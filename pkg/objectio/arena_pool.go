@@ -44,20 +44,28 @@ const (
 	arenaLargeInit = 32 * 1024 * 1024 // 32 MB
 )
 
-// arenaNode is a linked-list node for the GC-immune WriteArena free list.
-type arenaNode struct {
-	arena *WriteArena
-	next  *arenaNode
+// A warm arena is reused by the next writer. Arenas left unused after a
+// burst are returned individually instead of waiting for a global drain.
+const arenaIdleTTL = time.Minute
+
+type parkedArena struct {
+	arena    *WriteArena
+	parkedAt time.Time
 }
 
-// arenaFreeList is a lock-free stack of WriteArena instances.
+// arenaFreeList keeps arenas ordered by return time. The most recently
+// returned arena is checked out first, leaving burst surplus to expire.
 type arenaFreeList struct {
-	head     atomic.Pointer[arenaNode]
-	count    atomic.Int32
-	maxCount int32
-	bytes    atomic.Int64
-	maxBytes int64
-	budget   *arenaByteBudget
+	mu               sync.Mutex
+	parked           []parkedArena
+	reaper           *time.Timer
+	reaperGeneration uint64
+	idleTTL          time.Duration // zero uses arenaIdleTTL
+	count            atomic.Int32
+	maxCount         int32
+	bytes            atomic.Int64
+	maxBytes         int64
+	budget           *arenaByteBudget
 }
 
 type arenaByteBudget struct {
@@ -150,25 +158,27 @@ func getArena(tier, maxRetainedBytes int, bounded bool) *WriteArena {
 }
 
 func (pool *arenaFreeList) get() *WriteArena {
-	for {
-		head := pool.head.Load()
-		if head == nil {
-			return nil
-		}
-		if pool.head.CompareAndSwap(head, head.next) {
-			pool.count.Add(-1)
-			metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(head.arena.serialBuf.Cap()))
-			size := int64(head.arena.Allocated())
-			pool.bytes.Add(-size)
-			if pool.budget != nil {
-				pool.budget.used.Add(-size)
-			}
-			return head.arena
-		}
+	pool.mu.Lock()
+	n := len(pool.parked)
+	if n == 0 {
+		pool.mu.Unlock()
+		return nil
 	}
+	a := pool.parked[n-1].arena
+	pool.parked[n-1] = parkedArena{}
+	pool.parked = pool.parked[:n-1]
+	pool.count.Add(-1)
+	metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(a.serialBuf.Cap()))
+	size := int64(a.Allocated())
+	pool.bytes.Add(-size)
+	if pool.budget != nil {
+		pool.budget.used.Add(-size)
+	}
+	pool.mu.Unlock()
+	return a
 }
 
-// PutArena pushes a WriteArena back into its tier's free list,
+// PutArena parks a WriteArena in its tier's free list,
 // auto-routing based on sizeLimit.
 func PutArena(a *WriteArena) {
 	if a == nil {
@@ -185,56 +195,94 @@ func PutArena(a *WriteArena) {
 func (pool *arenaFreeList) put(a *WriteArena) {
 	// Trim scratch while the caller still owns the arena, before byte accounting.
 	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit)
-	serialCap := a.serialBuf.Cap()
-	// Count limits alone allow a few wide-column arenas to pin gigabytes.
-	// Reserve all three buffers before publishing; pooled arenas are immutable.
 	size := int64(a.Allocated())
-	if pool.budget != nil && !pool.budget.reserve(size) {
+	pool.mu.Lock()
+	if pool.count.Load() >= pool.maxCount || size > pool.maxBytes-pool.bytes.Load() ||
+		(pool.budget != nil && !pool.budget.reserve(size)) {
+		pool.mu.Unlock()
 		a.FreeBuffers()
 		return
 	}
-	for {
-		used := pool.bytes.Load()
-		if size > pool.maxBytes-used {
-			if pool.budget != nil {
-				pool.budget.used.Add(-size)
-			}
-			a.FreeBuffers()
-			return
-		}
-		if pool.bytes.CompareAndSwap(used, used+size) {
-			break
-		}
+	// Keep detached buffers charged until returned to the allocator, so a
+	// concurrent reaper or pressure drain cannot over-admit the pool budget.
+	pool.count.Add(1)
+	pool.bytes.Add(size)
+	metric.MemObjectIOPooledSerialBytesGauge.Add(float64(a.serialBuf.Cap()))
+	pool.parked = append(pool.parked, parkedArena{arena: a, parkedAt: time.Now()})
+	if pool.reaper == nil {
+		pool.armReaperLocked(pool.ttl())
 	}
-	// Optimistically claim a slot before pushing: increment first, then
-	// check.  This avoids the TOCTOU race where N goroutines each read
-	// count < maxCount and all push, exceeding the soft cap.
-	if pool.count.Add(1) > pool.maxCount {
-		pool.count.Add(-1)
-		pool.bytes.Add(-size)
-		if pool.budget != nil {
-			pool.budget.used.Add(-size)
-		}
-		a.FreeBuffers()
-		return
+	pool.mu.Unlock()
+}
+
+func (pool *arenaFreeList) ttl() time.Duration {
+	if pool.idleTTL > 0 {
+		return pool.idleTTL
 	}
-	node := &arenaNode{arena: a}
-	// Account before publishing so a concurrent pop cannot subtract first.
-	metric.MemObjectIOPooledSerialBytesGauge.Add(float64(serialCap))
-	for {
-		oldHead := pool.head.Load()
-		node.next = oldHead
-		if pool.head.CompareAndSwap(oldHead, node) {
-			return
-		}
+	return arenaIdleTTL
+}
+
+// armReaperLocked must hold mu. Generation prevents a stopped callback from
+// draining a new set of parked arenas after ReleaseIdleArenas races with Put.
+func (pool *arenaFreeList) armReaperLocked(delay time.Duration) {
+	pool.reaperGeneration++
+	generation := pool.reaperGeneration
+	pool.reaper = time.AfterFunc(delay, func() { pool.reap(generation) })
+}
+
+// detachLocked removes the oldest parked arenas, retaining their budget until
+// freeDetached has returned the backing buffers to the allocator outside the lock.
+func (pool *arenaFreeList) detachLocked(count int) []parkedArena {
+	if count == 0 {
+		return nil
+	}
+	detached := append([]parkedArena(nil), pool.parked[:count]...)
+	for _, p := range detached {
+		metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(p.arena.serialBuf.Cap()))
+	}
+	n := copy(pool.parked, pool.parked[count:])
+	clear(pool.parked[n:])
+	pool.parked = pool.parked[:n]
+	return detached
+}
+
+func (pool *arenaFreeList) freeDetached(detached []parkedArena) {
+	var size int64
+	for _, p := range detached {
+		size += int64(p.arena.Allocated())
+		p.arena.FreeBuffers()
+	}
+	pool.count.Add(-int32(len(detached)))
+	pool.bytes.Add(-size)
+	if pool.budget != nil {
+		pool.budget.used.Add(-size)
 	}
 }
 
-// arenaDrainDelay is how long to wait after the last checkpoint before
-// draining the arena pools.  Using 2x the default incremental checkpoint
-// interval (5 minutes) ensures the timer is always reset during active
-// operation, so pools stay warm.  Draining only happens during genuine
-// idle periods.
+// reap retires only arenas that have remained parked for a full idle TTL.
+func (pool *arenaFreeList) reap(generation uint64) {
+	pool.mu.Lock()
+	if generation != pool.reaperGeneration {
+		pool.mu.Unlock()
+		return
+	}
+	pool.reaper = nil
+	now := time.Now()
+	idleTTL := pool.ttl()
+	expired := 0
+	for expired < len(pool.parked) && now.Sub(pool.parked[expired].parkedAt) >= idleTTL {
+		expired++
+	}
+	detached := pool.detachLocked(expired)
+	if len(pool.parked) != 0 {
+		pool.armReaperLocked(idleTTL - now.Sub(pool.parked[0].parkedAt))
+	}
+	pool.mu.Unlock()
+	pool.freeDetached(detached)
+}
+
+// arenaDrainDelay preserves the legacy global drain deadline. Individual
+// arenas can expire earlier according to arenaIdleTTL.
 const arenaDrainDelay = 10 * time.Minute
 
 var (
@@ -242,10 +290,11 @@ var (
 	arenaDrainTimer *time.Timer
 )
 
-// ScheduleArenaDrain debounces arena pool draining.  Each call resets the
-// timer to arenaDrainDelay from now.  During steady-state checkpointing,
-// the timer never fires and pools stay warm.  Once activity ceases, the
-// timer fires and RSS is reclaimed.
+// ScheduleArenaDrain retains the legacy global drain for callers that use it.
+// Individual arenas also expire after arenaIdleTTL while activity continues.
+// Each call resets the timer to arenaDrainDelay from now.  During steady-state checkpointing,
+// global timer is repeatedly postponed. Once activity ceases, it returns
+// any remaining idle buffers to the allocator.
 func ScheduleArenaDrain() {
 	arenaDrainMu.Lock()
 	defer arenaDrainMu.Unlock()
@@ -271,30 +320,13 @@ func ReleaseIdleArenas() {
 }
 
 func (pool *arenaFreeList) drain() {
-	for {
-		head := pool.head.Load()
-		if head == nil {
-			return
-		}
-		if pool.head.CompareAndSwap(head, nil) {
-			// Count and free exactly the nodes we grabbed.
-			// Use Add(-n) rather than Store(0) so concurrent
-			// PutArena calls that incremented count after the CAS
-			// are not silently erased.
-			var n int32
-			var size int64
-			for node := head; node != nil; node = node.next {
-				size += int64(node.arena.Allocated())
-				metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(node.arena.serialBuf.Cap()))
-				node.arena.FreeBuffers()
-				n++
-			}
-			pool.count.Add(-n)
-			pool.bytes.Add(-size)
-			if pool.budget != nil {
-				pool.budget.used.Add(-size)
-			}
-			return
-		}
+	pool.mu.Lock()
+	pool.reaperGeneration++
+	if pool.reaper != nil {
+		pool.reaper.Stop()
+		pool.reaper = nil
 	}
+	detached := pool.detachLocked(len(pool.parked))
+	pool.mu.Unlock()
+	pool.freeDetached(detached)
 }
