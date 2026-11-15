@@ -33,11 +33,11 @@ type indexComparisonBound struct {
 }
 
 func sameIndexComparisonDomain(key, value types.Type) bool {
-	// CHAR IN compares PAD SPACE keys, whereas SERIAL preserves bytes. The
-	// raw-vector runtime-filter contract invokes that IN kernel and therefore
-	// does not prove that a byte predicate over a persisted CHAR key is safe.
+	// CHAR equality and IN use raw bytes, as does the runtime-filter key.
+	// Keep mixed CHAR/string JOINs conservative until their casts are proven.
 	if key.Oid == types.T_char || value.Oid == types.T_char {
-		return false
+		return key.Oid == types.T_char && value.Oid == types.T_char &&
+			keycodec.SupportsExactRawRuntimeFilterPair(key, value)
 	}
 	return keycodec.SupportsExactRawRuntimeFilterPair(key, value) ||
 		key.Oid.IsMySQLString() && value.Oid.IsMySQLString()
@@ -53,7 +53,10 @@ func analyzeIndexComparisonBound(bound *plan.Expr, keyType plan.Type) indexCompa
 		return indexComparisonBound{usable: true}
 	}
 	key, value := makeTypeByPlan2Type(keyType), makeTypeByPlan2Expr(bound)
-	if sameIndexComparisonDomain(key, value) {
+	// SQL string comparisons and SERIAL both consume the bound's bytes.
+	// This static lookup proof is independent of the JOIN runtime-filter one.
+	if key.Oid.IsMySQLString() && value.Oid.IsMySQLString() ||
+		sameIndexComparisonDomain(key, value) {
 		return indexComparisonBound{usable: true}
 	}
 	if key.Oid.IsDecimal() && value.Oid.IsDecimal() && losslessIndexDecimalBound(bound, key) {
@@ -243,8 +246,7 @@ func serializedIndexInUsable(rhs *plan.Expr, keyType plan.Type) (usable bool) {
 		// Checked decoding validates executable vector metadata without
 		// allocating a scalar expression for every member.
 		vec, _, ok := decodeLiteralVec(rhs.GetVec())
-		return ok && types.T(keyType.Id) != types.T_char && vec.GetType().Oid != types.T_char &&
-			keycodec.SupportsExactRawRuntimeFilterPair(makeTypeByPlan2Type(keyType), *vec.GetType())
+		return ok && keycodec.SupportsExactRawRuntimeFilterPair(makeTypeByPlan2Type(keyType), *vec.GetType())
 	}
 	return analyzeIndexComparisonBound(rhs, keyType).usable
 }

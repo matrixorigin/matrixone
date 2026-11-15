@@ -45,7 +45,8 @@ func TestSerializedIndexComparisonDomains(t *testing.T) {
 		{"runtime_decimal_scale", types.New(types.T_decimal64, 10, 2), types.New(types.T_decimal64, 18, 6), false},
 		{"raw_string", types.New(types.T_varbinary, 20, 0), types.New(types.T_varchar, 10, 0), true},
 		{"json_order", types.T_json.ToType(), types.T_json.ToType(), false},
-		{"char_padding", types.New(types.T_char, 8, 0), types.New(types.T_char, 8, 0), false},
+		{"char_bytes", types.New(types.T_char, 8, 0), types.New(types.T_char, 8, 0), true},
+		{"char_varchar_bytes", types.New(types.T_char, 8, 0), types.New(types.T_varchar, 8, 0), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			col := GetColExpr(makePlan2Type(&tc.key), 0, 0)
@@ -84,6 +85,29 @@ func TestSerializedIndexComparisonDomains(t *testing.T) {
 		or := &planpb.Function{Func: &planpb.ObjectRef{ObjName: "or"}, Args: []*planpb.Expr{comparison(d), {Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "or"}, Args: []*planpb.Expr{comparison(d), comparison(peer)}}}}}}
 		require.Equal(t, peer.Oid == d.Oid, serializedIndexComparisonUsable(or, col.Typ), "every nested OR arm needs a candidate superset")
 	}
+}
+
+func TestSerializedCharInVectorDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.New(types.T_char, 8, 0)
+	values := vector.NewVec(typ)
+	defer values.Free(proc.Mp())
+	for _, value := range []string{"a", "a "} {
+		require.NoError(t, vector.AppendBytes(values, []byte(value), false, proc.Mp()))
+	}
+	require.NoError(t, vector.AppendBytes(values, nil, true, proc.Mp()))
+	data, err := values.MarshalBinary()
+	require.NoError(t, err)
+	rhs := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(values.Length()), Data: data}}}
+	require.True(t, serializedIndexInUsable(rhs, makePlan2Type(&typ)))
+	require.True(t, runtimeConstMayBeNull(rhs), "a NULL member still needs the decoded residual")
+	require.True(t, sameIndexComparisonDomain(typ, typ), "same-type CHAR JOIN filters use raw bytes")
+	other := types.New(types.T_varchar, 8, 0)
+	require.False(t, sameIndexComparisonDomain(typ, other), "mixed-type JOIN admission remains conservative")
+	require.False(t, serializedIndexInUsable(rhs, makePlan2Type(&other)))
+	bad := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 1, Data: []byte{0}}}}
+	require.False(t, serializedIndexInUsable(bad, makePlan2Type(&typ)))
 }
 
 func TestDecimalIndexNormalizationRequiresExactInRangeValue(t *testing.T) {
