@@ -43,7 +43,7 @@ separate storage/compatibility design.
 
 | Closure | Owner and resulting behavior |
 | --- | --- |
-| TLS | Drain frontend-owned read-ahead bytes before underlying TCP input; both handshake branches keep the existing socket ownership. Linux terminal probing unwraps the known buffered/TLS wrappers and keeps FIN grace. |
+| TLS | Drain frontend-owned read-ahead bytes before underlying TCP input; both handshake branches keep the existing socket ownership. Linux terminal probing unwraps the known buffered/TLS wrappers and applies the existing TCP FIN/write-half-close cancellation policy on the five-second scan, without the legacy TCP grace. |
 | SQL mode | Derive response status from the executing session; no second cached SQL-mode state. |
 | FULLTEXT | Quote identifier components through the existing SQL quoting owner in planner, post-DML and ISCP; keep asynchronous parser parameters. |
 | Numeric parser | Preserve numeric token boundaries and incomplete-exponent errors, while retaining 4.2 wire metadata. |

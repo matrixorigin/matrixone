@@ -149,17 +149,16 @@ func TestTerminalMonitorBufferedTLSHalfClose(t *testing.T) {
 	require.NoError(t, clientRaw.CloseWrite())
 	require.Eventually(t, func() bool { return terminalSocketHasEvent(serverRaw, unix.POLLRDHUP) }, 3*time.Second, time.Millisecond)
 	monitor.scan(now)
-	require.NoError(t, ctx.Err(), "a half-close must not be treated as a terminal reset")
-	require.False(t, routine.isTerminalRetired())
+	require.ErrorIs(t, ctx.Err(), context.Canceled, "the accepted TCP FIN policy cancels the active request")
+	require.True(t, routine.isTerminalRetired())
+	require.False(t, routine.setInProcessRequest(true), "a retired connection cannot admit another request")
+	// The probe must not consume the socket or prevent an underlying write.
 	_, err := serverTLS.Write([]byte("reply"))
 	require.NoError(t, err)
 	var reply [5]byte
 	_, err = io.ReadFull(clientTLS, reply[:])
 	require.NoError(t, err)
 	require.Equal(t, "reply", string(reply[:]))
-	monitor.scan(now.Add(clientDisconnectProbeGrace + time.Second))
-	require.ErrorIs(t, ctx.Err(), context.Canceled, "the legacy grace policy still applies to a buffered TLS FIN")
-	require.False(t, routine.isTerminalRetired(), "a FIN uses the legacy path")
 }
 
 func TestTerminalTCPConnBufferedTLS(t *testing.T) {
