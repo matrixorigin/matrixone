@@ -111,6 +111,37 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	}
 	clear(lookup.codes[:count])
 	for col, vec := range vecs {
+		if vec.IsDictionary() {
+			view := vector.ResolveVarlenaReadView(vec)
+			for i := 0; i < count; i++ {
+				physical := int(view.Selection[start+i])
+				if view.Constant {
+					physical = 0
+				}
+				value := &view.Values[physical]
+				if !value.IsSmall() {
+					return groupInsertPreview{}, false, nil
+				}
+				raw := value.ByteSlice()
+				for len(raw) > 0 && raw[len(raw)-1] == ' ' {
+					raw = raw[:len(raw)-1]
+				}
+				if len(raw) > 1 {
+					return groupInsertPreview{}, false, nil
+				}
+				var code uint32
+				if len(raw) != 0 {
+					code = uint32(raw[0]) + 1
+				}
+				if col == 0 {
+					lookup.codes[i] = code
+				} else {
+					lookup.codes[i] = lookup.codes[i]*compactCharDomain + code
+				}
+			}
+			continue
+		}
+
 		vals, _ := vector.MustVarlenaRawData(vec)
 		for i := 0; i < count; i++ {
 			value := &vals[start+i]
