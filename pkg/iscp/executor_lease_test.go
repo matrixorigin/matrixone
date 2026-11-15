@@ -32,13 +32,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type repairTestWorkspace struct{ client.Workspace }
+type repairTestWorkspace struct {
+	client.Workspace
+	events *[]string
+}
 
-func (repairTestWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error { return nil }
+func (w repairTestWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	if w.events != nil {
+		*w.events = append(*w.events, "advance_snapshot")
+	}
+	return nil
+}
 
-type repairTestTxn struct{ *statusTestTxn }
+type repairTestTxn struct {
+	*statusTestTxn
+	events *[]string
+}
 
-func (*repairTestTxn) GetWorkspace() client.Workspace { return repairTestWorkspace{} }
+func (t *repairTestTxn) GetWorkspace() client.Workspace {
+	return repairTestWorkspace{events: t.events}
+}
 
 type repairTestClient struct {
 	client.TxnClient
@@ -46,12 +59,16 @@ type repairTestClient struct {
 	err error
 }
 
+func (*repairTestClient) GetLatestCommitTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
 type handoffTestClient struct {
 	client.TxnClient
 	calls      atomic.Int32
 	repaired   atomic.Bool
 	rolledBack chan struct{}
 }
+
+func (*handoffTestClient) GetLatestCommitTS() timestamp.Timestamp { return timestamp.Timestamp{} }
 
 func (c *handoffTestClient) New(context.Context, timestamp.Timestamp, ...client.TxnOption) (client.TxnOperator, error) {
 	if c.calls.Add(1) == 1 {
@@ -92,7 +109,7 @@ func TestRepairAbandonedJobsTransactionCreationFailure(t *testing.T) {
 			txn := &statusTestTxn{}
 			client := &repairTestClient{err: tc.err}
 			if tc.withTxn {
-				client.txn = &repairTestTxn{txn}
+				client.txn = &repairTestTxn{statusTestTxn: txn}
 			}
 			exec := &ISCPTaskExecutor{txnEngine: statusTestEngine{}, cnTxnClient: client}
 			err := exec.repairAbandonedJobs(t.Context())
@@ -133,7 +150,8 @@ func TestRepairAbandonedJobsRequiresCurrentOwner(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			txn := &statusTestTxn{commitErr: tc.commitErr, rollbackErr: tc.rollbackErr}
-			exec := &ISCPTaskExecutor{cnUUID: "old-cn", taskID: 7, txnEngine: statusTestEngine{}, cnTxnClient: &repairTestClient{txn: &repairTestTxn{txn}}}
+			events := []string{}
+			exec := &ISCPTaskExecutor{cnUUID: "old-cn", taskID: 7, txnEngine: statusTestEngine{}, cnTxnClient: &repairTestClient{txn: &repairTestTxn{statusTestTxn: txn, events: &events}}}
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			old := ExecWithResult
@@ -142,15 +160,19 @@ func TestRepairAbandonedJobsRequiresCurrentOwner(t *testing.T) {
 			ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
 				calls++
 				if strings.Contains(sql, "mo_catalog.mo_iscp_log") {
+					require.Contains(t, sql, "drop_at IS NULL", "repair should leave retired jobs untouched")
+					events = append(events, "repair_jobs")
 					return executor.Result{AffectedRows: 1}, nil
 				}
 				if strings.HasPrefix(sql, "SELECT count(*)") {
+					events = append(events, "count_owners")
 					result := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, mp)
 					result.NewBatchWithRowCount(1)
 					require.NoError(t, executor.AppendFixedRows(result, 0, []int64{tc.ownerCount}))
 					return result.GetResult(), nil
 				}
 				require.Contains(t, sql, "mo_task.sys_daemon_task")
+				events = append(events, "guard_lease")
 				if tc.panicGuard {
 					panic("guard panic")
 				}
@@ -179,8 +201,10 @@ func TestRepairAbandonedJobsRequiresCurrentOwner(t *testing.T) {
 			}
 			if tc.ownerCount == 1 {
 				require.Equal(t, 3, calls)
+				require.Equal(t, []string{"count_owners", "advance_snapshot", "repair_jobs", "guard_lease"}, events)
 			} else {
-				require.Equal(t, 2, calls)
+				require.Equal(t, 1, calls)
+				require.Equal(t, []string{"count_owners"}, events)
 			}
 			require.Equal(t, tc.commits, txn.commits)
 			require.Equal(t, tc.rollbacks, txn.rollbacks)

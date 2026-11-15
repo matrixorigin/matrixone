@@ -69,14 +69,32 @@ func (statusTestEngine) New(context.Context, client.TxnOperator) error { return 
 
 type statusTestClient struct {
 	client.TxnClient
-	ops  []*statusTestTxn
-	next int
+	ops            []*statusTestTxn
+	next           int
+	latestCommitTS timestamp.Timestamp
+	newMinTS       timestamp.Timestamp
 }
 
-func (c *statusTestClient) New(context.Context, timestamp.Timestamp, ...client.TxnOption) (client.TxnOperator, error) {
+func (c *statusTestClient) New(_ context.Context, minTS timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+	c.newMinTS = minTS
 	op := c.ops[c.next]
 	c.next++
 	return op, nil
+}
+
+func (c *statusTestClient) GetLatestCommitTS() timestamp.Timestamp { return c.latestCommitTS }
+
+func TestGetTxnMinimumSnapshotIncludesLatestLocalCommit(t *testing.T) {
+	latestCommit := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+	txnClient := &statusTestClient{
+		ops:            []*statusTestTxn{{}},
+		latestCommitTS: latestCommit,
+	}
+	op, err := getTxn(t.Context(), statusTestEngine{}, txnClient, "test latest commit visibility")
+	require.NoError(t, err)
+	require.NotNil(t, op)
+	require.Equal(t, latestCommit, txnClient.newMinTS)
+	require.NoError(t, op.Rollback(t.Context()))
 }
 
 type statusTestTxn struct {
