@@ -109,6 +109,33 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	if (len(lookup.ids) == compactCharDomain) != (len(vecs) == 1) {
 		return groupInsertPreview{}, false, nil
 	}
+	if len(vecs) == 2 && !vecs[0].IsDictionary() && !vecs[1].IsDictionary() {
+		left, _ := vector.MustVarlenaRawData(vecs[0])
+		right, _ := vector.MustVarlenaRawData(vecs[1])
+		allHit := true
+		for i := 0; i < count; i++ {
+			a, ok := compactInlineCharCode(&left[start+i])
+			if !ok {
+				return groupInsertPreview{}, false, nil
+			}
+			b, ok := compactInlineCharCode(&right[start+i])
+			if !ok {
+				return groupInsertPreview{}, false, nil
+			}
+			code := a*compactCharDomain + b
+			// Generic insertion publishes these codes after a miss. Even when
+			// an earlier ID is absent, validate and initialize the whole suffix.
+			lookup.codes[i] = code
+			id := lookup.ids[code]
+			lookup.values[i] = id
+			allHit = allHit && id != 0
+		}
+		lookup.eligible = true
+		if !allHit {
+			return groupInsertPreview{}, false, nil
+		}
+		return groupInsertPreview{values: lookup.values[:count], inserted: lookup.inserted[:count], existingOnly: true}, true, nil
+	}
 	clear(lookup.codes[:count])
 	for col, vec := range vecs {
 		vals, _ := vector.MustVarlenaRawData(vec)
@@ -148,6 +175,23 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 		return groupInsertPreview{}, false, nil
 	}
 	return groupInsertPreview{values: lookup.values[:count], inserted: lookup.inserted[:count], existingOnly: true}, true, nil
+}
+
+func compactInlineCharCode(value *types.Varlena) (uint32, bool) {
+	if !value.IsSmall() {
+		return 0, false
+	}
+	raw := value.ByteSlice()
+	for len(raw) > 0 && raw[len(raw)-1] == ' ' {
+		raw = raw[:len(raw)-1]
+	}
+	if len(raw) > 1 {
+		return 0, false
+	}
+	if len(raw) == 0 {
+		return 0, true
+	}
+	return uint32(raw[0]) + 1, true
 }
 
 func (hr *ResHashRelated) publishCompactGroups(values []uint64) {

@@ -15,6 +15,7 @@
 package group
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -29,6 +30,115 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompactTupleLookupScratchAndOffsets(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	vecs := []*vector.Vector{vector.NewVec(types.New(types.T_char, 1, 0)), vector.NewVec(types.New(types.T_char, 1, 0))}
+	for col, values := range [][]string{
+		{"ignored", "A ", " ", "\x00", "\xff", "A"},
+		{"ignored", "B", "", "\x00", "\xfe", "B "},
+	} {
+		vec := vecs[col]
+		t.Cleanup(func() { vec.Free(mp) })
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+		}
+	}
+	ctr := container{mp: mp}
+	ctr.hr.mp = mp
+	ctr.hr.compactRows = 2 * hashmap.UnitLimit
+	t.Cleanup(ctr.hr.Free0)
+	_, hit, err := ctr.previewCompactGroups(vecs, 1, 5)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.True(t, ctr.hr.compact.eligible)
+	// Explicit expected codes keep the oracle separate from the production
+	// canonicalizer; the prefix outside the requested domain is unsupported.
+	require.Equal(t, []uint32{66*257 + 67, 0, 1*257 + 1, 256*257 + 255, 66*257 + 67}, ctr.hr.compact.codes[:5])
+	ctr.hr.publishCompactGroups([]uint64{11, 22, 33, 44, 11})
+	preview, hit, err := ctr.previewCompactGroups(vecs, 1, 5)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.True(t, preview.existingOnly)
+	require.Equal(t, []uint64{11, 22, 33, 44, 11}, preview.values)
+	require.Equal(t, []uint8{0, 0, 0, 0, 0}, preview.inserted)
+
+	// A first-row miss must not leave stale codes in the otherwise valid tail.
+	require.NoError(t, vector.SetBytesAt(vecs[0], 1, []byte("C"), mp))
+	_, hit, err = ctr.previewCompactGroups(vecs, 1, 5)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.True(t, ctr.hr.compact.eligible)
+	require.Equal(t, uint32(68*257+67), ctr.hr.compact.codes[0])
+	require.Equal(t, uint32(66*257+67), ctr.hr.compact.codes[4])
+	ctr.hr.publishCompactGroups([]uint64{55, 22, 33, 44, 11})
+	preview, hit, err = ctr.previewCompactGroups(vecs, 1, 5)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Equal(t, []uint64{55, 22, 33, 44, 11}, preview.values)
+
+	// Reject a late unsupported value in either column without publishing any
+	// partially overwritten code scratch from the earlier successful rows.
+	for col := range vecs {
+		old := append([]byte(nil), vecs[col].GetBytesAt(5)...)
+		require.NoError(t, vector.SetBytesAt(vecs[col], 5, []byte("AB"), mp))
+		_, hit, err = ctr.previewCompactGroups(vecs, 1, 5)
+		require.NoError(t, err)
+		require.False(t, hit)
+		require.False(t, ctr.hr.compact.eligible)
+		ctr.hr.publishCompactGroups([]uint64{99, 99, 99, 99, 99})
+		require.NoError(t, vector.SetBytesAt(vecs[col], 5, old, mp))
+		preview, hit, err = ctr.previewCompactGroups(vecs, 1, 5)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Equal(t, []uint64{55, 22, 33, 44, 11}, preview.values)
+	}
+}
+
+func BenchmarkCompactGroupLookup(b *testing.B) {
+	for _, columns := range []int{1, 2} {
+		for _, rows := range []int{1, 31, hashmap.UnitLimit} {
+			for _, shape := range []string{"hit", "miss", "unsupported"} {
+				b.Run(fmt.Sprintf("columns=%d/rows=%d/%s", columns, rows, shape), func(b *testing.B) {
+					mp := mpool.MustNewZero()
+					b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
+					vecs := make([]*vector.Vector, columns)
+					for col := range vecs {
+						vec := vector.NewVec(types.New(types.T_char, 1, 0))
+						vecs[col] = vec
+						b.Cleanup(func() { vec.Free(mp) })
+						for row := 0; row < rows; row++ {
+							require.NoError(b, vector.AppendBytes(vec, []byte{byte('A' + (row+col)%4)}, false, mp))
+						}
+					}
+					ctr := container{mp: mp}
+					ctr.hr.mp = mp
+					ctr.hr.compactRows = 2 * hashmap.UnitLimit
+					b.Cleanup(ctr.hr.Free0)
+					_, _, err := ctr.previewCompactGroups(vecs, 0, rows)
+					require.NoError(b, err)
+					for code := range ctr.hr.compact.ids {
+						ctr.hr.compact.ids[code] = uint64(code + 1)
+					}
+					if shape == "miss" {
+						clear(ctr.hr.compact.ids)
+					} else if shape == "unsupported" {
+						require.NoError(b, vector.SetBytesAt(vecs[columns-1], rows-1, []byte("AB"), mp))
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						_, hit, err := ctr.previewCompactGroups(vecs, 0, rows)
+						if hit != (shape == "hit") || err != nil {
+							b.Fatal(hit, err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
 
 func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 	for _, tc := range []struct {
