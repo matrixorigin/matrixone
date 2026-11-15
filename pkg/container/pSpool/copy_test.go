@@ -66,10 +66,7 @@ func TestOneBatchMemoryCacheSelection(t *testing.T) {
 			}
 			vec := vector.NewOffHeapVecWithType(types.T_text.ToType())
 			t.Cleanup(func() { vec.Free(mp) })
-			require.NoError(t, cache.setSuitableBuffers([]batchMemoryRequest{
-				{vec, test.dataSize, vector.DetachedDataBuffer},
-				{vec, test.areaSize, vector.DetachedAreaBuffer},
-			}))
+			require.NoError(t, cache.setSuitableDataAreaToVector(test.dataSize, test.areaSize, vec))
 			require.Equal(t, test.dataCap, cap(vec.GetData()))
 			require.Equal(t, test.areaCap, cap(vec.GetArea()))
 			require.Len(t, cache.buffers, test.remaining)

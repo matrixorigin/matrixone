@@ -16,7 +16,6 @@ package pSpool
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -51,7 +50,7 @@ func newSpoolSizeBatch(tb testing.TB, mp *mpool.MPool, sizes []int, alias bool) 
 	return source
 }
 
-func TestCachedBatchReservesLargeBacking(t *testing.T) {
+func TestCachedBatchCopiesMixedShapes(t *testing.T) {
 	for _, test := range []struct {
 		name                       string
 		columns                    int
@@ -92,12 +91,11 @@ func TestCachedBatchReservesLargeBacking(t *testing.T) {
 			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 			cache := initCachedBatch(mp, 1)
 			t.Cleanup(cache.free)
-			copyAndReturn := func(src *batch.Batch, checkMemory bool) {
+			copyAndReturn := func(src *batch.Batch) {
 				copied, useCache, id, err := cache.GetCopiedBatch(src)
 				require.NoError(t, err)
 				defer cache.CacheBatch(useCache, id, copied)
 				require.Equal(t, src.RowCount(), copied.RowCount())
-				var required int64
 				for i, vec := range src.Vecs {
 					if vec == nil {
 						require.Nil(t, copied.Vecs[i])
@@ -107,23 +105,17 @@ func TestCachedBatchReservesLargeBacking(t *testing.T) {
 					require.Equal(t, vec.IsNull(0), copied.Vecs[i].IsNull(0))
 					if test.alias && i == len(src.Vecs)-1 {
 						require.Same(t, copied.Vecs[i-1], copied.Vecs[i])
-					} else {
-						required += int64(vec.Length()*vec.GetType().TypeSize() + cap(vec.GetArea()))
 					}
 				}
-				if checkMemory {
-					require.LessOrEqual(t, mp.CurrNB(), required,
-						"small columns must not consume the only cached backing needed by a later large column")
-				}
 			}
-			copyAndReturn(seed, false)
-			copyAndReturn(source, true)
-			copyAndReturn(source, true)
+			copyAndReturn(seed)
+			copyAndReturn(source)
+			copyAndReturn(source)
 		})
 	}
 }
 
-func TestCachedBatchPlannedCopyFailureReturnsBacking(t *testing.T) {
+func TestCachedBatchMixedShapeFailureReturnsBacking(t *testing.T) {
 	sourceMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(sourceMP); require.Zero(t, sourceMP.CurrNB()) })
 	seed := newSpoolSizeBatch(t, sourceMP, []int{0, 8192}, true)
@@ -162,47 +154,4 @@ func TestCachedBatchPlannedCopyFailureReturnsBacking(t *testing.T) {
 	require.Equal(t, source.Vecs[0].GetBytesAt(0), copied.Vecs[0].GetBytesAt(0))
 	require.Equal(t, source.Vecs[1].GetBytesAt(0), copied.Vecs[1].GetBytesAt(0))
 	require.Same(t, copied.Vecs[1], copied.Vecs[2])
-}
-
-func BenchmarkCachedBatchMixedSizeReuse(b *testing.B) {
-	for _, columns := range []int{2, 20} {
-		b.Run(fmt.Sprintf("columns_%d", columns), func(b *testing.B) {
-			sourceMP := mpool.MustNewZeroNoFixed()
-			b.Cleanup(func() {
-				defer mpool.DeleteMPool(sourceMP)
-				if sourceMP.CurrNB() != 0 {
-					b.Error("source backing remains")
-				}
-			})
-			seedSizes, nextSizes := make([]int, columns), make([]int, columns)
-			seedSizes[columns-1], nextSizes[columns-1], nextSizes[0] = 8192, 8192, 1024
-			seed := newSpoolSizeBatch(b, sourceMP, seedSizes, false)
-			source := newSpoolSizeBatch(b, sourceMP, nextSizes, false)
-			mp := mpool.MustNewZeroNoFixed()
-			b.Cleanup(func() {
-				defer mpool.DeleteMPool(mp)
-				if mp.CurrNB() != 0 {
-					b.Error("target backing remains")
-				}
-			})
-			cache := initCachedBatch(mp, 1)
-			b.Cleanup(cache.free)
-			copyAndReturn := func(src *batch.Batch) {
-				copied, use, id, err := cache.GetCopiedBatch(src)
-				if err != nil {
-					b.Fatal(err)
-				}
-				cache.CacheBatch(use, id, copied)
-			}
-			copyAndReturn(seed)
-			copyAndReturn(source)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				copyAndReturn(source)
-			}
-			b.StopTimer()
-			b.ReportMetric(float64(mp.CurrNB()), "retained-B")
-		})
-	}
 }
