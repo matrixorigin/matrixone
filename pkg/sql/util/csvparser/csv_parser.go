@@ -652,9 +652,8 @@ func (parser *CSVParser) chargeFolded(n int) error {
 }
 
 // appendToRecord appends content to the record buffer under the single-record
-// size bound. Every recordBuffer growth goes through it so the bound covers a
-// whole record identically whether content arrives as one readUntil fragment,
-// an escaped token pair, or a quote byte.
+// size bound. The scanner enforces the same bound for direct fragment appends;
+// this method covers escaped token pairs and quote bytes.
 func (parser *CSVParser) appendToRecord(content []byte) error {
 	newSize := parser.recordWeight() + int64(len(content))
 	if newSize > parser.maxRecordSize() {
@@ -686,50 +685,51 @@ func (parser *CSVParser) appendCSVTokenToRecordBuffer(token csvToken) error {
 	return parser.appendToRecord([]byte{byte(token)})
 }
 
-// readUntil reads the buffer until any character from the `chars` set is found.
-// that character is excluded from the final buffer.
-func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
+// readUntil appends bytes up to the next character in chars to dst, excluding
+// that character. weight is the accumulated record weight before this append.
+// Appending directly to the caller-owned buffer avoids a temporary whole-field
+// allocation when a field spans read blocks. The boolean reports nonempty
+// content even when its append is rejected, preserving syntax-error precedence.
+func (parser *CSVParser) readUntil(chars *byteSet, dst []byte, weight int64) ([]byte, byte, bool, error) {
+	// Most fields fit in the current read block. Keep this path independent of
+	// the multi-block accumulator and its progress accounting.
 	index := IndexAnyByte(parser.buf, chars)
 	if index >= 0 {
-		ret := parser.buf[:index]
-		parser.lineNo += int64(bytes.Count(ret, newlineByte))
+		if size := weight + int64(index); size > parser.maxRecordSize() {
+			return dst, 0, index > 0, parser.recordSizeLimitError(size)
+		}
+		content := parser.buf[:index]
+		dst = append(dst, content...)
+		parser.lineNo += int64(bytes.Count(content, newlineByte))
 		parser.buf = parser.buf[index:]
 		parser.pos += int64(index)
-		return ret, parser.buf[0], nil
+		return dst, parser.buf[0], index > 0, nil
 	}
-
-	// not found in parser.buf, need allocate and loop.
-	var buf []byte
+	start := len(dst)
 	for {
-		// Every byte of parser.buf is drained into buf here, so this is where
-		// its newlines are consumed. Counting only the final block's prefix
-		// below would lose the newlines of every block drained before it,
-		// which is what a quoted field spanning more than one read block does.
-		parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
-		buf = append(buf, parser.buf...)
-		// The returned fragment is folded into the current record by the
-		// caller, so bound fragment + accumulated record weight together: this
-		// fails fast on runaway input without waiting for the fold-in, and the
-		// bound stays identical regardless of how the row was fragmented.
-		if buffered := parser.recordWeight() + int64(len(buf)); buffered > parser.maxRecordSize() {
-			return buf, 0, parser.recordSizeLimitError(buffered)
+		found := index >= 0
+		if !found {
+			index = len(parser.buf)
 		}
-		parser.buf = nil
+		if size := weight + int64(len(dst)-start) + int64(index); size > parser.maxRecordSize() {
+			return dst, 0, len(dst) > start || index > 0, parser.recordSizeLimitError(size)
+		}
+		content := parser.buf[:index]
+		dst = append(dst, content...)
+		parser.lineNo += int64(bytes.Count(content, newlineByte))
+		parser.buf = parser.buf[index:]
+		if found {
+			parser.pos += int64(len(dst) - start)
+			return dst, parser.buf[0], len(dst) > start, nil
+		}
 		if err := parser.readBlock(); err != nil || len(parser.buf) == 0 {
 			if err == nil {
 				err = io.EOF
 			}
-			parser.pos += int64(len(buf))
-			return buf, 0, err
+			parser.pos += int64(len(dst) - start)
+			return dst, 0, len(dst) > start, err
 		}
-		index := IndexAnyByte(parser.buf, chars)
-		if index >= 0 {
-			parser.lineNo += int64(bytes.Count(parser.buf[:index], newlineByte))
-			buf = append(buf, parser.buf[:index]...)
-			parser.buf = parser.buf[index:]
-			parser.pos += int64(len(buf))
-			return buf, parser.buf[0], nil
-		}
+		index = IndexAnyByte(parser.buf, chars)
 	}
 }
 
@@ -808,15 +808,16 @@ outside:
 			parser.lineNo = oldLineNo + int64(bytes.Count(consumed, newlineByte))
 		}
 
-		content, firstByte, err := parser.readUntil(&parser.unquoteByteSet)
+		var hasContent bool
+		var firstByte byte
+		var err error
+		parser.recordBuffer, firstByte, hasContent, err = parser.readUntil(
+			&parser.unquoteByteSet, parser.recordBuffer, parser.recordWeight())
 
-		if len(content) > 0 {
+		if hasContent {
 			isEmptyLine = false
 			if prevToken == csvTokenDelimiter {
 				return errUnexpectedQuoteField
-			}
-			if err := parser.appendToRecord(content); err != nil {
-				return err
 			}
 			prevToken = csvTokenAnyUnquoted
 		}
@@ -940,12 +941,13 @@ outside:
 func (parser *CSVParser) readQuotedField() (bool, error) {
 	for {
 		prevPos := parser.pos
-		content, terminator, err := parser.readUntil(&parser.quoteByteSet)
+		start := len(parser.recordBuffer)
+		var terminator byte
+		var err error
+		parser.recordBuffer, terminator, _, err = parser.readUntil(
+			&parser.quoteByteSet, parser.recordBuffer, parser.recordWeight())
 		if err != nil {
 			if err == io.EOF && parser.cfg.AllowUnterminatedEnclosureAtEOF {
-				if err := parser.appendToRecord(content); err != nil {
-					return false, err
-				}
 				return true, nil
 			}
 			if err == io.EOF {
@@ -954,12 +956,9 @@ func (parser *CSVParser) readQuotedField() (bool, error) {
 				// use the `pos` again, so it's safe to modify it here.
 				parser.pos = prevPos - 1
 				// set buf to parser.buf in order to print err log
-				parser.buf = content
+				parser.buf = parser.recordBuffer[start:]
 				err = parser.replaceEOF(err, errUnterminatedQuotedField)
 			}
-			return false, err
-		}
-		if err := parser.appendToRecord(content); err != nil {
 			return false, err
 		}
 		parser.skipBytes(1)
@@ -1068,14 +1067,9 @@ func (parser *CSVParser) readColumns() error {
 func (parser *CSVParser) readUntilTerminator() ([]byte, int64, error) {
 	var ret []byte
 	for {
-		content, firstByte, err := parser.readUntil(&parser.newLineByteSet)
-		ret = append(ret, content...)
-		// Skipped content (comment lines, LINES STARTING BY lookahead) records
-		// nothing in recordBuffer, so the readUntil bound alone cannot see a
-		// terminator spanning many fragments; bound the accumulation here too.
-		if int64(len(ret)) > parser.maxRecordSize() {
-			return ret, parser.pos, parser.recordSizeLimitError(int64(len(ret)))
-		}
+		var firstByte byte
+		var err error
+		ret, firstByte, _, err = parser.readUntil(&parser.newLineByteSet, ret, int64(len(ret)))
 		if err != nil {
 			return ret, parser.pos, err
 		}
