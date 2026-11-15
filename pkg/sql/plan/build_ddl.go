@@ -296,9 +296,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		case *plan.Expr_F:
 			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
+			if validMySQLSpecialDisplayCall(e.F) && e.F.Args[1].GetCol() != nil {
 				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
+				colRef := e.F.Args[1].GetCol()
 				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
 				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
 					typ = binding.types[binding.colIdByName[colName]]
@@ -5785,11 +5785,12 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:          col.Typ.Id,
-			Width:       col.Typ.Width,
-			Scale:       col.Typ.Scale,
-			Enumvalues:  col.Typ.Enumvalues,
-			NullAbility: nullable,
+			Id:           col.Typ.Id,
+			Width:        col.Typ.Width,
+			Scale:        col.Typ.Scale,
+			Enumvalues:   col.Typ.Enumvalues,
+			EnumEncoding: col.Typ.EnumEncoding,
+			NullAbility:  nullable,
 		})
 	}
 

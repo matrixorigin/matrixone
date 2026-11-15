@@ -153,9 +153,9 @@ type Type struct {
 	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
 	// garbage data.  In theory these unused garbage should not be a problem, but
 	// it is.  Give it a name will zero fill it ...
-	Charset uint8
-	notNull uint8
-	dummy2  uint8
+	Charset      uint8
+	notNull      uint8
+	enumEncoding uint8
 
 	Size int32
 	// Width means max Display width for float and double, char and varchar
@@ -175,10 +175,15 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
+	if t.Oid == T_enum {
+		if err := ValidateEnumEncoding(t.GetEnumEncoding()); err != nil {
+			return 0, err
+		}
+	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
 	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
-	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint16(data[6:], uint16(t.enumEncoding))
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
@@ -206,10 +211,15 @@ func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
 		return moerr.NewInvalidInputNoCtx("short type encoding")
 	}
+	if T(binary.BigEndian.Uint16(data[0:])) == T_enum {
+		if err := ValidateEnumEncoding(uint32(binary.BigEndian.Uint16(data[6:]))); err != nil {
+			return err
+		}
+	}
 	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
 	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
 	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
-	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
+	t.enumEncoding = uint8(binary.BigEndian.Uint16(data[6:]))
 	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
 	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
 	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))

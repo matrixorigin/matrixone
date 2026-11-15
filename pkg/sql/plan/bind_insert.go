@@ -3239,6 +3239,25 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 			},
 		}
 		if isEnumPlanType(&tableDef.Cols[colIdx].Typ) {
+			var sourceDomain *plan.Type
+			compatibleSource := func(display *Expr) bool {
+				if !isEnumDisplayValueExpr(display) {
+					return false
+				}
+				typ := &display.GetF().Args[1].Typ
+				if sourceDomain == nil {
+					sourceDomain = typ
+					return true
+				}
+				return sameTypeMemberDomain(sourceDomain, typ)
+			}
+			if builder.isProjectedDisplayValueExpr(projExpr, compatibleSource, true, nil) {
+				raw, ok := builder.materializeProjectedMySQLSpecialStorage(projExpr, nil)
+				if !ok {
+					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven ENUM storage projection")
+				}
+				projExpr = raw
+			}
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err

@@ -1354,7 +1354,7 @@ func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, s
 	}
 	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
 		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
-		bitmap, ok := builder.materializeProjectedSetBitmap(expr, nil)
+		bitmap, ok := builder.materializeProjectedMySQLSpecialStorage(expr, nil)
 		if !ok {
 			return nil, false, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven SET bitmap projection")
 		}
@@ -1441,16 +1441,15 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
 }
 
-// materializeProjectedSetBitmap carries a proven SET bitmap through projection
-// boundaries. Set-operation inputs are materialized at the same hidden position
-// so the node can expose one physical uint64 output. The proof phase above runs
-// first, therefore mixed SET/VARCHAR operations are never mutated here.
-func (builder *QueryBuilder) materializeProjectedSetBitmap(
+// materializeProjectedMySQLSpecialStorage carries proven storage values through
+// existing hidden projection slots. Callers first prove every set-operation input;
+// enum assignments additionally require one logical source domain across inputs.
+func (builder *QueryBuilder) materializeProjectedMySQLSpecialStorage(
 	expr *Expr,
 	visited map[[2]int32]struct{},
 ) (*Expr, bool) {
-	if bitmap, ok := storedSetBitmapExpr(expr); ok {
-		return bitmap, true
+	if storage, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return storage, true
 	}
 	col := expr.GetCol()
 	if col == nil {
@@ -1460,10 +1459,10 @@ func (builder *QueryBuilder) materializeProjectedSetBitmap(
 	if !ok {
 		return expr, false
 	}
-	return builder.materializeProjectedSetBitmapAtNode(nodeID, col.ColPos, col.RelPos, visited)
+	return builder.materializeProjectedMySQLSpecialStorageAtNode(nodeID, col.ColPos, col.RelPos, visited)
 }
 
-func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
+func (builder *QueryBuilder) materializeProjectedMySQLSpecialStorageAtNode(
 	nodeID, colPos, outputTag int32,
 	visited map[[2]int32]struct{},
 ) (*Expr, bool) {
@@ -1475,9 +1474,8 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
 		return nil, false
 	}
-	bitmapType := plan.Type{Id: int32(types.T_uint64), NotNullable: node.ProjectList[colPos].Typ.NotNullable}
-	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
-		return GetColExpr(bitmapType, outputTag, pos), true
+	if pos, ok := builder.mysqlSpecialStorageByDisplayNode[key]; ok {
+		return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true
 	}
 	if visited == nil {
 		visited = make(map[[2]int32]struct{})
@@ -1495,7 +1493,8 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 			return nil, false
 		}
 		pos := int32(len(node.ProjectList))
-		for _, childID := range node.Children {
+		var storageType plan.Type
+		for i, childID := range node.Children {
 			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
 				return nil, false
 			}
@@ -1503,27 +1502,30 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 			if len(child.BindingTags) == 0 {
 				return nil, false
 			}
-			bitmap, found := builder.materializeProjectedSetBitmapAtNode(childID, colPos, child.BindingTags[0], visited)
-			if !found || bitmap.GetCol() == nil || bitmap.GetCol().ColPos != pos {
+			storage, found := builder.materializeProjectedMySQLSpecialStorageAtNode(childID, colPos, child.BindingTags[0], visited)
+			if !found || storage.GetCol() == nil || storage.GetCol().ColPos != pos {
 				return nil, false
+			}
+			if i == 0 {
+				storageType = storage.Typ
 			}
 		}
 		leftTag := builder.qry.Nodes[node.Children[0]].BindingTags[0]
-		node.ProjectList = append(node.ProjectList, GetColExpr(bitmapType, leftTag, pos))
-		builder.setBitmapByDisplayNode[key] = pos
-		return GetColExpr(bitmapType, outputTag, pos), true
+		storageType.NotNullable = node.ProjectList[colPos].Typ.NotNullable
+		node.ProjectList = append(node.ProjectList, GetColExpr(storageType, leftTag, pos))
+		builder.mysqlSpecialStorageByDisplayNode[key] = pos
+		return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true
 	}
 
-	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[colPos], visited)
+	storage, found := builder.materializeProjectedMySQLSpecialStorage(node.ProjectList[colPos], visited)
 	if !found {
 		return nil, false
 	}
 	pos := int32(len(node.ProjectList))
-	node.ProjectList = append(node.ProjectList, bitmap)
-	bitmapType = bitmap.Typ
-	bitmapType.Enumvalues = ""
-	builder.setBitmapByDisplayNode[key] = pos
-	return GetColExpr(bitmapType, outputTag, pos), true
+	storage.Typ.NotNullable = node.ProjectList[colPos].Typ.NotNullable
+	node.ProjectList = append(node.ProjectList, storage)
+	builder.mysqlSpecialStorageByDisplayNode[key] = pos
+	return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

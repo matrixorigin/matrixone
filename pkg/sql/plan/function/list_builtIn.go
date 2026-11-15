@@ -13646,6 +13646,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastIndexToValue
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_enum, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexToValue
+				},
+			},
 		},
 	},
 
@@ -13669,6 +13681,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastValueToIndex
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_enum.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastValueToIndex
+				},
+			},
 		},
 	},
 
@@ -13683,6 +13707,18 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar, types.T_uint16},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_enum.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexValueToIndex
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_uint16, types.T_int64},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {

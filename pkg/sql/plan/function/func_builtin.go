@@ -500,6 +500,9 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
+		if enumStr == "" && typ.Oid != types.T_enum {
+			return nil, nil
+		}
 		typeName := "ENUM"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
@@ -538,6 +541,12 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		}
 
 		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_enum {
+			members, err = types.DecodeEnumMembers(enumStr, typ.GetEnumEncoding())
+			if err != nil {
+				return nil, err
+			}
+		}
 		for i := range members {
 			members[i] = sqlquote.StringWithMode(members[i], noBackslashEscapes)
 		}
@@ -549,7 +558,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		enumStr, null2 := enumVal.GetStrValue(i)
-		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+		if null1 || null2 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

@@ -807,38 +807,38 @@ func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
 
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
-	require.Equal(t, "POINT", FormatColType(plan.Type{
+	require.Equal(t, "POINT", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
-	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY", mustFormatColType(t, plan.Type{
 		Id: int32(types.T_geometry),
 	}))
 
-	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
+	require.Equal(t, "POINT SRID 4326", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
-	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY SRID 0", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Width: encodeGeometrySRIDWidth(0, true),
 	}))
 
 	// GEOMETRY32 family renders with the "32" suffix.
-	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY32", mustFormatColType(t, plan.Type{
 		Id: int32(types.T_geometry32),
 	}))
-	require.Equal(t, "POINT32", FormatColType(plan.Type{
+	require.Equal(t, "POINT32", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry32),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 }
 
 func TestFormatColTypeArrayMetadata(t *testing.T) {
-	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
+	require.Equal(t, "ARRAY(varchar(20))", mustFormatColType(t, plan.Type{
 		Id:         int32(types.T_json),
 		Enumvalues: "array(varchar(20))",
 	}))
@@ -847,12 +847,12 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 func TestFormatColTypeVector(t *testing.T) {
 	// Every vector type must round-trip its dimension in SHOW CREATE, not just
 	// f32/f64 (the narrow types were previously missing the (N) suffix).
-	require.Equal(t, "VECF32(3)", FormatColType(plan.Type{Id: int32(types.T_array_float32), Width: 3}))
-	require.Equal(t, "VECF64(3)", FormatColType(plan.Type{Id: int32(types.T_array_float64), Width: 3}))
-	require.Equal(t, "VECBF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
-	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
-	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
-	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+	require.Equal(t, "VECF32(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float32), Width: 3}))
+	require.Equal(t, "VECF64(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float64), Width: 3}))
+	require.Equal(t, "VECBF16(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
+	require.Equal(t, "VECF16(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float16), Width: 3}))
+	require.Equal(t, "VECINT8(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_int8), Width: 3}))
+	require.Equal(t, "VECUINT8(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
 }
 
 // TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
@@ -981,7 +981,7 @@ func TestFormatLinesTerminatedBy(t *testing.T) {
 func TestFormatColTypeKeeps42Boolean(t *testing.T) {
 	require.Equal(t, "BOOL", types.T_bool.String())
 	for _, width := range []int32{0, 1, 64, -1} {
-		require.Equal(t, "BOOL", FormatColType(plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
+		require.Equal(t, "BOOL", mustFormatColType(t, plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
 	}
 }
 
@@ -1045,4 +1045,11 @@ func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustFormatColType(t *testing.T, typ plan.Type) string {
+	t.Helper()
+	formatted, err := FormatColType(typ)
+	require.NoError(t, err)
+	return formatted
 }

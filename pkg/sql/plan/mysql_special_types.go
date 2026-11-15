@@ -47,6 +47,22 @@ func isEnumPlanType(typ *plan.Type) bool {
 // Enumvalues field holding the comma-separated member list. This is the sole
 // discriminator between a plain uint64 column and a SET column — no other code
 // path should populate Enumvalues on a T_uint64 type.
+func sameTypeMemberDomain(left, right *plan.Type) bool {
+	if left.Id == int32(types.T_enum) && right.Id == int32(types.T_enum) {
+		return types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding)
+	}
+	return left.Enumvalues == right.Enumvalues && left.EnumEncoding == right.EnumEncoding
+}
+
+// Slot 1 remains the value for both persisted overload shapes.
+func mysqlSpecialTypeArgs(typ *plan.Type, value *plan.Expr) []*plan.Expr {
+	args := []*plan.Expr{makePlan2StringConstExprWithType(typ.Enumvalues), value}
+	if typ.Id == int32(types.T_enum) && typ.EnumEncoding != 0 {
+		args = append(args, makePlan2Int64ConstExprWithType(int64(typ.EnumEncoding)))
+	}
+	return args
+}
+
 func isSetPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_uint64) && len(typ.GetEnumvalues()) > 0
 }
@@ -69,7 +85,11 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	}
 
 	if isEnumPlanType(&targetType) {
-		index, err := mysqlEnumLiteralIndex(targetType.Enumvalues, value)
+		members, err := types.DecodeEnumMembers(targetType.Enumvalues, targetType.EnumEncoding)
+		if err != nil {
+			return nil, true, err
+		}
+		index, err := mysqlEnumMembersLiteralIndex(members, value)
 		if err != nil {
 			index = 0 // invalid ENUM values are stored as the empty-error member
 		}
@@ -100,22 +120,22 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	return nil, false, nil
 }
 
-func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, error) {
+func mysqlEnumMembersLiteralIndex(members types.EnumMembers, value *tree.NumVal) (types.Enum, error) {
 	switch value.ValType {
 	case tree.P_int64:
 		v, ok := value.Int64()
 		if !ok || v < 0 || v > int64(^uint16(0)) {
 			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
 		}
-		return types.ParseEnumValue(enumValues, uint16(v))
+		return members.ParseValue(uint16(v))
 	case tree.P_uint64:
 		v, ok := value.Uint64()
 		if !ok || v > uint64(^uint16(0)) {
 			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
 		}
-		return types.ParseEnumValue(enumValues, uint16(v))
+		return members.ParseValue(uint16(v))
 	default:
-		return types.ParseEnum(enumValues, value.String())
+		return members.Parse(value.String())
 	}
 }
 
@@ -381,7 +401,7 @@ func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type 
 
 	if isEnumOrSetDisplayValueExpr(expr) {
 		fn := expr.GetF()
-		if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+		if validMySQLSpecialDisplayCall(fn) && isEnumOrSetPlanType(&fn.Args[1].Typ) {
 			return DeepCopyType(&fn.Args[1].Typ)
 		}
 		return nil
@@ -431,7 +451,7 @@ func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type 
 }
 
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
-	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
+	return left != nil && right != nil && left.Id == right.Id && sameTypeMemberDomain(left, right)
 }
 
 // enumFoldKey produces the same equivalence classes used by strings.EqualFold
@@ -464,8 +484,15 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 		}
 		return true
 	case isEnumPlanType(typ):
-		seen := make(map[string]struct{})
-		for _, value := range strings.Split(typ.Enumvalues, ",") {
+		values, err := types.DecodeEnumMembers(typ.Enumvalues, typ.EnumEncoding)
+		if err != nil {
+			return false
+		}
+		seen := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			if value == "" {
+				return false
+			} // Ordinal zero has the same display.
 			key := enumFoldKey(value)
 			if _, exists := seen[key]; exists {
 				return false
@@ -495,15 +522,13 @@ func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, stora
 	if err != nil {
 		return nil, err
 	}
-	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
-		makePlan2StringConstExprWithType(storageType.Enumvalues),
-		DeepCopyExpr(displayExpr),
-	})
+	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, DeepCopyExpr(displayExpr)))
 	if err != nil {
 		return nil, err
 	}
 	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
 	orderKey.Typ.Enumvalues = storageType.Enumvalues
+	orderKey.Typ.EnumEncoding = storageType.EnumEncoding
 	return orderKey, nil
 }
 
@@ -528,13 +553,14 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 		funcName = indexValueToIndex
 	}
 
+	args := []tree.Expr{tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char), astExpr}
+	if targetType.Id == int32(types.T_enum) && targetType.EnumEncoding != 0 {
+		args = append(args, tree.NewNumVal(int64(targetType.EnumEncoding), strconv.FormatUint(uint64(targetType.EnumEncoding), 10), false, tree.P_int64))
+	}
 	return &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
-		Type: tree.FUNC_TYPE_DEFAULT,
-		Exprs: []tree.Expr{
-			tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
-			astExpr,
-		},
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
+		Type:  tree.FUNC_TYPE_DEFAULT,
+		Exprs: args,
 	}, nil
 }
 
@@ -634,4 +660,52 @@ func isNullLiteralExpr(expr *Expr) bool {
 	}
 	lit, ok := expr.Expr.(*plan.Expr_Lit)
 	return ok && lit.Lit != nil && lit.Lit.Isnull
+}
+
+// validMySQLSpecialDisplayCall recognizes only a well-formed presentation
+// wrapper for its stored operand. Dynamic or mismatched definitions must still
+// execute their conversion and cannot be unwrapped to bypass an error.
+func validMySQLSpecialDisplayCall(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || (len(fn.Args) != 2 && len(fn.Args) != 3) ||
+		fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	literal := fn.Args[0].GetLit()
+	if literal == nil || literal.Isnull {
+		return false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+	typ := &fn.Args[1].Typ
+	if value.Sval != typ.Enumvalues {
+		return false
+	}
+	if fn.Func.ObjName == moSetCastIndexToValueFun {
+		return len(fn.Args) == 2 && isSetPlanType(typ) && typ.EnumEncoding == 0
+	}
+	if fn.Func.ObjName != moEnumCastIndexToValueFun || !isEnumPlanType(typ) {
+		return false
+	}
+	var encoding uint32
+	if len(fn.Args) == 3 {
+		if fn.Args[2] == nil {
+			return false
+		}
+		tag := fn.Args[2].GetLit()
+		if tag == nil || tag.Isnull {
+			return false
+		}
+		v, ok := tag.Value.(*plan.Literal_I64Val)
+		if !ok || v.I64Val < 0 || v.I64Val > int64(types.EnumEncodingFramed) {
+			return false
+		}
+		encoding = uint32(v.I64Val)
+	}
+	if encoding != typ.EnumEncoding {
+		return false
+	}
+	_, err := types.DecodeEnumMembers(value.Sval, encoding)
+	return err == nil
 }

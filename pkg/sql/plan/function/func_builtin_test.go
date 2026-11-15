@@ -3059,3 +3059,36 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestEnumFramedNativeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		members []string
+	}{
+		{"2#3:a,b1:c", []string{"a,b", "c"}},
+		{"1#0:", []string{""}},
+		{"2#4: a, 4:x'\\,", []string{" a, ", "x'\\,"}},
+	} {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().SqlMode = mode
+			typ := types.T_enum.ToType()
+			typ.SetEnumEncoding(1)
+			encoded, err := types.Encode(&typ)
+			require.NoError(t, err)
+			check := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.payload}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, nil), builtInMoShowVisibleBinEnum)
+			// Run the actual formatter, then use the independent SQL parser as oracle.
+			defer check.Free()
+			require.NoError(t, check.result.PreExtendAndReset(1))
+			require.NoError(t, builtInMoShowVisibleBinEnum(check.parameters, check.result, proc, 1, nil))
+			metadata := check.GetResultVectorDirectly().GetStringAt(0)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), "create table replay(e "+metadata+")", 1, mode)
+			require.NoError(t, err, metadata)
+			t.Cleanup(stmt.Free)
+			require.Equal(t, tc.members, stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type.(*tree.T).InternalType.EnumValues)
+		}
+	}
+}

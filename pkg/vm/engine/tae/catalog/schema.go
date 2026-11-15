@@ -455,6 +455,11 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		}
 		n += int64(types.TSize)
 		def.Type = types.DecodeType(colBuf)
+		if def.Type.Oid == types.T_enum {
+			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
+				return
+			}
+		}
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
@@ -589,6 +594,11 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
+		if def.Type.Oid == types.T_enum {
+			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
+				return
+			}
+		}
 		if _, err = w.Write(types.EncodeUint16(&def.SeqNum)); err != nil {
 			return
 		}
@@ -809,6 +819,11 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 
 // make a basic coldef without sortKey info
 func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
+	if attr.Type.Oid == types.T_enum {
+		if _, err := types.DecodeEnumMembers(attr.EnumVlaues, attr.Type.GetEnumEncoding()); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	def := &ColDef{
 		Name:          attr.Name,

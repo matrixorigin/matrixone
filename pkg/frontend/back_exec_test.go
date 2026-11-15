@@ -564,3 +564,18 @@ func TestTopLevelStatsDoesNotRunLegacyResourceProjection(t *testing.T) {
 		t.Fatalf("top-level scan stats = (%d,%d), want (9,77)", details.RowsRead, details.BytesScan)
 	}
 }
+
+func TestBackExecStmtBorrowedAST(t *testing.T) {
+	stmt := &trackedStatement{}
+	wrappers, err := GetComputationWrapperInBack(&ExecCtx{reqCtx: t.Context()}, "",
+		&UserInput{sql: "select 1", stmt: stmt}, "", nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, wrappers, 1)
+	wrappers[0].Free()
+	require.Zero(t, stmt.freed)
+	stmt.Free()
+	require.Equal(t, 1, stmt.freed)
+	var back backExec
+	require.Error(t, back.ExecStmt(nil, nil))
+	require.Error(t, back.ExecStmt(t.Context(), nil))
+}

@@ -180,7 +180,10 @@ func constructCreateTableSQLWithFormat(
 			buf.WriteString(",\n")
 		}
 
-		typeStr := formatColType(col.Typ, !legacySchemaHash, noBackslashEscapes)
+		typeStr, err := formatColType(col.Typ, !legacySchemaHash, noBackslashEscapes)
+		if err != nil {
+			return "", nil, err
+		}
 		if strings.HasPrefix(typeStr, "ENUM") || (!legacySchemaHash && strings.HasPrefix(typeStr, "SET")) {
 			prefix := strings.IndexByte(typeStr, '(')
 			if prefix < 0 {
@@ -1151,13 +1154,13 @@ func skipBlockComment(s string, start int) int {
 }
 
 // FormatColType Get the formatted description of the column type.
-func FormatColType(colType plan.Type) string {
+func FormatColType(colType plan.Type) (string, error) {
 	return formatColType(colType, true, false)
 }
 
-func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) string {
+func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) (string, error) {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
-		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
+		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):], nil
 	}
 
 	typ := types.T(colType.Id).ToType()
@@ -1191,6 +1194,13 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 			break
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
+		if typ.Oid == types.T_enum {
+			var err error
+			elements, err = types.DecodeEnumMembers(colType.Enumvalues, colType.EnumEncoding)
+			if err != nil {
+				return "", err
+			}
+		}
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
@@ -1223,7 +1233,7 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}
-	return ts + suffix
+	return ts + suffix, nil
 }
 
 // formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL

@@ -279,20 +279,20 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode                   []*BindContext
-	nameByColRef                map[[2]int32]string
-	protectedScans              map[int32]int
-	projectSpecialGuards        map[int32]*specialIndexGuard
-	vectorCandidateAuto         *vectorCandidateAutoSummary
-	setBitmapByDisplayNode      map[[2]int32]int32
-	indexHintsByScan            map[int32]*indexHintSet
-	indexHintOwnerByNode        map[int32]int32
-	preserveSinkProjection      map[int32]struct{}
-	preserveLockProjection      map[int32]struct{}
-	preservePreInsertProjection map[int32]struct{}
-	preserveInsertProjection    map[int32]struct{}
-	preserveScanProjection      map[int32]struct{}
-	positionalSinkScans         map[int32]struct{}
+	ctxByNode                        []*BindContext
+	nameByColRef                     map[[2]int32]string
+	protectedScans                   map[int32]int
+	projectSpecialGuards             map[int32]*specialIndexGuard
+	vectorCandidateAuto              *vectorCandidateAutoSummary
+	mysqlSpecialStorageByDisplayNode map[[2]int32]int32
+	indexHintsByScan                 map[int32]*indexHintSet
+	indexHintOwnerByNode             map[int32]int32
+	preserveSinkProjection           map[int32]struct{}
+	preserveLockProjection           map[int32]struct{}
+	preservePreInsertProjection      map[int32]struct{}
+	preserveInsertProjection         map[int32]struct{}
+	preserveScanProjection           map[int32]struct{}
+	positionalSinkScans              map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -623,8 +623,9 @@ type baseBinder struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ  Type
-	cols []string
+	typ              Type
+	cols             []string
+	storedEnumDomain *storedEnumDomain
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`

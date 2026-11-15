@@ -1177,7 +1177,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+		t := vector.ProtoTypeToType(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1568,7 +1568,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
 		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
+		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
 }
@@ -1714,7 +1714,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 	return left.Id == right.Id &&
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
+		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

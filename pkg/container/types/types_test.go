@@ -93,13 +93,13 @@ func TestDecimal128MarshalAndUnmarshal(t *testing.T) {
 
 func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	typ := Type{
-		Oid:     T(1),
-		Charset: 2,
-		notNull: 0,
-		dummy2:  4,
-		Size:    5,
-		Width:   6,
-		Scale:   -1,
+		Oid:          T(1),
+		Charset:      2,
+		notNull:      0,
+		enumEncoding: 4,
+		Size:         5,
+		Width:        6,
+		Scale:        -1,
 	}
 
 	size := typ.ProtoSize()

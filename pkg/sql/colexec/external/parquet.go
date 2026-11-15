@@ -1965,9 +1965,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			)
 		}
 	case types.T_enum:
+		members, err := types.DecodeEnumMembers(dt.Enumvalues, dt.EnumEncoding)
+		if err != nil {
+			mp.mapper = func(_ *columnMapper, _ parquet.Page, _ *process.Process, _ *vector.Vector) error { return err }
+			break
+		}
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			if isParquetIntegerSource(st, false) {
-				enumValues := dt.Enumvalues
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Enum(0), func(v parquet.Value) (types.Enum, error) {
 						val, err := parquetValueToUint64(proc.Ctx, st, v)
@@ -1977,17 +1981,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						if val > math.MaxUint16 {
 							return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows enum index", val)
 						}
-						return types.ParseEnumValue(enumValues, uint16(val))
+						return members.ParseValue(uint16(val))
 					})
 				}
 			}
 			break
 		}
-		enumValues := dt.Enumvalues
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 				func(data []byte) (types.Enum, error) {
-					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+					return members.Parse(util.UnsafeBytesToString(data))
 				},
 				types.Enum(0),
 			)

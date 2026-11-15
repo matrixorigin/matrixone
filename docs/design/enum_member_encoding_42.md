@@ -1,8 +1,6 @@
 # Exact ENUM member domains on 4.2
 
-Status: accepted technical design; bind this revision in a design-only commit before implementation.
 Scope: PR #32723 / the ENUM-domain part of #30771 and #30776. Binary collation and unrelated HEX behavior are not closed by this change.
-Source basis: a864b44276b63d39cfed0144898b15114427851b, to be rebased onto 4.2-dev cc056261a8fb977aeaffec3bea4bbd85a342fdca.
 
 ## 1. Contract and evidence
 
@@ -100,6 +98,8 @@ Close these actual consumers:
 - buildNotNullColumnVal's implicit first-member backfill should use ordinal SQL constant 1 through the existing target cast, rather than interpolating a raw comma/quote-bearing label. Prove this with real ALTER ADD NOT NULL.
 - frontend branch/hashdiff: carry the tag in existing type/layout metadata, compare full domains semantically and decode varchar-to-enum values with the common owner. Preserve ordinal 0; display text alone cannot distinguish an empty error member from a declared empty label. Non-injective reverse conversions must use existing raw-ordinal binding or reject ambiguity, never guess.
 - checkpointtool: copy tag from actual native type, decode encoding 1 before rendering; preserve its legacy-format reader behavior for 0. Do not route encoding 1 through TrimSpace or SQL-looking-prefix heuristics.
+
+OUTPUT AS consumes the already-frozen spool; it must not re-query changing source tables. Its existing bounded SQL buffer preserves other types' formatting. For ENUM columns, parse that buffer once and replace only numeric ENUM cells with an internal StoredEnumValue AST carrying the complete domain and ordinal. No SQL parser production creates this node. The target-aware binder checks ordered-domain equality, the supported encoding and ordinal range (including stored zero), then emits the existing typed Literal_EnumVal. Ordinary SQL numeric zero retains strict assignment behavior. Reuse BackgroundExec.ExecStmt, the existing UserInput.stmt path, and ordinary compilation/transactions; do not introduce a second writer, public SQL function, IGNORE, or mutable process flag. The caller frees each flush AST, computation wrappers borrow it, and all values/domain strings outlive spool batch reuse. Failed materialization keeps the existing destination-table cleanup owner.
 - UNIQUE/FK/index column types, view/CTE provenance and clone/restore/backup definitions must retain the pair, including hidden physical and ordering columns.
 
 ## 7. Upgrade, recovery and external boundaries
@@ -127,6 +127,4 @@ Old binaries must not open new-format data. Cross-cluster publication/subscripti
 | Performance | Same-source pre/post batch benchmarks for ordinary legacy names/numeric/fold lookups at small/large domains, allocations and existing index thresholds; new coded domain decode-once benchmark. Preserve ordinary two-argument path and investigate any reproducible material regression before acceptance. |
 | Quality | Fresh owning tests/static for the actual changed closure, generated-proto reproducibility, scoped race only if implementation introduces shared mutable/lifecycle behavior. |
 
-Create a design-only commit of this exact document before production edits. Rebase the retained PR onto the recorded 4.2-dev head, preserve both upstream CSV/frontend changes and the PR's TLS/external fixes when resolving conflicts, then implement the closed owner map. Bind final source/evidence to the rebased tree; do not reuse old benchmarks/upgrade runs as fresh codec evidence. Keep raw failures and report measured limits.
-
-Design decision: PASS for implementation under these contracts. No unresolved architectural blocker remains; the validation rows are implementation acceptance gates, not permission to weaken the specified semantics.
+Evidence must identify the rebased source tree. Preserve upstream CSV/frontend behavior and the PR\'s TLS/external fixes. Performance and upgrade results for an older implementation do not qualify a changed codec or writer. Keep raw failures and report measured limits.

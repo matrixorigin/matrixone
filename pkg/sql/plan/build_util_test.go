@@ -771,25 +771,17 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 }
 
 func TestGetTypeFromAstEnumAndSetMemberBoundary(t *testing.T) {
-	for _, typ := range []string{"enum('a,b','c')", "enum(',')", "enum('a',',b')", "set('a,b','c')"} {
-		t.Run(typ, func(t *testing.T) {
-			stmt, err := mysql.ParseOne(t.Context(), "create table t(v "+typ+")", 1)
-			require.NoError(t, err)
-			t.Cleanup(stmt.Free)
-			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			got, err := getTypeFromAst(t.Context(), column.Type)
-			require.ErrorContains(t, err, "contains ','")
-			require.Zero(t, got.Id)
-		})
-	}
 	for _, tc := range []struct {
-		typ     string
-		members string
+		typ, payload string
+		encoding     uint32
 	}{
-		{"enum('a','b')", "a,b"},
-		{"enum('')", ""},
-		{"enum('UP','Down word')", "UP,Down word"},
-		{"set('a','b')", "a,b"},
+		{"enum('a,b','c')", "2#3:a,b1:c", 1},
+		{"enum(',')", "1#1:,", 1},
+		{"enum('a',',b')", "2#1:a2:,b", 1},
+		{"enum('')", "1#0:", 1},
+		{"enum('a','b')", "a,b", 0},
+		{"enum('UP','Down word')", "UP,Down word", 0},
+		{"set('a','b')", "a,b", 0},
 	} {
 		t.Run(tc.typ, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table t(v "+tc.typ+")", 1)
@@ -798,7 +790,14 @@ func TestGetTypeFromAstEnumAndSetMemberBoundary(t *testing.T) {
 			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			got, err := getTypeFromAst(t.Context(), column.Type)
 			require.NoError(t, err)
-			require.Equal(t, tc.members, got.Enumvalues)
+			require.Equal(t, tc.payload, got.Enumvalues)
+			require.Equal(t, tc.encoding, got.EnumEncoding)
 		})
 	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(v set('a,b','c'))", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	got, err := getTypeFromAst(t.Context(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+	require.ErrorContains(t, err, "contains ','")
+	require.Zero(t, got.Id)
 }

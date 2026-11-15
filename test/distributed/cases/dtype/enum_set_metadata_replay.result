@@ -15,7 +15,7 @@ execute domain_replay;
 deallocate prepare domain_replay;
 insert into ordinary_replay values(1,1),(2,2),(3,4);
 select count(*) as exact_members from ordinary_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
-➤ exact_members[-5,64,0]
+➤ exact_members[-5,64,0]  𝄀
 3
 set sql_mode='NO_BACKSLASH_ESCAPES';
 execute metadata_probe;
@@ -28,7 +28,7 @@ execute domain_replay;
 deallocate prepare domain_replay;
 insert into nbe_replay values(1,1),(2,2),(3,4);
 select count(*) as exact_members from nbe_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
-➤ exact_members[-5,64,0]
+➤ exact_members[-5,64,0]  𝄀
 3
 set sql_mode='';
 execute metadata_probe;
@@ -36,15 +36,21 @@ execute metadata_probe;
 46  𝄀
 45
 deallocate prepare metadata_probe;
-create table enum_bad(v enum('a,b','c'));
-invalid input: enum member "a,b" contains ','
-select count(*) as bad_tables from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME='enum_bad';
-➤ bad_tables[-5,64,0]
-0
+create table enum_comma(v enum('a,b','c'));
+insert into enum_comma values('a,b'),('c'),(1),(2);
+select hex(v),v+0 from enum_comma order by v+0;
+➤ hex(v)[12,-1,0]  ¦  v + 0[-5,64,0]  𝄀
+612C62  ¦  1  𝄀
+612C62  ¦  1  𝄀
+63  ¦  2  𝄀
+63  ¦  2
+select count(*) as comma_tables from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME='enum_comma';
+➤ comma_tables[-5,64,0]  𝄀
+1
 alter table ordinary_replay modify e enum('a,b','c');
-invalid input: enum member "a,b" contains ','
+internal error: convert to MySQL enum failed: item O'Brien is not in enum [a,b c]
 select count(*) as exact_members from ordinary_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
-➤ exact_members[-5,64,0]
+➤ exact_members[-5,64,0]  𝄀
 3
 set sql_mode=@metadata_saved_mode;
 drop database enum_set_metadata_replay;

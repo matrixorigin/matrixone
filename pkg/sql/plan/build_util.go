@@ -281,13 +281,11 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			for _, value := range n.InternalType.EnumValues {
-				if strings.Contains(value, ",") {
-					return plan.Type{}, moerr.NewInvalidInputf(ctx, "enum member %q contains ','", value)
-				}
+			payload, encoding, err := types.EncodeEnumMembers(n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
 			}
-
-			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding}, nil
 		case defines.MYSQL_TYPE_SET:
 			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
 			if err != nil {

@@ -1,0 +1,147 @@
+drop database if exists enum_domain_roundtrip;
+create database enum_domain_roundtrip;
+use enum_domain_roundtrip;
+set @enum_saved_mode=@@sql_mode;
+set sql_mode='';
+create table domain_src(id int primary key,e enum('a,b','c','') not null default 'a,b');
+insert into domain_src(id) values(1);
+insert into domain_src values(2,'c'),(3,''),(4,1);
+insert ignore into domain_src values(5,'missing');
+select id,hex(e),e+0 from domain_src order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  63  ¦  2  𝄀
+3  ¦    ¦  3  𝄀
+4  ¦  612C62  ¦  1  𝄀
+5  ¦    ¦  0
+create table domain_copy like domain_src;
+insert into domain_copy select id,e from domain_src order by id;
+select id,hex(e),e+0 from domain_copy order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  63  ¦  2  𝄀
+3  ¦    ¦  3  𝄀
+4  ¦  612C62  ¦  1  𝄀
+5  ¦    ¦  0
+alter table domain_copy modify e enum('c','','a,b');
+select id,hex(e),e+0 from domain_copy order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  3  𝄀
+2  ¦  63  ¦  1  𝄀
+3  ¦    ¦  2  𝄀
+4  ¦  612C62  ¦  3  𝄀
+5  ¦    ¦  0
+alter table domain_copy modify e enum('c','');
+internal error: convert to MySQL enum failed: item a,b is not in enum [c ]
+select id,hex(e),e+0 from domain_copy order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  3  𝄀
+2  ¦  63  ¦  1  𝄀
+3  ¦    ¦  2  𝄀
+4  ¦  612C62  ¦  3  𝄀
+5  ¦    ¦  0
+create table backfill(id int primary key);
+insert into backfill values(1),(2);
+alter table backfill add e enum('a,b','q''r') not null;
+select id,hex(e),e+0 from backfill order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  612C62  ¦  1
+create table singleton(id int primary key,e enum('') not null default '');
+insert into singleton(id) values(1);
+insert into singleton values(2,''),(3,1);
+insert ignore into singleton values(4,'bad');
+select id,hex(e),e+0 from singleton order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦    ¦  1  𝄀
+2  ¦    ¦  1  𝄀
+3  ¦    ¦  1  𝄀
+4  ¦    ¦  0
+create table legacy_collision(id int primary key,e enum('2#3:a','b1:c'));
+insert into legacy_collision values(1,1),(2,2);
+create table framed_collision(id int primary key,e enum('a,b','c'));
+insert into framed_collision values(1,1),(2,2);
+select id,hex(e),e+0 from legacy_collision order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  3223333A61  ¦  1  𝄀
+2  ¦  62313A63  ¦  2
+select id,hex(e),e+0 from framed_collision order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  63  ¦  2
+select att_relname,substring(hex(atttyp),13,4) as member_encoding,attr_enum from mo_catalog.mo_columns where att_database=database() and att_relname in ('legacy_collision','framed_collision') and attname='e' order by att_relname;
+➤ att_relname[12,-1,0]  ¦  member_encoding[12,-1,0]  ¦  attr_enum[12,-1,0]  𝄀
+framed_collision  ¦  0001  ¦  2#3:a,b1:c  𝄀
+legacy_collision  ¦  0000  ¦  2#3:a,b1:c
+create table definition_order(id int primary key,e enum('z,b','a','b,c'));
+insert into definition_order values(1,'b,c'),(2,'z,b'),(3,'a');
+select id,e from definition_order order by e;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+2  ¦  z,b  𝄀
+3  ¦  a  𝄀
+1  ¦  b,c
+select id,row_number() over(order by e) from definition_order order by id;
+➤ id[4,32,0]  ¦  row_number() over (order by e)[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  1  𝄀
+3  ¦  2
+select group_concat(id order by e) from definition_order;
+➤ group_concat(id order by e separator ,)[12,0,0]  𝄀
+2,3,1
+create view domain_view as select id,e from definition_order;
+select id,e from domain_view order by e;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+2  ¦  z,b  𝄀
+3  ¦  a  𝄀
+1  ¦  b,c
+with q as (select id,e from definition_order) select id,e from q order by e;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+2  ¦  z,b  𝄀
+3  ¦  a  𝄀
+1  ¦  b,c
+create table domain_ctas as select id,e from definition_order;
+select id,hex(e),e+0 from domain_ctas order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  622C63  ¦  3  𝄀
+2  ¦  7A2C62  ¦  1  𝄀
+3  ¦  61  ¦  2
+create table enum_parent(id int primary key,e enum('a,b','c','d,e') unique);
+create table enum_child(id int primary key,e enum('a,b','c','d,e'),foreign key(e) references enum_parent(e) on update cascade);
+insert into enum_parent values(1,'a,b');
+insert into enum_child values(1,'a,b');
+update enum_parent set e='d,e' where id=1;
+select id,hex(e),e+0 from enum_child;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  642C65  ¦  3
+insert into enum_parent values(2,'d,e');
+Duplicate entry '3' for key 'e'
+insert into enum_child values(2,'c');
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) as parent_rows from enum_parent;
+➤ parent_rows[-5,64,0]  𝄀
+1
+select count(*) as child_rows from enum_child;
+➤ child_rows[-5,64,0]  𝄀
+1
+create table import_csv(id int primary key,e enum('a,b','c',''));
+load data inline format='csv', data='1,"a,b"\n2,c\n3,""\n' into table import_csv fields terminated by ',' optionally enclosed by '"';
+select id,hex(e),e+0 from import_csv order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  63  ¦  2  𝄀
+3  ¦    ¦  3
+create table import_json like import_csv;
+load data inline format='jsonline', data='{"id":1,"e":"a,b"}\n{"id":2,"e":"c"}\n{"id":3,"e":""}\n', jsontype='object' into table import_json;
+select id,hex(e),e+0 from import_json order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  612C62  ¦  1  𝄀
+2  ¦  63  ¦  2  𝄀
+3  ¦    ¦  3
+create table import_numeric(id int primary key,e enum('3','a,b'));
+load data inline format='csv', data='1,3\n2,"a,b"\n' into table import_numeric fields terminated by ',' optionally enclosed by '"';
+select id,hex(e),e+0 from import_numeric order by id;
+➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  33  ¦  1  𝄀
+2  ¦  612C62  ¦  2
+set sql_mode=@enum_saved_mode;
+drop database enum_domain_roundtrip;

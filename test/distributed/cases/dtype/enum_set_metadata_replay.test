@@ -28,8 +28,10 @@ select count(*) as exact_members from nbe_replay where (e+0=1 and s+0=1 and hex(
 set sql_mode='';
 execute metadata_probe;
 deallocate prepare metadata_probe;
-create table enum_bad(v enum('a,b','c'));
-select count(*) as bad_tables from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME='enum_bad';
+create table enum_comma(v enum('a,b','c'));
+insert into enum_comma values('a,b'),('c'),(1),(2);
+select hex(v),v+0 from enum_comma order by v+0;
+select count(*) as comma_tables from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME='enum_comma';
 alter table ordinary_replay modify e enum('a,b','c');
 select count(*) as exact_members from ordinary_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
 set sql_mode=@metadata_saved_mode;
