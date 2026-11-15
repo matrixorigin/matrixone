@@ -215,7 +215,9 @@ func BenchmarkCSVRecordAccumulatorParallel(b *testing.B) {
 			b.SetBytes(int64(len(input)))
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
-				w := &workers[next.Add(1)-1]
+				// The prepared slots are immutable after handoff. Keep the hot row
+				// header local so independent readers do not share a writable cache line.
+				w := workers[next.Add(1)-1]
 				for pb.Next() {
 					w.reader.Reset(input)
 					w.parser.Reset(w.reader)
