@@ -53,7 +53,7 @@ func checkCompressedExtent(t *testing.T, extent Extent, offset uint32, input, ou
 		n, err := lz4.UncompressBlock(output, decoded)
 		require.NoError(t, err)
 		require.Equal(t, len(input), n)
-		require.Equal(t, input, decoded)
+		require.True(t, bytes.Equal(input, decoded), "decoded payload differs")
 	}
 }
 
@@ -119,6 +119,37 @@ func TestWriteWithCompressDirectArenaBoundaryAndFallback(t *testing.T) {
 				require.NotNil(t, arena.compressBuf)
 			} else {
 				require.Nil(t, arena.compressBuf)
+			}
+		})
+	}
+}
+
+func TestWriteWithCompressDirectArenaInputBoundaries(t *testing.T) {
+	incompressible := make([]byte, 64<<10)
+	state := uint64(731)
+	for i := range incompressible {
+		state ^= state << 13
+		state ^= state >> 7
+		state ^= state << 17
+		incompressible[i] = byte(state)
+	}
+	for _, tc := range []struct {
+		name  string
+		input []byte
+	}{
+		{name: "empty"},
+		{name: "incompressible", input: incompressible},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arena := NewArena(lz4.CompressBlockBound(len(tc.input)))
+			t.Cleanup(arena.FreeBuffers)
+			writer := &objectWriterV1{arena: arena}
+			out, extent, err := writer.WriteWithCompress(0, tc.input)
+			require.NoError(t, err)
+			checkCompressedExtent(t, extent, 0, tc.input, out)
+			require.Nil(t, arena.compressBuf)
+			if len(tc.input) != 0 {
+				require.GreaterOrEqual(t, len(out), len(tc.input))
 			}
 		})
 	}
