@@ -24,6 +24,11 @@ const (
 	SkipDiskCacheReads
 	SkipDiskCacheWrites
 	SkipFullFilePreloads
+	// ReplayDataForDiskCache permits a synchronous Write to reread Data entries
+	// for its disk cache. The caller and forwarding wrappers must keep Entries,
+	// their Data slices, and backing owners valid and unchanged until Write
+	// returns. ReaderForWrite remains a one-shot stream.
+	ReplayDataForDiskCache
 )
 
 const (
