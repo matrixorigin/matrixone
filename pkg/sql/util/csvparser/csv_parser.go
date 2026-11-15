@@ -800,7 +800,15 @@ outside:
 			}
 			if bytes.Equal(parser.newLine, []byte{'\n'}) {
 				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {
-					parser.recordBuffer = parser.recordBuffer[:n-1]
+					// Preserve CR in an already-sealed field; its boundary must
+					// remain within recordBuffer for every row/header consumer.
+					lastIdx := 0
+					if m := len(parser.fieldIndexes); m > 0 {
+						lastIdx = parser.fieldIndexes[m-1]
+					}
+					if n-1 >= lastIdx {
+						parser.recordBuffer = parser.recordBuffer[:n-1]
+					}
 				}
 			}
 			parser.finishField(fieldIsQuoted)
