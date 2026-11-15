@@ -4748,6 +4748,7 @@ func TestCastToJSONSupportedTypes(t *testing.T) {
 
 	for _, source := range []types.T{
 		types.T_uuid, types.T_enum, types.T_Rowid, types.T_Blockid,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_TS,
 	} {
 		require.Falsef(t, IfTypeCastSupported(source, types.T_json), "%s -> JSON", source)

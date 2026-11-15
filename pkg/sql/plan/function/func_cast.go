@@ -9711,6 +9711,7 @@ func castToJSONRows(from *vector.Vector, rs jsonCastSink, proc *process.Process,
 				return err
 			}
 		}
+		// typeswitch:partial JSON cast source types exclude low-precision floats; ordinary casts dispatch them through float32 before this switch.
 		switch from.GetType().Oid {
 		case types.T_json:
 			encoded = raw

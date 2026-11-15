@@ -27,6 +27,10 @@ import (
 // This is a real same-binary full-cluster restart, not a predecessor-release
 // upgrade. The catalog and object data remain in the test's private directory.
 func TestJSONValuePersistedExpressionsSurviveRestart(t *testing.T) {
+	// This test needs its own restartable cluster and persistent data directory.
+	// Release idle shared fixtures left by earlier tests before acquiring it.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	t.Cleanup(cancel)
 	// Darwin's Unix socket path limit is shorter than testing.TempDir's
