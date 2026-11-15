@@ -788,9 +788,9 @@ SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
 -- Test 13: Optimizer hint test - precision mismatch should show hint
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 
--- Test 14: Early false detection - should return empty result immediately
+-- Test 14: An unrepresentable value cannot match a non-NULL decimal
 -- price is DECIMAL(10,2), constant 99.991234567 has scale=9 with non-zero trailing digits
--- This comparison is always false, should not scan table
+-- The nullable comparison must still preserve SQL NULL semantics
 SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991234567;
 
 -- Test 15: Early false detection with different column
@@ -852,7 +852,7 @@ SELECT * FROM decimal128_large_test ORDER BY id;
 
 DROP TABLE decimal128_large_test;
 
--- Test 25-28: Not-equal (<>) operator early true detection
+-- Test 25-28: Not-equal (<>) operator with a nullable decimal
 DROP TABLE IF EXISTS decimal_neq_test;
 CREATE TABLE decimal_neq_test (
     id INT PRIMARY KEY,
@@ -860,10 +860,10 @@ CREATE TABLE decimal_neq_test (
 );
 INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
 
--- Test 25: <> with incompatible precision - should return all rows (always true)
+-- Test 25: <> with incompatible precision returns non-NULL rows
 -- price is DECIMAL(10,2), constant 99.991234567 has non-zero trailing digits
--- Any DECIMAL(10,2) value can never equal 99.991234567, so <> is always true
--- @regex("Filter Cond: true",true)
+-- A non-NULL DECIMAL(10,2) value cannot equal 99.991234567
+-- @regex("price.*<>.*99.991",true)
 EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.991234567;
 SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.991234567;
 
@@ -875,7 +875,7 @@ SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.990000000;
 -- Test 27: <> with exact scale match - normal comparison
 SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.99;
 
--- Test 28: <> combined with other conditions - always true simplifies to just id > 1
+-- Test 28: <> combined with other conditions
 SELECT * FROM decimal_neq_test WHERE price <> 99.991234567 AND id > 1 ORDER BY id;
 
 DROP TABLE decimal_neq_test;

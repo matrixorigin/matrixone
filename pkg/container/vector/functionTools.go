@@ -172,6 +172,12 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	// A wrapper may own a converted vector (for example DECIMAL64 to
+	// DECIMAL128). Reinterpreting the original source on reuse loses that
+	// conversion; changed type metadata also requires a fresh wrapper.
+	if !f.GetType().Eq(*v.GetType()) {
+		return false
+	}
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[T])
 		if !ok {

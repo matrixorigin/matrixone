@@ -1456,7 +1456,8 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
-        Filter Cond: false
+        Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(17, 9)) = 99.991234567)
+              -- HINT: Cast expression may prevent index usage
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
@@ -1569,7 +1570,8 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
-        Filter Cond: false
+        Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(17, 9)) = 99.991234567)
+              -- HINT: Cast expression may prevent index usage
 SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
@@ -1639,11 +1641,11 @@ price DECIMAL(10, 2)
 );
 INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
 EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.991234567;
--- @regex("Filter Cond: true", true)
+-- @regex("price.*<>.*99.991", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on decimal.decimal_neq_test  𝄀
-        Filter Cond: true
+        Filter Cond: (decimal_neq_test.price <> 99.991234567)
 SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.991234567;
 ➤ COUNT(*)[-5,64,0]  𝄀
 3
