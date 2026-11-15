@@ -3246,11 +3246,22 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 	return parquetFloat64ToFloat32(ctx, val)
 }
 
-func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
-	if !math.IsNaN(val) && !math.IsInf(val, 0) && (val > math.MaxFloat32 || val < -math.MaxFloat32) {
-		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
+func parquetFloat64ToFloat32(ctx context.Context, val float64) (result float32, err error) {
+	if val > math.MaxFloat32 || val < -math.MaxFloat32 {
+		result, err = parquetFloat64ToFloat32OutOfRange(ctx, val)
+	} else {
+		result = float32(val)
 	}
-	return float32(val), nil
+	return
+}
+
+// parquetFloat64ToFloat32OutOfRange accepts infinities and rejects finite overflow.
+// The caller must first check that val is outside the finite FLOAT range.
+func parquetFloat64ToFloat32OutOfRange(ctx context.Context, val float64) (float32, error) {
+	if math.IsInf(val, 0) {
+		return float32(val), nil
+	}
+	return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
 }
 
 func parquetValueToString(ctx context.Context, st parquet.Type, v parquet.Value) (string, error) {

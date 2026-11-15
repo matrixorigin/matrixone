@@ -98,7 +98,8 @@ Earlier canonical metadata/standard BOOL reflection results do not certify this
 display policy. Unchanged TLS, Stage, FULLTEXT, parser, Parquet and branch/restore
 closures reuse their matching evidence from the series through 428a9ea84ab1
 with revision and scope attribution; those suites were not rerun by this
-display-only follow-up.
+display-only follow-up. The later lexer/Parquet QA section below records the
+new implementation and owning-package validation for those two paths.
 
 ## Release limits
 
@@ -192,3 +193,87 @@ and account for writes after that backup. Simply replacing the binary with
 4.2.1/4.2.8 on candidate-written data is not a validated safe rollback procedure.
 The isolated old-binary probes do not change the shutdown-only/no-downgrade
 support contract or certify every user schema, snapshot, index or deployment.
+
+## Lexer and Parquet QA follow-up
+
+This follow-up closes the two nonblocking findings in the
+[QA review on 6eb3293fef74](https://github.com/matrixorigin/matrixone/pull/32723#issuecomment-6892511924).
+It adds no display mode or compatibility path.
+
+### Signed exponent boundary
+
+After recognizing e/E and a sign, the existing scanner requires the next
+character to be a decimal digit. Otherwise it returns LEX_ERROR immediately.
+This covers integer, dotted and leading-dot mantissas, both signs, missing
+digits, whitespace and a second sign. Legacy unsigned identifier fallback
+(1e, 1efoo, 1e2foo, 123name), complete exponents and existing dollar aliases
+remain covered by positive controls.
+
+The eight new invalid lexer assertions failed before the three-line fix and
+pass afterwards. The QA comment's blanket base-ParseOne rejection claim needs
+qualification: an independent AST-only probe found that base accepts
+SELECT 1.5e+foo as an identifier expression; this does not establish successful
+SQL execution. The corrected scanner rejects the malformed exponent lexically.
+
+### Parquet conversion and measured cost
+
+The existing range comparison keeps ordinary values and NaN on the direct
+conversion path. Only values outside the finite FLOAT range call one private
+cold converter. It accepts signed infinities and returns the original
+contextual invalid-input error plus zero for finite overflow. Exact boundary
+neighbors and both signed MaxFloat64 values test finite overflow; existing
+plain/dictionary tests retain infinities, NaN, signed zero and finite boundaries.
+
+On 57, Linux/amd64, AMD Ryzen 9 7900X, Go 1.26.4 and source-matched CPU native
+libraries, the final converter is inlined under default compiler settings
+(cost 77, budget 80). The standard benchmark binary has no outer converter
+symbol or scalar call to it. No compiler directives, performance-only flags,
+extra memory/state or input-specific shortcuts are used.
+
+The same committed benchmark source runs on exact base 1a3e7fb696,
+pre-fix 6eb3293fef and the final follow-up. Base/pre overlays only supply that
+benchmark and change the shared page-test fixture argument to testing.TB;
+their production source is unchanged. Five interleaved rounds per revision,
+one second per case, use CPU 23 and GOMAXPROCS=1. Medians:
+
+| Case | Base 1a3e7fb696 | Before 6eb3293fef | Final follow-up | Final/base | Final/before |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Scalar finite (ns/value) | 0.9541 | 2.0970 | 0.9532 | -0.09% | -54.54% |
+| Scalar NaN (ns/value) | 0.9543 | 1.4580 | 0.9537 | -0.06% | -34.59% |
+| 4096-value plain page (us/page) | 120.8120 | 123.8330 | 121.1160 | +0.25% | -2.19% |
+| 4096-value dictionary page (us/page) | 111.2290 | 115.5350 | 112.0040 | +0.70% | -3.06% |
+
+Both scalar cases allocate zero bytes/objects. Both page cases retain exactly
+98,320 B/op and 2 allocs/op on all three revisions and all samples. Pages contain
+4096 real Double values; setup asserts row/value counts, plain/dictionary
+encoding and each mapped value (including signed-zero bits). File creation is
+outside timing and the output vector is reused with its length reset.
+
+These are scalar and in-memory page-mapping measurements. They do not measure
+end-to-end LOAD, file I/O, Darwin/arm64 or a general workload speedup. Small
+page differences are reported numerically rather than treated as significance.
+Earlier candidates were retained and rejected: range-first still lost inlining,
+and an inlined error-only checker retained an extra normal-path error branch
+and about 19% scalar overhead against base.
+
+### Validation and evidence reuse
+
+- Final source: four focused root tests and all 593 root tests in
+  pkg/sql/parsers/dialect/mysql, pkg/sql/parsers and pkg/sql/colexec/external
+  pass with -short -tags=matrixone_test, zero skips.
+- gofmt, standard vet, pinned molint and configured incremental golangci-lint
+  pass on those three owners.
+- The existing numeric_literal_exponent BVT passes 19/19 twice on the same
+  real instance, zero failed/ignored/abnormal statements, normal shutdown and
+  explicit fixture cleanup. It uses ordinary expected-result comparison,
+  without genrs. This run preceded the final Parquet-only layout change;
+  lexer and case/result bytes are unchanged and checked explicitly.
+- The initial TestReadDirSymlink failure under a hidden task TMPDIR also
+  reproduces on exact base. Base passes under the visible task TMPDIR, as
+  does the final complete owner run, without test/assertion changes or skips.
+  Failed performance candidates and task-runner setup failures remain recorded
+  separately and do not count as passing evidence.
+- Design and final review use gpt-6.1-sol/max. The PR body records the final
+  reviewed source and outcome. Unchanged display, TLS, FULLTEXT, Stage,
+  branch/restore and upgrade evidence retain their stated revision and scope;
+  those broader suites are not rerun for this two-owner follow-up.

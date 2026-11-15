@@ -816,6 +816,9 @@ exponent:
 			token = FLOAT
 			canPromoteToIdentifier = false
 			s.incN(2)
+			if digitVal(s.cur()) >= 10 {
+				return LEX_ERROR, s.buf[start:s.Pos]
+			}
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
 			s.inc()

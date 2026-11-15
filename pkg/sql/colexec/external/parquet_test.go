@@ -1825,6 +1825,19 @@ func TestParquetFloat32Overflow(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects finite overflow", func(t *testing.T) {
+		for _, value := range []float64{
+			math.Nextafter(math.MaxFloat32, math.Inf(1)),
+			math.Nextafter(-math.MaxFloat32, math.Inf(-1)),
+			math.MaxFloat64,
+			-math.MaxFloat64,
+		} {
+			converted, err := parquetFloat64ToFloat32(context.Background(), value)
+			require.ErrorContains(t, err, "overflows FLOAT")
+			require.Zero(t, converted)
+		}
+	})
+
 	t.Run("accepts finite boundaries", func(t *testing.T) {
 		for _, value := range []float64{math.MaxFloat32, -math.MaxFloat32} {
 			converted, err := parquetFloat64ToFloat32(context.Background(), value)
@@ -2169,7 +2182,7 @@ func writeListNodeAndGetPage(t *testing.T, listNode parquet.Node, rows []parquet
 	return f, pg
 }
 
-func writeColumnAndGetPage(t *testing.T, node parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
+func writeColumnAndGetPage(t testing.TB, node parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
 	t.Helper()
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{

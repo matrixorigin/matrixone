@@ -102,6 +102,13 @@ func TestNumberBeforeDollarQuotedAlias(t *testing.T) {
 	}{
 		{"123name", ID, "123name"}, {"1e", ID, "1e"}, {"0xFE", HEXNUM, "0xfe"},
 		{"1.5e", LEX_ERROR, "1.5e"}, {"1.efoo", LEX_ERROR, "1.e"},
+		{"1.5e+", LEX_ERROR, "1.5e+"}, {"1.5e-", LEX_ERROR, "1.5e-"},
+		{".1e+", LEX_ERROR, ".1e+"}, {"1.5e+foo", LEX_ERROR, "1.5e+"},
+		{"1e+", LEX_ERROR, "1e+"}, {"1E-", LEX_ERROR, "1E-"},
+		{"1.5e+ 2", LEX_ERROR, "1.5e+"}, {"1.5e+-2", LEX_ERROR, "1.5e+"},
+		{"1efoo", ID, "1efoo"}, {"1e2foo", ID, "1e2foo"},
+		{"1e+2", FLOAT, "1e+2"}, {".1e-2", FLOAT, ".1e-2"},
+		{"1.5E+2", FLOAT, "1.5e+2"}, {"1.5e+2foo", FLOAT, "1.5e+2"},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			s := NewScanner(dialect.MYSQL, tc.sql)
