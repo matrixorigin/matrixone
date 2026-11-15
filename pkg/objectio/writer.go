@@ -21,7 +21,6 @@ import (
 	"math"
 	"slices"
 	"sync"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -807,19 +806,6 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 
 func (w *objectWriterV1) GetDataStats() ObjectStats {
 	return w.objStats
-}
-
-// compressionBuffersOverlap protects inputs that alias unused arena space.
-func compressionBuffersOverlap(left, right []byte) bool {
-	if len(left) == 0 || len(right) == 0 {
-		return false
-	}
-	l := uintptr(unsafe.Pointer(unsafe.SliceData(left)))
-	r := uintptr(unsafe.Pointer(unsafe.SliceData(right)))
-	if l <= r {
-		return r-l < uintptr(len(left))
-	}
-	return l-r < uintptr(len(right))
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
