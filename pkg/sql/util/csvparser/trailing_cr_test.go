@@ -149,3 +149,15 @@ func TestTrailingCRBelongsToSealedField(t *testing.T) {
 		require.ErrorIs(t, err, io.EOF)
 	})
 }
+
+func TestTrailingCRWithRetainedFields(t *testing.T) {
+	parser, err := NewCSVParser(crStripIssueConfig(false), NewStringReader("a\r00\n"), 1, false)
+	require.NoError(t, err)
+	parser.RetainFields(1)
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, []Field{newStringField("a\r", false, false)}, row)
+	require.Equal(t, 3, parser.fieldsSeen, "discarded fields still count for strict LOAD validation")
+	_, err = parser.Read(nil)
+	require.ErrorIs(t, err, io.EOF)
+}
