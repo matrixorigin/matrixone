@@ -37,7 +37,7 @@ func groupedMeasureTestBuilder(t *testing.T) (*QueryBuilder, int32) {
 		require.NoError(t, err)
 		return e
 	}
-	var facts []*plan.Node
+	facts := make([]*plan.Node, 0, 2)
 	for range 2 {
 		tag := b.genNewBindTag()
 		id := b.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{tag},
