@@ -913,3 +913,48 @@ sides of wrap, closed destinations and a nonzero whole-bucket destination.
 The unchanged per-query all22 wall/CPU/instruction/resource gates against main
 still determine publication. Component gains do not establish TPC-H acceptance,
 and Q7's separate elapsed/cache observation remains open. Preserve C/D scope.
+
+### Approved unused-frame cleanup and pooled-frame placement — 2026-11-15
+
+The requester approved a zero-state DictionaryInputFrame.Free guard, followed
+by the four-private-owner placement plan. Keep the shared colexec.Projection
+representation unchanged in this step and preserve all C/D scopes above.
+
+Free may return only when no input bank, predicate discovery scratch, predicate
+owner, pooled row holder, allocation selection or unreported counter state can
+remain. Predicate column discovery can allocate before predicateInput exists;
+the guard must cover that partial state. Initialized and counter-only frames
+still perform complete cleanup.
+
+TableScan, Filter, the projection operator and Group keep their private frame
+alongside the operator in the same pooled Go allocation. The operator retains
+a pointer to that frame. Pool reset clears the operator and restores this one
+pointer, avoiding repeated clearing of an unused frame. No additional pool or
+per-query header allocation is introduced for these pooled owners. A bare
+zero-value owner creates its optional frame on first actual use. Cleanup and
+observation accept a nil frame; Begin still requires an installed owner.
+
+End retires all borrowed inputs before source/row scratch reuse. Free releases
+owned vectors, predicate views, row selectors and allocation selections before
+operator release; only an empty frame header survives pool reset. Account and
+width changes retain the existing release/rebind contract. Dependent-source
+admission includes the entire coallocated TableScan wrapper, not just the
+smaller operator prefix. No SQL/wire/public API or kernel/page/cache-policy
+change is part of this work.
+
+Qualification first measures actual owner construction, unused reset, repeated
+batches and query reuse. Cold allocation count/bytes remain unchanged; retain
+CPU/instruction positives and distinguish them from the reset-cycle benefit.
+Tiny ownership tests cover zero values, independent frames, cancellation,
+repeated Free and the exact pool-reset callbacks. Existing account/width,
+partial-discovery and capacity-refusal cases retain their original oracles.
+
+Final local evidence uses one process per arm/configuration: an excluded cold
+full22 and five profiled warm full22 suites, with no result/schema/data checks.
+Timing uses normal binaries; separate diagnostic binaries collect allocation
+and copy traffic. New frame-pointer field writes are counted explicitly rather
+than disappearing outside the original indexed-store probe. Every observation
+and its source/binary pin is retained. Full-suite observations and targeted
+allocation attribution are reported separately; the latter cannot replace the
+former. Acceptance exceptions require an explicit requester decision. The
+original publication gate remains in force until that decision.
