@@ -854,6 +854,13 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 	}
 	canLimit := allProven && (len(index.FilterList) == 0 ||
 		len(index.FilterList) == 1 && proven != nil)
+	if len(filters) > 0 {
+		increaseRefCntForExprList(filters, 1, colRefCnt)
+		index.FilterList = append(index.FilterList, filters...)
+		// Refresh the complete private input before Project/Top copies its
+		// estimates; keep already selected scheduling contracts intact.
+		ReCalcNodeStats(index.NodeId, builder, false, true, false)
+	}
 	// Publish ordinary Project/Top nodes, retaining the stored primary key.
 	// Natural ordering reuses the existing hidden-key/ordered-reader owner.
 	tag := builder.genNewBindTag()
@@ -895,8 +902,6 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 		{index.BindingTags[0], 1}: GetColExpr(index.TableDef.Cols[1].Typ, tag, 0),
 	})
 	increaseRefCntForExprList(join.OnList, 1, colRefCnt)
-	increaseRefCntForExprList(filters, 1, colRefCnt)
-	index.FilterList = append(index.FilterList, filters...)
 	join.Children[1] = sortID
 }
 

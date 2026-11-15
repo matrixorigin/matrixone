@@ -2,8 +2,8 @@
 
 Owner: pkg/sql/plan, the existing regular-index rewrite.
 Tracking: MatrixOne #32665, PR #32675.
-Design revision: 10. Delivery requires correctness and performance acceptance;
-the original useful-index case and the regression budget remain gates.
+Design revision: 11. Delivery requires correctness and path-controlled
+performance acceptance, including the original useful-index case.
 
 ## Contract and existing responsibilities
 
@@ -71,10 +71,11 @@ Top remains responsible for the complete result, including PASS.
 
 ## Statistics and scheduling
 
-Finalize the selected index scan's complete filters before appendNode invokes
-the canonical statistics calculation. The parent join then consumes those
-complete statistics. Do not append residual/range filters after publishing a
-leading-only estimate.
+Finalize index access predicates before publishing the scan. If a bounded
+backfill Top adds exact SQL rechecks to its private scan, refresh that scan
+through the canonical statistics owner before publishing Project/Top. Refresh
+only estimates, preserving physical placement and hash/shuffle decisions.
+Parent nodes then consume estimates for the complete filter list.
 
 A literal composite prefix/range bound carries the original finite range
 selectivity as well as its equality prefix. Dynamic or unknown values retain
@@ -86,8 +87,11 @@ CalcNodeDOP remains the planner scheduling owner. Do not introduce separate
 literal-key boundaries or mutate planned worker/receiver counts at runtime.
 
 The existing runtime reader scheduler can use actual pruned block counts,
-including ordered scans. IndexReaderParam and reused-shuffle paths retain their
-existing reader scheduling.
+including ordered scans. IndexReaderParam retains its existing reader scheduling.
+Plain block-list splitting divides scan work; existing shuffle operators own
+bucket routing and keep all planned workers, including empty-reader workers,
+active. Unrelated query branches do not participate in this scan-local decision.
+Remote fragments without a complete plan retain their existing reader count.
 Existing grouping transfers every backend reader to one worker and fills unused
 planned slots with EmptyReaders. Local Top thresholds and final MergeTop remain
 distinct. A runtime-filter DROP follows the empty-reader terminal path before
@@ -154,4 +158,7 @@ Pair latency/resource measurements against the verified target with both data
 layouts and startup orders. Include point, oversized LIMIT, dense/sparse ranges,
 automatic plans, neighboring key counts, PASS, stale statistics and the original
 VARCHAR case. Recheck long-lived snapshot and larger-input behavior. Report any
-missing or slower case explicitly. No performance gate is waived by this design.
+missing or slower case explicitly. A forced index can reasonably cost more than
+a better automatic access path: establish the actual plans and explain that
+extra work rather than applying the same-path regression budget. Same-effective-
+path and unexplained regressions remain subject to the performance gate.

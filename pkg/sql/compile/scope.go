@@ -1954,10 +1954,11 @@ func cleanupScopePipeline(p *pipeline.Pipeline, proc *process.Process, isPrepare
 
 // scanReaderCount applies the existing scheduling grain after static and runtime
 // filters have selected the actual blocks. Worker topology and EOF counts stay
-// fixed; unused workers receive EmptyReaders.
+// fixed; unused workers receive EmptyReaders. Shuffle operators retain the
+// original bucket owners independently of which reader produces their input.
 func (s *Scope) scanReaderCount(c *Compile) int {
 	n := s.NodeInfo.Mcpu
-	if n <= 1 || uint64(n) > uint64(^uint32(0)>>1) || c == nil || c.pn == nil || c.pn.GetQuery() == nil || len(c.pn.GetQuery().Nodes) == 0 ||
+	if n <= 1 || uint64(n) > uint64(^uint32(0)>>1) || c == nil || c.pn == nil ||
 		s.DataSource == nil || s.DataSource.node == nil || s.DataSource.node.Stats == nil ||
 		s.DataSource.IndexReaderParam != nil {
 		return n
@@ -1966,14 +1967,6 @@ func (s *Scope) scanReaderCount(c *Compile) int {
 	data, ok := s.NodeInfo.Data.(*readutil.BlockListRelData)
 	if !ok || data.DataCnt() <= 0 || uint64(data.DataCnt()) > uint64(^uint32(0)>>1) {
 		return n
-	}
-	for _, node := range c.pn.GetQuery().Nodes {
-		// Reused shuffle input already belongs to particular workers. Ordinary
-		// shuffle operators still repartition their input at the original DOP.
-		if node == nil || node.Stats == nil ||
-			node.Stats.GetHashmapStats().GetShuffleMethod() == plan.ShuffleMethod_Reuse {
-			return n
-		}
 	}
 	stats := *s.DataSource.node.Stats
 	stats.BlockNum = int32(data.DataCnt())

@@ -64,13 +64,29 @@ func TestScanReaderCountUsesPrunedWork(t *testing.T) {
 			require.EqualValues(t, 124, stats.BlockNum, "do not rewrite reusable plan statistics")
 		})
 	}
-	for _, name := range []string{"no compile", "no plan", "no query", "empty query", "nil node", "missing stats", "no source stats", "index top", "reused sibling", "object list", "combined", "empty ranges"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want int
+	}{
+		{"no compile", 4},
+		{"no plan", 4},
+		{"no query", 1},
+		{"empty query", 1},
+		{"nil sibling", 1},
+		{"missing sibling stats", 1},
+		{"no source stats", 4},
+		{"index top", 4},
+		{"reused sibling", 1},
+		{"object list", 4},
+		{"combined", 4},
+		{"empty ranges", 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			node := &plan.Node{Stats: &plan.Stats{BlockNum: 124, Rowsize: 72}}
 			query := &plan.Query{Nodes: []*plan.Node{node}}
 			c := &Compile{pn: &plan.Plan{Plan: &plan.Plan_Query{Query: query}}}
 			s := &Scope{NodeInfo: engine.Node{Mcpu: 4, Data: readutil.NewBlockListRelationData(5)}, DataSource: &Source{node: node}}
-			switch name {
+			switch tc.name {
 			case "no compile":
 				c = nil
 			case "no plan":
@@ -79,9 +95,9 @@ func TestScanReaderCountUsesPrunedWork(t *testing.T) {
 				c.pn = &plan.Plan{}
 			case "empty query":
 				query.Nodes = nil
-			case "nil node":
+			case "nil sibling":
 				query.Nodes = append(query.Nodes, nil)
-			case "missing stats":
+			case "missing sibling stats":
 				query.Nodes = append(query.Nodes, &plan.Node{})
 			case "no source stats":
 				s.DataSource.node = &plan.Node{}
@@ -96,7 +112,9 @@ func TestScanReaderCountUsesPrunedWork(t *testing.T) {
 			case "empty ranges":
 				s.NodeInfo.Data = readutil.NewBlockListRelationData(0)
 			}
-			require.Equal(t, 4, s.scanReaderCount(c))
+			require.Equal(t, tc.want, s.scanReaderCount(c))
+			require.Equal(t, 4, s.NodeInfo.Mcpu)
+			require.EqualValues(t, 124, node.Stats.BlockNum)
 		})
 	}
 }

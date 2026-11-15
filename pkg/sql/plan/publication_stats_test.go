@@ -66,3 +66,55 @@ func TestIndexJoinPublicationUsesCompleteFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestScanStatsRefreshPreservesExecutionContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		rows              float64
+		reset, initialize bool
+	}{
+		{name: "retain", rows: 1000000},
+		{name: "reset", rows: 1000000, reset: true},
+		{name: "initialize", rows: 1000000, initialize: true},
+		{name: "unknown stats"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &backfillTopStatsContext{MockCompilerContext: NewMockCompilerContext(true), rows: tc.rows}
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+			typ := planpb.Type{Id: int32(types.T_int32)}
+			filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
+				GetColExpr(typ, 10, 0), makePlan2Int32ConstExprWithType(7),
+			})
+			require.NoError(t, err)
+			node := &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10},
+				ObjRef: &planpb.ObjectRef{Obj: 100001, SchemaName: "db", ObjName: "idx"},
+				TableDef: &planpb.TableDef{Name: "idx", TblId: 100001,
+					Cols: []*planpb.ColDef{{Name: "a", Typ: typ}}, Name2ColIndex: map[string]int32{"a": 0}},
+				FilterList: []*planpb.Expr{filter},
+			}
+			builder.appendNode(node, nil)
+			want := *node.Stats
+			wantBlocks := len(node.BlockFilterList)
+			hashmap := &planpb.HashMapStats{HashmapSize: 7, HashOnPK: true, Shuffle: true,
+				ShuffleMethod: planpb.ShuffleMethod_Reuse, Ranges: []float64{2, 5}}
+			previous := &planpb.Stats{BlockNum: -1, Cost: -1, Outcnt: -1,
+				ForceOneCN: true, Dop: 3, Sql: "scan source", HashmapStats: hashmap}
+			node.Stats = previous
+			if tc.initialize {
+				node.Stats = nil
+			}
+			ReCalcNodeStats(node.NodeId, builder, false, true, tc.reset)
+			if !tc.reset && !tc.initialize {
+				want.ForceOneCN, want.Dop, want.Sql, want.HashmapStats = true, 3, "scan source", hashmap
+				require.Same(t, previous, node.Stats)
+				require.Same(t, hashmap, node.Stats.HashmapStats)
+			} else {
+				require.NotSame(t, previous, node.Stats)
+				require.NotNil(t, node.Stats.HashmapStats)
+			}
+			require.Equal(t, &want, node.Stats)
+			require.Len(t, node.BlockFilterList, wantBlocks)
+		})
+	}
+}

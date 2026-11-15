@@ -430,6 +430,8 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 		{"mixed", "where a=1 order by b asc,id desc limit 2", 2},
 		{"offset", "where a=1 order by b,id limit 2 offset 3", 5},
 		{"mapped residual", "where a=1 and mod(b,2)=0 order by b,id limit 2", 2},
+		{"range residual", "where a=1 and b between 1 and 3 order by b,id limit 2", 2},
+		{"IN residual", "where a in (1,2) and mod(b,2)=0 order by b,id limit 2", 2},
 		{"unmapped residual", "where a=1 and mod(payload,2)=0 order by b,id limit 2", 0},
 		{"incomplete order", "where a=1 order by b limit 2", 0},
 		{"unmapped order", "where a=1 order by payload,id limit 2", 0},
@@ -487,6 +489,7 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 			var readerLimit uint64
 			var hasReaderLimit bool
 			var joins int
+			var indexScan, innerTop *planpb.Node
 			seen := map[int32]bool{}
 			var walk func(int32)
 			walk = func(id int32) {
@@ -495,6 +498,9 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 				}
 				seen[id] = true
 				n := q.Nodes[id]
+				if n.IndexScanInfo.IsIndexScan {
+					indexScan = n
+				}
 				if n.IndexScanInfo.IsIndexScan && n.IndexReaderParam != nil {
 					var ok bool
 					readerLimit, ok = getLiteralUint64(n.IndexReaderParam.Limit)
@@ -507,6 +513,7 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 					inspect = func(s int32) {
 						v := q.Nodes[s]
 						if v.NodeType == planpb.Node_SORT {
+							innerTop = v
 							if tc.name == "mapped residual" {
 								require.Len(t, v.OrderBy, 1)
 								require.Equal(t, int32(types.T_varchar), v.OrderBy[0].Expr.Typ.Id, "reuse the exact serialized order after residual evaluation")
@@ -528,6 +535,31 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 			}
 			for _, root := range q.Steps {
 				walk(root)
+			}
+			if tc.name == "mapped residual" || tc.name == "range residual" || tc.name == "IN residual" {
+				require.NotNil(t, indexScan)
+				require.NotNil(t, innerTop)
+				// Re-estimate a separate copy of the final, remapped scan. This
+				// compares publication with its complete predicates, including
+				// rechecks introduced specifically for the bounded Top.
+				canonical := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+				copy := DeepCopyNode(indexScan)
+				const tag int32 = 10000
+				copy.BindingTags = []int32{tag}
+				cols := make([]*planpb.Expr, len(copy.TableDef.Cols))
+				for i, col := range copy.TableDef.Cols {
+					cols[i] = GetColExpr(col.Typ, tag, int32(i))
+				}
+				for i, filter := range copy.FilterList {
+					copy.FilterList[i] = replaceColRefs(filter, 0, cols)
+				}
+				id := canonical.appendNode(copy, nil)
+				want := canonical.qry.Nodes[id].Stats
+				require.Equal(t, want.Outcnt, indexScan.Stats.Outcnt)
+				require.Equal(t, want.Selectivity, indexScan.Stats.Selectivity)
+				require.Equal(t, want.Cost, indexScan.Stats.Cost)
+				require.Equal(t, want.BlockNum, indexScan.Stats.BlockNum)
+				require.Equal(t, want.Outcnt, innerTop.Stats.Cost, "Top costs its complete input cardinality")
 			}
 			if tc.name == "mapped residual" {
 				calls := 0

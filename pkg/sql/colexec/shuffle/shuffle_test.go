@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -739,29 +740,37 @@ func TestShuffleResetAndFreeReleaseRuntimeState(t *testing.T) {
 }
 
 func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
-	const (
-		bucketNum     = int32(2)
-		rowsPerWorker = objectio.BlockMaxRows * 6
-	)
+	testFixedBucketWorkers(t, 2, 2, objectio.BlockMaxRows*6)
+}
+
+func TestShuffleSharedPoolWithSingleProducer(t *testing.T) {
+	testFixedBucketWorkers(t, 4, 1, 32)
+}
+
+func testFixedBucketWorkers(t *testing.T, bucketNum int32, producers, rowsPerWorker int) {
+	t.Helper()
 	mp := mpool.MustNewZero()
-	procs := []*process.Process{
-		testutil.NewProcessWithMPool(t, "", mp),
-		testutil.NewProcessWithMPool(t, "", mp),
-	}
-	pool := NewShufflePool(bucketNum, int32(len(procs)), false)
+	procs := make([]*process.Process, bucketNum)
 	args := make([]*Shuffle, len(procs))
 	defer func() {
 		for i, arg := range args {
 			if arg != nil {
-				arg.GetChildren(0).Free(procs[i], false, nil)
 				arg.Reset(procs[i], false, nil)
+				arg.GetChildren(0).Free(procs[i], false, nil)
 				arg.Free(procs[i], false, nil)
 				arg.Release()
 			}
-			procs[i].Free()
+			if procs[i] != nil {
+				procs[i].Free()
+			}
 		}
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
+	for i := range procs {
+		procs[i] = testutil.NewProcessWithMPool(t, "", mp)
+	}
+	pool := NewShufflePool(bucketNum, int32(len(procs)), false)
+	var expected []int64
 	for i := range args {
 		arg := NewArgument()
 		arg.BucketNum = bucketNum
@@ -780,16 +789,21 @@ func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
 			values[row] = candidate
 			candidate++
 		}
-		input := batch.NewWithSize(1)
-		input.Vecs[0] = testutil.NewInt64Vector(rowsPerWorker, types.T_int64.ToType(), mp, false, nil, values)
-		input.SetRowCount(rowsPerWorker)
-		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		var inputs []*batch.Batch
+		if i < producers {
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.NewInt64Vector(rowsPerWorker, types.T_int64.ToType(), mp, false, nil, values)
+			input.SetRowCount(rowsPerWorker)
+			inputs = []*batch.Batch{input}
+			expected = append(expected, values...)
+		}
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
 		args[i] = arg
 		require.NoError(t, arg.Prepare(procs[i]))
 	}
 
 	type workerResult struct {
-		rows       int
+		values     []int64
 		wrongBatch bool
 		err        error
 	}
@@ -809,8 +823,12 @@ func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
 				if callResult.Batch.IsEmpty() {
 					continue
 				}
-				result.rows += callResult.Batch.RowCount()
+				values := vector.MustFixedColNoTypeCheck[int64](callResult.Batch.Vecs[0])
+				result.values = append(result.values, values...)
 				result.wrongBatch = result.wrongBatch || callResult.Batch.ShuffleIDX != arg.CurrentShuffleIdx
+				for _, value := range values {
+					result.wrongBatch = result.wrongBatch || plan2.SimpleInt64HashToRange(uint64(value), uint64(bucketNum)) != uint64(arg.CurrentShuffleIdx)
+				}
 			}
 			if result.err == nil && proc.Ctx.Err() != nil {
 				result.err = proc.Ctx.Err()
@@ -841,13 +859,15 @@ func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
 	if timedOut {
 		t.Fatal("fixed-bucket shuffle workers did not finish")
 	}
-	totalRows := 0
+	var observed []int64
 	for _, result := range workerResults {
 		require.NoError(t, result.err)
 		require.False(t, result.wrongBatch)
-		totalRows += result.rows
+		observed = append(observed, result.values...)
 	}
-	require.Equal(t, rowsPerWorker*len(args), totalRows)
+	slices.Sort(expected)
+	slices.Sort(observed)
+	require.Equal(t, expected, observed, "all rows must reach their designated bucket exactly once")
 }
 
 func TestNestedFixedBucketShufflesMakeProgressUnderBackpressure(t *testing.T) {
