@@ -8,9 +8,14 @@ insert into src values
 (10,'[100,100,100]'),(11,'[101,101,101]'),
 (20,'[500,500,500]'),(21,'[501,501,501]');
 create index idx using ivfflat on src(b) lists=3 op_type 'vector_l2_ops' ASYNC;
-select sleep(30);
-sleep(30)
-0
+set @ivf_restore_src_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src') limit 1);
+set @ivf_restore_src_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src') limit 1);
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_src_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version'')');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+execute ivf_restore_wait;
+active_entries
+6
+deallocate prepare ivf_restore_wait;
 select a from src order by l2_distance(b,'[1,1,1]') limit 1;
 a
 1
@@ -21,9 +26,14 @@ count(*)
 show create table dst;
 Table    Create Table
 dst    CREATE TABLE `dst` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops'  async \n)
-select sleep(30);
-sleep(30)
-0
+set @ivf_restore_dst_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst') limit 1);
+set @ivf_restore_dst_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst') limit 1);
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_dst_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_dst_metadata, '` where `__mo_index_key` = ''version'' and cast(`__mo_index_val` as bigint) > (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version''))');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+execute ivf_restore_wait;
+active_entries
+6
+deallocate prepare ivf_restore_wait;
 select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
 a
 1
@@ -31,9 +41,12 @@ select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
 a
 20
 insert into dst values (30,'[1000,1000,1000]'),(31,'[1001,1001,1001]');
-select sleep(45);
-sleep(45)
-0
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_dst_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_dst_metadata, '` where `__mo_index_key` = ''version'' and cast(`__mo_index_val` as bigint) > (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version''))');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+execute ivf_restore_wait;
+active_entries
+8
+deallocate prepare ivf_restore_wait;
 select a from dst order by l2_distance(b,'[1000,1000,1000]') limit 1;
 a
 30

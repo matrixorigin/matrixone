@@ -70,29 +70,59 @@ func TestIssue26123DatabaseCopiesKeepLikeMetacharacterFKTables(t *testing.T) {
 			{name: "backslash", tableName: `child\fk`, tableNameSQL: "`child\\fk`"},
 		}
 
+		// The copy modes consume the same source schema and rows. Keep one
+		// source per identifier case, while each copy still gets its own target
+		// and runs all of its original data, metadata and FK-error assertions.
+		sourceReady := make(map[string]bool, len(tableCases))
+		sourceRegistered := make(map[string]bool, len(tableCases))
+		var sourceDBs []string
+		defer func() {
+			for _, sourceDB := range sourceDBs {
+				func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+sourceDB+"`")
+				}()
+			}
+		}()
+
 		for _, mode := range copyModes {
 			for _, tc := range tableCases {
 				t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
-					sourceDB := "issue_26123_" + mode.key + "_" + tc.name + "_src"
+					sourceDB := "issue_26123_" + tc.name + "_src"
 					targetDB := "issue_26123_" + mode.key + "_" + tc.name + "_dst"
 					defer func() {
 						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 						defer cleanupCancel()
 						execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+targetDB+"`")
-						execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+sourceDB+"`")
 					}()
 
 					execSQLRequire(t, ctx, db, "drop database if exists `"+targetDB+"`")
-					execSQLRequire(t, ctx, db, "drop database if exists `"+sourceDB+"`")
-					execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
-					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`parent_t` (id int primary key)")
-					if tc.collisionTable != "" {
-						execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.collisionTable+" (id int primary key)")
-						execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.collisionTable+" values (22)")
+					if !sourceReady[tc.name] {
+						if !sourceRegistered[sourceDB] {
+							sourceDBs = append(sourceDBs, sourceDB)
+							sourceRegistered[sourceDB] = true
+						}
+						execSQLRequire(t, ctx, db, "drop database if exists `"+sourceDB+"`")
+						execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
+						execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`parent_t` (id int primary key)")
+						if tc.collisionTable != "" {
+							execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.collisionTable+" (id int primary key)")
+							execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.collisionTable+" values (22)")
+						}
+						execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.tableNameSQL+" (id int primary key, parent_id int, foreign key (parent_id) references `"+sourceDB+"`.`parent_t`(id))")
+						execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`parent_t` values (1)")
+						execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.tableNameSQL+" values (11, 1)")
+						sourceReady[tc.name] = true
+					} else {
+						var id, parentID, parent int
+						require.NoError(t, db.QueryRowContext(ctx,
+							"select c.id, c.parent_id, p.id from `"+sourceDB+"`."+tc.tableNameSQL+
+								" c join `"+sourceDB+"`.`parent_t` p on c.parent_id = p.id").Scan(&id, &parentID, &parent))
+						require.Equal(t, 11, id)
+						require.Equal(t, 1, parentID)
+						require.Equal(t, 1, parent)
 					}
-					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.tableNameSQL+" (id int primary key, parent_id int, foreign key (parent_id) references `"+sourceDB+"`.`parent_t`(id))")
-					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`parent_t` values (1)")
-					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.tableNameSQL+" values (11, 1)")
 
 					execSQLRequire(t, ctx, db, mode.copy(sourceDB, targetDB))
 					assertIssue26123CopiedFKTable(t, ctx, db, sourceDB, targetDB, tc.tableName, tc.tableNameSQL, tc.collisionTable)
