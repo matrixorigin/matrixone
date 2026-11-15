@@ -134,8 +134,9 @@ jobs:
     concurrency:
       group: cs-three-group-shared-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-ut-dispatch-canary.yaml@b7649bb1c4f28149f65b624bfa3043badcf6048b
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@6095f2ef33030d89c9490e2b23226cfc3c371f91
     with:
+      stack: mnl2
       cache_seed: false
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
