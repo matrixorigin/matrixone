@@ -51,6 +51,13 @@ type Field struct {
 	Val            string
 	IsNull         bool
 	HasStringQuote bool
+	// IsJSONNumber carries JSONLINE scalar provenance: the field's text came
+	// from an unquoted JSON NUMBER token of a JSONLINE record, not from raw
+	// CSV bytes or a quoted JSON string. Only the JSONLINE reader sets it and
+	// only value conversion reads it, to tell a numeric token from the same
+	// characters as text. The zero value (false) preserves the byte-string
+	// semantics everywhere else.
+	IsJSONNumber bool
 }
 
 type escapeFlavor uint8
