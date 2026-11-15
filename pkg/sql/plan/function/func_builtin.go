@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -467,7 +468,27 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
+func sessionNoBackslashEscapes(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if value, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := value.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	if mode == process.EmptySqlModeSentinel {
+		mode = ""
+	}
+	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
+}
+
 func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	noBackslashEscapes := sessionNoBackslashEscapes(proc)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -518,7 +539,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 
 		members := strings.Split(enumStr, ",")
 		for i := range members {
-			members[i] = sqlquote.String(members[i])
+			members[i] = sqlquote.StringWithMode(members[i], noBackslashEscapes)
 		}
 		ret := typeName + "(" + strings.Join(members, ",") + ")"
 

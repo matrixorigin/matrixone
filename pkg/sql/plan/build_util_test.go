@@ -769,3 +769,36 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
+
+func TestGetTypeFromAstEnumAndSetMemberBoundary(t *testing.T) {
+	for _, typ := range []string{"enum('a,b','c')", "enum(',')", "enum('a',',b')", "set('a,b','c')"} {
+		t.Run(typ, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(v "+typ+")", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			got, err := getTypeFromAst(t.Context(), column.Type)
+			require.ErrorContains(t, err, "contains ','")
+			require.Zero(t, got.Id)
+		})
+	}
+	for _, tc := range []struct {
+		typ     string
+		members string
+	}{
+		{"enum('a','b')", "a,b"},
+		{"enum('')", ""},
+		{"enum('UP','Down word')", "UP,Down word"},
+		{"set('a','b')", "a,b"},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(v "+tc.typ+")", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			got, err := getTypeFromAst(t.Context(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, tc.members, got.Enumvalues)
+		})
+	}
+}

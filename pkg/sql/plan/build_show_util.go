@@ -1236,7 +1236,7 @@ func formatStrInSingleQuotes(s string) string {
 // formatDDLString quotes a raw value for the parser that will replay the DDL.
 func formatDDLString(value string, noBackslashEscapes bool) string {
 	if noBackslashEscapes {
-		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+		return sqlquote.StringWithMode(value, true)
 	}
 	return formatStrLit(value)
 }

@@ -1,0 +1,50 @@
+drop database if exists enum_set_metadata_replay;
+create database enum_set_metadata_replay;
+use enum_set_metadata_replay;
+set @metadata_saved_mode=@@sql_mode;
+set sql_mode='';
+create table metadata_src(e enum('O''Brien','Back\\slash','Back\\''quote'), s set('O''Brien','Back\\slash','Back\\''quote'));
+prepare metadata_probe from 'select length(COLUMN_TYPE) as n from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME=''metadata_src'' and COLUMN_NAME in (''e'',''s'') order by ORDINAL_POSITION';
+execute metadata_probe;
+➤ n[-5,64,0]  𝄀
+46  𝄀
+45
+set @metadata_ddl=concat('create table ordinary_replay(e ',(select COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='metadata_src' and COLUMN_NAME='e'),', s ',(select COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='metadata_src' and COLUMN_NAME='s'),')');
+prepare domain_replay from @metadata_ddl;
+execute domain_replay;
+deallocate prepare domain_replay;
+insert into ordinary_replay values(1,1),(2,2),(3,4);
+select count(*) as exact_members from ordinary_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
+➤ exact_members[-5,64,0]
+3
+set sql_mode='NO_BACKSLASH_ESCAPES';
+execute metadata_probe;
+➤ n[-5,64,0]  𝄀
+44  𝄀
+43
+set @metadata_ddl=concat('create table nbe_replay(e ',(select COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='metadata_src' and COLUMN_NAME='e'),', s ',(select COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='metadata_src' and COLUMN_NAME='s'),')');
+prepare domain_replay from @metadata_ddl;
+execute domain_replay;
+deallocate prepare domain_replay;
+insert into nbe_replay values(1,1),(2,2),(3,4);
+select count(*) as exact_members from nbe_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
+➤ exact_members[-5,64,0]
+3
+set sql_mode='';
+execute metadata_probe;
+➤ n[-5,64,0]  𝄀
+46  𝄀
+45
+deallocate prepare metadata_probe;
+create table enum_bad(v enum('a,b','c'));
+invalid input: enum member "a,b" contains ','
+select count(*) as bad_tables from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME='enum_bad';
+➤ bad_tables[-5,64,0]
+0
+alter table ordinary_replay modify e enum('a,b','c');
+invalid input: enum member "a,b" contains ','
+select count(*) as exact_members from ordinary_replay where (e+0=1 and s+0=1 and hex(e)='4F27427269656E' and hex(s)='4F27427269656E') or (e+0=2 and s+0=2 and hex(e)='4261636B5C736C617368' and hex(s)='4261636B5C736C617368') or (e+0=3 and s+0=4 and hex(e)='4261636B5C2771756F7465' and hex(s)='4261636B5C2771756F7465');
+➤ exact_members[-5,64,0]
+3
+set sql_mode=@metadata_saved_mode;
+drop database enum_set_metadata_replay;

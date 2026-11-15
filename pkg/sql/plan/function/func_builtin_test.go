@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1026,22 +1028,63 @@ func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
 }
 
 func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, tc := range []struct {
+	members := []string{"UP", "Down word", "O'Brien", "Back\\slash", "Back\\'quote"}
+	for _, typ := range []struct {
 		oid  types.T
-		want string
+		name string
 	}{
-		{types.T_enum, `ENUM('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
-		{types.T_uint64, `SET('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_enum, "ENUM"},
+		{types.T_uint64, "SET"},
 	} {
-		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
-		require.NoError(t, err)
-		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{`UP,Down word,O'Brien,Back\slash,Back\'quote`}, nil),
-		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), builtInMoShowVisibleBinEnum)
-		succeed, info := testCase.RunAndFree()
-		require.True(t, succeed, info)
+		t.Run(typ.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			encoded, err := types.Encode(&types.Type{Oid: typ.oid})
+			require.NoError(t, err)
+			// Reuse one process across mode changes, including an explicit empty
+			// runtime mode that must override a captured nonempty session mode.
+			for _, mode := range []struct {
+				name     string
+				captured string
+				active   string
+				resolver bool
+			}{
+				{"runtime ordinary", "NO_BACKSLASH_ESCAPES", "", true},
+				{"runtime NBE", "", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+				{"runtime ordinary again", "NO_BACKSLASH_ESCAPES", "", true},
+				{"captured NBE", "NO_BACKSLASH_ESCAPES", "NO_BACKSLASH_ESCAPES", false},
+				{"captured ordinary", "", "", false},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					proc.GetSessionInfo().SqlMode = mode.captured
+					proc.SetResolveVariableFunc(nil)
+					if mode.resolver {
+						proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+							require.Equal(t, "sql_mode", name)
+							require.True(t, system)
+							require.False(t, global)
+							return mode.active, nil
+						})
+					}
+					want := typ.name + "('UP','Down word','O''Brien','Back\\\\slash','Back\\\\''quote')"
+					if mode.active != "" {
+						want = typ.name + "('UP','Down word','O''Brien','Back\\slash','Back\\''quote')"
+					}
+					tc := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{strings.Join(members, ",")}, nil),
+					}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{want}, nil), builtInMoShowVisibleBinEnum)
+					t.Cleanup(tc.Free)
+					succeed, info := tc.Run()
+					require.True(t, succeed, info)
+					metadata := tc.GetResultVectorDirectly().GetStringAt(0)
+					stmt, err := mysql.ParseOneWithSQLMode(t.Context(), "create table replay(v "+metadata+")", 1, mode.active)
+					require.NoError(t, err, metadata)
+					t.Cleanup(stmt.Free)
+					column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+					require.Equal(t, members, column.Type.(*tree.T).InternalType.EnumValues)
+				})
+			}
+		})
 	}
 }
 

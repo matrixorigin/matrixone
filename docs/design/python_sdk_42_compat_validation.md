@@ -21,10 +21,23 @@ ordinary SQL replay remain covered; the withdrawn canonical-output BOOL client
 feature is not replaced with a skip or negative-only acceptance.
 
 Independent ENUM/SET correctness work remains: preserve direct view provenance
-before projection remapping, retain exact domain members/case and quote members
-through existing literal owners. The dedicated empty ENUM domain remains
+before projection remapping, retain exact representable domain members/case and
+quote members through existing literal owners for the executing SQL mode.
+Native COLUMN_TYPE and SHOW CREATE share NO_BACKSLASH_ESCAPES literal quoting;
+ordinary SHOW CREATE control-character and schema-hash spelling stay unchanged.
+The dedicated empty ENUM domain remains
 `enum('')`. Public domain replay and the existing 4.2 DUMP/hash spelling have
 separate existing owners; scalar normalization does not justify changing either.
+
+The existing 4.2 catalog stores ENUM/SET members as a comma-separated string.
+Members containing an ASCII comma cannot be represented reversibly. SET already
+rejects them; ENUM now rejects them before joining the members. This tightens the
+input contract for every caller of the type binder, including CREATE/ALTER,
+typed declarations and replaying old raw DDL with such a member. It does not
+change persisted encoding, rewrite existing data or recover the original
+grouping from an already ambiguous catalog string. Exact-member replay applies
+to domains representable by this format; full comma-member support needs a
+separate storage/compatibility design.
 
 ## Other retained closures
 
@@ -277,3 +290,36 @@ and about 19% scalar overhead against base.
   reviewed source and outcome. Unchanged display, TLS, FULLTEXT, Stage,
   branch/restore and upgrade evidence retain their stated revision and scope;
   those broader suites are not rerun for this two-owner follow-up.
+
+## Native domain metadata replay
+
+The native formatter resolves the executing SQL mode once per vector batch,
+using the same runtime-resolver and serialized-session fallback as LIKE.
+NO_BACKSLASH_ESCAPES preserves literal backslashes and doubles single quotes;
+ordinary mode also escapes backslashes. The formatter remains volatile, so a
+prepared metadata query follows mode changes at execution time. No second
+SQL-mode cache, new catalog codec or migration path is introduced.
+
+The focused metadata test checks both types, runtime mode overrides (including
+an explicit empty mode), captured-mode fallback, exact rendered literals and
+parser member-value round trips. The type-binder test covers unrepresentable
+comma members and preserves separate ordinary members, case and the valid
+single empty ENUM member.
+
+On 57, Linux/amd64, Go 1.26.4 with source-matched native libraries, the five
+focused roots and all 3,091 roots in sqlquote, plan and function pass with
+-short -tags=matrixone_test and zero skips. Formatting, standard vet and
+configured incremental lint pass on these owners. Pinned molint exits zero
+with the same three pre-existing checkrecover diagnostics in expr_opt.go and
+returning.go; both files remain byte-identical to the exact PR base.
+The maintained enum_set_metadata_replay BVT passes all 31 statements twice on
+the same real instance with zero failed/ignored/abnormal statements. It executes
+one prepared metadata query across ordinary/NBE/ordinary modes, builds new
+tables from native COLUMN_TYPE, and verifies original member bytes through
+ordinal inserts and HEX reads. Rejected CREATE/ALTER leave catalog and data
+unchanged. The normal expected-result comparator is used; header comparison
+is disabled but all result cells and errors are checked. The service stops
+normally and fixtures are removed between runs.
+
+This closure does not rerun physical upgrades or the prior lexer/Parquet
+benchmarks; those results retain their original tested revision and scope.
