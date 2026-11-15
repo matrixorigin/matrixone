@@ -142,4 +142,37 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	require.NotNil(t, warmPrivate.Readers()[0])
 	require.Equal(t, "*objectio.cacheJSONReader", fmt.Sprintf("%T", warmPrivate.Readers()[0]))
 	require.Equal(t, backing, mp.CurrNB()-before, "a private cache version must not copy another JSON column")
+
+	// The generic borrowed-column path must still publish JSON through its
+	// immutable reader owner, and materialize the ordinary vector separately.
+	borrowedPublication := objectio.NewJSONReadSet([]int{0})
+	borrowedPublication.SetCachePinAdmission(admit)
+	defer borrowedPublication.Close()
+	borrowedPublication.BindColumns([]uint16{0})
+	borrowedDestination := vector.NewOffHeapVecWithType(typ)
+	defer borrowedDestination.Free(mp)
+	hit, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, borrowedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{borrowedDestination}, mp, 0, nil)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.False(t, borrowedDestination.HasBorrowedBacking())
+	require.NotNil(t, borrowedPublication.Readers()[0])
+	result, err = borrowedPublication.Readers()[0].Query(1, &path)
+	require.NoError(t, err)
+	borrowedPublication.Close()
+	text, err = result.Text()
+	result.Close()
+	require.NoError(t, err)
+	require.Equal(t, "2", text.Text)
+	text.Close()
+
+	failedPublication := objectio.NewJSONReadSet([]int{0})
+	failedPublication.SetCachePinAdmission(admit)
+	defer failedPublication.Close()
+	failedPublication.BindColumns([]uint16{0})
+	mismatchedDestination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	defer mismatchedDestination.Free(mp)
+	_, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, failedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{mismatchedDestination}, mp, 0, nil)
+	require.Error(t, err)
+	require.Nil(t, failedPublication.Readers(), "failed borrowing must release an already published JSON owner")
+
 }
