@@ -958,3 +958,18 @@ and its source/binary pin is retained. Full-suite observations and targeted
 allocation attribution are reported separately; the latter cannot replace the
 former. Acceptance exceptions require an explicit requester decision. The
 original publication gate remains in force until that decision.
+
+### Requester wrap-up decision — 2026-11-15
+
+After reviewing the full-suite observations, exact native allocation attribution
+and matched-input buffering controls, the requester instructed: "wrap up the PR".
+For this PR, accept the disclosed fixed Q6 metadata traffic and the remaining
+Q7 batching/context uncertainty as bounded review tradeoffs. Preserve the
+original positive observations and their measured source heads; do not claim
+universal zero regression or replace full-suite evidence with the targeted
+diagnostic. This is not a general relaxation for later performance PRs.
+
+Freeze implementation scope. Publish the final changes and results, collapse
+superseded benchmark comments, and complete the normal authoritative-main,
+static, functional and CI delivery gates. No further kernel/page/cache-policy
+changes or opportunistic optimization belongs to this wrap-up. Preserve C/D.
