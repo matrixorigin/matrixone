@@ -121,9 +121,9 @@ select a.id from chunks a join documents b on a.document_id=b.document_id where 
 select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
 select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
 select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
--- @sortkey:0,1
+-- @sortkey:0
 select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4;
--- @sortkey:0,1
+-- @sortkey:0
 select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4 by rank with option 'mode=force';
 -- @regex("documents.idx_label_document",false)
 explain select a.id from chunks a join documents b ignore index(idx_label_document) on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;

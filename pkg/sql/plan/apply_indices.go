@@ -846,6 +846,10 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 		}
 		allProven = false
 		mapped := replaceColumnsForExpr(DeepCopyExpr(filter), colMap)
+		if indexAccessAccountsForSelectivity(def, base, index, filter) {
+			// Keep the SQL recheck, but its selectivity is already in the bound.
+			mapped.Selectivity = 1
+		}
 		if !slices.ContainsFunc(index.FilterList, func(existing *plan.Expr) bool {
 			return exprStructuralEqual(existing, mapped)
 		}) {
@@ -2598,7 +2602,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
 		return
 	}
-	bounds := builder.secondaryIndexPrefixRanges(idxDef, node, idxTableNode, filterIdx)
+	bounds := builder.secondaryIndexPrefixRanges(idxDef, node, idxTableNode, filterIdx, colMap)
 	if len(bounds) == 0 || !ExprIsZonemappable(builder.GetContext(), bounds[0]) {
 		return
 	}

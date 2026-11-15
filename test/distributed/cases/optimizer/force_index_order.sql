@@ -393,4 +393,22 @@ execute bounded_key using @k;
 deallocate prepare bounded_key;
 rollback;
 
+-- Different DECIMAL scales must retain the decoded range recheck before index Top.
+create table decimal_top (id int primary key,p decimal(10,2),q decimal(10,2),payload int,key ix_decimal_top(p,q));
+insert into decimal_top values (1,1.25,1.00,101),(2,1.25,2.00,102),(3,1.25,2.01,103),(4,1.25,2.02,104),(5,1.25,3.00,105),(6,1.25,null,106);
+insert into decimal_top select result+100,1.25,cast(mod(result,400)/100 as decimal(10,2)),result from generate_series(1,512) g;
+select mo_ctl('dn','flush','force_index_order.decimal_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_decimal_top');
+-- @separator:table
+-- @regex("approx_count_distinct",true)
+analyze table decimal_top;
+-- @separator:table
+-- @regex("Index Table Scan.*ix_decimal_top",true)
+-- @regex("serial_extract.*>= 2.001",true)
+-- @regex("(?s)Limit: 2.*Limit: 2",true)
+-- @regex("Index Reader Param",false)
+explain select id,payload from decimal_top force index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+select id,payload from decimal_top force index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+select id,payload from decimal_top ignore index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+
 drop database force_index_order;

@@ -118,6 +118,13 @@ func TestSecondaryIndexEqualityPrefixWithIntegerRange(t *testing.T) {
 				rangeExpr.Selectivity = 0
 			}
 			original := DeepCopyExprList(scan.FilterList)
+			if tc.name == "between" {
+				// An access range cannot take ownership of the estimate until
+				// the decoded SQL range has actually been published.
+				colMap, err := builder.regularIndexColumnMap(idx, scan, indexTag, idxTable)
+				require.NoError(t, err)
+				require.Empty(t, builder.secondaryIndexPrefixRanges(idx, scan, idxScan, []int32{0}, colMap))
+			}
 			builder.applyExtraFiltersOnIndex(idx, scan, idxScan, []int32{0})
 			require.Len(t, scan.FilterList, len(original))
 			for i := range original {
@@ -140,11 +147,9 @@ func TestSecondaryIndexEqualityPrefixWithIntegerRange(t *testing.T) {
 			require.NotNil(t, found)
 			require.Equal(t, tc.want, found.GetF().Func.ObjName)
 			require.Equal(t, tc.want, idxScan.FilterList[0].GetF().Func.ObjName)
-			wantCost := 0.0025
-			if tc.rangeSel != 0 || tc.name == "zero_range_cost" || tc.dynamicPrefix || tc.dynamicRange {
-				wantCost = 0.01
-			}
-			require.InDelta(t, wantCost, idxScan.FilterList[0].Selectivity, 1e-12)
+			// The decoded range filter, not the access prefix, owns the
+			// range selectivity so the scan estimates it only once.
+			require.InDelta(t, 0.01, idxScan.FilterList[0].Selectivity, 1e-12)
 			require.Equal(t, indexTag, found.GetF().Args[0].GetCol().RelPos)
 			for _, bound := range found.GetF().Args[1:3] {
 				require.Equal(t, "serial_full", bound.GetF().Func.ObjName)
