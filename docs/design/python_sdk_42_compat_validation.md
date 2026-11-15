@@ -113,3 +113,82 @@ written data. Old unmarked empty databases cannot safely be inferred as branches
 Persisted ENUM/SET views that already lost provenance need recreation. Native
 Arrow LOAD and VECF4/VECF8 are not introduced by this backport. No CI runner is
 added, and local validation does not certify remote CI.
+
+## PR-only upgrade and rollback qualification
+
+If this change ships in 4.2.9, the following record qualifies this PR's increment,
+not the complete future release. The paired targets are PR base
+1a3e7fb6960995e9a143e5cc3d5a50f2feb0980f and candidate
+27f71fd679a0d498d45672185a27f217b44874b2. No production code or additional
+compatibility mode was introduced for this qualification.
+
+### Released physical-data fixtures
+
+| Source | Release commit | Immutable image digest |
+| --- | --- | --- |
+| v4.2.1 | d2393868a7aaa6343518d80849fe4696aa3577e9 | matrixorigin/matrixone@sha256:c95d1b468e3fc5f4f2b377da14f4601e7efefa6eb143758636d60114a5bbb436 |
+| v4.2.8 | 10d204b8763f19b2b37ba2147d1d4c1a7828d6d4 | matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6 |
+
+Binary version output and SHA-256 were recorded for both released fixtures.
+The released binary creates the tables, data, views, FULLTEXT index, Stage,
+nonempty/empty branch databases and a database snapshot, then stops normally.
+Clone its complete physical data directory separately for base and candidate;
+neither target ever opens the original source. Both original source mo-data content
+hashes remain unchanged.
+
+Each target reads the old objects, performs new writes, restores an old snapshot,
+creates/recreates a view, executes CREATE STAGE ... ENABLE=false, creates
+database branches, restores a new branch snapshot, and restarts on the resulting
+data. The requested Stage remains in_use on base and persists disabled on
+candidate. Only another
+disposable stopped-data copy is opened by the source release for rollback
+observations. This is one CN/TN/LogService with complete stops between versions.
+All seven service phases per source exited normally. The test does not exercise
+rolling upgrade, downgrade support, large catalogs or general performance.
+
+### Paired results
+
+| Contract | From v4.2.1 | From v4.2.8 |
+| --- | --- | --- |
+| Upgrade reads: scalar values/metadata, legacy view metadata, Stage, existing FULLTEXT search, legacy branch identity and snapshot reads | Candidate equals released source and base | Candidate equals released source and base |
+| Existing host-form Stage URI reads | Base and candidate return the fixture bytes | Base and candidate return the fixture bytes |
+| Old snapshot restore with SET members UP,Down | Base produces up,down; candidate preserves UP,Down | Same |
+| New ENUM/SET view provenance | Candidate stores members and logical types; base stores VARCHAR without members | Same |
+| New branch identity, disabled Stage state and new view data after restart | Preserved | Preserved |
+| Old release reads of sampled post-write table/view/catalog data | Preserved in both base/candidate data copies | Preserved in both base/candidate data copies |
+| Old release creates a publication on a newly created nonempty branch | Base data succeeds; candidate data rejects the database as not a user database | Same |
+| New path-form Stage URI | Works on candidate; old parser rejects the URI after rollback | Same |
+| Old release deletes the empty database branch | Fails for both base and candidate data; inherited old limitation | Same |
+
+The SET restore mismatch is a real base counterexample, not a passing base
+assertion or a new candidate failure. Initial harness failures were preserved:
+a raw varchar load_file call bypassed Stage Datalink resolution, so the actual
+public test was corrected to load_file(CAST(... AS DATALINK)). No product code,
+golden output or candidate correctness assertion was weakened. Candidate
+restoration still must equal the source's original values exactly.
+
+### Compatibility interpretation
+
+No PR-specific old-data read failure was found in these two source fixtures.
+Ordinary scalar storage and display remain unchanged. Existing views that
+already lost ENUM/SET provenance and old unmarked empty branches are not
+silently repaired by startup; their existing limitations remain.
+
+New writes can create semantics that old releases do not understand. The
+publication failure is a concrete PR-specific rollback difference: candidate
+stores data-branch in the existing dat_type column, while base stores an empty
+value. Both source releases reject the candidate-written category when creating
+a publication, although the sampled rows remain readable. This is a functional
+rollback incompatibility; the probe did not observe data corruption.
+Applications using the new path-form Stage URI also require the new parser.
+
+CREATE ENABLE=false, SQL-mode response status, ENUM/SET quoting/provenance,
+credential validation and rejection of malformed dotted exponents deliberately
+correct old behavior. Existing stored credential rows are not rewritten merely
+by startup; new CREATE/ALTER credential inputs use the corrected validation.
+
+A rollback plan must retain a consistent pre-upgrade backup or data snapshot
+and account for writes after that backup. Simply replacing the binary with
+4.2.1/4.2.8 on candidate-written data is not a validated safe rollback procedure.
+The isolated old-binary probes do not change the shutdown-only/no-downgrade
+support contract or certify every user schema, snapshot, index or deployment.
