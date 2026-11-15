@@ -246,7 +246,11 @@ func (source *jsonConstructorExpressionExecutor) jsonReaderInput(proc *process.P
 		}
 		selection = &mask
 	}
-	reader, err := function.EvalJSONConstructorReader(expr.fid, expr.semanticParameterVectors(expr.parameterResults), proc, expressionRowCount(batches), selection, expr.allocation)
+	parameters, err := expr.normalizeDictionaryParameters(expr.parameterResults, false)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := function.EvalJSONConstructorReader(expr.fid, expr.semanticParameterVectors(parameters), proc, expressionRowCount(batches), selection, expr.allocation)
 	if err != nil {
 		return nil, err
 	}

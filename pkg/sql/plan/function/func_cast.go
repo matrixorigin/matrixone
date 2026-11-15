@@ -34,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -10334,6 +10335,100 @@ func appendBinaryToTextUtf8Warning(proc *process.Process, v []byte) {
 	}
 }
 
+// castBackingOverlaps reports overlap including spare capacity. Pre-growing a
+// result must not release storage still read through a source window.
+func castBackingOverlaps(left, right []byte) bool {
+	if cap(left) == 0 || cap(right) == 0 {
+		return false
+	}
+	l := uintptr(unsafe.Pointer(unsafe.SliceData(left[:cap(left)])))
+	r := uintptr(unsafe.Pointer(unsafe.SliceData(right[:cap(right)])))
+	if l <= r {
+		return r-l < uintptr(cap(left))
+	}
+	return l-r < uintptr(cap(right))
+}
+
+func castVectorsOverlap(source, result *vector.Vector) bool {
+	sourceData, sourceArea := source.GetData(), source.GetArea()
+	resultData, resultArea := result.GetData(), result.GetArea()
+	return castBackingOverlaps(sourceData, resultData) ||
+		castBackingOverlaps(sourceData, resultArea) ||
+		castBackingOverlaps(sourceArea, resultData) ||
+		castBackingOverlaps(sourceArea, resultArea)
+}
+
+// tryReserveAssignedText avoids repeated area growth for a new TEXT/BLOB
+// assignment result. Values requiring diagnostics or conversion fall back to
+// the ordinary row path. The result remains independently owned.
+func tryReserveAssignedText(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	toType types.Type,
+	selectList *FunctionSelectList,
+) (bool, error) {
+	source, result := from.GetSourceVector(), to.GetResultVector()
+	if proc == nil || source == nil || result == nil || length < 2 ||
+		(toType.Oid != types.T_text && toType.Oid != types.T_blob) ||
+		*result.GetType() != toType || source.GetType().Oid != toType.Oid ||
+		source == result || source.IsConst() || source.IsDictionary() ||
+		source.Length() != length || result.IsConst() || result.IsDictionary() ||
+		result.Length() != 0 || result.HasBorrowedBacking() ||
+		result.DataBackingKind() != vector.OwnedMPoolUnique ||
+		result.AreaBackingKind() != vector.OwnedMPoolUnique ||
+		cap(result.GetArea()) != 0 || len(source.GetArea()) == 0 ||
+		(selectList != nil && (selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow())) {
+		return false, nil
+	}
+	if castVectorsOverlap(source, result) {
+		return false, nil
+	}
+	total, externalValues := 0, 0
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if null || len(value) <= types.VarlenaInlineSize {
+			continue
+		}
+		if len(value) > math.MaxInt-total {
+			return false, nil
+		}
+		total += len(value)
+		externalValues++
+	}
+	// One external value already needs only one area allocation. Avoid an
+	// extra validation pass and preserve the existing single-value path.
+	if externalValues < 2 || uint64(total) > math.MaxUint32 ||
+		int64(total) > mpool.MaxAllocationSize() {
+		return false, nil
+	}
+	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if null {
+			continue
+		}
+		// Leave diagnostics and their row order to the ordinary path.
+		if hasByteWidth && len(value) > byteWidth {
+			return false, nil
+		}
+		if err := types.ValidateCollationValue(toType, value); err != nil {
+			return false, nil
+		}
+	}
+	if err := result.PreExtendWithArea(0, total, proc.Mp()); err != nil {
+		return true, err
+	}
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if err := to.AppendBytes(value, null); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
 func strToStr(
 	ctx context.Context,
 	proc *process.Process,
@@ -10341,6 +10436,11 @@ func strToStr(
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool,
 	mode castMode, selectList *FunctionSelectList) error {
+	if mode.isAssignment() {
+		if done, err := tryReserveAssignedText(proc, from, to, length, toType, selectList); done {
+			return err
+		}
+	}
 	totype := to.GetType()
 	destLen := int(totype.Width)
 	trimComparisonKey := mode == castModeComparison &&

@@ -3,7 +3,8 @@ name: MatrixOne ALL CI
 on:
   pull_request_target:
     types: [ opened, synchronize, reopened, ready_for_review ]
-    branches: [ main, 4.2-dev, '[0-9]+.[0-9]+*' ]
+    # pull_request_target reads this entrypoint from the default branch.
+    branches: [ main, 4.2-dev, v4.2.8-hotfix, '[0-9]+.[0-9]+*' ]
 
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}

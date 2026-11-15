@@ -169,6 +169,71 @@ func TestProjectionJSONReaderPublicationAndReuse(t *testing.T) {
 	require.Equal(t, 1, published.Length(), "projection borrows rather than consumes the publication")
 }
 
+func TestJSONProjectionReaderWithDictionaryPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	defer bat.Clean(mp)
+	for range 3 {
+		doc, err := types.ParseStringToByteJson(`{"a":1,"b":2}`)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendByteJson(bat.Vecs[0], doc, false, mp))
+	}
+	paths := vector.NewVec(types.T_varchar.ToType())
+	defer paths.Free(mp)
+	for _, path := range []string{"$.a", "$.b"} {
+		require.NoError(t, vector.AppendBytes(paths, []byte(path), false, mp))
+	}
+	owner, err := vector.FreezeVector(paths, mp, nil)
+	require.NoError(t, err)
+	defer owner.Release()
+	rows, err := vector.NewRowSelection([]int64{1, 0, 1}, 2, mp, nil)
+	require.NoError(t, err)
+	defer rows.Release()
+	bat.Vecs[1], err = vector.NewDictionaryVector(owner, rows, mp, nil)
+	require.NoError(t, err)
+	bat.SetRowCount(3)
+	doc := &plan.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	path := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	literal := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	constructor := bindTestFunction(t, proc, "json_object", literal("keep"), path)
+	projection := &Projection{ProjectList: []*plan.Expr{
+		bindTestFunction(t, proc, "json_value", doc, path),
+		bindTestFunction(t, proc, "json_value", doc, path),
+		bindTestFunction(t, proc, "json_value", constructor, literal("$.keep")),
+	}}
+	require.NoError(t, projection.PrepareProjection(proc))
+	defer projection.FreeProjection(proc)
+	out, err := projection.EvalProjection(bat, proc)
+	require.NoError(t, err)
+	for _, col := range out.Vecs[:2] {
+		for row, want := range []string{"2", "1", "2"} {
+			require.Equal(t, want, string(col.GetBytesAt(row)))
+		}
+	}
+	for row, want := range []string{"$.b", "$.a", "$.b"} {
+		require.Equal(t, want, string(out.Vecs[2].GetBytesAt(row)))
+	}
+	require.Equal(t, uint64(1), projection.dictionaryInputs.Gathers, "JSON projection siblings share the normalized path input")
+	reader, err := vector.NewJSONReaderSnapshot(bat.Vecs[0], mp)
+	require.NoError(t, err)
+	defer reader.Close()
+	executor := jsonProjectionState(projection.ProjectExecutors).inputs[0].executor
+	selected, err := executor.EvalWithJSONReader(proc, []*batch.Batch{bat}, []bool{true, false, true}, reader)
+	require.NoError(t, err)
+	require.Equal(t, "2", string(selected.GetBytesAt(0)))
+	require.True(t, selected.IsNull(1))
+	require.Equal(t, "2", string(selected.GetBytesAt(2)))
+	selectedConstructor, err := projection.ProjectExecutors[2].Eval(proc, []*batch.Batch{bat}, []bool{true, false, true})
+	require.NoError(t, err)
+	require.Equal(t, "$.b", string(selectedConstructor.GetBytesAt(0)))
+	require.True(t, selectedConstructor.IsNull(1))
+	require.Equal(t, "$.b", string(selectedConstructor.GetBytesAt(2)))
+}
+
 func TestProjectionJSONValueInsideConstructor(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()

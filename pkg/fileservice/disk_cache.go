@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -55,6 +56,7 @@ type DiskCache struct {
 	cache        *lrucache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	preloads     *preloadUsage
+	ranges       cachedRanges
 	dirEntries   bool
 	// held counts the holds on entry directories.
 	held        dirHolds
@@ -64,6 +66,19 @@ type DiskCache struct {
 	diskFullEviction     atomic.Bool
 	downloads            diskCacheDownloads
 	downloadMaxExtraWait time.Duration
+	prefetchRange        prefetchRangeConfig
+	objectSplit          objectSplitConfig
+	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
+	memoryPrefetchMax int64
+	prefetched        prefetchedObjects
+	// downloadConns counts the object-storage connections whole-object downloads hold,
+	// at most maxDownloadConns.
+	downloadConns    atomic.Int64
+	maxDownloadConns int64
+	// connsFreed, when set, is closed once reserved connections are freed.
+	connsMu         sync.Mutex
+	connsFreed      chan struct{}
+	prefetchObjects prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -85,14 +100,28 @@ type DiskCache struct {
 	// beforeIndexLoadedDirs is a test-only phase barrier before the entry directories found
 	// by the load are indexed.
 	beforeIndexLoadedDirs func()
+	// beforeLoadFile is a test-only phase barrier before a file found by the load is
+	// indexed.
+	beforeLoadFile func(diskPath string)
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
+	// afterPublicationClaim is a test-only phase barrier between a file's publication
+	// claim and its caching.
+	afterPublicationClaim func()
+	// afterFilePublication is a test-only phase barrier after a file is cached.
+	afterFilePublication func()
 	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
 	beforeCacheDirFileOpen func()
 	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
 	// eviction starting.
 	beforeEvictionStart func(path string)
+	// deletes counts the deletes of objects; see objectDeletes.
+	deletes objectDeletes
+	// prefetchFlightBytes, when set, is the most bytes of prefetch range runs under way,
+	// instead of flightBudget.
+	prefetchFlightBytes int64
+	flightBudget        flightBudget
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -151,6 +180,13 @@ type diskCacheOptions struct {
 	// downloadMaxExtraWait is how much later than a range read a read may get its bytes
 	// by waiting for the download of their object.
 	downloadMaxExtraWait time.Duration
+	// prefetchRange sets the prefetch ranges of range reads.
+	prefetchRange prefetchRangeConfig
+	// objectSplit sets the parts a whole-object download reads at once.
+	objectSplit objectSplitConfig
+	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject; 0 is
+	// DefaultDiskPrefetchMemoryMax.
+	memoryPrefetchMax int64
 }
 
 func newDiskCache(
@@ -195,7 +231,11 @@ func newDiskCache(
 		capacityFunc:         capacityFunc,
 		dirEntries:           opts.dirEntries,
 		downloadMaxExtraWait: opts.downloadMaxExtraWait,
+		prefetchRange:        opts.prefetchRange,
+		objectSplit:          opts.objectSplit,
+		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
 		preloads:             newPreloadUsage(),
+		maxDownloadConns:     int64(maxConnsPerHost / 2),
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
@@ -206,6 +246,7 @@ func newDiskCache(
 				ret.preloads.readDownload(path, o, n)
 			}
 		}
+		ret.ranges.add(ret.path, path)
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -234,6 +275,7 @@ func newDiskCache(
 	}
 	postEvict := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.removed(path, size)
+		ret.ranges.remove(path)
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -268,6 +310,68 @@ func newDiskCache(
 	}
 
 	return ret, nil
+}
+
+// loadFile indexes the cache file at diskPath found at startup, unless its object was
+// deleted since the cache was created: the delete may have missed a file not yet
+// indexed, so the file is removed instead. As for the publication of an entry, a delete
+// counted later finds the file indexed.
+func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileInfo) {
+	objectPath := diskPath
+	if !isFullFileCachePath(diskPath) {
+		key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size())
+		if ok {
+			dir, name := filepath.Split(key)
+			objectPath = filepath.Join(dir, "full"+name)
+		}
+	}
+	if d.beforeLoadFile != nil {
+		d.beforeLoadFile(diskPath)
+	}
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if d.deletes.since(objectPath, 0) {
+		_ = os.Remove(diskPath)
+		return
+	}
+	d.cache.SetOldest(ctx, diskPath, struct{}{}, int64(fileSize(info)))
+}
+
+// reindexRead indexes the cache file at diskPath that a read opened and the cache does
+// not hold. As in loadFile, a file of an object deleted since the cache was created is
+// neither read nor indexed: a delete during the load may have missed it. It reports
+// whether the file may be read.
+func (d *DiskCache) reindexRead(
+	ctx context.Context,
+	diskPath string,
+	objectPath string,
+	generation uint64,
+	file *os.File,
+) (readable bool, err error) {
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if d.deletes.since(objectPath, 0) {
+		return false, nil
+	}
+	LogEvent(ctx, str_disk_cache_file_stat_begin)
+	stat, err := file.Stat()
+	LogEvent(ctx, str_disk_cache_file_stat_end)
+	if err != nil {
+		return false, err
+	}
+	doneReindex, ok := d.tryStartReadReindex(diskPath, generation)
+	if !ok {
+		return true, nil
+	}
+	defer func() {
+		if doneErr := doneReindex(); err == nil {
+			err = doneErr
+		}
+	}()
+	d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+	return true, nil
 }
 
 func (d *DiskCache) loadCache(ctx context.Context) {
@@ -317,8 +421,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 					if err != nil {
 						continue // ignore
 					}
-
-					d.cache.SetOldest(ctx, work.Path, struct{}{}, int64(fileSize(info)))
+					d.loadFile(ctx, work.Path, info)
 				}
 			}
 		}()
@@ -502,6 +605,21 @@ func (d *DiskCache) Read(
 		return opened, true, true
 	}
 
+	var rangeKey string
+	objectKey := func() string {
+		if rangeKey == "" {
+			rangeKey = d.rangeObjectKey(path.File)
+		}
+		return rangeKey
+	}
+	var fullPath string
+	objectPath := func() string {
+		if fullPath == "" {
+			fullPath = d.pathForFile(path.File)
+		}
+		return fullPath
+	}
+
 	fillEntry := func(entry *IOEntry) error {
 		LogEvent(ctx, str_disk_cache_fill_entry_begin)
 		defer LogEvent(ctx, str_disk_cache_fill_entry_end)
@@ -540,10 +658,12 @@ func (d *DiskCache) Read(
 			}
 		}
 
+		var downloading bool
 		if !openedOK {
 			// try full file
-			diskPath = d.pathForFile(path.File)
-			downloading, filled, err := d.readFromDownload(ctx, diskPath, entry)
+			diskPath = objectPath()
+			var filled bool
+			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
 			if err != nil {
 				return err
 			}
@@ -553,23 +673,90 @@ func (d *DiskCache) Read(
 				numHit++
 				return nil
 			}
-			if downloading {
-				// A range read gets these bytes sooner than the download.
-				vector.downloadDeclined = true
-				return nil
-			}
-			if f, newlyOpened, ok := openPath(diskPath); ok {
-				if newlyOpened {
-					numOpenFull++
-				}
-				LogEvent(ctx, str_disk_cache_file_seek_begin)
-				_, err = f.file.Seek(entry.Offset, io.SeekStart)
-				LogEvent(ctx, str_disk_cache_file_seek_end)
-				if err == nil {
-					opened = f
-					openedOK = true
+			if !downloading {
+				if f, newlyOpened, ok := openPath(diskPath); ok {
+					if newlyOpened {
+						numOpenFull++
+					}
+					LogEvent(ctx, str_disk_cache_file_seek_begin)
+					_, err = f.file.Seek(entry.Offset, io.SeekStart)
+					LogEvent(ctx, str_disk_cache_file_seek_end)
+					if err == nil {
+						opened = f
+						openedOK = true
+					}
 				}
 			}
+		}
+
+		// try a cached range that contains the entry; rangeOffset is where the entry
+		// starts in it
+		var rangeOffset int64
+		for tried := []string(nil); !openedOK; {
+			r, ok := d.ranges.containing(objectKey(), entry.Offset, entry.Size, tried)
+			if !ok {
+				break
+			}
+			tried = append(tried, r.diskPath)
+			if !d.cache.Contains(r.diskPath) {
+				d.ranges.remove(r.diskPath)
+				continue
+			}
+			f, newlyOpened, ok := openPath(r.diskPath)
+			if !ok {
+				continue
+			}
+			if newlyOpened {
+				numOpenIOEntry++
+			}
+			if _, err = f.file.Seek(entry.Offset-r.offset, io.SeekStart); err == nil {
+				diskPath, opened, openedOK = r.diskPath, f, true
+				rangeOffset = entry.Offset - r.offset
+			}
+		}
+
+		// try cached ranges that hold the entry together
+		if !openedOK {
+			if rs, ok := d.ranges.covering(objectKey(), entry.Offset, entry.Size); ok && len(rs) > 1 {
+				readers := make([]io.Reader, 0, len(rs))
+				pos, end := entry.Offset, entry.Offset+entry.Size
+				for _, r := range rs {
+					if !d.cache.Contains(r.diskPath) {
+						d.ranges.remove(r.diskPath)
+						readers = nil
+						break
+					}
+					f, newlyOpened, ok := openPath(r.diskPath)
+					if !ok {
+						readers = nil
+						break
+					}
+					if newlyOpened {
+						numOpenIOEntry++
+					}
+					next := min(r.offset+r.size, end)
+					readers = append(readers, io.NewSectionReader(f.file, pos-r.offset, next-pos))
+					pos = next
+				}
+				if readers != nil {
+					if err := entry.readFrom(ctx, io.MultiReader(readers...), d.cacheDataAllocator); err != nil {
+						return err
+					}
+					for _, r := range rs {
+						d.cache.Get(ctx, r.diskPath)
+					}
+					entry.done = true
+					entry.fromCache = d
+					numHit++
+					return nil
+				}
+			}
+		}
+
+		if !openedOK && downloading {
+			// A range read gets these bytes sooner than the download.
+			vector.downloadDeclined = true
+			return nil
 		}
 
 		if !openedOK {
@@ -580,28 +767,18 @@ func (d *DiskCache) Read(
 
 		LogEvent(ctx, str_disk_cache_update_states_begin)
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
-			// set cache
-			LogEvent(ctx, str_disk_cache_file_stat_begin)
-			stat, err := file.Stat()
-			LogEvent(ctx, str_disk_cache_file_stat_end)
+			readable, err := d.reindexRead(ctx, diskPath, objectPath(), opened.generation, file)
 			if err != nil {
 				return err
 			}
-			if doneReindex, ok := d.tryStartReadReindex(diskPath, opened.generation); ok {
-				var reindexErr error
-				func() {
-					defer func() { reindexErr = doneReindex() }()
-					d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
-				}()
-				if reindexErr != nil {
-					return reindexErr
-				}
+			if !readable {
+				return nil
 			}
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
-		readOffset, readSize := int64(0), entry.Size
-		if diskPath == d.pathForFile(path.File) {
+		readOffset, readSize := rangeOffset, entry.Size
+		if diskPath == objectPath() {
 			readOffset = entry.Offset
 			d.preloads.read(diskPath, entry.Size)
 		}
@@ -675,7 +852,7 @@ func (d *DiskCache) Update(
 			// ignore size unknown entry
 			continue
 		}
-		if entry.fromCache == d {
+		if entry.fromCache == d || entry.inPrefetchRange {
 			// no need to update
 			continue
 		}
@@ -700,7 +877,10 @@ func (d *DiskCache) updateEntry(
 	entry IOEntry,
 	onWritten []OnDiskCacheWrittenFunc,
 ) error {
-	written, err := d.writeEntry(ctx, diskPath, entry, nil)
+	live := func() bool { return ctx.Err() == nil }
+	written, err := d.publishUnlessDeleted(filePath, entry, live, func(claim func() bool) (bool, error) {
+		return d.writeEntry(ctx, diskPath, entry, claim)
+	})
 	if err != nil || !written {
 		return err
 	}
@@ -718,7 +898,7 @@ func (d *DiskCache) writeEntry(
 ) (bool, error) {
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, false, claimPublication, notWholeFill)
+	}, false, claimPublication, notWholeFill, nil)
 	if writeErr != nil {
 		return false, d.observeWriteResult(diskPath, writeErr)
 	}
@@ -736,7 +916,7 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
-	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, notWholeFill)
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, notWholeFill, nil)
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
@@ -832,10 +1012,47 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	asyncFinalize bool,
 	claimPublication func() bool,
 	fill wholeFill,
+	objectSize objectLayout,
 ) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
+	if _, ok := d.cache.Get(ctx, diskPath); ok {
+		if _, err := os.Stat(diskPath); err == nil {
+			return false, nil
+		}
+	}
+	// A download holds its object-storage connections for long; it reserves them so
+	// range reads keep theirs, before it holds the path, so its wait for a connection
+	// holds nothing else.
+	var bounds []int64
+	var conns int64
+	if fill == storageFill || fill == rangeFill {
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
+			if size, splitAt, err := objectSize(ctx); err == nil {
+				bounds = d.objectSplit.bounds(size, splitAt)
+			}
+		}
+		conns = max(int64(len(bounds))-1, 1)
+		if conns > 1 && !d.reserveDownloadConns(conns) {
+			bounds, conns = nil, 1
+		}
+		if conns == 1 && !d.reserveDownloadConns(1) {
+			// Without a connection to hold, the download is skipped; otherwise it waits for one.
+			if d.maxDownloadConns < 1 {
+				metric.FSDiskCacheDownloadSkippedCounter.Inc()
+				return false, nil
+			}
+			if err := d.waitDownloadConns(ctx, 1); err != nil {
+				return false, err
+			}
+		}
+	}
+	releaseConns := func() {
+		d.releaseDownloadConns(conns)
+		conns = 0
+	}
+	defer releaseConns()
 	asyncSlotOwned := false
 	if asyncFinalize {
 		if !d.tryReserveAsyncFileFinalize(diskPath) {
@@ -905,7 +1122,9 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var download *objectDownload
 	var dst io.Writer = f
 	if fill != notWholeFill {
-		download = d.startDownload(diskPath, f.Name(), fill == storageFill)
+		download = d.startDownload(diskPath, f.Name(), fill != contentFill, bounds)
+		fileDownloadStarted(ctx, download)
+		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
 		endUpdate := doneUpdate
 		doneUpdate = func() error {
@@ -914,12 +1133,15 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		}
 	}
 
-	from, err := openReader(ctx)
+	readCtx, idle := newIdleReader(ctx)
+	defer idle.Close()
+	from, err := openReader(readCtx)
 	if err != nil {
 		return false, &diskCacheSourceError{err: err}
 	}
 	defer from.Close()
-	source := &diskCacheSourceReader{Reader: from}
+	idle.r = from
+	source := &diskCacheSourceReader{Reader: idle}
 
 	// do eviction before write
 	forceEvict := int64(0)
@@ -932,21 +1154,30 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}
 	d.cache.Evict(ctx, nil, forceEvict)
 
-	var buf []byte
-	put := ioBufferPool.Get(&buf)
-	defer put.Put()
-	n, err := io.CopyBuffer(dst, source, buf)
+	var n int64
+	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
+		n, err = copyParts(ctx, f, download, l.openRange, bounds)
+	} else {
+		var buf []byte
+		put := ioBufferPool.Get(&buf)
+		defer put.Put()
+		if download != nil {
+			download.begin(0)
+		}
+		n, err = io.CopyBuffer(dst, source, buf)
+		if err != nil && source.err != nil {
+			err = &diskCacheSourceError{err: source.err}
+		}
+	}
+	releaseConns()
 	if download != nil {
 		download.end(err == nil)
 	}
 	if err != nil {
-		if source.err != nil {
-			return false, &diskCacheSourceError{err: source.err}
-		}
 		return false, err
 	}
 
-	if download != nil {
+	if download != nil && fill != rangeFill {
 		d.noteWholeFile(n)
 	}
 
@@ -1005,6 +1236,9 @@ func (d *DiskCache) finalizeFile(
 	} else if err := ctx.Err(); err != nil {
 		return err
 	}
+	if d.afterPublicationClaim != nil {
+		d.afterPublicationClaim()
+	}
 	if err := os.Rename(tempPath, diskPath); err != nil {
 		return err
 	}
@@ -1019,6 +1253,9 @@ func (d *DiskCache) finalizeFile(
 		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+	}
+	if d.afterFilePublication != nil {
+		d.afterFilePublication()
 	}
 
 	return nil
@@ -1423,7 +1660,7 @@ func (d *DiskCache) setFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 ) error {
-	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill)
+	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill, nil)
 }
 
 // setFileContent caches content already in memory as the whole file of filePath.
@@ -1435,7 +1672,7 @@ func (d *DiskCache) setFileContent(
 ) error {
 	return d.fillFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(content)), nil
-	}, asyncFinalize, contentFill)
+	}, asyncFinalize, contentFill, nil)
 }
 
 // wholeFill is how a write fills a disk-cache file.
@@ -1448,14 +1685,20 @@ const (
 	contentFill
 	// storageFill downloads a whole object from object storage.
 	storageFill
+	// rangeFill downloads a range of an object from object storage.
+	rangeFill
 )
 
+// fillFile caches the whole object of filePath read through openReader; objectSize, when
+// set, returns the object's size before a download starts, so a large object downloads
+// as parts.
 func (d *DiskCache) fillFile(
 	ctx context.Context,
 	filePath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 	fill wholeFill,
+	objectSize objectLayout,
 ) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
@@ -1463,7 +1706,7 @@ func (d *DiskCache) fillFile(
 	}
 	diskPath := d.pathForFile(path.File)
 	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize)
 	d.wholeFills.Add(-1)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
@@ -1488,8 +1731,19 @@ func (d *DiskCache) DeletePaths(
 		return err
 	}
 	for _, path := range canonical {
-		//TODO also delete IOEntry files
+		diskPath := d.pathForFile(path)
+		// Counted first: an entry read before it and cached after it is retracted.
+		d.deletes.deleted(diskPath)
+		// No prefetch object of the object caches its bytes after the delete; one under
+		// way is canceled rather than waited for.
+		if err = d.dropPrefetches(ctx, diskPath); err != nil {
+			return
+		}
 		if err = d.removeOnePath(ctx, path); err != nil {
+			return
+		}
+		d.prefetched.forget(diskPath)
+		if err = d.removeRangeFiles(ctx, path); err != nil {
 			return
 		}
 	}
@@ -1537,6 +1791,30 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 	return
 }
 
+// removeRangeFiles deletes the cached range files of the object at path.
+func (d *DiskCache) removeRangeFiles(ctx context.Context, path string) error {
+	for _, r := range d.ranges.of(d.rangeObjectKey(path)) {
+		if err := d.removeRangeFile(ctx, r.diskPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DiskCache) removeRangeFile(ctx context.Context, diskPath string) error {
+	doneUpdate, err := d.startUpdateContext(ctx, diskPath)
+	if err != nil {
+		return err
+	}
+	defer doneUpdate()
+	d.ranges.remove(diskPath)
+	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	d.cache.Delete(ctx, diskPath)
+	return nil
+}
+
 func (d *DiskCache) Evict(ctx context.Context, done chan int64) {
 	d.cache.Evict(ctx, done, 0)
 }
@@ -1553,6 +1831,7 @@ func (d *DiskCache) Close(ctx context.Context) {
 	// reuse the cache directory for a new DiskCache generation until a later
 	// Close returns with a live context.
 	d.load.cancel()
+	d.closePrefetches(ctx)
 	d.closeAsyncUpdates(ctx)
 	select {
 	case <-d.load.done:

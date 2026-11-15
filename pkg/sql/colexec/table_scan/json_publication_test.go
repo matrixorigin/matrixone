@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -42,6 +43,7 @@ func TestTableScanConsumesPublishedJSONVersion(t *testing.T) {
 		t.Run(fmt.Sprint(filtered), func(t *testing.T) { testTableScanPublishedJSONVersion(t, filtered) })
 	}
 	t.Run("accounted", func(t *testing.T) { testTableScanPublishedJSONVersion(t, true, true) })
+	t.Run("dictionary-selection", func(t *testing.T) { testTableScanPublishedJSONVersion(t, true, true, false, true) })
 }
 func TestTableScanDeliversJSONVersionToStandaloneProjection(t *testing.T) {
 	for _, filtered := range []bool{false, true} {
@@ -50,6 +52,7 @@ func TestTableScanDeliversJSONVersionToStandaloneProjection(t *testing.T) {
 }
 func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ...bool) {
 	external := len(accounted) > 1 && accounted[1]
+	dictionary := len(accounted) > 2 && accounted[2]
 	proc := testutil.NewProc(t)
 	defer func() { proc.Free(); require.Zero(t, proc.GetMPool().CurrNB()) }()
 	var selection *vector.AllocationAccountSelection
@@ -101,7 +104,7 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 		version, err := builder.Finish()
 		require.NoError(t, err)
 		publication.Publish(0, version)
-		if external {
+		if external || dictionary {
 			changed, err := types.ParseStringToByteJson(`{"keep":9}`)
 			require.NoError(t, err)
 			raw, err := changed.Marshal()
@@ -123,7 +126,9 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 		scan.FilterExprs = []*pb.Expr{lateTestCol(1, types.T_bool.ToType())}
 	}
 	scan.OutputAllocation = selection
-	if !external {
+	if dictionary {
+		scan.ProjectList = []*pb.Expr{column}
+	} else if !external {
 		scan.ProjectList = []*pb.Expr{expression}
 	} else if !filtered {
 		scan.ProjectList = []*pb.Expr{}
@@ -135,6 +140,28 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 	}
 	defer scan.Free(proc, false, nil)
 	require.NoError(t, scan.Prepare(proc))
+	if dictionary {
+		consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator()}
+		consumer.AppendChild(scan)
+		vm.ConfigureDictionaryBoundaries(consumer)
+		require.True(t, scan.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+		require.NoError(t, scan.RequestJSONInputs(proc, []int{0}))
+		result, err := scan.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, 1, result.Batch.RowCount())
+		output, err := scan.ExecProjection(proc, result.Batch)
+		require.NoError(t, err)
+		versions, err := scan.PublishJSONInputs(proc, output, []int{0})
+		require.NoError(t, err)
+		defer colexec.CloseJSONInputVersions(versions)
+		require.Equal(t, 1, versions.Readers[0].Length())
+		value, err := versions.Readers[0].QueryText(0, []byte("$.keep"), true)
+		require.NoError(t, err)
+		defer value.Close()
+		require.True(t, value.Exists)
+		require.Equal(t, "2", value.Text)
+		return
+	}
 	var output *batch.Batch
 	if external {
 		consumer := projection.NewArgument()
@@ -150,11 +177,13 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 		result, err := scan.Call(proc)
 		require.NoError(t, err)
 		require.NotNil(t, scan.jsonPublication())
-		changed, err := types.ParseStringToByteJson(`{"keep":9}`)
-		require.NoError(t, err)
-		changedRaw, err := changed.Marshal()
-		require.NoError(t, err)
-		require.NoError(t, vector.SetBytesAt(result.Batch.Vecs[0], 0, changedRaw, proc.Mp()))
+		if !dictionary {
+			changed, err := types.ParseStringToByteJson(`{"keep":9}`)
+			require.NoError(t, err)
+			changedRaw, err := changed.Marshal()
+			require.NoError(t, err)
+			require.NoError(t, vector.SetBytesAt(result.Batch.Vecs[0], 0, changedRaw, proc.Mp()))
+		}
 		output, err = scan.ExecProjection(proc, result.Batch)
 		require.NoError(t, err)
 	}

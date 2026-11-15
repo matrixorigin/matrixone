@@ -199,10 +199,18 @@ upgrade every CN before relying on it. Stage STRING inputs containing backslash
 or NUL remain explicitly rejected before dispatch.
 
 Names which are not URL hostnames use ``stage:///percent-encoded-name/file``.
-Stage convenience load/export methods construct this URI automatically. The
-encoded first segment is decoded once; dot-only names use the existing host
-form. Credential keys/values cannot contain commas, keys cannot contain equals
-signs, and duplicate keys after case folding reject before mutation.
+For example, ``stage:///two%20words/file.csv`` refers to the Stage named
+``two words``. The first segment is decoded once: ``part%2Fname`` means the
+name ``part/name``, while ``literal%252F`` means ``literal%2F``. Existing
+``stage://name/file`` references remain supported; dot-only names use that host
+form and an empty name remains invalid. Catalog, Stage status and file-access
+checks still apply.
+
+Stage convenience load/export methods construct the URI automatically. The
+server must support the path form: published 4.2.8 does not, so a 4.2 release
+containing the Stage URI backport is required. Credential keys/values cannot
+contain commas, keys cannot contain equals signs, and duplicate keys after case
+folding reject before mutation.
 
 Atomic Data Loading From Existing Stages
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

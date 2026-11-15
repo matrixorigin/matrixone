@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestEventLogger(t *testing.T) {
@@ -146,4 +148,34 @@ func BenchmarkEventLoggerArguments(b *testing.B) {
 			}
 		})
 	}
+}
+
+// A logger closed by one read is left alone by another sharing it: no panic, no hang.
+func TestLogSlowEventOfClosedLogger(t *testing.T) {
+	ctx := WithEventLogger(context.Background())
+	LogSlowEvent(ctx, time.Hour)
+	LogSlowEvent(ctx, 0)
+	LogEvent(ctx, str_to_cache_data_begin)
+	logger := ctx.Value(EventLoggerKey).(*eventLogger)
+	require.True(t, logger.mu.TryLock(), "the logger is not left locked")
+	logger.mu.Unlock()
+}
+
+// Nested reads sharing one context log apart: a read inside a read, as the take-over of
+// queued column ranges does, leaves the outer read's logger open.
+func TestNestedReadKeepsOuterEventLogger(t *testing.T) {
+	ctx := WithEventLogger(context.Background())
+	outer := ctx.Value(EventLoggerKey).(*eventLogger)
+	inner := withoutEventLogger(ctx)
+	for range 3 {
+		innerCtx := WithEventLogger(inner)
+		require.NotSame(t, outer, innerCtx.Value(EventLoggerKey))
+		LogEvent(innerCtx, str_to_cache_data_begin)
+		LogSlowEvent(innerCtx, 0)
+	}
+	outer.mu.Lock()
+	require.False(t, outer.closed)
+	require.Empty(t, *outer.events)
+	outer.mu.Unlock()
+	LogSlowEvent(ctx, time.Hour)
 }
