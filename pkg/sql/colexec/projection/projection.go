@@ -106,6 +106,9 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
 	if bat.HasDictionary() {
+		if projection.ctr.dictionaryInputs == nil {
+			projection.ctr.dictionaryInputs = &colexec.DictionaryInputFrame{}
+		}
 		projection.ctr.dictionaryInputs.Begin(bat, projection.ctr.outputAllocation, proc.Mp())
 		projection.ctr.dictionaryInputs.Bind(projection.ctr.projExecutors)
 		defer func() {

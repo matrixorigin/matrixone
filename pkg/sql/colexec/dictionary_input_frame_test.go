@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -165,6 +166,11 @@ func TestDictionaryInputFrameFreeUnusedAndPartial(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	t.Run("nil-owner", func(t *testing.T) {
+		var frame *DictionaryInputFrame
+		frame.Free(mp)
+		frame.Observe(process.NewAnalyzer(0, false, false, "unused-frame"))
+	})
 	t.Run("unused-and-repeated", func(t *testing.T) {
 		var frame DictionaryInputFrame
 		frame.Free(mp)

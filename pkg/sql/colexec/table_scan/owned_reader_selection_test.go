@@ -192,7 +192,9 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 						require.Nil(t, scan.ctr.readerWorkspace)
 					}
 					require.Equal(t, shape != "pad-char", reader.selectCalls > 0)
-					require.Zero(t, scan.ctr.dictionaryInputs.Gathers, "the second predicate must borrow phone values")
+					if frame := scan.ctr.dictionaryInputs; frame != nil {
+						require.Zero(t, frame.Gathers, "the second predicate must borrow phone values")
+					}
 					result, err = vm.Exec(scan, proc)
 					require.NoError(t, err)
 					require.Nil(t, result.Batch)

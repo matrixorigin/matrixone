@@ -79,6 +79,9 @@ func (f *DictionaryInputFrame) End() {
 	}
 }
 func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
+	if f == nil {
+		return
+	}
 	// Predicate scopes are bound only after predicateInput is created. Column
 	// discovery can precede it, so include that scratch and counter-only state.
 	if f.inputs == nil && f.flat == nil && f.ready == nil &&
@@ -182,7 +185,7 @@ func (f *DictionaryInputFrame) bind(executors []ExpressionExecutor, hasDictionar
 
 // Observe reports committed work, never an estimate of copies avoided.
 func (f *DictionaryInputFrame) Observe(analyzer process.Analyzer) {
-	if analyzer == nil || f.Gathers == f.reportedGathers {
+	if f == nil || analyzer == nil || f.Gathers == f.reportedGathers {
 		return
 	}
 	stats := analyzer.GetOpStats()

@@ -289,7 +289,7 @@ type container struct {
 	groupingAware bool
 
 	// x, y of `group by x, y`.
-	dictionaryInputs colexec.DictionaryInputFrame
+	dictionaryInputs *colexec.DictionaryInputFrame
 	groupByEvaluate  colexec.ExprEvalVector
 	// m, n of `select agg1(m, n), agg2(m, n)`.
 	aggArgEvaluate []colexec.ExprEvalVector
@@ -887,6 +887,9 @@ func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
 	if bat.HasDictionary() {
+		if group.ctr.dictionaryInputs == nil {
+			group.ctr.dictionaryInputs = &colexec.DictionaryInputFrame{}
+		}
 		group.ctr.dictionaryInputs.Begin(bat, group.ctr.expressionAllocation, proc.Mp())
 		group.ctr.dictionaryInputs.Bind(group.ctr.groupByEvaluate.Executor)
 		for i := range group.ctr.aggArgEvaluate {
@@ -1166,14 +1169,28 @@ func (mergeGroup *MergeGroup) Release() {
 	}
 }
 
+// Keep the frame in the same allocation, outside the operator's reset range.
+type groupArgument struct {
+	operator Group
+	frame    colexec.DictionaryInputFrame
+}
+
+func newGroupArgument() *Group {
+	a := new(groupArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetGroupArgument(a *Group) {
+	frame := a.ctr.dictionaryInputs
+	*a = Group{}
+	a.ctr.dictionaryInputs = frame
+}
+
 func init() {
 	reuse.CreatePool(
-		func() *Group {
-			return &Group{}
-		},
-		func(a *Group) {
-			*a = Group{}
-		},
+		newGroupArgument,
+		resetGroupArgument,
 		reuse.DefaultOptions[Group]().
 			WithEnableChecker(),
 	)

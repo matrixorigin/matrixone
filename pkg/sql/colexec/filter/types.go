@@ -43,15 +43,29 @@ func (filter *Filter) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[Filter](
-		func() *Filter {
-			return &Filter{}
-		},
-		func(a *Filter) {
-			*a = Filter{}
-		},
+		newFilterArgument,
+		resetFilterArgument,
 		reuse.DefaultOptions[Filter]().
 			WithEnableChecker(),
 	)
+}
+
+// Keep the frame in the same allocation, outside the operator's reset range.
+type filterArgument struct {
+	operator Filter
+	frame    colexec.DictionaryInputFrame
+}
+
+func newFilterArgument() *Filter {
+	a := new(filterArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetFilterArgument(a *Filter) {
+	frame := a.ctr.dictionaryInputs
+	*a = Filter{}
+	a.ctr.dictionaryInputs = frame
 }
 
 func (filter Filter) TypeName() string {
@@ -70,7 +84,7 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
-	dictionaryInputs          colexec.DictionaryInputFrame
+	dictionaryInputs          *colexec.DictionaryInputFrame
 	dictionaryBoundary        vm.DictionaryOutputState
 	viewOutput                *batch.Batch
 	selectedRows              []int64

@@ -35,7 +35,7 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	dictionaryInputs          colexec.DictionaryInputFrame
+	dictionaryInputs          *colexec.DictionaryInputFrame
 	dictionaryBoundary        vm.DictionaryOutputState
 	maxAllocSize              int
 	buf                       *batch.Batch
@@ -154,15 +154,29 @@ func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[TableScan](
-		func() *TableScan {
-			return &TableScan{}
-		},
-		func(a *TableScan) {
-			*a = TableScan{}
-		},
+		newTableScanArgument,
+		resetTableScanArgument,
 		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
+}
+
+// Keep the frame in the same allocation, outside the operator's reset range.
+type tableScanArgument struct {
+	operator TableScan
+	frame    colexec.DictionaryInputFrame
+}
+
+func newTableScanArgument() *TableScan {
+	a := new(tableScanArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetTableScanArgument(a *TableScan) {
+	frame := a.ctr.dictionaryInputs
+	*a = TableScan{}
+	a.ctr.dictionaryInputs = frame
 }
 
 func (tableScan TableScan) TypeName() string {

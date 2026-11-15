@@ -47,15 +47,29 @@ func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[Projection](
-		func() *Projection {
-			return &Projection{}
-		},
-		func(a *Projection) {
-			*a = Projection{}
-		},
+		newProjectionArgument,
+		resetProjectionArgument,
 		reuse.DefaultOptions[Projection]().
 			WithEnableChecker(),
 	)
+}
+
+// Keep the frame in the same allocation, outside the operator's reset range.
+type projectionArgument struct {
+	operator Projection
+	frame    colexec.DictionaryInputFrame
+}
+
+func newProjectionArgument() *Projection {
+	a := new(projectionArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetProjectionArgument(a *Projection) {
+	frame := a.ctr.dictionaryInputs
+	*a = Projection{}
+	a.ctr.dictionaryInputs = frame
 }
 
 func (projection Projection) TypeName() string {
@@ -73,7 +87,7 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
-	dictionaryInputs   colexec.DictionaryInputFrame
+	dictionaryInputs   *colexec.DictionaryInputFrame
 	dictionaryBoundary vm.DictionaryOutputState
 	outputAllocation   *vector.AllocationAccountSelection
 	buf                *batch.Batch
