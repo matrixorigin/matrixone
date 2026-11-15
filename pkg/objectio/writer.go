@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -808,12 +809,40 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 	return w.objStats
 }
 
+// compressionBuffersOverlap protects inputs that alias unused arena space.
+func compressionBuffersOverlap(left, right []byte) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	l := uintptr(unsafe.Pointer(unsafe.SliceData(left)))
+	r := uintptr(unsafe.Pointer(unsafe.SliceData(right)))
+	if l <= r {
+		return r-l < uintptr(len(left))
+	}
+	return l-r < uintptr(len(right))
+}
+
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
 	dataLen := len(buf)
 	if dataLen > math.MaxInt-dataLen/255-16 || uint64(dataLen) > math.MaxUint32 {
 		return nil, extent, moerr.NewInternalErrorNoCtx("compressed column exceeds supported size")
 	}
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
+	// The unused arena tail can hold the whole compression bound. Compress
+	// directly there and commit only the bytes written, avoiding a temporary
+	// scratch allocation and copy. Aliased input must use the ordinary path.
+	if w.arena != nil && compressBlockBound <= len(w.arena.data)-w.arena.usedOffset {
+		out := w.arena.data[w.arena.usedOffset : w.arena.usedOffset+compressBlockBound]
+		if !compressionBuffersOverlap(buf, out) {
+			n, err := w.lz4c.CompressBlock(buf, out)
+			if err != nil {
+				return nil, extent, err
+			}
+			data = w.arena.Alloc(n)
+			extent = NewExtent(compress.Lz4, offset, uint32(n), uint32(dataLen))
+			return data, extent, nil
+		}
+	}
 	var compressBuf []byte
 	if w.arena != nil {
 		compressBuf, err = w.arena.compressBufChecked(compressBlockBound)
