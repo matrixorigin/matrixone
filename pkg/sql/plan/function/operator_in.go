@@ -218,7 +218,8 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 		op.init(parameters[0], parameters[1])
 	}
 
-	p := vector.GenerateFunctionStrParameter(parameters[0])
+	result.UseOptFunctionParamFrame(1)
+	p := vector.OptGetBytesParamFromWrapper(result, 0, parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)
@@ -247,7 +248,8 @@ func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vec
 		op.init(parameters[0], parameters[1])
 	}
 
-	p := vector.GenerateFunctionStrParameter(parameters[0])
+	result.UseOptFunctionParamFrame(1)
+	p := vector.OptGetBytesParamFromWrapper(result, 0, parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)
@@ -324,6 +326,32 @@ func (op *opOperatorIntegerIn[T]) eval(parameters []*vector.Vector, result vecto
 	resultNulls := rs.GetNulls()
 	if probe.IsConstNull() {
 		resultNulls.AddRange(0, uint64(length))
+		return nil
+	}
+	if probe.IsDictionary() {
+		view := vector.ResolveFixedReadView[T](probe)
+		output := vector.MustFixedColWithTypeCheck[bool](rs)[:length]
+		for i := range output {
+			if view.AllNull || view.Nulls.Contains(uint64(i)) {
+				resultNulls.Add(uint64(i))
+				continue
+			}
+			physical := int(view.Selection[i])
+			if view.Constant {
+				physical = 0
+			}
+			value := view.Values[physical]
+			var found bool
+			if op.bits != nil {
+				found = op.bits.Contains(uint64(value) - op.lower)
+			} else {
+				_, found = op.mp[value]
+			}
+			output[i] = found != negate
+			if !found && op.hasNull {
+				resultNulls.Add(uint64(i))
+			}
+		}
 		return nil
 	}
 	values := vector.MustFixedColWithTypeCheck[T](probe)

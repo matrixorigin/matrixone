@@ -675,3 +675,48 @@ func TestM0EngineExactMembershipTopNMissingVector(t *testing.T) {
 	require.Zero(t, out.RowCount())
 	require.Len(t, out.Vecs, 3)
 }
+
+// Selection-only fast paths must not bypass the object's strict M0 layout.
+func TestM0SelectionReadRejectsUnprovenMissingColumn(t *testing.T) {
+	ctx, fs, loc, mp, layout := m0MappingFixture(t)
+	typ := types.T_int32.ToType()
+	var info objectio.BlockInfo
+	info.SetMetaLocation(loc)
+	info.ConstructBlockID(loc.Name(), loc.ID())
+	for _, owned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owned_%t", owned), func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, closeErr := registry.CompleteTerminal(account)
+				require.NoError(t, closeErr)
+			}()
+			out := batch.NewWithSize(2)
+			out.Vecs[0], out.Vecs[1] = vector.NewVec(typ), vector.NewVec(typ)
+			defer out.Clean(mp)
+			cache := containers.NewVectors(2)
+			defer cache.Free(mp)
+			req := &engine.ReaderFilterRequest{
+				OutputAllocation: selection,
+				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("unexpected Apply")
+					return engine.ReaderFilterResult{}, nil
+				},
+				Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("unexpected Select")
+					return engine.ReaderFilterResult{}, nil
+				},
+			}
+			if owned {
+				req.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
+			}
+			err = blockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 0}, []types.Type{typ, typ}, -1, types.TS{}, nil, fileservice.SkipAllCache, out, cache, mp, fs, []int{0}, req, nil, nil, &m0read.ObjectReadLayout{ObjectName: layout.ObjectName})
+			require.ErrorIs(t, err, m0read.ErrMissingColumnWithoutProof)
+		})
+	}
+}
