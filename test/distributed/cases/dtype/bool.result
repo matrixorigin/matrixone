@@ -170,37 +170,37 @@ show create table bool_metadata;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 bool_metadata  ¦  CREATE TABLE `bool_metadata` (
   `id` int NOT NULL,
-  `flag` boolean DEFAULT NULL,
-  `enabled` boolean NOT NULL DEFAULT true,
-  `disabled` boolean DEFAULT false,
+  `flag` bool DEFAULT NULL,
+  `enabled` bool NOT NULL DEFAULT true,
+  `disabled` bool DEFAULT false,
   PRIMARY KEY (`id`)
 )
 show columns from bool_metadata;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-enabled  ¦  boolean  ¦  NO  ¦    ¦  true  ¦    ¦    𝄀
-disabled  ¦  boolean  ¦  YES  ¦    ¦  false  ¦    ¦  
+flag  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+enabled  ¦  BOOL(0)  ¦  NO  ¦    ¦  true  ¦    ¦    𝄀
+disabled  ¦  BOOL(0)  ¦  YES  ¦    ¦  false  ¦    ¦  
 show full columns from bool_metadata;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-flag  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-enabled  ¦  boolean  ¦  null  ¦  NO  ¦    ¦  true  ¦    ¦  select,insert,update,references  ¦    𝄀
-disabled  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references  ¦  
+flag  ¦  BOOL(0)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+enabled  ¦  BOOL(0)  ¦  null  ¦  NO  ¦    ¦  true  ¦    ¦  select,insert,update,references  ¦    𝄀
+disabled  ¦  BOOL(0)  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references  ¦  
 create view bool_metadata_view as select id, flag, cast(id as bigint unsigned) as n, cast(id as decimal(10,2)) as amount, cast('2026-01-02' as date) as day from bool_metadata;
 describe bool_metadata_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-n  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+flag  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+n  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 amount  ¦  DECIMAL(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-day  ¦  date  ¦  NO  ¦    ¦  null  ¦    ¦  
+day  ¦  DATE(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
 ➤ COLUMN_NAME[12,-1,0]  ¦  DATA_TYPE[12,-1,0]  ¦  COLUMN_TYPE[12,-1,0]  ¦  IS_NULLABLE[12,-1,0]  ¦  COLUMN_DEFAULT[12,-1,0]  𝄀
 id  ¦  INT  ¦  INT(32)  ¦  NO  ¦  null  𝄀
-flag  ¦  BOOL  ¦  boolean  ¦  YES  ¦  null  𝄀
-enabled  ¦  BOOL  ¦  boolean  ¦  NO  ¦  true  𝄀
-disabled  ¦  BOOL  ¦  boolean  ¦  YES  ¦  false
+flag  ¦  BOOL  ¦  BOOL(0)  ¦  YES  ¦  null  𝄀
+enabled  ¦  BOOL  ¦  BOOL(0)  ¦  NO  ¦  true  𝄀
+disabled  ¦  BOOL  ¦  BOOL(0)  ¦  YES  ¦  false
 select count(*) as legacy_int_type from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' and COLUMN_NAME='id' and COLUMN_TYPE='INT(32)';
 ➤ legacy_int_type[-5,64,0]
 1
@@ -224,8 +224,8 @@ create table bool_width_alias(flag bool(1));
 create table boolean_width_alias(flag boolean(1));
 select TABLE_NAME,COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_width_alias','boolean_width_alias') and COLUMN_NAME='flag' order by TABLE_NAME;
 ➤ TABLE_NAME[12,-1,0]  ¦  COLUMN_TYPE[12,-1,0]  𝄀
-bool_width_alias  ¦  boolean  𝄀
-boolean_width_alias  ¦  boolean
+bool_width_alias  ¦  BOOL(0)  𝄀
+boolean_width_alias  ¦  BOOL(0)
 drop table bool_width_alias;
 drop table boolean_width_alias;
 drop view bool_metadata_view;
@@ -241,5 +241,5 @@ id  ¦  INT(32)  𝄀
 f  ¦  FLOAT(0)  𝄀
 d  ¦  DOUBLE(0)  𝄀
 y  ¦  YEAR(4)  𝄀
-scaled  ¦  float(5,2)
+scaled  ¦  FLOAT(5)
 drop table metadata_legacy_numeric;

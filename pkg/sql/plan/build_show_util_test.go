@@ -978,10 +978,10 @@ func TestFormatLinesTerminatedBy(t *testing.T) {
 	require.Equal(t, "'#EOL#'", formatDDLString("#EOL#", false))
 }
 
-func TestFormatColTypeBoolean(t *testing.T) {
+func TestFormatColTypeKeeps42Boolean(t *testing.T) {
 	require.Equal(t, "BOOL", types.T_bool.String())
 	for _, width := range []int32{0, 1, 64, -1} {
-		require.Equal(t, "BOOLEAN", FormatColType(plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
+		require.Equal(t, "BOOL", FormatColType(plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
 	}
 }
 
@@ -1020,7 +1020,7 @@ func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
 				if rewritten != nil {
 					t.Cleanup(rewritten.Free)
 				}
-				require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
+				require.Contains(t, sql, "`flag` bool DEFAULT NULL")
 				require.Contains(t, sql, "`empty_enum` enum('')")
 				parsed, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, replayMode)
 				require.NoError(t, err)

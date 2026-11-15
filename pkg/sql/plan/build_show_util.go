@@ -1161,14 +1161,6 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 	}
 
 	typ := types.T(colType.Id).ToType()
-	if replayableEnum && !isSetPlanType(&colType) {
-		// Public metadata must spell SQL types replayably. The 4.2 schema-hash
-		// renderer retains the historical spelling below.
-		typ.Width, typ.Scale = colType.Width, colType.Scale
-		if formatted, ok := types.FormatSQLColumnType(typ); ok {
-			return formatted
-		}
-	}
 
 	ts := typ.String()
 	// after decimal fix, remove this
