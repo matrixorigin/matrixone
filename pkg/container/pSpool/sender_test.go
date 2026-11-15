@@ -266,7 +266,11 @@ func TestUnaccountedCacheNonLastSelectionRetainsOwnership(t *testing.T) {
 		owner.Free(mp)
 	}
 	vec := vector.NewOffHeapVecWithType(types.T_int8.ToType())
-	require.NoError(t, cache.setSuitableBuffers([]batchMemoryRequest{{vec, 100, vector.DetachedDataBuffer}}))
+	require.NoError(t, cache.setSuitableDataAreaToVector(
+		100,
+		0,
+		vec,
+	))
 	require.Len(t, cache.buffers, 2)
 
 	vec.Free(mp)
