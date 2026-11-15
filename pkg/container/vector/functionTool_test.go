@@ -402,3 +402,63 @@ func TestReuseFunctionParameterFixed(t *testing.T) {
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, true, ok)
 }
+
+func TestReuseConvertedDecimalParameter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	result := NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer result.Free()
+	result.UseOptFunctionParamFrame(1)
+	sourceType := types.New(types.T_decimal64, 10, 2)
+	ordinary := NewVec(sourceType)
+	defer ordinary.Free(mp)
+	require.NoError(t, AppendFixed(ordinary, types.Decimal64(100), false, mp))
+	require.NoError(t, AppendFixed(ordinary, types.Decimal64(200), false, mp))
+	nullable := NewVec(sourceType)
+	defer nullable.Free(mp)
+	require.NoError(t, AppendFixed(nullable, types.Decimal64(100), false, mp))
+	require.NoError(t, AppendFixed(nullable, types.Decimal64(0), true, mp))
+	constant, err := NewConstFixed(sourceType, types.Decimal64(150), 2, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	constantNull := NewConstNull(sourceType, 2, mp)
+	defer constantNull.Free(mp)
+	for _, tc := range []struct {
+		name   string
+		source *Vector
+		want   []types.Decimal128
+		nulls  []bool
+	}{
+		{"ordinary", ordinary, []types.Decimal128{{B0_63: 100}, {B0_63: 200}}, []bool{false, false}},
+		{"nullable", nullable, []types.Decimal128{{B0_63: 100}, {}}, []bool{false, true}},
+		{"constant", constant, []types.Decimal128{{B0_63: 150}, {B0_63: 150}}, []bool{false, false}},
+		{"constant null", constantNull, []types.Decimal128{{}, {}}, []bool{true, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for batch := 0; batch < 2; batch++ {
+				param := OptGetParamFromWrapper[types.Decimal128](result, 0, tc.source)
+				for i, expected := range tc.want {
+					got, isNull := param.GetValue(uint64(i))
+					require.Equal(t, tc.nulls[i], isNull, "batch=%d row=%d", batch, i)
+					if !isNull {
+						require.Equal(t, expected, got, "batch=%d row=%d", batch, i)
+					}
+				}
+			}
+		})
+	}
+
+	firstType := types.New(types.T_decimal128, 20, 2)
+	nextType := types.New(types.T_decimal128, 22, 4)
+	first, next := NewVec(firstType), NewVec(nextType)
+	defer first.Free(mp)
+	defer next.Free(mp)
+	require.NoError(t, AppendFixed(first, types.Decimal128{B0_63: 100}, false, mp))
+	require.NoError(t, AppendFixed(next, types.Decimal128{B0_63: 10000}, false, mp))
+	firstParam := OptGetParamFromWrapper[types.Decimal128](result, 0, first)
+	require.Equal(t, firstType, firstParam.GetType())
+	nextParam := OptGetParamFromWrapper[types.Decimal128](result, 0, next)
+	require.Equal(t, nextType, nextParam.GetType())
+	got, isNull := nextParam.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.Decimal128{B0_63: 10000}, got)
+}

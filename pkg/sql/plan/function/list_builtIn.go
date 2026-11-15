@@ -3180,10 +3180,14 @@ var supportedStringBuiltIns = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				t01.Scale = max(t01.Scale, t02.Scale)
-				t1.Scale = t01.Scale
-				t2.Scale = t01.Scale
+			if t01.Oid.IsDecimal() {
+				target, ok := decimalComparisonTarget([]types.Type{t01, t1, t2}, inputs[:3])
+				if !ok {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				if !inputs[0].Eq(target) || !inputs[1].Eq(target) || !inputs[2].Eq(target) {
+					return newCheckResultWithCast(0, []types.Type{target, target, target, inputs[3]})
+				}
 			}
 
 			if has0 || has1 {

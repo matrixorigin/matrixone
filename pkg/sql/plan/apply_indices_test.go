@@ -4778,6 +4778,7 @@ func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Exp
 				Func: &planpb.ObjectRef{ObjName: op},
 				Args: []*planpb.Expr{
 					{
+						Typ: planpb.Type{Id: int32(types.T_int64)},
 						Expr: &planpb.Expr_Col{
 							Col: &planpb.ColRef{
 								RelPos: relPos,
@@ -4786,6 +4787,7 @@ func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Exp
 						},
 					},
 					{
+						Typ: planpb.Type{Id: int32(types.T_int64)},
 						Expr: &planpb.Expr_Lit{
 							Lit: &planpb.Literal{
 								Value: &planpb.Literal_I64Val{I64Val: val},

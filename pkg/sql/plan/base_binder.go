@@ -3399,17 +3399,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, err
 		}
 
-		// Early detection for decimal comparisons
-		if len(args) == 2 {
-			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Equality with incompatible precision is always false
-				return makePlan2BoolConstExprWithType(false), nil
-			}
-			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Inequality with incompatible precision is always true
-				return makePlan2BoolConstExprWithType(true), nil
-			}
-		}
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
@@ -3864,18 +3853,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						return true
 					}
 
-					// For decimal types, check scale compatibility
 					if colOid.IsDecimal() && otherOid.IsDecimal() {
-						// Only use column type if it has enough precision (scale)
-						// to represent the other value without truncation
-						if colType.Scale >= otherType.Scale {
-							return true
-						}
-						// Check if the other value (constant) has trailing zeros that can be truncated
-						if otherExpr != nil && hasTrailingZeros(otherExpr, otherType, colType.Scale) {
-							return true
-						}
-						return false
+						return losslessIndexDecimalBound(otherExpr, colType) ||
+							decimalDomainContains(colType, otherType)
 					}
 
 					return false
