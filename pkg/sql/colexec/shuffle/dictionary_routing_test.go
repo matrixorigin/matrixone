@@ -166,6 +166,75 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 	}
 }
 
+func TestDictionaryIntegerRangeRoutingLogicalRows(t *testing.T) {
+	for _, unsigned := range []bool{false, true} {
+		t.Run(map[bool]string{false: "signed", true: "unsigned-high-bit"}[unsigned], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				used := mp.CurrNB()
+				mpool.DeleteMPool(mp)
+				require.Zero(t, used)
+			})
+			high := uint64(1) << 63
+			var source *vector.Vector
+			if unsigned {
+				source = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+			} else {
+				source = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			}
+			t.Cleanup(func() { source.Free(mp) })
+			if unsigned {
+				require.NoError(t, vector.AppendFixedList(source, []uint64{high - 5, high + 5, high + 15, high + 25}, []bool{false, true, false, false}, mp))
+			} else {
+				require.NoError(t, vector.AppendFixedList(source, []int64{-5, 5, 15, 25}, []bool{false, true, false, false}, mp))
+			}
+			for _, cuts := range []bool{false, true} {
+				t.Run(map[bool]string{false: "min-max", true: "range-cuts"}[cuts], func(t *testing.T) {
+					arg := &Shuffle{BucketNum: 4, ShuffleType: int32(plan.ShuffleType_Range), ShuffleColMin: -10, ShuffleColMax: 30}
+					if unsigned {
+						arg.ShuffleColMin, arg.ShuffleColMax = int64(high-10), int64(high)+30
+					}
+					if cuts {
+						if unsigned {
+							arg.ShuffleRangeUint64 = []uint64{high, high + 10, high + 20}
+						} else {
+							arg.ShuffleRangeInt64 = []int64{0, 10, 20}
+						}
+					}
+					for _, mixed := range []bool{false, true} {
+						t.Run(map[bool]string{false: "whole-bucket", true: "reordered-repeated-null"}[mixed], func(t *testing.T) {
+							rows := []int64{3, 3}
+							if mixed {
+								rows = []int64{3, 1, 0, 3, 2}
+							}
+							selected := make([]*vector.Vector, 1)
+							admitted, err := vector.TrySelectDictionaryVectors([]*vector.Vector{source}, selected, rows, 4, mp, nil)
+							require.NoError(t, err)
+							require.True(t, admitted)
+							t.Cleanup(func() { selected[0].Free(mp) })
+							partition := bucketSelections{sels: make([][]int32, 4)}
+							if unsigned {
+								dictionaryIntegerSels[uint64](arg, selected[0], false, &partition)
+							} else {
+								dictionaryIntegerSels[int64](arg, selected[0], true, &partition)
+							}
+							require.Equal(t, uint64(3), partition.first)
+							require.Equal(t, mixed, partition.mixed)
+							if mixed {
+								// Row 1 is logically NULL and row 2 is in the lowest range.
+								// Rows 0 and 3 repeat the highest-range source row.
+								require.Equal(t, [][]int32{{1, 2}, nil, {4}, {0, 3}}, partition.sels)
+							} else {
+								require.Equal(t, [][]int32{nil, nil, nil, nil}, partition.sels)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDictionarySortedRangeUsesEndpointsWithoutEnumerating(t *testing.T) {
 	for _, nullable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "endpoint-fast-path", true: "null-control"}[nullable], func(t *testing.T) {
