@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,14 +39,55 @@ func downloading(t *testing.T) (*DiskCache, *io.PipeWriter, chan error) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
 	filled := make(chan error, 1)
+	finished := make(chan struct{})
+	// Cleanup runs before cache.Close and t.TempDir removal. Closing the pipe
+	// only delivers EOF: the caller-owned SetFile goroutine can still publish
+	// the file. Join it without consuming the result needed by individual tests.
+	t.Cleanup(func() { finishDiskCacheTestDownload(t, pw, finished) })
 	go func() {
+		defer close(finished)
 		filled <- cache.SetFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil })
 	}()
 	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 	return cache, pw, filled
+}
+
+func finishDiskCacheTestDownload(t *testing.T, pw *io.PipeWriter, finished <-chan struct{}) {
+	t.Helper()
+	_ = pw.Close()
+	select {
+	case <-finished:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("test download did not finish before cache cleanup")
+	}
+}
+
+func TestDiskCacheDownloadCleanupWaitsForWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pr, pw := io.Pipe()
+		defer pr.Close()
+		finished := make(chan struct{})
+		returned := make(chan struct{})
+		go func() {
+			finishDiskCacheTestDownload(t, pw, finished)
+			close(returned)
+		}()
+		synctest.Wait()
+		select {
+		case <-returned:
+			t.Fatal("cleanup returned before the writer finished")
+		default:
+		}
+		close(finished)
+		synctest.Wait()
+		select {
+		case <-returned:
+		default:
+			t.Fatal("cleanup did not return after the writer finished")
+		}
+	})
 }
 
 func readRange(ctx context.Context, cache *DiskCache, offset, size int64) chan *IOVector {
