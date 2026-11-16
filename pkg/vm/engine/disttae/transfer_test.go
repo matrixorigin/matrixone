@@ -195,8 +195,9 @@ func TestTombstoneTransferUsesOpenedRelation(t *testing.T) {
 			})
 			if name != "opened relation" {
 				switch name {
-				case "deleted relation":
+				case "deleted relation", "recreated database":
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+					require.Zero(t, calls)
 				case "deleted database":
 					require.ErrorIs(t, err, moerr.GetOkExpectedEOB())
 				case "removed workspace":

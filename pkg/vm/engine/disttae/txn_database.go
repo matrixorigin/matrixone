@@ -129,6 +129,15 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		return rel, nil
 	}
 
+	// A database created by this transaction has no committed relations.
+	// Its local tables are owned by tableOps above, including rollback/drop.
+	if txn.databaseOps != nil {
+		created := txn.databaseOps.existAndActive(genDatabaseKey(accountId, db.databaseName))
+		if created != nil && created.databaseId == db.databaseId {
+			return nil, ctx.Err()
+		}
+	}
+
 	item, err := db.getTableItem(
 		ctx,
 		accountId,

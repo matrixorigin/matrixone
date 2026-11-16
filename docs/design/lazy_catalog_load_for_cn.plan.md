@@ -131,6 +131,8 @@ CN 仅额外保留三张表的固定 bootstrap 基线；其 COW fork 在 engine 
 晚于请求 snapshot，则复用原有历史 checkpoint 选择、读取及 snapshot manager，不发布账户 ready。
 同事务写入仍由 workspace 合并。workspace 维护优先按 account、database ID 和表名复用事务已打开
 的 Relation，保留事务内删除及 RC schema/database 身份失效检查，避免 Commit 关闭 SQL 入口后再回读元数据。
+事务新建数据库中的表由 workspace tableOps/cache 管理；账户、库名及数据库 ID 精确匹配时，
+缺表直接返回不存在，不因账户尚未 ready 而重复回源。创建回滚后仍走普通目录查询，不增加持久化负缓存。
 
 只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以使用
 内部 replay 标记；普通 SQL 的快路径只依赖谓词证明，不得借用该标记。系统表的物理 `accountId=0` 不代表调用方
