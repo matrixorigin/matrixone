@@ -43,3 +43,9 @@ existing COUNT executors instead of inventing weighted COUNT/partial SUM, whose
 type and overflow contracts would require a broader design. Keep rejection as
 the original valid plan, never a new user-facing error. This version does not
 support duplicate preserved-key bags without a catalog uniqueness proof.
+
+## Approved regression revision — 2026-11-16
+
+The requester approved the four proposed fixes with “then fix”.
+
+Cap a valid positive group estimate locally by an available exactly representable small-integer min/max span, with matching statistics type and a possible NULL group. Missing or invalid bounds retain the original estimate. Keep all original cost thresholds and catalog legality proofs; change no global statistics.
