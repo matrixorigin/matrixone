@@ -58,7 +58,7 @@ jobs:
     concurrency:
       group: cs-gomod-comparison
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-buildcache-pair.yaml@46fe26289ddb2a88cdb25ee7c7ba26bd6171f5dd
+    uses: matrixorigin/CI/.github/workflows/coverage-buildcache-pair.yaml@72dd14e8b6ca6b50dedadb6be576a100e3144ba4
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
