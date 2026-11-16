@@ -43,3 +43,9 @@ ownership/lifecycle edges are unchanged. Focus owning tests/static checks and
 self-review on those contracts; no new BVT is needed for this internal algorithm
 with unchanged SQL semantics and existing real Group coverage. Preserve pending
 dictionary work when resolving future source overlaps, without depending on it.
+
+## Approved regression revision — 2026-11-16
+
+The requester approved the four proposed fixes with “then fix”.
+
+Read the existing fixed Varlena length and payload directly, bounded by VarlenaInlineSize, so the canonicalizer can inline without unsafe-slice checks. Preserve all existing key/publication semantics. Require the same instruction and fallback controls before whole-query acceptance.
