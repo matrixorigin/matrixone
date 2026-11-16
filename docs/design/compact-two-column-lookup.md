@@ -66,3 +66,13 @@ all18 caller-shape controls, including equal-work cycles/taken branches, before
 isolated all22 local acceptance. Reuse matching main captures and the approved
 controlled-disk condition. Compile and time after ongoing Q13/Q20 collection.
 
+# Approved tiny-control tradeoff — 2026-11-16
+
+The requester explicitly approved the measured fixed setup overhead in
+single-row miss/unsupported controls (about eight instructions and two to three
+cycles, with zero allocation/copy increase), conditional on no confirmed TPC-H
+query, Total or resource regression in the full local acceptance. Keep those
+raw control results visible. Bulk controls, SQL/key identity, fallback, ownership,
+admission and spill/generation correctness remain required. No further code
+change is implied by this acceptance decision.
+
