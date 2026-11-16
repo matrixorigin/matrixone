@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,44 @@ permissions:
   contents: read
 
 jobs:
+  cs-go-mod-cache-readonly:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'go-mod-cache-readonly'
+    runs-on: cs-mnl2-medium-2c8g
+    timeout-minutes: 20
+    steps:
+      - name: Verify empty destination and disk headroom
+        id: disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$GITHUB_WORKSPACE/.sca-go-module-cache"
+          for probe_path in "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; do
+            available_kib=$(df -Pk "$probe_path" | awk 'NR==2 {print $4}')
+            test "$available_kib" -ge 52428800 || { echo 'Insufficient disk headroom; cache restore not started.'; exit 1; }
+            echo "Available disk: $((available_kib / 1048576)) GiB"
+          done
+          echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Restore existing trusted Go module archive read-only
+        id: restore
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: .sca-go-module-cache
+          key: matrixone-go-mod-Linux-ARM64-go1.27.1-c0241aa82794feceba7ecd41322e4a4e600c0ca67f8f59643a3a8db3b10d8465
+      - name: Report restore result
+        env:
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+          STARTED: ${{ steps.disk.outputs.started }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          elapsed=$(( $(date +%s) - STARTED ))
+          echo "Exact cache hit: ${CACHE_HIT:-false}; restore elapsed: ${elapsed}s"
+          if [ "$CACHE_HIT" != 'true' ]; then
+            echo 'No matching cache was restored; no cache was written.'
+            exit 1
+          fi
+          echo "Extracted size: $(du -sm "$GITHUB_WORKSPACE/.sca-go-module-cache" | awk '{print $1}') MiB"
+          echo 'Download probe only: ARM64-keyed module archive; no UT or cache save.'
   jed-shared-label-probe:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'jed-shared-probe'
     runs-on: [cs-large-7c14g, cs-jed-large-7c14g]
