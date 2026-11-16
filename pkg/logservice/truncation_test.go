@@ -231,6 +231,14 @@ func TestExportSnapshotTimeoutAfterAdmissionReconcilesLateCompletion(t *testing.
 }
 
 func TestRetiringReplicaWaitsForTimedOutExport(t *testing.T) {
+	testRetiringReplicaWaitsForLateExport(t, false)
+}
+
+func TestRetiringReplicaWaitsForStoppedExport(t *testing.T) {
+	testRetiringReplicaWaitsForLateExport(t, true)
+}
+
+func testRetiringReplicaWaitsForLateExport(t *testing.T, stopBeforeTimeout bool) {
 	cfg := getStoreTestConfig()
 	cfg.TruncateInterval.Duration = time.Hour
 	cfg.HAKeeperTruncateInterval.Duration = time.Hour
@@ -274,12 +282,19 @@ func TestRetiringReplicaWaitsForTimedOutExport(t *testing.T) {
 	l.markReplicaRetiring(shardID, replicaID)
 	require.ErrorIs(t, l.beginExport(shardID, replicaID), dragonboat.ErrShardNotFound)
 	require.ErrorIs(t, l.snapshotMgr.RemoveReplica(shardID, replicaID), errSnapshotExportPending)
-	exportCtx.expire()
+	wantExportErr := dragonboat.ErrTimeout
+	if stopBeforeTimeout {
+		require.NoError(t, exportCtx.Err())
+		require.NoError(t, l.stopReplica(shardID, replicaID))
+		wantExportErr = dragonboat.ErrShardClosed
+	} else {
+		exportCtx.expire()
+	}
 	select {
 	case err := <-result:
-		require.ErrorIs(t, err, dragonboat.ErrTimeout)
+		require.ErrorIs(t, err, wantExportErr)
 	case <-ctx.Done():
-		t.Fatal("timed-out request did not return")
+		t.Fatal("export request did not return")
 	}
 	_, _, err = l.snapshotMgr.ReconcileUncertainExports(shardID, replicaID,
 		l.cfg.MaxExportedSnapshot)

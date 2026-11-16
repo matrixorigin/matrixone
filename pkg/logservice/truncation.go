@@ -271,7 +271,9 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	if err != nil {
 		// These results can arrive after Dragonboat accepted the request;
 		// the export may still reach its final directory later.
-		if errors.Is(err, dragonboat.ErrTimeout) || errors.Is(err, dragonboat.ErrCanceled) {
+		if errors.Is(err, dragonboat.ErrTimeout) ||
+			errors.Is(err, dragonboat.ErrCanceled) ||
+			errors.Is(err, dragonboat.ErrShardClosed) {
 			mayFinishLater = true
 		}
 		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))

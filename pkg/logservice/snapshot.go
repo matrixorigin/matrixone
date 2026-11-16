@@ -106,10 +106,10 @@ type snapshotRecord struct {
 	nodeID nodeID
 	// items are sorted by .index
 	items []*snapshotItem
-	// An export request can time out while Dragonboat is still completing it.
+	// An export request can return before Dragonboat finishes writing it.
 	// Keep checking disk on later truncation ticks after that result is unknown.
 	uncertainExport bool
-	// An admitted export can outlive its RPC. A timed-out request may still
+	// An admitted export can outlive its RPC. A request that returned early may still
 	// publish a final directory, even after StopReplica returns.
 	activeExports      int
 	lateExportPossible bool
@@ -433,8 +433,8 @@ func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) {
 	ss.activeExports++
 }
 
-// FinishExport keeps a timed-out request fenced until process restart. The
-// Dragonboat API does not expose completion after returning a timeout.
+// FinishExport keeps an uncertain request fenced until process restart. The
+// Dragonboat API does not expose completion after returning an early error.
 func (sm *snapshotManager) FinishExport(shardID, replicaID uint64, mayFinishLater bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -447,7 +447,7 @@ func (sm *snapshotManager) FinishExport(shardID, replicaID uint64, mayFinishLate
 }
 
 // ReconcileUncertainExports reloads completed snapshots after an export with
-// an unknown result. The flag remains set because a timed-out request may
+// an unknown result. The flag remains set because an early-returned request may
 // finish after any individual scan. Ordinary replicas avoid the disk scan.
 func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, maxCount int) (uint64, bool, error) {
 	sm.mu.Lock()
