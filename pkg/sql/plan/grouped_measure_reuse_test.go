@@ -85,6 +85,8 @@ func TestGroupedMeasureReuseCarriesExactMeasure(t *testing.T) {
 	require.Equal(t, oldType, projection.ProjectList[2].Typ)
 	require.Equal(t, int32(2), b.qry.Nodes[root].ProjectList[1].GetCol().ColPos)
 	qualProject := b.qry.Nodes[4]
+	require.Equal(t, plan.Node_INNER, b.qry.Nodes[5].JoinType, "reuse the existing qualifying edge")
+	require.Equal(t, int32(5), projection.Children[0], "prune the fact connector without rebuilding the dimension tree")
 	require.Len(t, qualProject.ProjectList, 2, "expose the already computed measure through the qualifier's projection")
 	require.Equal(t, qualProject.BindingTags[0], projection.ProjectList[2].GetCol().RelPos)
 	seen := make(map[int32]bool)
@@ -108,7 +110,7 @@ func TestGroupedMeasureReuseCarriesExactMeasure(t *testing.T) {
 }
 
 func TestGroupedMeasureReuseRejectsDifferentBagsAndMultiplicity(t *testing.T) {
-	for _, name := range []string{"nonunique", "changed-filter", "different-table", "different-argument", "distinct", "no-key-group", "unsafe-sum", "outer", "having", "shared", "cost", "disabled"} {
+	for _, name := range []string{"nonunique", "changed-filter", "different-table", "different-argument", "distinct", "no-key-group", "unsafe-sum", "outer", "having", "shared", "cost", "disabled", "multiple fact connectors"} {
 		t.Run(name, func(t *testing.T) {
 			b, root := groupedMeasureTestBuilder(t)
 			fact, dim, join, agg := b.qry.Nodes[1], b.qry.Nodes[2], b.qry.Nodes[6], b.qry.Nodes[7]
@@ -138,6 +140,8 @@ func TestGroupedMeasureReuseRejectsDifferentBagsAndMultiplicity(t *testing.T) {
 				b.qry.Nodes[4].Stats.Outcnt = 10000
 			case "disabled":
 				b.optimizerHints = &OptimizerHints{aggPushDown: 1}
+			case "multiple fact connectors":
+				join.OnList = append(join.OnList, DeepCopyExpr(join.OnList[0]))
 			}
 			before := proto.Clone(b.qry)
 			b.reuseGroupedMeasures(root)
@@ -188,6 +192,9 @@ func TestGroupedMeasureSQLReachability(t *testing.T) {
 		n := query.Nodes[id]
 		if n.NodeType == plan.Node_TABLE_SCAN && n.TableDef.Name == "lineitem" {
 			facts++
+			require.Empty(t, n.FilterList, "retiring a fact connector must not generate self-equality row filters")
+			require.Empty(t, n.BlockFilterList)
+			require.Equal(t, float64(40000), n.Stats.Outcnt, "keep the qualifier's real cardinality for parallel planning")
 		}
 		for _, child := range n.Children {
 			visit(child)

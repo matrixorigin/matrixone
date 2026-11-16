@@ -256,12 +256,23 @@ func (builder *QueryBuilder) reuseGroupedMeasure(agg *plan.Node, owners map[int3
 		!groupedMeasureCostAllows(fact.Stats, builder.qry.Nodes[semi.Children[1]].Stats, factKey.Typ, agg.AggList[0].GetF().Args[0].Typ, agg.AggList[0].Typ) {
 		return
 	}
+	connector, factSide := builder.groupedMeasureFactConnector(agg.Children[0], fact.NodeId)
+	if connector == nil || len(connector.OnList) != 1 ||
+		!groupedMeasureConnectorImplied(connector.OnList[0], factKey, probe) {
+		return
+	}
+	factPredicates := 0
+	for _, predicate := range region.predicates {
+		if containsTag(predicate, fact.BindingTags[0]) {
+			factPredicates++
+		}
+	}
+	if factPredicates != 1 {
+		return
+	}
 	// Every surviving dimension row identifies exactly one fact group. Replace
 	// references to its fact key with that dimension key before retiring the scan.
 	refs := map[[2]int32]*plan.Expr{{fact.BindingTags[0], keyCol.ColPos}: probe}
-	predicates := DeepCopyExprList(region.predicates)
-	replaceColumnsForExprList(predicates, refs)
-	predicates = append(predicates, DeepCopyExpr(semi.OnList[0]))
 	project := DeepCopyExprList(agg.GroupBy)
 	replaceColumnsForExprList(project, refs)
 	measure := GetColExpr(qualifier.AggList[0].Typ, qualifier.BindingTags[1], 0)
@@ -274,14 +285,11 @@ func (builder *QueryBuilder) reuseGroupedMeasure(agg *plan.Node, owners map[int3
 	}
 	measure.Typ = agg.AggList[0].Typ
 	project = append(project, measure)
-	ctx := builder.ctxByNode[agg.NodeId]
-	root := dims[0].NodeId
-	for _, dim := range dims[1:] {
-		root = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER,
-			Children: []int32{root, dim.NodeId}, SpillMem: builder.joinSpillMem}, ctx)
-	}
-	root = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER,
-		Children: []int32{root, semi.Children[1]}, OnList: predicates, SpillMem: builder.joinSpillMem}, ctx)
+	// Preserve every surviving join and its predicate placement. Rebuilding a
+	// Cartesian region and rewriting the retired equality to probe=probe creates
+	// useless scan filters and false low-cardinality/serial execution plans.
+	root := builder.pruneGroupedMeasureConnector(agg.Children[0], connector.NodeId, connector.Children[1-factSide])
+	semi.JoinType, semi.IsRightJoin = plan.Node_INNER, false
 	projectTag := builder.genNewBindTag()
 	for i, expr := range project {
 		oldTag, oldPos := agg.BindingTags[0], int32(i)
@@ -298,6 +306,55 @@ func (builder *QueryBuilder) reuseGroupedMeasure(agg *plan.Node, owners map[int3
 	builder.tag2NodeID[projectTag] = agg.NodeId
 	builder.qry.Nodes[agg.NodeId] = &plan.Node{NodeId: agg.NodeId, NodeType: plan.Node_PROJECT,
 		Children: []int32{root}, BindingTags: []int32{projectTag}, ProjectList: project}
+}
+
+func (builder *QueryBuilder) groupedMeasureFactConnector(id, factID int32) (*plan.Node, int) {
+	n := builder.qry.Nodes[id]
+	if n.NodeType != plan.Node_JOIN {
+		return nil, 0
+	}
+	for side, child := range n.Children {
+		if n.JoinType == plan.Node_SEMI && side == 1 {
+			continue
+		}
+		if child == factID {
+			if n.JoinType == plan.Node_INNER {
+				return n, side
+			}
+			return nil, 0
+		}
+		if parent, index := builder.groupedMeasureFactConnector(child, factID); parent != nil {
+			return parent, index
+		}
+	}
+	return nil, 0
+}
+
+func groupedMeasureConnectorImplied(predicate, factKey, probe *plan.Expr) bool {
+	fn := predicate.GetF()
+	if fn == nil || len(fn.Args) != 2 || !groupedMeasureIntegerEquality(predicate) {
+		return false
+	}
+	same := func(a, b *plan.Expr) bool {
+		x, y := a.GetCol(), b.GetCol()
+		return x != nil && y != nil && x.RelPos == y.RelPos && x.ColPos == y.ColPos && sameSemiContainmentType(a.Typ, b.Typ)
+	}
+	return same(fn.Args[0], factKey) && same(fn.Args[1], probe) || same(fn.Args[1], factKey) && same(fn.Args[0], probe)
+}
+
+func (builder *QueryBuilder) pruneGroupedMeasureConnector(id, connectorID, siblingID int32) int32 {
+	if id == connectorID {
+		return siblingID
+	}
+	n := builder.qry.Nodes[id]
+	if n.NodeType == plan.Node_JOIN {
+		for side, child := range n.Children {
+			if n.JoinType != plan.Node_SEMI || side == 0 {
+				n.Children[side] = builder.pruneGroupedMeasureConnector(child, connectorID, siblingID)
+			}
+		}
+	}
+	return id
 }
 
 func groupedMeasureDimensionsUnique(dims []*plan.Node, key *plan.Expr, equalities *semiContainmentEqualities, groups []*plan.Expr) bool {
