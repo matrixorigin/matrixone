@@ -45,14 +45,21 @@ const arenaSerialRetainLimit = 16 << 20
 // the backing arrays out of Go's heap and invisible to pprof inuse_space.
 var arenaMPool = mpool.MustNew("write-arena")
 
+// ownedCompressionBuffer has independent storage: it is created empty or
+// from a fresh allocation, and is never initialized from arena data.
+// Only this internal buffer may be compressed directly into an arena.
+type ownedCompressionBuffer struct {
+	bytes.Buffer
+}
+
 type WriteArena struct {
 	data           []byte
 	usedOffset     int
 	compressBuf    []byte
-	serialBuf      bytes.Buffer // reused for column serialization across write cycles
-	serialPeak     int          // largest serialized column in the current write cycle
-	totalRequested int          // sum of all Alloc sizes in the current cycle
-	sizeLimit      int          // max data growth; 0 means arenaMaxSize
+	serialBuf      ownedCompressionBuffer // reused for column serialization across write cycles
+	serialPeak     int                    // largest serialized column in the current write cycle
+	totalRequested int                    // sum of all Alloc sizes in the current cycle
+	sizeLimit      int                    // max data growth; 0 means arenaMaxSize
 }
 
 func NewArena(size int) *WriteArena {
@@ -115,7 +122,7 @@ func (a *WriteArena) Reset() {
 
 func (a *WriteArena) resetSerialBuf(drop bool) {
 	if drop {
-		a.serialBuf = bytes.Buffer{}
+		a.serialBuf = ownedCompressionBuffer{}
 	} else {
 		a.serialBuf.Reset()
 	}
@@ -555,7 +562,7 @@ func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint3
 	}
 	// Pre-size to avoid repeated bytes.Buffer growth during Write calls.
 	total := IOEntryHeaderSize + int(zoneMapAreaStart)
-	buf := bytes.NewBuffer(make([]byte, 0, total))
+	buf := &ownedCompressionBuffer{Buffer: *bytes.NewBuffer(make([]byte, 0, total))}
 	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range blocks {
@@ -563,7 +570,7 @@ func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint3
 			buf.Write(block.meta.ColumnMeta(seqnum).rawZoneMap())
 		}
 	}
-	return w.WriteWithCompress(offset, buf.Bytes())
+	return w.writeOwnedBufferWithCompress(offset, buf)
 }
 
 func (w *objectWriterV1) getMaxIndex(blocks []blockData) uint16 {
@@ -679,7 +686,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		idxStart += metaExtents[i].OriginSize()
 		startID += uint16(len(w.blocks[i]))
 	}
-	var buf bytes.Buffer
+	var buf ownedCompressionBuffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(metaHeader)
@@ -688,7 +695,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	for i := range metas {
 		buf.Write(metas[i])
 	}
-	objMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
+	objMeta, extent, err := w.writeOwnedBufferWithCompress(start, &buf)
 	objectHeader.SetExtent(extent)
 
 	// begin write
@@ -777,9 +784,33 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 	return w.objStats
 }
 
+// WriteWithCompress accepts arbitrary borrowed input, which may overlap the arena.
+// Keep it on the scratch path so callers need no new ownership contract.
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
+	return w.writeWithCompressScratch(offset, buf, lz4.CompressBlockBound(len(buf)))
+}
+
+// writeOwnedBufferWithCompress is restricted to independently allocated internal buffers.
+func (w *objectWriterV1) writeOwnedBufferWithCompress(offset uint32, source *ownedCompressionBuffer) (data []byte, extent Extent, err error) {
+	buf := source.Bytes()
 	dataLen := len(buf)
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
+	// Owned serialization buffers cannot overlap the independently allocated arena.
+	if w.arena != nil && compressBlockBound >= 0 && compressBlockBound <= len(w.arena.data)-w.arena.usedOffset {
+		out := w.arena.data[w.arena.usedOffset : w.arena.usedOffset+compressBlockBound]
+		n, err := w.lz4c.CompressBlock(buf, out)
+		if err != nil {
+			return nil, extent, err
+		}
+		data = w.arena.Alloc(n)
+		extent = NewExtent(compress.Lz4, offset, uint32(n), uint32(dataLen))
+		return data, extent, nil
+	}
+	return w.writeWithCompressScratch(offset, buf, compressBlockBound)
+}
+
+func (w *objectWriterV1) writeWithCompressScratch(offset uint32, buf []byte, compressBlockBound int) (data []byte, extent Extent, err error) {
+	dataLen := len(buf)
 	var compressBuf []byte
 	if w.arena != nil {
 		compressBuf = w.arena.CompressBuf(compressBlockBound)
@@ -828,7 +859,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		// for every new objectWriterV1 instance).
 		var sbuf *bytes.Buffer
 		if w.arena != nil {
-			sbuf = &w.arena.serialBuf
+			sbuf = &w.arena.serialBuf.Buffer
 		} else {
 			sbuf = &w.buf
 		}
@@ -848,7 +879,12 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		}
 		var ext Extent
 		var err error
-		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
+		if w.arena != nil {
+			data, ext, err = w.writeOwnedBufferWithCompress(0, &w.arena.serialBuf)
+		} else {
+			data, ext, err = w.WriteWithCompress(0, sbuf.Bytes())
+		}
+		if err != nil {
 			return 0, err
 		}
 		size += len(data)
