@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v5, 2026-11-14 (v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v6, 2026-11-16 (v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -238,6 +238,13 @@ took 14.1 / 14.3 s and fetched 6.7 GB, against 41.8 / 42.0 s and 21 GB; an INSER
 duplicate keys into a table with a vector column fetched 0.15 MB against 29.9 MB; TPC-C
 tpmC was unchanged (15,754 / 15,793 against 15,719 / 16,887).
 
+Every data source that reads persisted blocks for such a scan prefetches its columns'
+ranges: the local data source of the CN that plans the scan, and the remote data source
+of each other CN the scan is distributed to (decision 2026-11-16). Without it a remote
+scan reads each block's columns as separate range reads, one after another, with no
+whole-object download to amortize them; distributed SSB ran 8–11 times slower
+([#32796](https://github.com/matrixorigin/matrixone/issues/32796)).
+
 ### Parallel range downloads of whole objects (decision)
 
 - A whole-object download of an object of at least `disk-prefetch-object-split-min`
@@ -256,6 +263,22 @@ tpmC was unchanged (15,754 / 15,793 against 15,719 / 16,887).
   reads always keep connections of their own. A download that cannot reserve its
   parts runs as one stream; one that cannot reserve even one connection waits until
   a connection is free (decision 2026-11-13).
+
+### A download waited for is bounded by its readers (decision 2026-11-16)
+
+- While a read waits for the bytes of a download — the read that started it, or one
+  that joined it — the download is bounded only by that read's context. Its wait for an
+  object-storage connection, the response and each byte has no other timeout.
+- While no read waits for it, a download whose source sends no bytes for 20 s stops.
+  It stops silently: no read waits for it, so no read fails, and a read that comes later
+  reads its own bytes. The stop frees the download's connection, its prefetch memory and
+  its cache-write slot.
+- A read that waits for a download gives up after the I/O wait bound and reads its own
+  bytes, so a source that stalls under a waiting read delays that read, without failing it.
+
+Before this rule the timeout ran while reads waited, and it counted a download's wait
+for a free connection: under load, reads failed with "no bytes from the source within the
+idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792)).
 
 ## Bounds and ownership of resources
 

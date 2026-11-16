@@ -19,10 +19,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -120,12 +118,8 @@ type LocalDisttaeDataSource struct {
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
-		// prefetchScan is what the scan's prefetches are for.
-		prefetchScan *fileservice.PrefetchScan
-		// paceStart and paceCursor are when and where the scan's pace is measured from.
-		paceStart       time.Time
-		paceCursor      int
-		WorkspaceLocked bool
+		prefetch            readutil.ScanPrefetch
+		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
 	}
 
@@ -430,8 +424,7 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
-	ls.rc.prefetchScan.End()
-	ls.rc.prefetchScan = nil
+	ls.rc.prefetch.End()
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -1752,7 +1745,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	begin := max(ls.rc.batchPrefetchCursor, ls.rangesCursor)
 	end := min(ls.rangesCursor+readutil.BatchPrefetchSize, n)
 	now := time.Now()
-	pace := ls.scanPace(now)
+	pace := ls.rc.prefetch.Pace(now, ls.rangesCursor)
 
 	policy := fileservice.GetFileServicePolicy(ctx)
 	for idx := begin; idx < end; {
@@ -1776,28 +1769,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		}
 		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
 		if policy.Any(fileservice.ColumnPrefetch) {
-			if !isPrefetcher {
-				continue
-			}
-			ranges, bytes, recorded, err := ls.columnRanges(ctx, blk, seqNums)
-			if err != nil {
-				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-				continue
-			}
-			if !recorded || len(ranges) == 0 {
-				// The object records no column ranges, or stores none of the columns.
-				continue
-			}
-			if ls.rc.prefetchScan == nil {
-				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-			}
-			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
-				FilePath: blk.MetaLocation().Name().String(),
-				Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
-			})
-			if err != nil {
-				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-			}
+			ls.rc.prefetch.PrefetchColumns(ctx, ls.fs, blk, seqNums, due)
 			continue
 		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
@@ -1806,12 +1778,9 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		// prefetch blk data
 		var err error
 		if isPrefetcher && size > 0 {
-			if ls.rc.prefetchScan == nil {
-				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetch.Scan(),
 			})
 		} else {
 			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
@@ -1824,65 +1793,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	}
 
 	ls.rc.batchPrefetchCursor = max(end, begin)
-}
-
-// columnRanges returns the ranges that hold the columns seqNums across all the blocks of
-// the object of blk, and their bytes in all. It returns false when the object stores a
-// column of seqNums without recording its range.
-func (ls *LocalDisttaeDataSource) columnRanges(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16) ([]fileservice.PrefetchRange, int64, bool, error) {
-	loc := blk.MetaLocation()
-	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, ls.fs)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	data := meta.MustDataMeta()
-	var ranges []fileservice.PrefetchRange
-	var bytes int64
-	recorded := true
-	for _, seq := range seqNums {
-		if seq > data.BlockHeader().MaxSeqnum() {
-			continue
-		}
-		ext := data.MustGetColumn(seq).Location()
-		if ext.Length() == 0 {
-			recorded = false
-			continue
-		}
-		ranges = append(ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
-		bytes += int64(ext.Length())
-	}
-	return ranges, bytes, recorded, nil
-}
-
-const (
-	// scanPaceMin is how far a scan goes before its own pace is used.
-	scanPaceMinBlocks = 8
-	scanPaceMinTime   = 50 * time.Millisecond
-	// scanPaceWeight is the weight of a scan's pace in the pace of scans.
-	scanPaceWeight = 0.2
-)
-
-// scanPaces is the average pace of the scans, in blocks a second.
-var scanPaces atomic.Uint64
-
-func init() {
-	scanPaces.Store(math.Float64bits(100))
-}
-
-// scanPace returns the blocks a second the scan reads: its own pace once it has read
-// enough to measure it, which counts toward the pace of scans, or that pace before.
-func (ls *LocalDisttaeDataSource) scanPace(now time.Time) float64 {
-	if ls.rc.paceStart.IsZero() {
-		ls.rc.paceStart, ls.rc.paceCursor = now, ls.rangesCursor
-	}
-	blocks, elapsed := ls.rangesCursor-ls.rc.paceCursor, now.Sub(ls.rc.paceStart)
-	average := math.Float64frombits(scanPaces.Load())
-	if blocks < scanPaceMinBlocks || elapsed < scanPaceMinTime {
-		return average
-	}
-	pace := float64(blocks) / elapsed.Seconds()
-	scanPaces.Store(math.Float64bits((1-scanPaceWeight)*average + scanPaceWeight*pace))
-	return pace
 }
 
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(

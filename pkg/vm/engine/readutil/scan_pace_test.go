@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package readutil
 
 import (
 	"math"
@@ -30,12 +30,10 @@ func TestScanPace(t *testing.T) {
 	scanPaces.Store(math.Float64bits(100))
 
 	now := time.Now()
-	ls := &LocalDisttaeDataSource{}
-	require.Equal(t, 100.0, ls.scanPace(now), "nothing read yet")
-	ls.rangesCursor = scanPaceMinBlocks - 1
-	require.Equal(t, 100.0, ls.scanPace(now.Add(time.Second)), "too few blocks")
+	var p ScanPrefetch
+	require.Equal(t, 100.0, p.Pace(now, 0), "nothing read yet")
+	require.Equal(t, 100.0, p.Pace(now.Add(time.Second), scanPaceMinBlocks-1), "too few blocks")
 
-	ls.rangesCursor = 400
-	require.InDelta(t, 200.0, ls.scanPace(now.Add(2*time.Second)), 1e-9)
+	require.InDelta(t, 200.0, p.Pace(now.Add(2*time.Second), 400), 1e-9)
 	require.InDelta(t, (1-scanPaceWeight)*100+scanPaceWeight*200, math.Float64frombits(scanPaces.Load()), 1e-9)
 }
