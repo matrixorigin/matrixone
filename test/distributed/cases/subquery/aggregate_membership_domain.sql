@@ -16,4 +16,5 @@ select p.part,p.supp,p.avail from p where p.part in (select part from domain_key
 select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select count(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
 select p.part,p.supp,p.avail from p where p.part not in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
 select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') or p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select 'fórêst' collate utf8mb4_general_ci like 'forest%' as accent, 'ßx' collate utf8mb4_general_ci like 'sx%' as sharp, 'ßx' collate utf8mb4_general_ci like 'ss%' as double_sharp, 'Forest' collate utf8mb4_bin like 'forest%' as binary_case;
 drop database aggregate_membership_domain;
