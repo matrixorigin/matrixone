@@ -115,7 +115,7 @@ type snapshotRecord struct {
 	lateExportPossible bool
 }
 
-var errSnapshotExportPending = errors.New("exported snapshot may still be written")
+var errSnapshotExportPending = moerr.NewInternalErrorNoCtx("exported snapshot may still be written")
 
 func newNodeSnapshot(fs vfs.FS, nodeID nodeID) *snapshotRecord {
 	return &snapshotRecord{
