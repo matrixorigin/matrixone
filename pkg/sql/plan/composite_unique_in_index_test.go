@@ -246,7 +246,7 @@ func TestCompositeUniqueForcedOrderRejectsCompetingPrefixAccess(t *testing.T) {
 			idxColMap := map[[2]int32]*pb.Expr{}
 			got, err := builder.applyForceIndexHintToScan(builder.qry.Nodes[scan], []forceIndexRequirement{{
 				scope: forceIndexForOrder, columns: []*pb.Expr{GetColExpr(table.Cols[4].Typ, tag, 4)},
-			}}, colRefCnt, idxColMap)
+			}}, colRefCnt, idxColMap, make(map[forceIndexMemoKey]int32))
 			require.NoError(t, err)
 			require.Equal(t, scan, got)
 			builder.applyIndicesForFilters(scan, builder.qry.Nodes[scan], colRefCnt, idxColMap)
