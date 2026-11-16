@@ -113,6 +113,26 @@ func TestEnumDisplayWrapperEncoding(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInsertDistinctEnumKeepsVisibleGroupKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	typ := plan.Type{Id: int32(types.T_enum), Enumvalues: "2#3:a,b0:", EnumEncoding: 1}
+	mock.ctxt.tables["nation"].Cols[1].Typ = typ
+	addSetBitmapDestinationForTest(mock)
+	mock.ctxt.tables["set_bitmap_destination"].Cols[1].Typ = typ
+
+	query, err := runOneStmt(mock, t, `insert into set_bitmap_destination(id, bitmap)
+		select 1, name from (select distinct n_name as name from nation) q`)
+	require.NoError(t, err)
+	var found bool
+	for _, node := range query.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.GroupBy) == 1 &&
+			node.GroupBy[0].Typ.Id == int32(types.T_varchar) {
+			found = true
+		}
+	}
+	require.True(t, found, "DISTINCT must group the one visible value, without a hidden ordinal key")
+}
+
 func TestMalformedEnumMetadataCannotRenderDDL(t *testing.T) {
 	for _, typ := range []plan.Type{
 		{Id: int32(types.T_enum), Enumvalues: "2#9:a", EnumEncoding: 1},
