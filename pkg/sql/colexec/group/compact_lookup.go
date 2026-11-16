@@ -109,7 +109,7 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	if (len(lookup.ids) == compactCharDomain) != (len(vecs) == 1) {
 		return groupInsertPreview{}, false, nil
 	}
-	if len(vecs) == 2 && !vecs[0].IsDictionary() && !vecs[1].IsDictionary() {
+	if len(vecs) == 2 && count > 1 && !vecs[0].IsDictionary() && !vecs[1].IsDictionary() {
 		return lookup.previewFlatTuple(vecs, start, count)
 	}
 	clear(lookup.codes[:count])
@@ -196,6 +196,15 @@ func (lookup *compactGroupLookup) previewFlatTuple(vecs []*vector.Vector, start,
 
 func compactInlineCharCode(value *types.Varlena) (uint32, bool) {
 	length := int(value[0])
+	// Ordinary CHAR(1) needs no trim loop or general length dispatch.
+	if length == 1 {
+		b := value[1]
+		code := uint32(b) + 1
+		if b == ' ' {
+			code = 0
+		}
+		return code, true
+	}
 	if length > types.VarlenaInlineSize {
 		return 0, false
 	}

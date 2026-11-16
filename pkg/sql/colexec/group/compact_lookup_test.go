@@ -94,6 +94,17 @@ func TestCompactTupleLookupScratchAndOffsets(t *testing.T) {
 		require.True(t, hit)
 		require.Equal(t, []uint64{55, 22, 33, 44, 11}, preview.values)
 	}
+	// Single-row tuples use the common route with the same canonical IDs.
+	for _, tc := range []struct {
+		offset int
+		id     uint64
+	}{{1, 55}, {2, 22}, {3, 33}, {4, 44}, {5, 11}} {
+		preview, hit, err = ctr.previewCompactGroups(vecs, tc.offset, 1)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.True(t, preview.existingOnly)
+		require.Equal(t, []uint64{tc.id}, preview.values)
+	}
 }
 
 func BenchmarkCompactGroupLookup(b *testing.B) {
