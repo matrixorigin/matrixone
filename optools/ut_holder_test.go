@@ -68,7 +68,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "fixture=shared-cluster phase=start count=1 total=1.00s") {
 			t.Fatalf("aggregate without package/time: %v\n%s", err, out)
 		}
@@ -79,7 +81,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || len(out) != 0 {
 			t.Fatalf("holder-only report should be silent: %v\n%s", err, out)
 		}
@@ -90,7 +94,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "fixture=embedded-cluster phase=admission-acquire count=1") || strings.Contains(string(out), "admission generations:") {
 			t.Fatalf("invalid time must affect only holder evidence: %v\n%s", err, out)
 		}
@@ -100,7 +106,9 @@ func TestUTSetupSummaryKeepsAggregateAndHolderFiltersIndependent(t *testing.T) {
 		if err := os.WriteFile(path, []byte{0xff, '\n'}, 0600); err != nil {
 			t.Fatal(err)
 		}
-		out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+		cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+		cmd.Env = pythonStdlibEnvironment()
+		out, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "UnicodeDecodeError") {
 			t.Fatalf("invalid UTF-8 must fail: %v\n%s", err, out)
 		}
@@ -117,7 +125,9 @@ from summarize_ut_setup import admission_holders
 import sys
 assert admission_holders(Path(sys.argv[1])) == []
 `
-	out, err := exec.Command("python3", "-c", script, path).CombinedOutput()
+	cmd := exec.Command("python3", "-c", script, path)
+	cmd.Env = pythonStdlibEnvironment()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("standalone helper must ignore malformed numbers: %v\n%s", err, out)
 	}
@@ -166,7 +176,9 @@ raise SystemExit(status)
 			if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "-c", script, path, tc.wantOpens).CombinedOutput()
+			cmd := exec.Command("python3", "-c", script, path, tc.wantOpens)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("summary fallback: %v\n%s", err, out)
 			}
@@ -206,7 +218,9 @@ raise SystemExit(result)
 			if err := os.WriteFile(path, []byte(report), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "-c", script, path).CombinedOutput()
+			cmd := exec.Command("python3", "-c", script, path)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if !hasTotals {
 				if err != nil || len(out) != 0 {
 					t.Fatalf("no totals should be silent: %v\n%s", err, out)
