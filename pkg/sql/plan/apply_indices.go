@@ -2794,6 +2794,11 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	numParts := len(idxDef.Parts)
 	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
+	if fn.Func.ObjName == "in" && len(fn.Args) > 1 && runtimeConstMayBeNull(fn.Args[1]) {
+		// A serialized NULL is not a seekable prefix. Keep the decoded SQL
+		// residual instead of constructing a prefix_in access predicate.
+		return nil
+	}
 	if fn.Func.ObjName == "or" {
 		for i := range fn.Args {
 			fn.Args[i] = builder.replaceNonEqualCondition(idxDef, fn.Args[i], idxTag, idxTableDef)
