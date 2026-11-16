@@ -1017,6 +1017,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		})
 
+		// The join reads only the candidate rows of the base table; the copied scan
+		// reads the whole table.
+		readColumnRanges(scanNode)
 		outerJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{scanNode.NodeId, innerJoinNodeID},
@@ -1086,6 +1089,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		})
 
+		// The join reads only the candidate rows of the base table.
+		readColumnRanges(scanNode)
 		joinnodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{scanNode.NodeId, last_node_id},

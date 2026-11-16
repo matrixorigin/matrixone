@@ -32,6 +32,14 @@ const (
 	NarrowRead
 	// MemoryCacheNoEvict allows late reads to allocate only unused cache capacity.
 	MemoryCacheNoEvict
+	// ColumnPrefetch marks a read whose prefetches download only the columns it reads,
+	// and which reads exactly its entries, not prefetch ranges around them.
+	ColumnPrefetch
+	// ExactRead marks a read that reads exactly its entries, not prefetch ranges around
+	// them.
+	ExactRead
+	// IndexFileObject marks a read of an object the index-file cache may hold whole.
+	IndexFileObject
 	// ReplayDataForDiskCache permits a synchronous Write to reread Data entries
 	// for its disk cache. The caller and forwarding wrappers must keep Entries,
 	// their Data slices, and backing owners valid and unchanged until Write
@@ -46,6 +54,9 @@ const (
 	SkipMemoryCache = SkipMemoryCacheReads | SkipMemoryCacheWrites
 	SkipRemoteCache = SkipRemoteCacheReads | SkipRemoteCacheWrites
 	SkipAllCache    = SkipDiskCache | SkipMemoryCache | SkipRemoteCache
+	// ExactColumnsRead is the policy of a read of a few columns of an object: it reads
+	// exactly their entries and never downloads the whole object.
+	ExactColumnsRead = SkipFullFilePreloads | ExactRead
 )
 
 func (c Policy) Any(policies ...Policy) bool {

@@ -76,6 +76,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -624,37 +625,48 @@ func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
 func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 	for _, skip := range []bool{false, true} {
 		for _, fromObjRef := range []bool{false, true} {
-			proc := testutil.NewProcess(t)
-			proc.BuildPipelineContext(context.Background())
-			reader := &mockReaderForParallelOrderBy{}
-			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
-			tableDef := &plan.TableDef{TblId: 42}
-			if fromObjRef {
-				// A rewritten scan can carry its table only in the object reference.
-				tableDef.TblId = 0
-				node.ObjRef = &plan.ObjectRef{Obj: 42}
+			for _, entries := range []bool{false, true} {
+				proc := testutil.NewProcess(t)
+				proc.BuildPipelineContext(context.Background())
+				reader := &mockReaderForParallelOrderBy{}
+				node := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
+				if skip {
+					node.ReadPolicy = uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+				}
+				if entries {
+					node.TableDef = &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries}
+				}
+				tableDef := &plan.TableDef{TblId: 42}
+				if fromObjRef {
+					// A rewritten scan can carry its table only in the object reference.
+					tableDef.TblId = 0
+					node.ObjRef = &plan.ObjectRef{Obj: 42}
+				}
+				scope := &Scope{
+					RootOp: table_scan.NewArgument(),
+					Proc:   proc,
+					DataSource: &Source{
+						R:        reader,
+						Rel:      &mockRelationForMembershipFilter{},
+						TableDef: tableDef,
+						node:     node,
+					},
+				}
+				require.NoError(t, scope.Run(&Compile{proc: proc}))
+				want := fileservice.Policy(0)
+				if skip {
+					want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+				}
+				if entries {
+					want |= fileservice.IndexFileObject
+				}
+				require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
+				wantGroup := uint64(0)
+				if want != 0 {
+					wantGroup = 42
+				}
+				require.Equal(t, []uint64{wantGroup}, reader.readGroups, "the reads of a scan with a policy are grouped by their table")
 			}
-			scope := &Scope{
-				RootOp: table_scan.NewArgument(),
-				Proc:   proc,
-				DataSource: &Source{
-					R:        reader,
-					Rel:      &mockRelationForMembershipFilter{},
-					TableDef: tableDef,
-					node:     node,
-				},
-			}
-			require.NoError(t, scope.Run(&Compile{proc: proc}))
-			want := fileservice.Policy(0)
-			if skip {
-				want = fileservice.NarrowRead
-			}
-			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
-			wantGroup := uint64(0)
-			if skip {
-				wantGroup = 42
-			}
-			require.Equal(t, []uint64{wantGroup}, reader.readGroups, "narrow reads are grouped by their table")
 		}
 	}
 }
@@ -3832,4 +3844,59 @@ func TestRetainedExternalSourceRechecksRole(t *testing.T) {
 	c.proc.Base.SessionInfo.Role = "public"
 	_, err = c.getExternParam(c.proc, scan, string(encoded))
 	require.ErrorContains(t, err, "only the sys account moadmin role")
+}
+
+// rangesPolicyRelation records the read policy of the context its Ranges runs under.
+type rangesPolicyRelation struct {
+	*stubRelation
+	policy fileservice.Policy
+}
+
+func (r *rangesPolicyRelation) Ranges(ctx context.Context, _ engine.RangesParam) (engine.RelData, error) {
+	r.policy = fileservice.GetFileServicePolicy(ctx)
+	return nil, moerr.NewInternalErrorNoCtx("ranges recorded")
+}
+
+// The block pruning of a narrow scan, which reads object metadata and bloom filters,
+// runs under the scan's read policy.
+func TestScopeGetRelDataAppliesScanReadPolicy(t *testing.T) {
+	catalog.SetupDefines("")
+	for _, narrow := range []bool{false, true} {
+		rel := &rangesPolicyRelation{stubRelation: newStubRelation("t")}
+		e := newStubEngine()
+		db := newStubDatabase("db")
+		e.databaseFn = func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+			return &rangesPolicyDatabase{stubDatabase: db, rel: rel}, nil
+		}
+		s := newScope(Normal)
+		s.Proc = testutil.NewProcess(t)
+		s.NodeInfo = engine.Node{Mcpu: 1, CNCNT: 1}
+		s.DataSource = &Source{node: &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{},
+			ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef: &plan.TableDef{Name: "t"},
+		}}
+		if narrow {
+			s.DataSource.node.ReadPolicy = uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+		}
+		c := NewMockCompile(t)
+		c.proc = s.Proc
+		c.e = e
+		require.ErrorContains(t, s.getRelData(c, nil), "ranges recorded")
+		want := fileservice.Policy(0)
+		if narrow {
+			want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+		}
+		require.Equal(t, want, rel.policy)
+	}
+}
+
+type rangesPolicyDatabase struct {
+	*stubDatabase
+	rel engine.Relation
+}
+
+func (db *rangesPolicyDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
+	return db.rel, nil
 }
