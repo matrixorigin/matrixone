@@ -151,6 +151,36 @@ func TestOuterCountCostBoundaries(t *testing.T) {
 	}
 }
 
+func TestOuterCountIntegerSpanBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		oid                  types.T
+		groups, lo, hi, want float64
+		nullable             bool
+	}{
+		{"overlapping object NDV", types.T_int32, 3484895, 1, 1499999, 1499999, false},
+		{"possible NULL group", types.T_int32, 3484895, 1, 1499999, 1500000, true},
+		{"retain smaller estimate", types.T_int16, 10, 0, 100, 10, false},
+		{"single value", types.T_uint8, 100, 7, 7, 1, false},
+		{"uninitialized zone map", types.T_int32, 100, 0, 0, 100, false},
+		{"unsigned full domain", types.T_uint32, 5e9, 0, math.MaxUint32, 4294967296, false},
+		{"unsupported precision", types.T_int64, 1e6, 1, 100, 1e6, false},
+		{"not integer", types.T_float64, 100, 1, 10, 100, false},
+		{"unknown NDV", types.T_int32, -1, 1, 10, -1, false},
+		{"invalid range", types.T_int32, 100, 10, 1, 100, false},
+		{"fractional bound", types.T_int32, 100, 1.5, 10, 100, false},
+		{"out of type domain", types.T_int8, 1000, -129, 127, 1000, false},
+		{"negative unsigned", types.T_uint32, 100, -1, 10, 100, false},
+		{"NaN", types.T_int32, 100, math.NaN(), 10, 100, false},
+		{"infinity", types.T_int32, 100, 1, math.Inf(1), 100, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := plan.Type{Id: int32(tc.oid), NotNullable: !tc.nullable}
+			require.Equal(t, tc.want, outerCountIntegerSpanCap(tc.groups, typ, tc.lo, tc.hi))
+		})
+	}
+}
+
 func TestOuterCountSQLReachability(t *testing.T) {
 	ctx := &fixedStatsCompilerContext{&statsCacheCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), statsCache: NewStatsCache(),
@@ -168,7 +198,10 @@ func TestOuterCountSQLReachability(t *testing.T) {
 			s.NdvMap[col.Name], s.SizeMap[col.Name], s.DataTypeMap[col.Name] = rows, uint64(rows*8), uint64(col.Typ.Id)
 		}
 		if name == "orders" {
-			s.NdvMap["o_custkey"] = 1000
+			// An overestimated NDV must not exceed the known INT32 span.
+			s.NdvMap["o_custkey"] = 3500
+			s.MinValMap = map[string]float64{"o_custkey": 1}
+			s.MaxValMap = map[string]float64{"o_custkey": 999}
 		}
 		ctx.statsCache.Set(table.TblId, s)
 	}

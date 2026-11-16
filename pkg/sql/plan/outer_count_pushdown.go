@@ -137,6 +137,16 @@ func (builder *QueryBuilder) pushOuterCount(agg *plan.Node, owners map[int32]int
 		return
 	}
 	groups := estimateNDVAfterSelection(getExprNdv(key, builder), right.Stats)
+	if w := builder.getStatsInfoByCol(key.GetCol()); w != nil && w.GetStats() != nil {
+		stats := w.GetStats()
+		name := key.GetCol().Name
+		lo, hasLo := stats.MinValMap[name]
+		hi, hasHi := stats.MaxValMap[name]
+		oid, hasType := stats.DataTypeMap[name]
+		if hasLo && hasHi && hasType && oid == uint64(key.Typ.Id) {
+			groups = outerCountIntegerSpanCap(groups, key.Typ, lo, hi)
+		}
+	}
 	if !outerCountCostAllows(right.Stats, left.Stats, groups) {
 		return
 	}
@@ -188,6 +198,43 @@ func outerCountCostAllows(fact, preserved *plan.Stats, groups float64) bool {
 	valid := func(n float64) bool { return n > 0 && !math.IsNaN(n) && !math.IsInf(n, 0) }
 	return fact != nil && preserved != nil && valid(fact.Outcnt) && valid(preserved.Outcnt) && valid(groups) &&
 		fact.Outcnt >= 4*hashmap.UnitLimit && groups <= fact.Outcnt/4 && groups <= preserved.Outcnt
+}
+
+// Statistics may overestimate NDV across overlapping objects. For small integer
+// keys, exactly represented min/max values provide an independent domain bound.
+// This affects profitability only; catalog proofs still establish legality.
+func outerCountIntegerSpanCap(groups float64, key plan.Type, lo, hi float64) float64 {
+	if !finitePositive(groups) || math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) ||
+		lo > hi || math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
+		// UpdateStatsInfo also uses [0,0] for an uninitialized zone map.
+		// Do not treat that ambiguous sentinel as a proven singleton domain.
+		return groups
+	}
+	var lower, upper float64
+	switch types.T(key.Id) {
+	case types.T_int8:
+		lower, upper = math.MinInt8, math.MaxInt8
+	case types.T_int16:
+		lower, upper = math.MinInt16, math.MaxInt16
+	case types.T_int32:
+		lower, upper = math.MinInt32, math.MaxInt32
+	case types.T_uint8:
+		upper = math.MaxUint8
+	case types.T_uint16:
+		upper = math.MaxUint16
+	case types.T_uint32:
+		upper = math.MaxUint32
+	default:
+		return groups
+	}
+	if lo < lower || hi > upper {
+		return groups
+	}
+	span := hi - lo + 1
+	if !key.NotNullable {
+		span++
+	}
+	return math.Min(groups, span)
 }
 
 func outerCountPlainScan(scan *plan.Node) bool {
