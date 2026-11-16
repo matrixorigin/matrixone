@@ -4544,6 +4544,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
+		if builder.pushDownOuterCounts(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
@@ -4564,6 +4567,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		// Keep qualification as SEMI through join ordering and pushdown before
+		// carrying its grouped measure through the surviving dimension joins.
+		if builder.reuseGroupedMeasures(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		// Compare unique filtering joins against ANTI on their original fact-key
 		// domain after the legacy existence-pushdown pass has finished.
 		if !builder.outerAntiPlanningDisabled() &&
