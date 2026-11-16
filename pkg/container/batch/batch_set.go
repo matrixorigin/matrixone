@@ -350,6 +350,53 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 	return consumed, nil
 }
 
+// UnionRange appends consecutive logical rows without constructing selection indices.
+// The BatchSet owns each destination before writing, including on an error.
+func (bs *BatchSet) UnionRange(mp *mpool.MPool, input *Batch, offset, count int, reuse *Batch) (bool, error) {
+	if count == 0 {
+		return false, nil
+	}
+	if offset == 0 && count == input.RowCount() && count <= bs.batchMaxRow {
+		return bs.Extend(mp, input, reuse)
+	}
+	return bs.appendRange(mp, input, offset, count, reuse)
+}
+
+func (bs *BatchSet) appendRange(mp *mpool.MPool, input *Batch, offset, count int, reuse *Batch) (bool, error) {
+	consumed := false
+	end := offset + count
+	for offset < end {
+		var dst *Batch
+		if len(bs.batches) != 0 {
+			last := bs.batches[len(bs.batches)-1]
+			if last.RowCount() < bs.batchMaxRow && bs.matchesDestination(last, input) {
+				dst = last
+			}
+		}
+		if dst == nil {
+			var err error
+			dst, err = bs.getOrCreateBatch(input, reuse, mp)
+			if err != nil {
+				return consumed, err
+			}
+			if dst == reuse {
+				consumed, reuse = true, nil
+			}
+			bs.batches = append(bs.batches, dst)
+		} else if dst.RowCount() > 0 {
+			for _, vec := range dst.Vecs {
+				vec.SetSorted(false)
+			}
+		}
+		n := min(end-offset, bs.batchMaxRow-dst.RowCount())
+		if err := dst.UnionWindow(input, offset, n, mp); err != nil {
+			return consumed, err
+		}
+		offset += n
+	}
+	return consumed, nil
+}
+
 func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpool.MPool) (*Batch, error) {
 	if bs.matchesDestination(reuseBuf, inBatch) {
 		reuseBuf.CleanOnlyData()
@@ -387,37 +434,7 @@ func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpo
 // extendWithDestination copies the full input without inheriting its
 // allocation provenance. The BatchSet owns every destination before writing.
 func (bs *BatchSet) extendWithDestination(mp *mpool.MPool, input, reuse *Batch) (bool, error) {
-	consumed := false
-	for start := 0; start < input.RowCount(); {
-		var dst *Batch
-		if len(bs.batches) != 0 {
-			last := bs.batches[len(bs.batches)-1]
-			if last.RowCount() < bs.batchMaxRow && bs.matchesDestination(last, input) {
-				dst = last
-			}
-		}
-		if dst == nil {
-			var err error
-			dst, err = bs.getOrCreateBatch(input, reuse, mp)
-			if err != nil {
-				return consumed, err
-			}
-			if dst == reuse {
-				consumed, reuse = true, nil
-			}
-			bs.batches = append(bs.batches, dst)
-		} else if dst.RowCount() > 0 {
-			for _, vec := range dst.Vecs {
-				vec.SetSorted(false)
-			}
-		}
-		n := min(input.RowCount()-start, bs.batchMaxRow-dst.RowCount())
-		if err := dst.UnionWindow(input, start, n, mp); err != nil {
-			return consumed, err
-		}
-		start += n
-	}
-	return consumed, nil
+	return bs.appendRange(mp, input, 0, input.RowCount(), reuse)
 }
 
 func (bs *BatchSet) extendWithNewProvenance(

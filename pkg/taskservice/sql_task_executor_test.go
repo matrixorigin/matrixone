@@ -16,7 +16,10 @@ package taskservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,6 +71,139 @@ func TestSQLTaskExecutorExecuteContext(t *testing.T) {
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
 	require.True(t, runs[0].GateResult)
+}
+
+type sqlTaskAdmissionFailureStore struct {
+	TaskStorage
+	err error
+}
+
+func (s *sqlTaskAdmissionFailureStore) AcquireSQLTaskRun(ctx context.Context, _ SQLTask, _ SQLTaskRun, _ *SQLTaskRunAdmission) (uint64, error) {
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	return 0, s.err
+}
+
+func TestSQLTaskAdmissionBackoffOnlyForStorageFailure(t *testing.T) {
+	for _, name := range []string{"canceled", "holder-busy", "holder-busy-unclaimed", "storage-timeout"} {
+		t.Run(name, func(t *testing.T) {
+			base := NewMemTaskStorage()
+			var store TaskStorage = &sqlTaskAdmissionFailureStore{TaskStorage: base, err: context.DeadlineExceeded}
+			var holder *refreshableTaskStorage
+			if strings.HasPrefix(name, "holder-busy") {
+				holder = newRefreshableTaskStorage(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) { return "ready", nil }, NewFixedTaskStorageFactory(base)).(*refreshableTaskStorage)
+				store = holder
+			}
+			service := NewTaskService(runtime.DefaultRuntime(), store)
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+			spec := &task.SQLTaskContext{TaskId: 1, TaskName: "t", TriggerType: SQLTaskTriggerScheduled, TriggerCount: 1}
+			firing := task.AsyncTask{ID: 1, ParentTaskID: "sql-task:1", TaskRunner: "cn1", Metadata: BuildSQLTaskMetadata(spec)}
+			if name == "holder-busy-unclaimed" {
+				firing.Metadata.Context = []byte{0xff}
+			}
+			disposition := &sqlTaskRunnerDisposition{}
+			ctx := context.WithValue(context.Background(), sqlTaskDispositionContextKey{}, disposition)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			if name == "canceled" {
+				cancel()
+			}
+			if holder != nil {
+				holder.mu.Lock()
+			}
+			executor := NewSQLTaskExecutor(func() ie.InternalExecutor {
+				t.Fatal("failed admission must not execute SQL")
+				return nil
+			}, service, "cn1")
+			err := executor.TaskExecutor()(ctx, &firing)
+			if holder != nil {
+				holder.mu.Unlock()
+			}
+			if name == "holder-busy-unclaimed" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.True(t, disposition.deferred)
+			require.Equal(t, name == "storage-timeout", disposition.failed)
+		})
+	}
+}
+
+func TestSQLTaskRunnerRefetchesAfterUnclaimedGuardContention(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	store := NewMemTaskStorage().(*memTaskStorage)
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	runner := NewTaskRunner("cn1", service, nil, WithRunnerParallelism(1), WithRunnerFetchInterval(5*time.Millisecond))
+	t.Cleanup(func() {
+		require.NoError(t, runner.Stop())
+		require.NoError(t, service.Close())
+	})
+	definition := mustAddSQLTaskForExecutorTest(t, store, func(value *SQLTask) { value.Enabled = false })
+	parent := fmt.Sprintf("sql-task:%d", definition.TaskID)
+	firings := make([]task.AsyncTask, 2)
+	for i := range firings {
+		metadata := BuildSQLTaskMetadata(newSQLTaskContextForTest(definition, SQLTaskTriggerScheduled))
+		metadata.ID = fmt.Sprintf("%s:%d", parent, i+1)
+		firings[i] = task.AsyncTask{Metadata: metadata, ParentTaskID: parent, Status: task.TaskStatus_Created}
+	}
+	firings[0].Status, firings[0].TaskRunner, firings[0].Epoch = task.TaskStatus_Running, "cn1", 1
+	mustAddTestAsyncTask(t, store, 2, firings...)
+
+	owner := service.(*taskService)
+	guard := owner.sqlRecovery.tryGuard(sqlTaskGuardKey{kind: 3, value: "unclaimed"}, 50)
+	require.NotNil(t, guard)
+	t.Cleanup(func() { owner.sqlRecovery.releaseGuard(guard) })
+	var sqlCalls, attempts atomic.Int32
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor {
+		sqlCalls.Add(1)
+		return &fakeInternalExecutor{}
+	}, service, "cn1").TaskExecutor()
+	type attemptResult struct {
+		disposition sqlTaskRunnerDisposition
+		err         error
+	}
+	first := make(chan attemptResult, 1)
+	runner.RegisterExecutor(task.TaskCode_SQLTask, func(ctx context.Context, value task.Task) error {
+		attempts.Add(1)
+		err := executor(ctx, value)
+		result := attemptResult{*ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition), err}
+		select {
+		case first <- result:
+		default:
+		}
+		return err
+	})
+	require.NoError(t, runner.Start())
+	select {
+	case result := <-first:
+		require.NoError(t, result.err, "nil may mean deferred rather than completed")
+		require.True(t, result.disposition.handled)
+		require.True(t, result.disposition.deferred)
+		require.False(t, result.disposition.failed, "guard contention is not a storage failure")
+	case <-ctx.Done():
+		t.Fatal("runner did not reach the occupied unclaimed guard")
+	}
+	children := mustGetTestAsyncTask(t, store, 2, WithTaskParentTaskIDCond(EQ, parent))
+	for _, child := range children {
+		require.NotEqual(t, task.TaskStatus_Completed, child.Status)
+	}
+	mustGetTestSQLTaskRun(t, store, 0)
+	require.Zero(t, sqlCalls.Load())
+
+	owner.sqlRecovery.releaseGuard(guard)
+	guard = nil
+	require.Eventually(t, func() bool {
+		values, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, parent))
+		return err == nil && len(values) == 1 && values[0].Metadata.ID == firings[0].Metadata.ID &&
+			values[0].Status == task.TaskStatus_Completed && values[0].ExecuteResult != nil &&
+			values[0].ExecuteResult.Code == task.ResultCode_Success
+	}, 5*time.Second, 5*time.Millisecond, "the runner must refetch and clean stale siblings after guard release")
+	require.GreaterOrEqual(t, attempts.Load(), int32(2))
+	mustGetTestSQLTaskRun(t, store, 0)
+	require.Zero(t, sqlCalls.Load())
 }
 
 func TestSQLTaskExecutorRecordsRowsAffected(t *testing.T) {
@@ -241,7 +377,7 @@ func TestSQLTaskExecutorSkipsWhenGateFalse(t *testing.T) {
 		queryValues: []any{false},
 	}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
-	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
 	require.NoError(t, err)
 	require.Empty(t, fakeIE.execSQLs)
 
@@ -263,16 +399,18 @@ func TestSQLTaskExecutorReturnsFinishRunErrorOnGateFailure(t *testing.T) {
 	sqlTask := mustAddSQLTaskForExecutorTest(t, baseStore, func(task *SQLTask) {
 		task.GateCondition = "select 1"
 		task.SQLBody = "select 1"
-		task.RetryLimit = 1
+		task.RetryLimit = 0
 	})
 
 	fakeIE := &fakeInternalExecutor{
 		queryErrs: []error{moerr.NewInternalErrorNoCtx("gate failed")},
 	}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
-	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
-	require.EqualError(t, err, "internal error: finish failed")
-	require.Equal(t, 1, store.completeCalls)
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.ErrorContains(t, err, "gate failed")
+	var pending *SQLTaskMetadataPendingError
+	require.ErrorAs(t, err, &pending)
+	require.True(t, pending.Recovering)
 
 	runs := mustGetTestSQLTaskRun(t, baseStore, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusRunning, runs[0].Status)
@@ -296,7 +434,7 @@ func TestSQLTaskExecutorRetryOnFailure(t *testing.T) {
 		execErrs:    []error{moerr.NewInternalErrorNoCtx("boom"), nil},
 	}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
-	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
 	require.NoError(t, err)
 
 	runs := mustGetTestSQLTaskRun(t, store, 2, WithTaskIDCond(EQ, sqlTask.TaskID))
@@ -328,11 +466,165 @@ func TestSQLTaskExecutorTimeout(t *testing.T) {
 		},
 	}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
-	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
 	require.Error(t, err)
 
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusTimeout, runs[0].Status)
+}
+
+func TestSQLTaskExecutorDoesNotRetryUnknownCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(error) error
+	}{
+		{"direct", func(err error) error { return err }},
+		{"wrapped", func(err error) error { return fmt.Errorf("statement: %w", err) }},
+		{"joined", func(err error) error { return errors.Join(moerr.NewInternalErrorNoCtx("cleanup"), err) }},
+	} {
+		for _, trigger := range []string{SQLTaskTriggerManual, SQLTaskTriggerScheduled} {
+			t.Run(tc.name+"/"+trigger, func(t *testing.T) {
+				ctx := context.Background()
+				store := NewMemTaskStorage().(*memTaskStorage)
+				service := NewTaskService(runtime.DefaultRuntime(), store)
+				t.Cleanup(func() { require.NoError(t, service.Close()) })
+				sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+					task.GateCondition = ""
+					task.SQLBody = "insert into target values (1)"
+					task.RetryLimit = 1
+					task.TriggerCount = 1
+				})
+				unknown := moerr.NewTxnUnknown(ctx, "txn-1")
+				calls := 0
+				fake := &fakeInternalExecutor{execHook: func(context.Context, string, ie.SessionOverrideOptions) error {
+					calls++
+					if calls == 1 {
+						return tc.wrap(unknown)
+					}
+					return nil
+				}}
+				executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fake }, service, "cn-test")
+				spec := newSQLTaskContextForTest(sqlTask, trigger)
+				var err error
+				if trigger == SQLTaskTriggerScheduled {
+					spec.TriggerCount = sqlTask.TriggerCount
+					asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(spec))
+					asyncTask.ParentTaskID = fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+					asyncTask.Status, asyncTask.TaskRunner, asyncTask.Epoch = task.TaskStatus_Running, "cn-test", 1
+					mustAddTestAsyncTask(t, store, 1, asyncTask)
+					asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
+					err = executor.TaskExecutor()(ctx, &asyncTask)
+				} else {
+					err = executor.ExecuteContext(ctx, spec, true)
+				}
+				require.ErrorIs(t, err, unknown)
+				var identity *moerr.Error
+				require.ErrorAs(t, err, &identity)
+				require.Equal(t, moerr.ErrTxnUnknown, identity.ErrorCode())
+				require.Equal(t, 1, calls, "an uncertain commit must not be replayed")
+				runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+				require.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+				require.Zero(t, runs[0].FinishedAt)
+				require.Equal(t, int(moerr.ErrTxnUnknown), runs[0].ErrorCode)
+				require.Contains(t, runs[0].ErrorMessage, "txn-1")
+				_, acquireErr := store.AcquireSQLTaskRun(ctx, sqlTask, SQLTaskRun{TaskID: sqlTask.TaskID, TaskName: sqlTask.TaskName, AccountID: sqlTask.AccountID, Status: SQLTaskStatusRunning, TriggerType: SQLTaskTriggerManual}, testSQLTaskAdmission(nil, 0))
+				require.ErrorIs(t, acquireErr, ErrSQLTaskOverlap)
+			})
+		}
+	}
+}
+
+func TestSQLTaskScheduledRunsRecoverAfterBusinessFailure(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemTaskStorage().(*memTaskStorage)
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = ""
+		task.SQLBody = "insert into target values (1)"
+		task.RetryLimit = 0
+		task.TriggerCount = 3
+	})
+	problem := moerr.NewInternalErrorNoCtx("dependency unavailable")
+	failed := true
+	fake := &fakeInternalExecutor{execHook: func(context.Context, string, ie.SessionOverrideOptions) error {
+		if failed {
+			return problem
+		}
+		return nil
+	}}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fake }, service, "cn-test")
+	for i := uint64(1); i <= 3; i++ {
+		spec := newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)
+		spec.TriggerCount = i
+		firing := newTaskFromMetadata(BuildSQLTaskMetadata(spec))
+		firing.Status, firing.TaskRunner, firing.Epoch = task.TaskStatus_Running, "cn-test", 1
+		firing.ParentTaskID = fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+		mustAddTestAsyncTask(t, store, 1, firing)
+		firing = mustGetTestAsyncTask(t, store, 1, WithTaskMetadataId(EQ, firing.Metadata.ID))[0]
+		if i == 3 {
+			failed = false
+		}
+		err := executor.TaskExecutor()(ctx, &firing)
+		if i < 3 {
+			require.ErrorIs(t, err, problem)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	require.Len(t, fake.execSQLs, 3)
+	runs := mustGetTestSQLTaskRun(t, store, 3, WithTaskIDCond(EQ, sqlTask.TaskID))
+	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
+	require.Equal(t, SQLTaskStatusFailed, runs[1].Status)
+	require.Equal(t, SQLTaskStatusFailed, runs[2].Status)
+}
+
+func TestSQLTaskExecutorUnknownCommitErrorPaths(t *testing.T) {
+	t.Run("gate", func(t *testing.T) {
+		ctx := context.Background()
+		store := NewMemTaskStorage().(*memTaskStorage)
+		service := NewTaskService(runtime.DefaultRuntime(), store)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+			task.RetryLimit = 1
+		})
+		unknown := moerr.NewTxnUnknown(ctx, "gate-txn")
+		fake := &fakeInternalExecutor{queryErrs: []error{fmt.Errorf("gate: %w", unknown)}}
+		executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fake }, service, "cn-test")
+		err := executor.ExecuteContext(ctx, newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+		require.ErrorIs(t, err, unknown)
+		require.Len(t, fake.querySQLs, 1)
+		require.Empty(t, fake.execSQLs)
+		runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+		require.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+		require.False(t, runs[0].GateResult)
+		require.Equal(t, int(moerr.ErrTxnUnknown), runs[0].ErrorCode)
+		require.Contains(t, runs[0].ErrorMessage, "gate-txn")
+	})
+
+	t.Run("completion failure preserves unknown outcome", func(t *testing.T) {
+		ctx := context.Background()
+		baseStore := NewMemTaskStorage().(*memTaskStorage)
+		store := &finishRunFailingTaskStorage{TaskStorage: baseStore}
+		service := NewTaskService(runtime.DefaultRuntime(), store)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		sqlTask := mustAddSQLTaskForExecutorTest(t, baseStore, func(task *SQLTask) {
+			task.GateCondition = ""
+			task.RetryLimit = 1
+		})
+		unknown := moerr.NewTxnUnknown(ctx, "body-txn")
+		fake := &fakeInternalExecutor{execErrs: []error{errors.Join(moerr.NewInternalErrorNoCtx("cleanup"), unknown)}}
+		executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fake }, service, "cn-test")
+		err := executor.ExecuteContext(ctx, newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+		require.ErrorIs(t, err, unknown)
+		var identity *moerr.Error
+		require.ErrorAs(t, err, &identity)
+		require.Equal(t, moerr.ErrTxnUnknown, identity.ErrorCode())
+		var pending *SQLTaskMetadataPendingError
+		require.ErrorAs(t, err, &pending)
+		require.True(t, pending.Recovering)
+		require.Len(t, fake.execSQLs, 1)
+	})
 }
 
 func TestSQLTaskExecutorOverlap(t *testing.T) {
@@ -390,7 +682,7 @@ func TestSQLTaskExecutorAttachesAccountContext(t *testing.T) {
 		},
 	}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
-	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
 	require.NoError(t, err)
 }
 
@@ -407,10 +699,21 @@ func TestSQLTaskExecutorTaskExecutorPayloads(t *testing.T) {
 	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
 		task.GateCondition = ""
 		task.SQLBody = ""
+		task.TriggerCount = 1
 	})
 	mustAddTestSQLTaskRun(t, store, 1, newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
-	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual)))
+	spec := newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)
+	spec.TriggerCount = 1
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(spec))
+	asyncTask.ParentTaskID = fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+	asyncTask.Status, asyncTask.TaskRunner, asyncTask.Epoch = task.TaskStatus_Running, "cn-test", 1
+	mustAddTestAsyncTask(t, store, 1, asyncTask)
+	asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
 	require.NoError(t, executor.TaskExecutor()(context.Background(), &asyncTask))
+	require.Eventually(t, func() bool {
+		tasks, err := store.QueryAsyncTask(context.Background())
+		return err == nil && len(tasks) == 1 && tasks[0].Status == task.TaskStatus_Completed
+	}, time.Second, time.Millisecond)
 }
 
 func TestSQLTaskExecutorExecuteContextEdges(t *testing.T) {
@@ -439,6 +742,42 @@ func TestSQLTaskExecutorExecuteContextEdges(t *testing.T) {
 		task.SQLBody = ""
 	})
 	require.NoError(t, executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true))
+}
+
+func TestSQLTaskExecutorRejectsOversizedRunnerBeforeSQL(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	definition := mustAddSQLTaskForExecutorTest(t, store, func(definition *SQLTask) {
+		definition.SQLBody = "select 1"
+		definition.TriggerCount = 1
+	})
+	fake := &fakeInternalExecutor{}
+	factory := func() ie.InternalExecutor { return fake }
+	manual := NewSQLTaskExecutor(factory, service, strings.Repeat("x", sqlTaskRunnerMaxBytes+1))
+	err := manual.ExecuteContext(context.Background(), newSQLTaskContextForTest(definition, SQLTaskTriggerManual), true)
+	require.ErrorContains(t, err, "execution identifier is too long")
+
+	spec := newSQLTaskContextForTest(definition, SQLTaskTriggerScheduled)
+	spec.TriggerCount = 1
+	scheduled := NewSQLTaskExecutor(factory, service, "cn")
+	for _, tooLong := range []string{"runner", "parent", "metadata"} {
+		firing := &task.AsyncTask{ID: 1, Metadata: BuildSQLTaskMetadata(spec), ParentTaskID: fmt.Sprintf("sql-task:%d", definition.TaskID),
+			Status: task.TaskStatus_Running, TaskRunner: "cn", Epoch: 1}
+		switch tooLong {
+		case "runner":
+			firing.TaskRunner = strings.Repeat("x", sqlTaskAsyncRunnerMaxBytes+1)
+		case "parent":
+			firing.ParentTaskID = strings.Repeat("x", 51)
+		case "metadata":
+			firing.Metadata.ID = strings.Repeat("x", 51)
+		}
+		err = scheduled.TaskExecutor()(context.Background(), firing)
+		require.ErrorContains(t, err, "execution identifier is too long", tooLong)
+	}
+	require.Empty(t, fake.querySQLs)
+	require.Empty(t, fake.execSQLs)
+	mustGetTestSQLTaskRun(t, store, 0)
 }
 
 func TestSQLTaskExecutorGateAndBoolEdges(t *testing.T) {
@@ -531,12 +870,10 @@ type fakeInternalExecutor struct {
 
 type finishRunFailingTaskStorage struct {
 	TaskStorage
-	completeCalls int
 }
 
-func (s *finishRunFailingTaskStorage) CompleteSQLTaskRun(context.Context, SQLTaskRun) (int, error) {
-	s.completeCalls++
-	return 0, moerr.NewInternalErrorNoCtx("finish failed")
+func (s *finishRunFailingTaskStorage) PublishSQLTaskReceipt(context.Context, SQLTaskReceiptRequest) (bool, error) {
+	return false, moerr.NewInternalErrorNoCtx("finish failed")
 }
 
 func (f *fakeInternalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {

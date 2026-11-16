@@ -470,3 +470,59 @@ type descNoProviderSubscribedContext struct {
 func (c *descNoProviderSubscribedContext) GetQueryingSubscription() *SubscriptionMeta {
 	return c.sub
 }
+
+// The quoted wildcard argument is the SHOW COLUMNS LIKE filter: the
+// DESCRIBE form derives the identical bound predicate and the repository
+// expression executor keeps exactly the genuinely matching current
+// columns, with the escaped forms behaving verbatim like the authored
+// LIKE comparison.
+func TestDescQuotedWildcardFiltersThroughRealLikeEvaluation(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := newPlanTestProcess(t)
+	ctx := mock.CurrentContext()
+	fields := []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}
+
+	// Start from the parse: the quoted argument must reach the planner as
+	// a LIKE comparison, never as a named column.
+	stmt := descParseOne(t, ctx, "desc nation 'n_na%'")
+	defer stmt.Free()
+	sc := descShowColumns(t, stmt)
+	require.NotNil(t, sc.Like)
+	require.Nil(t, sc.ColName)
+
+	descStmt, err := runOneStmt(mock, t, "desc nation 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, descStmt, "n_na%", fields),
+		"the quoted prefix filter keeps the genuinely matching columns")
+
+	showStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, showStmt, "n_na%", fields),
+		"the authored SHOW COLUMNS LIKE form keeps the same rows")
+
+	allStmt, err := runOneStmt(mock, t, "desc nation '%'")
+	require.NoError(t, err)
+	require.Equal(t, fields,
+		descKeptByFilterPattern(t, proc, allStmt, "%", fields),
+		"the bare wildcard keeps every column")
+
+	missStmt, err := runOneStmt(mock, t, "desc nation 'nosuch%'")
+	require.NoError(t, err)
+	require.Empty(t,
+		descKeptByFilterPattern(t, proc, missStmt, "nosuch%", fields),
+		"a non-matching pattern keeps zero rows")
+
+	escStmt, err := runOneStmt(mock, t, "desc nation 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escStmt, `n\_name`, fields),
+		"the escaped underscore matches the literal column name only")
+
+	escShowStmt, err := runOneStmt(mock, t, "show columns from nation like 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escShowStmt, `n\_name`, fields),
+		"the authored escaped LIKE form keeps the same single row")
+}

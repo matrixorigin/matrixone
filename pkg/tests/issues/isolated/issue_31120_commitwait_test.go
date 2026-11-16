@@ -240,8 +240,22 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 		defer goroutines.Done()
 		spentResult <- spendTxn.Commit()
 	}()
-	require.Never(t, func() bool { return probeWaiters() > 0 }, spendWindow, 10*time.Millisecond,
-		"leg C: a matching commit must never park on the spent barrier while the same installation remains")
+	// Never runs each condition in a goroutine and can return while the final
+	// probe is still running. Keep probes on this goroutine so cleanup cannot
+	// remove the fault point before an outstanding probe finishes.
+	spendTimer := time.NewTimer(spendWindow)
+	defer spendTimer.Stop()
+	spendTicker := time.NewTicker(10 * time.Millisecond)
+	defer spendTicker.Stop()
+	for observing := true; observing; {
+		require.Zero(t, probeWaiters(),
+			"leg C: a matching commit must never park on the spent barrier while the same installation remains")
+		select {
+		case <-spendTimer.C:
+			observing = false
+		case <-spendTicker.C:
+		}
+	}
 	select {
 	case commitErr := <-spentResult:
 		require.NoError(t, commitErr)

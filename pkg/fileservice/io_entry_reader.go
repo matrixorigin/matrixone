@@ -67,7 +67,8 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 			if l := int64(len(buf)); l < numBytes {
 				numBytes = l
 			}
-			buf = buf[numBytes:] // skip
+			clear(buf[:numBytes])
+			buf = buf[numBytes:]
 			n += int(numBytes)
 			i.offset += numBytes
 		}

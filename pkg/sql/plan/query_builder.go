@@ -4541,6 +4541,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
+		if builder.pushDownOuterCounts(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
@@ -4554,12 +4557,25 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		rootID = builder.pushDownGroupedSums(rootID)
 		// Preserve INNER-join reordering before introducing an existence boundary.
 		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
 		builder.reduceSetMembershipJoins(rootID, i)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		// Keep qualification as SEMI through join ordering and pushdown before
+		// carrying its grouped measure through the surviving dimension joins.
+		if builder.reuseGroupedMeasures(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
+		// Compare unique filtering joins against ANTI on their original fact-key
+		// domain after the legacy existence-pushdown pass has finished.
+		if !builder.outerAntiPlanningDisabled() &&
+			(builder.optimizerHints == nil || builder.optimizerHints.joinOrdering == 0) {
+			rootID, _ = builder.applyAntiJoinPreservedSideRule(rootID)
+		}
+		builder.pruneGroupedOuterDomains(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -4718,6 +4734,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.pushdownGroupingExpressions()
+	if len(builder.userWindowNodes) > 1 {
+		for _, rootID := range builder.qry.Steps {
+			builder.fuseWindowNodes(rootID, make(map[int32]bool))
+		}
+	}
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {
@@ -6379,8 +6400,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.integerPrecisionTransparentBoundary = true
 	}
 	defer func() {
-		if err == nil && isRoot && builder.integerPrecision != nil {
-			builder.captureIntegerPrecisionOutputs(ctx)
+		if err == nil && isRoot {
+			builder.captureEnumSetResultTypes(ctx)
+			if builder.integerPrecision != nil {
+				builder.captureIntegerPrecisionOutputs(ctx)
+			}
 		}
 	}()
 
@@ -6934,7 +6958,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
+				field := enumSetResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+				if field != nil {
+					provenance := ctx.outputColumnProvenanceForProject(int32(i))
+					provenance.EnumSetResultType = field
+					ctx.setOutputColumnProvenance(int32(i), provenance)
+				}
 			}
 			// Window functions run above AGG, so their raw argument, partition,
 			// and ordering expressions must be materialized by the aggregate
@@ -14768,6 +14798,41 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	return nil
 }
 
+// naturalJoinUsingColumns follows the operands' visible schemas, not their
+// underlying bindings: a nested USING/NATURAL join has already merged and
+// reordered its common columns. RIGHT JOIN treats its preserved operand first.
+func (builder *QueryBuilder) naturalJoinUsingColumns(left, right *BindContext, joinType plan.Node_JoinType) ([]string, error) {
+	accountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	first, second := left, right
+	if joinType == plan.Node_RIGHT {
+		first, second = right, left
+	}
+	_, firstCols, _, err := first.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+	if err != nil {
+		return nil, err
+	}
+	_, secondCols, _, err := second.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+	if err != nil {
+		return nil, err
+	}
+	common := make(map[string]struct{}, len(secondCols))
+	for _, col := range secondCols {
+		common[strings.ToLower(col)] = struct{}{}
+	}
+	usingCols := make([]string, 0, min(len(firstCols), len(secondCols)))
+	for _, col := range firstCols {
+		col = strings.ToLower(col)
+		if _, ok := common[col]; ok {
+			usingCols = append(usingCols, col)
+			delete(common, col)
+		}
+	}
+	return usingCols, nil
+}
+
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	joinType := plan.Node_INNER
 
@@ -14863,24 +14928,16 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				}
 			default:
 				if tbl.JoinType == tree.JOIN_TYPE_NATURAL {
-					leftCols := make(map[string]bool)
-					for _, binding := range leftCtx.bindings {
-						for i, col := range binding.cols {
-							if !binding.colIsHidden[i] {
-								leftCols[col] = true
-							}
-						}
+					usingCols, err := builder.naturalJoinUsingColumns(leftCtx, rightCtx, joinType)
+					if err != nil {
+						return 0, err
 					}
-					for _, binding := range rightCtx.bindings {
-						for i, col := range binding.cols {
-							if !binding.colIsHidden[i] && leftCols[col] {
-								filter, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
-								if err != nil {
-									return 0, err
-								}
-								filters = append(filters, filter)
-							}
+					for _, col := range usingCols {
+						filter, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
+						if err != nil {
+							return 0, err
 						}
+						filters = append(filters, filter)
 					}
 				}
 			}
@@ -15029,23 +15086,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
 		}
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
-			leftCols := make(map[string]bool)
-			for _, binding := range leftCtx.bindings {
-				for i, col := range binding.cols {
-					if binding.colIsHidden[i] {
-						continue
-					}
-					leftCols[col] = true
-				}
-			}
-
-			var usingCols []string
-			for _, binding := range rightCtx.bindings {
-				for _, col := range binding.cols {
-					if leftCols[col] {
-						usingCols = append(usingCols, col)
-					}
-				}
+			usingCols, err := builder.naturalJoinUsingColumns(leftCtx, rightCtx, joinType)
+			if err != nil {
+				return 0, err
 			}
 
 			for _, col := range usingCols {

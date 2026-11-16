@@ -249,7 +249,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	op := newTxnOperatorForTest(t)
 	txn := &Transaction{proc: proc, op: op, engine: &Engine{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)}}
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
 	var memory, committed, spilled types.Rowid
 	memory.SetSegment(colexec.TxnWorkspaceSegment)
 	memory.SetRowOffset(1)
@@ -279,7 +279,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 		require.Equal(t, []types.Rowid{committed}, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0]))
 	}
 	require.Equal(t, []int64{0}, txn.batchSelectList[insert])
-	require.Equal(t, []int64{3, 3}, txn.deletedBlocks.offsets[spilled.CloneBlockID()])
+	require.Equal(t, []int64{3, 3}, txn.deletedBlocks.offsets[42][spilled.CloneBlockID()])
 }
 
 func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
@@ -419,7 +419,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	}()
 	txn := &Transaction{proc: proc, writes: []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}},
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 0}},
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)}}
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
 	txn.accountWorkspaceEntryLocked(&txn.writes[0])
 	beforeSize, beforeCount := txn.workspaceSize, txn.approximateInMemInsertCnt
 	retired, err := txn.shrinkWorkspaceEntryBatchLocked(0, txn.batchSelectList[bat])

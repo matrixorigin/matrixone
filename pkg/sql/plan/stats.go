@@ -1071,6 +1071,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		}
 	case *plan.Expr_Lit:
 		ret = 1.0
+		// Contradiction folding (normalizeColumnDomain) and constant folding can
+		// reduce a whole filter list to one boolean literal. Its row fraction is
+		// exact: TRUE keeps every row, while FALSE and NULL keep none. Estimating
+		// the always-empty case as 1.0 sized scans and the operators above them
+		// for the full table behind an always-empty filter (#32068). This floor
+		// matches the impossible-interval estimate in estimateIntervalSelectivity.
+		if IsFalseExpr(expr) || exprImpl.Lit.GetIsnull() {
+			ret = 0.00000001
+		}
 	}
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
@@ -2189,7 +2198,7 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	fn := expr.GetF()
 	argCount := 2
 	switch fn.GetFunc().GetObjName() {
-	case "=", "<", "<=", ">", ">=":
+	case "=", "<", "<=", ">", ">=", "in":
 	case "between":
 		argCount = 3
 	case "in_range":
@@ -2199,6 +2208,12 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	}
 	if !hasNonNilFunctionArgs(fn, argCount) {
 		return false
+	}
+	if fn.GetFunc().GetObjName() == "in" {
+		// IN 的操作数不可交换；列表在常量折叠前后分别表示为 List/Vec。
+		return fn.Args[0].GetCol() != nil &&
+			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&
+			isRuntimeConstExpr(fn.Args[1])
 	}
 	if fn.Args[0].GetCol() == nil {
 		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
@@ -2491,10 +2506,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = false
 			break
 		}
+		leftBuildRows := leftChild.Stats.Outcnt
+		if node.JoinType == plan.Node_ANTI && leftChild.NodeType == plan.Node_JOIN && leftChild.JoinType == plan.Node_INNER {
+			if selectivity, known := builder.getJoinActiveDomainSelectivity(leftChild.NodeId); known {
+				// The legacy INNER estimate can apply a dimension's historical
+				// filter fraction instead of its coverage of the fact key domain.
+				// Do not choose a wide ANTI build solely from that lower estimate.
+				leftBuildRows = max(leftBuildRows, builder.qry.Nodes[leftChild.Children[0]].Stats.Outcnt*selectivity)
+				node.IsRightJoin = false
+			}
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
+		} else if builder.IsEquiJoin(node) && leftBuildRows*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 

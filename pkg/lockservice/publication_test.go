@@ -114,8 +114,12 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
+		// Incarnation fields are immutable while allocator RPCs are running.
+		// The restart helper closes the owner and drains stale backends before
+		// creating its replacement, rather than mutating a live epoch.
 		alloc, err = restart()
 		require.NoError(t, err)
+		require.NotEqual(t, oldBind.AllocatorID, alloc.allocatorID)
 		_, err = b.Lock(ctx, table, newTestRows(1), newTestTxnID(2), newTestRowExclusiveOptions())
 		require.NoError(t, err)
 		require.NoError(t, fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{

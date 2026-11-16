@@ -70,8 +70,6 @@ type Routine struct {
 	requestStartedAt atomic.Int64
 	closing          atomic.Bool
 
-	cancelled atomic.Bool
-
 	connectionBeCounted atomic.Bool
 
 	mu sync.Mutex
@@ -129,11 +127,11 @@ func (rt *Routine) decreaseCount(counter func()) {
 }
 
 func (rt *Routine) setCancelled(b bool) bool {
-	return rt.cancelled.Swap(b)
+	return rt.mc.cancelled.Swap(b)
 }
 
 func (rt *Routine) isCancelled() bool {
-	return rt.cancelled.Load()
+	return rt.mc.cancelled.Load()
 }
 
 // shouldCloseConnection reports whether the connection lifecycle itself has
@@ -181,19 +179,6 @@ func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duratio
 		return false
 	}
 	return nowValue-startedAt >= minimum.Nanoseconds()
-}
-
-// execCallbackInProcessRequestOnly denotes if inProcessRequest is true,
-// then the callback will be called.
-// It has used the mutex.
-func (rt *Routine) execCallbackBasedOnRequest(want bool, callback func()) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.inProcessRequest == want {
-		if callback != nil {
-			callback()
-		}
-	}
 }
 
 func (rt *Routine) releaseRoutineCtx() {
@@ -654,11 +639,17 @@ func (rt *Routine) killConnection(killMyself bool) {
 		if rt.tryCloseIdleAfterKill() {
 			return
 		}
-		rt.execCallbackBasedOnRequest(false, func() {
-			if proto := rt.getProtocol(); proto != nil {
-				proto.Close()
-			}
-		})
+		// KILL has sealed request admission. Capture the idle protocol under
+		// the request lock, then close it without holding the lock across I/O.
+		rt.mu.Lock()
+		var proto MysqlRrWr
+		if !rt.inProcessRequest {
+			proto = rt.getProtocol()
+		}
+		rt.mu.Unlock()
+		if proto != nil {
+			proto.Close()
+		}
 	}
 }
 

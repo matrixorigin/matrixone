@@ -172,6 +172,10 @@ type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 
+// SQLTaskBackgroundKey marks internal statements of a scheduled SQL task for
+// bounded operational logging. It is not propagated to remote query contexts.
+type SQLTaskBackgroundKey struct{}
+
 // TemporaryTableAccessKey marks trusted internal catalog maintenance that must
 // resolve a temporary table by its exact physical name. It is intentionally
 // separate from InternalExecutorKey: ordinary internal SQL keeps the same

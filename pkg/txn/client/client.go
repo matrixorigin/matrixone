@@ -1081,6 +1081,18 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.atomic.forceSyncCommitTimes.Add(1)
 }
 
+// SyncLatestCommitTSContext advances the observed commit watermark and waits
+// for its logtail using the caller's budget. Unlike SyncLatestCommitTS, it
+// returns a wait failure to the caller and never terminates the process.
+func (client *txnClient) SyncLatestCommitTSContext(ctx context.Context, ts timestamp.Timestamp) error {
+	client.updateLastCommitTS(ctx, nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
+	if _, err := client.WaitLogTailAppliedAt(ctx, ts); err != nil {
+		return err
+	}
+	client.atomic.forceSyncCommitTimes.Add(1)
+	return nil
+}
+
 func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 	return client.atomic.forceSyncCommitTimes.Load()
 }

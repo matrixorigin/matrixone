@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/compress"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,14 +35,16 @@ import (
 )
 
 type DataWriterConfig struct {
-	Schema        api.Schema
-	PartitionSpec api.PartitionSpec
-	FilePath      string
-	TimeZone      *time.Location
+	ParquetOptions ParquetOptions
+	Schema         api.Schema
+	PartitionSpec  api.PartitionSpec
+	FilePath       string
+	TimeZone       *time.Location
 }
 
 const parquetWriteConversionBatchRows = 1024
 const parquetWriteMaxRowsPerRowGroup = 8192
+const parquetWriteMaxStringBytesPerRowGroup int64 = 1 << 20
 const maxIcebergWriterBoundBytes = 4 << 10
 
 type ParquetDataWriter struct {
@@ -52,15 +55,22 @@ type ParquetDataWriter struct {
 	byName  schemaFieldLookup
 	metrics map[int]*columnMetrics
 
-	partitionSet bool
-	partition    map[string]any
-	partitionKey string
-	rows         int64
-	estimated    int64
-	closed       bool
+	partitionSet     bool
+	partition        map[string]any
+	partitionKey     string
+	rows             int64
+	estimated        int64
+	closed           bool
+	groupRows        int
+	groupStringBytes int64
+	failed           error
 }
 
 func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writer) (*ParquetDataWriter, error) {
+	return newParquetDataWriter(ctx, cfg, dst, cfg.ParquetOptions.compression())
+}
+
+func newParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writer, codec compress.Codec) (*ParquetDataWriter, error) {
 	if dst == nil {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg Parquet writer requires an output writer", nil)
 	}
@@ -92,6 +102,7 @@ func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writ
 			cw,
 			parquet.NewSchema("iceberg", group),
 			parquet.MaxRowsPerRowGroup(parquetWriteMaxRowsPerRowGroup),
+			parquet.Compression(codec),
 		),
 		out:     cw,
 		fields:  append([]api.SchemaField(nil), cfg.Schema.Fields...),
@@ -104,13 +115,21 @@ func (w *ParquetDataWriter) WriteBatch(ctx context.Context, attrs []string, bat 
 	return w.WriteRows(ctx, attrs, bat, nil)
 }
 
-func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *batch.Batch, rowIndexes []int) error {
+func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *batch.Batch, rowIndexes []int) (retErr error) {
 	if w == nil || w.writer == nil {
 		return api.NewError(api.ErrConfigInvalid, "Iceberg Parquet writer is not initialized", nil)
 	}
 	if w.closed {
 		return api.NewError(api.ErrConfigInvalid, "Iceberg Parquet writer is already closed", nil)
 	}
+	if w.failed != nil {
+		return w.failed
+	}
+	defer func() {
+		if retErr != nil {
+			w.failed = retErr
+		}
+	}()
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
@@ -134,7 +153,8 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 		if end > selectedRows {
 			end = selectedRows
 		}
-		rows := make([]any, end-start)
+		rows := make([]any, 0, end-start)
+		var pendingBytes int64
 		for outIdx := start; outIdx < end; outIdx++ {
 			rowIdx := outIdx
 			if !useAllRows {
@@ -143,6 +163,7 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 			if rowIdx < 0 || rowIdx >= bat.RowCount() {
 				return moerr.NewInvalidInputf(ctx, "Iceberg Parquet writer row index out of range: row=%d row_count=%d", rowIdx, bat.RowCount())
 			}
+			var rowStringBytes int64
 			row := make(map[string]any, len(w.fields))
 			rowValues := make(map[int]any, len(w.fields))
 			seenFieldIDs := make(map[int]struct{}, len(attrs))
@@ -165,6 +186,11 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 					w.metric(field).observeNull()
 					continue
 				}
+				if field.Type.Kind == api.TypeString {
+					if str, ok := value.(string); ok {
+						rowStringBytes = saturatingWriterAdd(rowStringBytes, saturatingWriterAdd(int64(len(str)), 4))
+					}
+				}
 				row[field.Name] = value
 				rowValues[field.ID] = value
 				if err := w.metric(field).observe(ctx, field.Type, value); err != nil {
@@ -182,13 +208,58 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 			if err := w.observePartition(ctx, partition); err != nil {
 				return err
 			}
-			rows[outIdx-start] = row
+			if w.groupRows+len(rows) > 0 && (w.groupRows+len(rows) >= parquetWriteMaxRowsPerRowGroup || saturatingWriterAdd(saturatingWriterAdd(w.groupStringBytes, pendingBytes), rowStringBytes) > parquetWriteMaxStringBytesPerRowGroup) {
+				if err := w.writeConverted(rows, pendingBytes); err != nil {
+					return err
+				}
+				rows = rows[:0]
+				pendingBytes = 0
+				if err := w.flushGroup(ctx); err != nil {
+					return err
+				}
+			}
+			rows = append(rows, row)
+			pendingBytes = saturatingWriterAdd(pendingBytes, rowStringBytes)
+			if rowStringBytes > parquetWriteMaxStringBytesPerRowGroup {
+				if err := w.writeConverted(rows, pendingBytes); err != nil {
+					return err
+				}
+				rows = rows[:0]
+				pendingBytes = 0
+				if err := w.flushGroup(ctx); err != nil {
+					return err
+				}
+			}
 		}
-		if _, err := w.writer.Write(rows); err != nil {
-			return api.WrapError(api.ErrObjectIO, "Iceberg Parquet writer failed to encode rows", nil, err)
+		if err := w.writeConverted(rows, pendingBytes); err != nil {
+			return err
 		}
-		w.rows = saturatingWriterAdd(w.rows, int64(len(rows)))
 	}
+	return nil
+}
+
+func (w *ParquetDataWriter) writeConverted(rows []any, bytes int64) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if _, err := w.writer.Write(rows); err != nil {
+		return api.WrapError(api.ErrObjectIO, "Iceberg Parquet writer failed to encode rows", nil, err)
+	}
+	w.rows = saturatingWriterAdd(w.rows, int64(len(rows)))
+	w.groupRows += len(rows)
+	w.groupStringBytes = saturatingWriterAdd(w.groupStringBytes, bytes)
+	return nil
+}
+
+func (w *ParquetDataWriter) flushGroup(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := w.writer.Flush(); err != nil {
+		return api.WrapError(api.ErrObjectIO, "Iceberg Parquet writer failed to flush row group", nil, err)
+	}
+	w.groupRows = 0
+	w.groupStringBytes = 0
 	return nil
 }
 
@@ -221,6 +292,9 @@ func (w *ParquetDataWriter) fillMissingFields(
 func (w *ParquetDataWriter) Close(ctx context.Context) (api.DataFile, error) {
 	if w == nil || w.writer == nil {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg Parquet writer is not initialized", nil)
+	}
+	if w.failed != nil {
+		return api.DataFile{}, w.failed
 	}
 	if !w.closed {
 		if err := w.writer.Close(); err != nil {
@@ -352,7 +426,7 @@ func parquetNodeForField(ctx context.Context, field api.SchemaField) (parquet.No
 }
 
 func icebergStringNode() parquet.Node {
-	return parquet.Encoded(parquet.String(), &parquet.Plain)
+	return parquet.Encoded(parquet.String(), &parquet.RLEDictionary)
 }
 
 func vectorValue(ctx context.Context, vec *vector.Vector, row int, typ api.IcebergType, loc *time.Location) (any, bool, error) {

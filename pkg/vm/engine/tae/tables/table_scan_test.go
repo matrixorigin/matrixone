@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,20 +31,151 @@ import (
 
 type tombstoneScanCounter struct {
 	data.Object
-	scans int
+	scans       int
+	batch       *containers.Batch
+	batchOnScan int
+	err         error
+	errorOnScan int
 }
 
 func (counter *tombstoneScanCounter) CollectObjectTombstoneInRange(
-	context.Context,
-	types.TS,
-	types.TS,
-	*types.Objectid,
-	**containers.Batch,
-	*mpool.MPool,
-	*containers.VectorPool,
+	_ context.Context,
+	_ types.TS,
+	_ types.TS,
+	_ *types.Objectid,
+	bat **containers.Batch,
+	_ *mpool.MPool,
+	_ *containers.VectorPool,
 ) error {
 	counter.scans++
+	if counter.batch != nil && counter.scans == counter.batchOnScan {
+		*bat = counter.batch
+	}
+	if counter.scans == counter.errorOnScan {
+		return counter.err
+	}
 	return nil
+}
+
+func TestTombstoneRangeScanFallsBackForUninitializedZoneMap(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		initialize bool
+		wantScans  int
+	}{
+		{name: "unknown summary scans candidate", wantScans: 1},
+		{name: "known nonmatching summary prunes candidate", initialize: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := catalog.MockCatalog(nil)
+			defer c.Close()
+			db, err := c.CreateDBEntry("db", "", "", nil)
+			require.NoError(t, err)
+			table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+			require.NoError(t, err)
+
+			targetID := objectio.NewObjectid()
+			id := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+			if tc.initialize {
+				zm := index.NewZM(types.T_Rowid, 0)
+				otherID := objectio.NewObjectid()
+				zm.Update(types.NewRowIDWithObjectIDBlkNumAndRowID(otherID, 0, 0))
+				require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+			}
+			dataObject := &tombstoneScanCounter{}
+			entry, err := table.CreateCommittedObject(
+				types.BuildTS(1, 0),
+				&objectio.CreateObjOpt{Stats: stats, IsTombstone: true},
+				func(*catalog.ObjectEntry) data.Object { return dataObject },
+			)
+			require.NoError(t, err)
+			catalog.MockDroppedObjectEntry2List(entry, types.BuildTS(3, 0))
+
+			bat, err := TombstoneRangeScanByObject(
+				context.Background(),
+				table,
+				targetID,
+				types.BuildTS(2, 0),
+				types.BuildTS(4, 0),
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+			if bat != nil {
+				bat.Close()
+			}
+			require.Nil(t, bat)
+			require.Equal(t, tc.wantScans, dataObject.scans)
+		})
+	}
+}
+
+func TestTombstoneRangeScanClosesPartialBatchOnError(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	partial := containers.NewBatch()
+	defer partial.Close()
+	values := containers.MakeVector(types.T_int64.ToType(), mp)
+	values.Append(int64(1), false)
+	partial.AddVector("value", values)
+
+	dataObject := &tombstoneScanCounter{
+		batch:       partial,
+		batchOnScan: 1,
+		err:         errors.New("injected scan failure"),
+		errorOnScan: 2,
+	}
+	for i := uint64(1); i <= 2; i++ {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, true)
+		_, err = table.CreateCommittedObject(
+			types.BuildTS(int64(i), 0),
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: true},
+			func(*catalog.ObjectEntry) data.Object { return dataObject },
+		)
+		require.NoError(t, err)
+	}
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(), table, objectio.NewObjectid(), types.TS{}, types.BuildTS(2, 0), nil, nil,
+	)
+	require.EqualError(t, err, "injected scan failure")
+	require.Nil(t, bat)
+	require.Equal(t, 2, dataObject.scans, "one candidate builds output before the next fails")
+	require.Nil(t, partial.Vecs[0], "the partially built batch must be closed on error")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestTombstoneRangeScanReturnsErrorWhenObjectDataIsUnavailable(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, true)
+	_, err = table.CreateCommittedObject(
+		types.BuildTS(1, 0),
+		&objectio.CreateObjOpt{Stats: stats, IsTombstone: true},
+		nil,
+	)
+	require.NoError(t, err)
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(), table, objectio.NewObjectid(), types.TS{}, types.BuildTS(2, 0), nil, nil,
+	)
+	require.ErrorContains(t, err, "tombstone object data is unavailable")
+	require.Nil(t, bat)
 }
 
 func TestTombstoneRangeScanKeepsOlderAppendableCandidates(t *testing.T) {

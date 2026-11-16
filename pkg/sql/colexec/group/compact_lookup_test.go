@@ -32,11 +32,12 @@ import (
 
 func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		columns int
-		spill   int64
+		name       string
+		columns    int
+		dictionary bool
+		spill      int64
 	}{
-		{"single", 1, 0}, {"tuple", 2, 0}, {"spill", 2, 2},
+		{"single", 1, false, 0}, {"tuple", 2, false, 0}, {"spill", 2, false, 2}, {"dictionary", 2, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -70,6 +71,21 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 				expected[canonical]++
 			}
 			input.SetRowCount(rows)
+			if tc.dictionary {
+				mapping := make([]int64, rows)
+				for i := range mapping {
+					mapping[i] = int64(rows - 1 - i)
+				}
+				selected := make([]*vector.Vector, tc.columns)
+				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, mapping, rows, proc.Mp(), nil)
+				require.NoError(t, err)
+				require.True(t, admitted)
+				for _, source := range input.Vecs {
+					source.Free(proc.Mp())
+				}
+				input.Vecs = selected
+			}
+
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 			g := newGroupOp(proc, exprs, []aggexec.AggFuncExecExpression{countStarAgg()})
 			g.SpillMem = tc.spill

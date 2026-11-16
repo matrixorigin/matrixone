@@ -1041,7 +1041,7 @@ func useAssignmentStrictCast(targetType Type) bool {
 		return true
 	}
 	switch targetType.Id {
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_binary), int32(types.T_varbinary), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
 	case int32(types.T_blob), int32(types.T_text):
 		return true
@@ -1053,6 +1053,8 @@ func useAssignmentStrictCast(targetType Type) bool {
 func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text)
 }
@@ -1334,6 +1336,8 @@ func rePoliceUnsignedDecimalAssignmentBoundary(
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return isMediumIntPlanType(targetType) ||
 		isAttributedDecimalPlanType(targetType) ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
@@ -1451,6 +1455,14 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	// Binary assignment semantics are authored for the supported same-version
+	// cluster; do not extend the existing old-peer gate to these types.
+	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
+		if isIgnore {
+			return "cast_ignore"
+		}
+		return "cast_assign"
+	}
 	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
 		return "cast_ignore"
 	}
@@ -2105,17 +2117,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		planType := MakePlan2TypeValue(colType)
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
 		expr := MakePlan2StringConstExprWithType(string(num))
 		// The plan-time width check in SetInsertValueString no longer rejects
-		// over-length CHAR/VARCHAR (relaxed to defer to sql_mode). Enforce width
+		// over-length text or binary strings (defer to sql_mode). Enforce width
 		// at runtime via the assignment cast (cast_assign / lenient for IGNORE).
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
+	case types.T_blob, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		// A BIT literal is the one origin kind in this case whose payload can
 		// bypass array parsing: SetInsertValueString's P_bit arm returns

@@ -56,7 +56,8 @@ type operator struct {
 
 	// Test-owned bootstrap handlers allow a real CN restart to cross an
 	// interrupted upgrade target without rewriting persisted upgrade records.
-	testingCNOptions []cnservice.Option
+	testingCNOptions  []cnservice.Option
+	testingLogOptions []logservice.Option
 
 	reset struct {
 		svc        service
@@ -301,12 +302,18 @@ func (op *operator) startLogServiceLocked(
 	fs fileservice.FileService,
 ) error {
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	options := []logservice.Option{
+		logservice.WithRuntime(op.reset.rt),
+		logservice.WithConfigData(commonConfigKVMap),
+	}
+	if op.testing {
+		options = append(options, op.testingLogOptions...)
+	}
 	s, err := logservice.NewService(
 		op.cfg.getLogServiceConfig(),
 		fs,
 		op.reset.shutdownC,
-		logservice.WithRuntime(op.reset.rt),
-		logservice.WithConfigData(commonConfigKVMap),
+		options...,
 	)
 	if err != nil {
 		return err

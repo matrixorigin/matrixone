@@ -41,6 +41,18 @@ val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from desc_col_30890_db.t30890 like 'Mix%';
 ➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 MixCase  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 'v%';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+va1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 'zz%';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]
+show columns from desc_col_30890_db.t30890 like 'v%';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+va1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 use desc_col_30890_db;
 desc t30890 val;
 ➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀

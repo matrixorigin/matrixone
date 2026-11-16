@@ -935,9 +935,9 @@ func (tbl *txnTable) collectTombstones(
 			tombstone.AppendInMemory(row)
 		}
 		if blocks == nil {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDs(appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDs(tbl.tableId, appendDeletedRow)
 		} else {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(blocks, appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(tbl.tableId, blocks, appendDeletedRow)
 		}
 
 		//collect uncommitted persisted tombstones.
@@ -2259,7 +2259,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
@@ -2534,7 +2534,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}

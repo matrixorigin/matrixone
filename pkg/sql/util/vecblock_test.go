@@ -18,8 +18,34 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetInsertValueStringVecBlock(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := types.New(oid, 3, 0)
+			literal := tree.NewNumVal("[1,-3,6]", "[1,-3,6]", false, tree.P_char)
+			canInsert, cell, err := SetInsertValueString(proc, literal, &typ)
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			got, err := types.BlockScaledToString(cell)
+			require.NoError(t, err)
+			require.Equal(t, "[1, -3, 6]", got)
+
+			short := tree.NewNumVal("[1,2]", "[1,2]", false, tree.P_char)
+			_, _, err = SetInsertValueString(proc, short, &typ)
+			require.ErrorContains(t, err, "expected vector dimension 3 != actual dimension 2")
+
+			invalid := tree.NewNumVal("[bad]", "[bad]", false, tree.P_char)
+			_, _, err = SetInsertValueString(proc, invalid, &typ)
+			require.Error(t, err)
+		})
+	}
+}
 
 func TestArrayUserVariableValueToBytesVecBlock(t *testing.T) {
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {

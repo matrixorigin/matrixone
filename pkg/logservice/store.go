@@ -673,7 +673,7 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		panic(err)
 	}
-	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
 		return err
 	}
 	l.addMetadata(shardID, replicaID, false)
@@ -696,7 +696,7 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		panic(err)
 	}
-	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
 		return err
 	}
 	l.addMetadata(shardID, replicaID, true)
@@ -704,6 +704,18 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 		l.onReplicaChanged(shardID, replicaID, AddReplica)
 	}
 	return nil
+}
+
+func (l *store) newStateMachine(shardID, replicaID uint64) sm.IStateMachine {
+	s := newStateMachine(shardID, replicaID).(*stateMachine)
+	s.entryTerm = func(index uint64) (uint64, error) {
+		reader, err := l.nh.GetLogReader(shardID)
+		if err != nil {
+			return 0, err
+		}
+		return reader.Term(index)
+	}
+	return s
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
@@ -884,12 +896,31 @@ func (l *store) propose(ctx context.Context,
 	session *cli.Session, cmd []byte) (sm.Result, error) {
 	count := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return sm.Result{}, dragonboat.ErrTimeout
+			}
+			return sm.Result{}, err
+		}
 		count++
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) ||
 				errors.Is(err, dragonboat.ErrSystemBusy) {
-				l.retryWait()
+				wait := time.Duration(l.nh.NodeHostConfig().RTTMillisecond/2) * time.Millisecond
+				if l.nh.NodeHostConfig().RTTMillisecond == 1 {
+					wait += time.Millisecond
+				}
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+						return sm.Result{}, dragonboat.ErrTimeout
+					}
+					return sm.Result{}, ctx.Err()
+				case <-timer.C:
+				}
 				continue
 			}
 			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
@@ -953,8 +984,36 @@ func (l *store) truncateLog(ctx context.Context,
 	return nil
 }
 
+func (l *store) truncateWAL(ctx context.Context, shardID uint64, psn, checkpointedDSN Lsn) error {
+	session := l.nh.GetNoOPSession(shardID)
+	result, err := l.propose(ctx, session, getWALTruncateCmd(psn, checkpointedDSN))
+	if err != nil {
+		return err
+	}
+	if result.Value != 0 {
+		return moerr.NewInvalidTruncateLsn(ctx, shardID, result.Value)
+	}
+	return nil
+}
+
+func (l *store) getWALTruncate(ctx context.Context, shardID uint64) (walTruncateState, error) {
+	v, err := l.read(ctx, shardID, walTruncateStateQuery{})
+	if err != nil {
+		return walTruncateState{}, err
+	}
+	return v.(walTruncateState), nil
+}
+
 func (l *store) append(ctx context.Context,
-	shardID uint64, cmd []byte) (Lsn, error) {
+	shardID uint64, cmd []byte, walRequest ...bool) (Lsn, error) {
+	wal := len(walRequest) != 0 && walRequest[0]
+	if wal {
+		// A proposal may already have committed when this deadline expires.
+		// WAL callers retry the same logical DSN and replay reconcile duplicates.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 7*time.Second)
+		defer cancel()
+	}
 	session := l.nh.GetNoOPSession(shardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
@@ -1539,10 +1598,67 @@ func (l *store) setRequiredLsn(ctx context.Context, shardID uint64, lsn Lsn) err
 		l.runtime.Logger().Error("propose set required lsn cmd failed", zap.Error(err))
 		return err
 	}
-	if result.Value > 0 {
-		l.runtime.Logger().Warn(fmt.Sprintf("shardID %d already set required to lsn %d", shardID, result.Value))
+	if len(result.Data) != 0 || result.Value > 0 {
+		return moerr.NewInternalErrorf(ctx,
+			"required LSN update rejected for shard %d at %d", shardID, result.Value)
 	}
 	return nil
+}
+
+func (l *store) setRequiredLsnIfCurrent(
+	ctx context.Context, shardID uint64, lsn, expectedLsn, revision, owner Lsn,
+) error {
+	leaderID, term, ok, err := l.nh.GetLeaderID(shardID)
+	if err != nil {
+		return err
+	}
+	state, err := l.getRequiredLsnState(ctx, shardID)
+	if err != nil {
+		return err
+	}
+	if !ok || state.term == 0 || leaderID != state.leaderID || term != state.term {
+		return moerr.NewInternalError(ctx, "required LSN owner is from an older leader term")
+	}
+	session := l.nh.GetNoOPSession(shardID)
+	result, err := l.propose(ctx, session,
+		getSetRequiredLsnIfCurrentCmd(lsn, expectedLsn, revision, owner))
+	if err != nil {
+		return err
+	}
+	if result.Value != 0 {
+		return moerr.NewInternalError(ctx, "required LSN revision conflict")
+	}
+	return nil
+}
+
+func (l *store) claimRequiredLsn(
+	ctx context.Context, shardID, expectedLsn, revision, owner, leaderTerm, leaderID uint64,
+) error {
+	currentLeader, currentTerm, ok, err := l.nh.GetLeaderID(shardID)
+	if err != nil {
+		return err
+	}
+	if !ok || currentLeader != leaderID || currentTerm != leaderTerm {
+		return moerr.NewInternalError(ctx, "required LSN claim is not from the current leader term")
+	}
+	session := l.nh.GetNoOPSession(shardID)
+	result, err := l.propose(ctx, session,
+		getClaimRequiredLsnCmd(expectedLsn, revision, owner, leaderTerm, leaderID))
+	if err != nil {
+		return err
+	}
+	if result.Value != 0 {
+		return moerr.NewInternalError(ctx, "required LSN claim conflict")
+	}
+	return nil
+}
+
+func (l *store) getRequiredLsnState(ctx context.Context, shardID uint64) (requiredLsnState, error) {
+	v, err := l.read(ctx, shardID, requiredLsnStateQuery{})
+	if err != nil {
+		return requiredLsnState{}, err
+	}
+	return v.(requiredLsnState), nil
 }
 
 func (l *store) getRequiredLsn(ctx context.Context, shardID uint64) (uint64, error) {
@@ -1921,12 +2037,17 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 
 // leaderID returns the leader ID of the specified shard.
 func (l *store) leaderID(shardID uint64) (uint64, error) {
-	leaderID, _, ok, err := l.nh.GetLeaderID(shardID)
+	leaderID, _, err := l.leaderState(shardID)
+	return leaderID, err
+}
+
+func (l *store) leaderState(shardID uint64) (uint64, uint64, error) {
+	leaderID, term, ok, err := l.nh.GetLeaderID(shardID)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if !ok {
-		return 0, nil
+		return 0, 0, nil
 	}
-	return leaderID, nil
+	return leaderID, term, nil
 }

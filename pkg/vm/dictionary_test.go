@@ -57,10 +57,14 @@ func (p *dictionaryTestProducer) DictionaryOutput() (bool, *vector.AllocationAcc
 
 type dictionaryTestConsumer struct {
 	testOperator
-	accepts bool
+	accepts   bool
+	ownsInput bool
 }
 
 func (p *dictionaryTestConsumer) AcceptsDictionary(child int) bool { return p.accepts && child == 0 }
+func (p *dictionaryTestConsumer) PrefersOwnedDictionaryInput(child int) bool {
+	return child == 0 && p.ownsInput
+}
 
 func dictionaryRuntimeFixture(t *testing.T) (*process.Process, *batch.Batch) {
 	t.Helper()
@@ -255,4 +259,88 @@ func TestDictionaryProducerCopyFailureAndReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{30, 10, 30}, vector.MustFixedColNoTypeCheck[int64](output.Batch.Vecs[0]))
 	require.True(t, input.HasDictionary())
+}
+
+// This forwarder can only use selected input when its destination accepts its
+// unchanged output. Updating the parent edge must reconfigure the source edge.
+type dictionaryTestForwarder struct{ *dictionaryTestProducer }
+
+func (p *dictionaryTestForwarder) AcceptsDictionary(child int) bool {
+	return child == 0 && p.boundary.AllowsDictionaryOutput()
+}
+
+func TestDictionaryForwarderPropagatesDestinationPermission(t *testing.T) {
+	source := newDictionaryTestProducer(nil)
+	forwarder := &dictionaryTestForwarder{newDictionaryTestProducer(nil)}
+	forwarder.AppendChild(source)
+	parent := &dictionaryTestConsumer{accepts: true}
+	parent.AppendChild(forwarder)
+	ConfigureDictionaryBoundaries(parent)
+	require.True(t, forwarder.boundary.AllowsDictionaryOutput())
+	require.True(t, source.boundary.AllowsDictionaryOutput())
+	parent.accepts = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, forwarder.boundary.AllowsDictionaryOutput())
+	require.False(t, source.boundary.AllowsDictionaryOutput())
+	require.True(t, source.boundary.required)
+}
+
+func TestDictionaryReusableBoundaryKeepsCapacityAndHeldSnapshots(t *testing.T) {
+	proc, input := dictionaryRuntimeFixture(t)
+	state := DictionaryOutputState{required: true}
+	t.Cleanup(state.BeginCall)
+	first, err := state.Normalize(input, proc.Mp())
+	require.NoError(t, err)
+	firstData := first.Vecs[0].GetData()
+	state.BeginReusableCall()
+	second, err := state.Normalize(input, proc.Mp())
+	require.NoError(t, err)
+	require.Same(t, first, second)
+	require.Same(t, &firstData[0], &second.Vecs[0].GetData()[0])
+	require.Equal(t, []int64{30, 10, 30}, vector.MustFixedColNoTypeCheck[int64](second.Vecs[0]))
+	base, err := vector.FreezeVector(second.Vecs[0], proc.Mp(), nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{0, 1, 2}, 3, proc.Mp(), nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	held, err := vector.NewDictionaryVector(base, rows, proc.Mp(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { held.Free(proc.Mp()) })
+	differentRows, err := vector.NewRowSelection([]int64{1, 1, 1}, 3, proc.Mp(), nil)
+	require.NoError(t, err)
+	t.Cleanup(differentRows.Release)
+	different, err := input.Vecs[0].SelectDictionary(differentRows, proc.Mp(), nil)
+	require.NoError(t, err)
+	next := batch.NewWithSize(1)
+	next.Vecs[0] = different
+	next.SetRowCount(3)
+	t.Cleanup(func() { next.Clean(proc.Mp()) })
+	state.BeginReusableCall()
+	third, err := state.Normalize(next, proc.Mp())
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 10, 10}, vector.MustFixedColNoTypeCheck[int64](third.Vecs[0]))
+	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](held, 0))
+	require.NotSame(t, &firstData[0], &third.Vecs[0].GetData()[0])
+}
+
+func TestDictionaryOwnedDemandPropagatesWithoutDisablingSelection(t *testing.T) {
+	source := newDictionaryTestProducer(nil)
+	forwarder := &dictionaryTestForwarder{newDictionaryTestProducer(nil)}
+	forwarder.AppendChild(source)
+	parent := &dictionaryTestConsumer{accepts: true, ownsInput: true}
+	parent.AppendChild(forwarder)
+	ConfigureDictionaryBoundaries(parent)
+	require.True(t, source.boundary.AllowsDictionaryOutput(), "selection remains admitted")
+	require.True(t, source.boundary.PrefersOwnedOutput())
+	require.True(t, forwarder.boundary.PrefersOwnedOutput())
+	parent.ownsInput = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, source.boundary.PrefersOwnedOutput(), "reconfiguration must clear stale ownership demand")
+	require.True(t, source.boundary.AllowsDictionaryOutput())
+	parent.ownsInput = true
+	parent.accepts = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, source.boundary.AllowsDictionaryOutput())
+	require.False(t, source.boundary.PrefersOwnedOutput())
 }

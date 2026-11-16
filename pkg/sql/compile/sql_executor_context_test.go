@@ -192,10 +192,15 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 		_, _ = c.ResolveAccountIds(nil)
 	}()
 
-	func() {
-		defer r()
-		_, _, _ = c.GetQueryResultMeta("")
-	}()
+	// GetQueryResultMeta is a delegated operation since CTAS-from-result_scan
+	// support: without a delegate - including the nil-context case above - it
+	// must return a clean typed internal error and no metadata, never panic.
+	cols, path, qerr := c.GetQueryResultMeta("")
+	require.Error(t, qerr)
+	require.True(t, moerr.IsMoErrCode(qerr, moerr.ErrInternal),
+		"want typed internal error, got %v", qerr)
+	require.Nil(t, cols)
+	require.Empty(t, path)
 }
 
 type recordingSessionCompilerContext struct {

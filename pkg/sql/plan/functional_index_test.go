@@ -393,7 +393,10 @@ func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
 	}{
 		{name: "same named column", expression: "lower('abc')", want: "lower('abc')", value: "abc"},
 		{name: "quoted literal", expression: "lower('a''b')", want: "lower('a''b')", value: "a'b"},
-		{name: "backslash literal", expression: `lower('a\\b')`, want: "lower(cast(0x615c62 as varchar))", value: "a\\b"},
+		// Width-preserving persistence: a backslash literal persists through
+		// the hex-introducer spelling, so the replay re-binds the authored
+		// character width instead of the widthless cast's MaxVarcharLen.
+		{name: "backslash literal", expression: `lower('a\\b')`, want: "lower(_utf8mb4 X'615c62')", value: "a\\b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			table := build("create table fi (abc varchar(40), index ix ((" + tc.expression + ")))")
@@ -408,6 +411,8 @@ func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
 			rebuiltOwner := functionalIndexColumn(rebuilt, rebuilt.Indexes[0])
 			require.Equal(t, tc.want, rebuiltOwner.GeneratedCol.OriginString)
 			require.Equal(t, tc.value, functionalIndexLiteralValue(rebuiltOwner.GeneratedCol.Expr))
+			require.Equal(t, owner.Typ.Id, rebuiltOwner.Typ.Id, "replay keeps the hidden key type")
+			require.Equal(t, owner.Typ.Width, rebuiltOwner.Typ.Width, "replay keeps the authored derived width exactly")
 		})
 	}
 }

@@ -25,6 +25,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLockIterWaiters(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		count     int
+		committed int
+		stopAfter int
+		want      []string
+	}{
+		{name: "empty", committed: -1},
+		{name: "one", count: 1, committed: -1, want: []string{"w1"}},
+		{name: "all", count: 3, committed: -1, want: []string{"w1", "w2", "w3"}},
+		{name: "stop-first", count: 3, committed: -1, stopAfter: 1, want: []string{"w1"}},
+		{name: "stop-second", count: 3, committed: -1, stopAfter: 2, want: []string{"w1", "w2"}},
+		{name: "uncommitted", count: 3, committed: 0},
+		{name: "committed-prefix", count: 3, committed: 2, want: []string{"w1", "w2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Only iteration is under test: these values own no pooled references
+			// or notification channels. Match the queue's committed-prefix boundary.
+			q := &sliceBasedWaiterQueue{beginChangeIdx: tc.committed}
+			for _, id := range []string{"w1", "w2", "w3"}[:tc.count] {
+				q.waiters = append(q.waiters, &waiter{txn: pb.WaitTxn{TxnID: []byte(id)}})
+			}
+			var got []string
+			Lock{waiters: q}.IterWaiters(func(w pb.WaitTxn) bool {
+				got = append(got, string(w.TxnID))
+				return tc.stopAfter == 0 || len(got) < tc.stopAfter
+			})
+			require.Equal(t, tc.want, got)
+			require.Len(t, q.waiters, tc.count, "observation must not consume waiters")
+		})
+	}
+}
+
 func TestTryHoldEmptyLockReturnsError(t *testing.T) {
 	l := Lock{
 		holders: newHolders(),

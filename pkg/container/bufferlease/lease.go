@@ -113,3 +113,17 @@ func (l *RefCounted) AccountedBytes() int64 {
 	}
 	return l.accounted
 }
+
+// TryDisown consumes the last reference without invoking its cleanup. Only the
+// original backing owner may use it to resume its original release authority.
+// The 1 -> 0 CAS excludes concurrent Retain; a failed attempt changes nothing.
+func (l *RefCounted) TryDisown() bool {
+	if l == nil || !l.refs.CompareAndSwap(1, 0) {
+		return false
+	}
+	l.mu.Lock()
+	l.data = nil
+	l.releaseOne = nil
+	l.mu.Unlock()
+	return true
+}

@@ -380,6 +380,19 @@ func TestSetMembershipRowWidth(t *testing.T) {
 	set.ProjectList[1].Typ.Width = 8
 	_, ok = setMembershipRowWidth(query, set)
 	require.True(t, ok, "a small declared bound can admit an otherwise unproved projection")
+	set.ProjectList[1].Typ.Width = 128
+	distinct := func(child int32) *plan.Node {
+		return &plan.Node{NodeType: plan.Node_AGG, Children: []int32{child},
+			GroupBy: plan2.DeepCopyExprList(cols), ProjectList: []*plan.Expr{
+				plan2.GetColExpr(cols[0].Typ, -1, 0), plan2.GetColExpr(cols[1].Typ, -1, 1)}}
+	}
+	query.Nodes[1], query.Nodes[3] = distinct(0), distinct(2)
+	width, ok = setMembershipRowWidth(query, set)
+	require.True(t, ok, "complete blocking DISTINCT outputs can use memory-admitted owners")
+	require.Greater(t, width, float64(128), "keep the declared bound for the budget")
+	query.Nodes[3].ProjectList = query.Nodes[3].ProjectList[:1]
+	_, ok = setMembershipRowWidth(query, set)
+	require.False(t, ok, "a projection losing a DISTINCT key can expose repeated wide rows")
 }
 
 func TestOwnedSetMembershipAdmission(t *testing.T) {
@@ -443,6 +456,9 @@ func TestOwnedSetMembershipAdmission(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, tc.want, result != nil)
+			if tc.name == "default" {
+				require.Len(t, result[0].PreScopes, 4, "two gathered inputs do not limit downstream work to two owners")
+			}
 		})
 	}
 	t.Run("cancelled entry", func(t *testing.T) {
@@ -534,9 +550,9 @@ func TestOwnedSetMembershipOwnerBoundaries(t *testing.T) {
 	}{
 		{"eight at boundary", 16, 16, 4, 4, eightOwnerHeadroom, 8},
 		{"one byte below boundary", 16, 16, 4, 4, eightOwnerHeadroom - 1, 4},
-		{"five workers", 16, 16, 3, 2, 1 << 30, 4},
-		{"seven workers", 16, 16, 4, 3, 1 << 30, 4},
-		{"three workers", 16, 16, 2, 1, 1 << 30, 3},
+		{"five producers", 16, 16, 3, 2, 1 << 30, 8},
+		{"seven producers", 16, 16, 4, 3, 1 << 30, 8},
+		{"three producers", 16, 16, 2, 1, 1 << 30, 8},
 		{"seven cpus", 7, 16, 4, 4, 1 << 30, 4},
 		{"max dop seven", 16, 7, 4, 4, 1 << 30, 4},
 	} {

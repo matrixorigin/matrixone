@@ -110,8 +110,15 @@ func TestCastToVecBlock(t *testing.T) {
 			_, err = runVecBlockCast(t, proc, out, types.New(types.T_array_float32, 4, 0))
 			require.Error(t, err, "vecblock -> vecf32 dim")
 
+			// vecf64 target dequantizes
+			wide, err := runVecBlockCast(t, proc, out, types.New(types.T_array_float64, 3, 0))
+			require.NoError(t, err)
+			require.Equal(t, []float64{1, 2, 3}, types.BytesToArray[float64](wide.GetBytesAt(0)))
+			_, err = runVecBlockCast(t, proc, out, types.New(types.T_array_float64, 4, 0))
+			require.Error(t, err, "vecblock -> vecf64 dim")
+
 			// unsupported target
-			_, err = runVecBlockCast(t, proc, out, types.New(types.T_array_float64, 3, 0))
+			_, err = runVecBlockCast(t, proc, out, types.New(types.T_array_bf16, 3, 0))
 			require.Error(t, err)
 		})
 	}
@@ -158,7 +165,8 @@ func TestCastVecBlockRegistered(t *testing.T) {
 		}
 		require.Contains(t, supportedTypeCast[oid], types.T_array_float32)
 		require.NotContains(t, supportedTypeCast[oid], types.T_varchar)
-		require.NotContains(t, supportedTypeCast[oid], types.T_array_float64)
+		require.Contains(t, supportedTypeCast[oid], types.T_array_float64)
+		require.NotContains(t, supportedTypeCast[oid], types.T_array_bf16)
 	}
 }
 

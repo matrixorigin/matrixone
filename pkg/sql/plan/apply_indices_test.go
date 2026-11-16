@@ -910,6 +910,45 @@ func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	require.Nil(t, indexScan.IndexReaderParam)
 }
 
+func TestScopedForceIndexPreservesFilterEvaluationDomain(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		hint   string
+		suffix string
+	}{
+		{name: "order by", hint: "force index for order by(idx_a)", suffix: "order by a"},
+		{name: "group by", hint: "force index for group by(idx_a)", suffix: "group by a"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			planScan := func(t *testing.T, inValue string) *planpb.Node {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+
+				queryPlan, err := runOneStmt(likePrefixPlanOptimizer(mock, 32768), t,
+					"select a from index_hint_t "+test.hint+
+						" where a like 'abc%' and a in ("+inValue+",'abc1') "+test.suffix)
+				require.NoError(t, err)
+				indexScan := findFirstIndexScanNode(queryPlan)
+				require.NotNil(t, indexScan)
+				require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+				require.NotEmpty(t, indexScan.FilterList)
+				return indexScan
+			}
+
+			t.Run("throwing bounds retain decoded filters", func(t *testing.T) {
+				indexScan := planScan(t, "regexp_replace('x','[','y')")
+				requireFuncNames(t, indexScan.FilterList, "in")
+				requireNoFuncNames(t, indexScan.FilterList, "prefix_in", "prefix_between", "prefix_in_range")
+			})
+			t.Run("literal bounds retain serialized access", func(t *testing.T) {
+				indexScan := planScan(t, "'abcX'")
+				requireFuncNames(t, indexScan.FilterList, "prefix_in")
+			})
+		})
+	}
+}
+
 func TestForceIndexOrderAcceptsEqualityFixedLeadingPrefix(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -4713,7 +4752,17 @@ func TestEncodedIndexCostDoesNotCapResidualLimit(t *testing.T) {
 		order by amount, activity_id
 		limit 1000`)
 	require.NoError(t, err)
-	assert.Empty(t, findFirstIndexScanName(queryPlan))
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_state_amount_activity", indexScan.IndexScanInfo.IndexName)
+	// The suffix range lowers candidate rows without LIMIT. Both encoded bounds
+	// retain exact SQL residuals, which disable the candidate-input LIMIT cap.
+	require.Len(t, indexScan.FilterList, 3)
+	require.Equal(t, "prefix_between", indexScan.FilterList[0].GetF().Func.ObjName)
+	require.Equal(t, "=", indexScan.FilterList[1].GetF().Func.ObjName)
+	require.Equal(t, "between", indexScan.FilterList[2].GetF().Func.ObjName)
+	require.False(t, canPushRegularIndexOrderedLimit(indexScan))
+	require.Nil(t, indexScan.IndexReaderParam)
 	assert.False(t, planHasIndexJoin(queryPlan))
 }
 
@@ -9342,6 +9391,371 @@ func TestRegularIndexSelectorCoalescesRangePair(t *testing.T) {
 		require.Equal(t, ">", indexScan.FilterList[1].GetF().Func.ObjName)
 		require.Equal(t, "<=", indexScan.FilterList[2].GetF().Func.ObjName)
 	})
+}
+
+func TestRegularIndexRangeAccessControls(t *testing.T) {
+	t.Run("forced leading between uses a serialized lookup", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select id, a from index_hint_t force index(idx_a) where a between 1 and 10")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+		require.NotEmpty(t, indexScan.FilterList)
+		lookup := indexScan.FilterList[0].GetF()
+		require.NotNil(t, lookup)
+		require.Equal(t, "prefix_between", lookup.Func.ObjName)
+		require.Len(t, lookup.Args, 3)
+		for _, arg := range lookup.Args[1:] {
+			require.Equal(t, "serial", wrappedSerialFuncName(t, arg))
+			require.Len(t, arg.GetF().Args, 1)
+		}
+	})
+
+	t.Run("forced count distinct between uses a serialized lookup", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select count(distinct a) from index_hint_t force index(idx_a) where a between 1 and 10")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+		require.NotEmpty(t, indexScan.FilterList)
+		require.Equal(t, "prefix_between", indexScan.FilterList[0].GetF().Func.ObjName)
+	})
+
+	t.Run("default range join uses a serialized lookup", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t, `
+			select count(*)
+			from index_hint_t t1 join index_hint_t t2 on t1.a = t2.a
+			where t1.a < 100`)
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.NotEmpty(t, indexScan.FilterList)
+		lookup := indexScan.FilterList[0].GetF()
+		require.NotNil(t, lookup)
+		require.Equal(t, "<", lookup.Func.ObjName)
+		require.Equal(t, "serial", wrappedSerialFuncName(t, lookup.Args[1]))
+		require.Zero(t, countExprFunctionCalls(indexScan.FilterList[:1], "serial_extract"))
+	})
+}
+
+func TestRegularIndexCompositeSuffixRangeDefaultSelection(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "category")
+	leading.Selectivity = 0.01
+	suffix := makeTypedInt64RangeFilterExpr(0, 0, ">=", 100, planpb.Type{Id: int32(types.T_int32)})
+	suffix.Selectivity = 0.01
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, suffix},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 80, Selectivity: 0.0001, Cost: 800_000},
+		map[int32]int{0: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		fn := filter.GetF()
+		fn.Args[0].GetCol().RelPos = node.BindingTags[0]
+		argTypes := make([]types.Type, len(fn.Args))
+		for i, arg := range fn.Args {
+			argTypes[i] = makeTypeByPlan2Expr(arg)
+		}
+		overload, err := function.GetFunctionByName(builder.GetContext(), fn.Func.ObjName, argTypes)
+		require.NoError(t, err)
+		fn.Func.Obj = overload.GetEncodedOverloadID()
+	}
+	require.True(t, regularIndexFiltersHaveStableEvaluation(node))
+
+	indexRoot := planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+	require.True(t, isCoveringIndexScan(indexRoot))
+	require.NotEmpty(t, indexRoot.FilterList)
+	require.Equal(t, "prefix_in_range", indexRoot.FilterList[0].GetF().Func.ObjName)
+	require.Len(t, indexRoot.FilterList, 3)
+	require.Equal(t, "=", indexRoot.FilterList[1].GetF().Func.ObjName)
+	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, indexRoot.FilterList[1].GetF().Args[0]))
+	require.Equal(t, ">=", indexRoot.FilterList[2].GetF().Func.ObjName)
+}
+
+func TestRegularIndexCompositeSuffixRangePreservesFilterEvaluationDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		bound      string
+		wantLookup string
+	}{
+		{name: "throwing suffix retains equality prefix", bound: "regexp_replace('x','[','y')", wantLookup: "prefix_eq"},
+		{name: "literal suffix retains serialized range", bound: "'x'", wantLookup: "prefix_in_range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			table.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+			table.Indexes = table.Indexes[:2]
+
+			queryPlan, err := runOneStmt(mock, t,
+				"select a,b from index_hint_t where a=99 and b>"+tc.bound)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.NotEmpty(t, indexScan.FilterList)
+			require.Equal(t, tc.wantLookup, indexScan.FilterList[0].GetF().Func.ObjName)
+			requireFuncNames(t, indexScan.FilterList, ">")
+		})
+	}
+}
+
+func TestRegularIndexCompositeSuffixRange(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t,
+		"select id, a, b from index_hint_t force index(idx_ab) where a = 9 and b > 90")
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+	require.NotEmpty(t, indexScan.FilterList)
+
+	bound := requireTestRegularIndexCursorRange(t, indexScan.FilterList[0], 1, ">")
+	require.Equal(t, int32(90), bound.GetLit().GetI32Val())
+	require.Len(t, indexScan.FilterList, 2)
+	residual := indexScan.FilterList[1].GetF()
+	require.NotNil(t, residual)
+	require.Equal(t, ">", residual.Func.ObjName)
+	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, residual.Args[0]))
+}
+
+func TestRegularIndexCompositeSuffixRangeBounds(t *testing.T) {
+	planScan := func(t *testing.T, where string, prepare func(*MockOptimizer)) *planpb.Node {
+		t.Helper()
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+		if prepare != nil {
+			prepare(mock)
+		}
+		queryPlan, err := runOneStmt(mock, t,
+			"select id, a, b from index_hint_t force index(idx_ab) where "+where)
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+		require.NotEmpty(t, indexScan.FilterList)
+		return indexScan
+	}
+
+	t.Run("one-sided and commuted bounds", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			where string
+			op    string
+			bound int32
+		}{
+			{name: "closed lower", where: "a = 9 and b >= 90", op: ">=", bound: 90},
+			{name: "open upper", where: "a = 9 and b < 100", op: "<", bound: 100},
+			{name: "closed upper", where: "a = 9 and b <= 100", op: "<=", bound: 100},
+			{name: "commuted equality", where: "9 = a and 90 < b", op: ">", bound: 90},
+			{name: "commuted range", where: "a = 9 and 100 > b", op: "<", bound: 100},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				indexScan := planScan(t, tt.where, nil)
+				bound := requireTestRegularIndexCursorRange(t, indexScan.FilterList[0], 1, tt.op)
+				require.Equal(t, tt.bound, bound.GetLit().GetI32Val())
+				require.Len(t, indexScan.FilterList, 2)
+				require.Positive(t, countExprFunctionCalls(indexScan.FilterList[1:], "serial_extract"))
+			})
+		}
+	})
+
+	requirePair := func(t *testing.T, indexScan *planpb.Node, name string, flag uint32, hasFlag bool) {
+		t.Helper()
+		lookup := indexScan.FilterList[0].GetF()
+		require.NotNil(t, lookup)
+		require.Equal(t, name, lookup.Func.ObjName)
+		expectedArgs := 3
+		if hasFlag {
+			expectedArgs = 4
+		}
+		require.Len(t, lookup.Args, expectedArgs)
+		if hasFlag {
+			require.Equal(t, flag, lookup.Args[3].GetLit().GetU8Val())
+		}
+		for i, bound := range []int32{90, 100} {
+			serial := lookup.Args[i+1].GetF()
+			require.NotNil(t, serial)
+			require.Equal(t, "serial", serial.Func.ObjName)
+			require.Len(t, serial.Args, 2)
+			require.Equal(t, int32(9), serial.Args[0].GetLit().GetI32Val())
+			require.Equal(t, bound, serial.Args[1].GetLit().GetI32Val())
+		}
+	}
+
+	for _, tt := range []struct {
+		name       string
+		index      string
+		closed     bool
+		closedPair bool
+		lookupName string
+		flag       uint32
+	}{
+		{name: "nonunique open pair", index: "idx_ab", lookupName: "prefix_in_range", flag: 3},
+		{name: "nonunique closed pair", index: "idx_ab", closed: true, lookupName: "prefix_between"},
+		{name: "nonunique closed comparison pair", index: "idx_ab", closedPair: true, lookupName: "prefix_between"},
+		{name: "unique open pair", index: "uk_ab", lookupName: "in_range", flag: 3},
+		{name: "unique closed pair", index: "uk_ab", closed: true, lookupName: "between"},
+		{name: "unique closed comparison pair", index: "uk_ab", closedPair: true, lookupName: "between"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			where := "a = 9 and b > 90 and b < 100"
+			if tt.closed {
+				where = "a = 9 and b between 90 and 100"
+			} else if tt.closedPair {
+				where = "a = 9 and b >= 90 and b <= 100"
+			}
+			projection := "id, a, b"
+			if tt.index == "uk_ab" {
+				projection = "a, b" // A unique key has no hidden primary-key part.
+			}
+			queryPlan, err := runOneStmt(mock, t,
+				"select "+projection+" from index_hint_t force index("+tt.index+") where "+where)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, tt.index, indexScan.IndexScanInfo.IndexName)
+			requirePair(t, indexScan, tt.lookupName, tt.flag, tt.flag != 0)
+			if tt.closed {
+				require.Len(t, indexScan.FilterList, 2)
+				require.Equal(t, "between", indexScan.FilterList[1].GetF().Func.ObjName)
+			} else {
+				require.Len(t, indexScan.FilterList, 3)
+				wantResiduals := []string{">", "<"}
+				if tt.closedPair {
+					wantResiduals = []string{">=", "<="}
+				}
+				require.ElementsMatch(t, wantResiduals, []string{
+					indexScan.FilterList[1].GetF().Func.ObjName,
+					indexScan.FilterList[2].GetF().Func.ObjName,
+				})
+			}
+		})
+	}
+
+	t.Run("byte string open lower bound is widened and rechecked", func(t *testing.T) {
+		indexScan := planScan(t, "a = 9 and b > 'a'", func(mock *MockOptimizer) {
+			mock.ctxt.tables["index_hint_t"].Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 16}
+		})
+		lookup := indexScan.FilterList[0].GetF()
+		require.NotNil(t, lookup)
+		require.Equal(t, "prefix_in_range", lookup.Func.ObjName)
+		require.Len(t, lookup.Args, 4)
+		require.Zero(t, lookup.Args[3].GetLit().GetU8Val())
+		require.Len(t, lookup.Args[1].GetF().Args, 2)
+		require.Len(t, lookup.Args[2].GetF().Args, 1)
+		require.Len(t, indexScan.FilterList, 2)
+		require.Equal(t, ">", indexScan.FilterList[1].GetF().Func.ObjName)
+	})
+
+	for _, tt := range []struct {
+		name     string
+		typ      planpb.Type
+		equality string
+	}{
+		{name: "varchar equality prefix", typ: planpb.Type{Id: int32(types.T_varchar), Width: 16}, equality: "a = 'a'"},
+		{name: "varbinary equality prefix", typ: planpb.Type{Id: int32(types.T_varbinary), Width: 16}, equality: "a = cast('a' as binary)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, op := range []string{">", ">="} {
+				t.Run(op, func(t *testing.T) {
+					indexScan := planScan(t, tt.equality+" and b "+op+" 90", func(mock *MockOptimizer) {
+						mock.ctxt.tables["index_hint_t"].Cols[1].Typ = tt.typ
+					})
+					require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
+					require.Len(t, indexScan.FilterList, 3)
+					require.Equal(t, "=", indexScan.FilterList[1].GetF().Func.ObjName)
+					require.Equal(t, "serial_extract", wrappedSerialFuncName(t, indexScan.FilterList[1].GetF().Args[0]))
+					require.Equal(t, op, indexScan.FilterList[2].GetF().Func.ObjName)
+				})
+			}
+		})
+	}
+
+	t.Run("lossless and rounding decimal bounds", func(t *testing.T) {
+		decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+		prepare := func(mock *MockOptimizer) {
+			mock.ctxt.tables["index_hint_t"].Cols[2].Typ = decimalType
+		}
+		lossless := planScan(t, "a = 9 and b > 90.55", prepare)
+		require.Equal(t, "prefix_in_range", lossless.FilterList[0].GetF().Func.ObjName)
+
+		rounding := planScan(t, "a = 9 and b > 90.555", prepare)
+		require.Equal(t, "prefix_eq", rounding.FilterList[0].GetF().Func.ObjName)
+		require.Len(t, rounding.FilterList, 2)
+		require.Equal(t, ">", rounding.FilterList[1].GetF().Func.ObjName)
+	})
+
+	t.Run("exact equality and unrelated range remain controls", func(t *testing.T) {
+		exact := planScan(t, "a = 9 and b = 90", nil)
+		require.Equal(t, "prefix_eq", exact.FilterList[0].GetF().Func.ObjName)
+		require.Len(t, exact.FilterList, 1)
+
+		unrelated := planScan(t, "a = 9 and id > 90", nil)
+		require.Equal(t, "prefix_eq", unrelated.FilterList[0].GetF().Func.ObjName)
+		require.Len(t, unrelated.FilterList, 2)
+		require.Equal(t, ">", unrelated.FilterList[1].GetF().Func.ObjName)
+	})
+}
+
+func TestRegularIndexUniqueSuffixRangeRequiresCompleteRowSource(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		where     string
+		wantIndex bool
+	}{
+		{name: "paired range leaves nullable trailing part unconstrained", where: "a = 9 and b > 90 and b < 100"},
+		{name: "paired range rejects null in trailing part", where: "a = 9 and b > 90 and b < 100 and c is not null", wantIndex: true},
+		{name: "one-sided range leaves nullable trailing part unconstrained", where: "a = 9 and b > 90"},
+		{name: "one-sided range rejects null in trailing part", where: "a = 9 and b > 90 and c is not null", wantIndex: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			tableDef := mock.ctxt.tables["index_hint_t"]
+			tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+				ColId: 4, Name: "c", OriginName: "c",
+				Typ:     planpb.Type{Id: int32(types.T_int32)},
+				Default: &planpb.Default{NullAbility: true},
+			})
+			tableDef.Name2ColIndex["c"] = 4
+			unique := tableDef.Indexes[2]
+			unique.IndexName = "uk_abc"
+			unique.IndexTableName = "uk_hint_abc"
+			unique.Parts = []string{"a", "b", "c"}
+			tableDef.Indexes = []*planpb.IndexDef{unique}
+			addIndexHintIndexTableForTest(mock, unique.IndexTableName, 25361)
+
+			queryPlan, err := runOneStmt(mock, t, "select a, b from index_hint_t where "+tt.where)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			if tt.wantIndex {
+				require.NotNil(t, indexScan)
+				require.Equal(t, unique.IndexName, indexScan.IndexScanInfo.IndexName)
+			} else {
+				require.Nil(t, indexScan, "an incomplete unique index must not replace the base-table row source")
+			}
+		})
+	}
 }
 
 func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
