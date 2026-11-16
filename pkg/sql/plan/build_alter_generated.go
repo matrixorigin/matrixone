@@ -93,9 +93,7 @@ func alterCopyPreservedGeneratedColumns(old, target *TableDef, alterCtx *AlterTa
 		if !ok || source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, src.Name) {
 			return false
 		}
-		a, b := src.Typ, dst.Typ
-		if a.Id != b.Id || a.NotNullable != b.NotNullable || a.AutoIncr != b.AutoIncr ||
-			a.Width != b.Width || a.Scale != b.Scale || a.Enumvalues != b.Enumvalues {
+		if !alterCopyTypeValueUnchanged(&src.Typ, &dst.Typ, true) {
 			return false
 		}
 		if src.GeneratedCol != nil {
