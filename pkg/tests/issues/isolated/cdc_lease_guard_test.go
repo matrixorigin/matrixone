@@ -67,6 +67,9 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=45s&writeTimeout=45s", first.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	secondDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=45s&writeTimeout=45s", second.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, secondDB.Close()) })
 	const taskID = "00000000-0000-0000-0000-000000000777"
 	result, err := first.RawService().(cnservice.Service).GetSQLExecutor().Exec(ctx, "insert into mo_catalog.mo_cdc_task(account_id,task_id,task_name,source_uri,sink_uri,tables,state,err_msg) values(0,'"+taskID+"','owned-cdc-probe','','','{}','restarting','')", executor.Options{}.WithAccountID(0))
 	require.NoError(t, err)
@@ -93,6 +96,23 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 		var state string
 		require.NoError(t, db.QueryRowContext(ctx, "select state from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&state))
 		return state
+	}
+	// The storage pool can use either CN. A successful transition must be
+	// visible on both before the next independent control is exercised.
+	waitCatalog := func(expected string) {
+		t.Helper()
+		var readErr error
+		require.Eventually(t, func() bool {
+			for _, reader := range []*sql.DB{db, secondDB} {
+				var state string
+				readErr = reader.QueryRowContext(ctx, "select state from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&state)
+				if readErr != nil || state != expected {
+					return readErr != nil
+				}
+			}
+			return true
+		}, 30*time.Second, 100*time.Millisecond, "committed catalog state must reach both CNs")
+		require.NoError(t, readErr)
 	}
 	withOptimisticTakeover := func(update func()) {
 		t.Helper()
@@ -146,8 +166,29 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 		}, 30*time.Second, 100*time.Millisecond, "successor owner must be visible before the stale transaction commits")
 		require.NoError(t, readErr)
 	}
+	// Task storage can commit and read through different CNs. Wait for a
+	// successful transition to reach the reader before asserting its fields.
+	waitTask := func(status task.TaskStatus, runner string) task.DaemonTask {
+		t.Helper()
+		var observed []task.DaemonTask
+		var readErr error
+		require.Eventually(t, func() bool {
+			for _, reader := range []*sql.DB{db, secondDB} {
+				var actualStatus int32
+				var actualRunner string
+				readErr = reader.QueryRowContext(ctx, "select task_status,coalesce(task_runner,'') from mo_task.sys_daemon_task where task_id=?", owner.DaemonID).Scan(&actualStatus, &actualRunner)
+				if readErr != nil || actualStatus != int32(status) || actualRunner != runner {
+					return readErr != nil
+				}
+			}
+			observed, readErr = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
+			return readErr != nil || (len(observed) == 1 && observed[0].TaskStatus == status && observed[0].TaskRunner == runner)
+		}, 30*time.Second, 100*time.Millisecond, "committed task state must reach both CNs")
+		require.NoError(t, readErr)
+		return observed[0]
+	}
 	require.NoError(t, ts.UpdateOwnedCDCTask(ctx, owner, taskservice.CDCTaskTransition{Status: task.TaskStatus_Running}, setState("running")), "matched owner no-op task status must commit")
-	require.Equal(t, "running", readState())
+	waitCatalog("running")
 	// A successor may use an optimistic transaction and bypass the old CN's
 	// pessimistic row lock. It must still win if it commits after the guard.
 	require.True(t, fault.Enable())
@@ -286,12 +327,9 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	// later records the new run and heartbeat with the Running transition.
 	require.NoError(t, ts.UpdateOwnedCDCTask(ctx, owner,
 		taskservice.CDCTaskTransition{Status: task.TaskStatus_RestartRequested, ReleaseLease: true}, setState("restarting")))
-	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-	require.NoError(t, err)
-	require.Equal(t, task.TaskStatus_RestartRequested, rows[0].TaskStatus)
-	require.Empty(t, rows[0].TaskRunner)
+	rows[0] = waitTask(task.TaskStatus_RestartRequested, "")
 	require.True(t, rows[0].LastHeartbeat.IsZero())
-	require.Equal(t, "restarting", readState())
+	waitCatalog("restarting")
 
 	rows[0].TaskRunner = second.ServiceID()
 	n, err = ts.UpdateDaemonTask(ctx, rows)
@@ -301,12 +339,10 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	started := time.Now().Truncate(time.Second)
 	require.NoError(t, ts.UpdateOwnedCDCTask(ctx, owner,
 		taskservice.CDCTaskTransition{Status: task.TaskStatus_Running, StartedAt: started}, setState("running")))
-	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-	require.NoError(t, err)
-	require.Equal(t, task.TaskStatus_Running, rows[0].TaskStatus)
+	rows[0] = waitTask(task.TaskStatus_Running, second.ServiceID())
 	require.Equal(t, started.Unix(), rows[0].LastRun.Unix())
 	require.Equal(t, started.Unix(), rows[0].LastHeartbeat.Unix())
-	require.Equal(t, "running", readState())
+	waitCatalog("running")
 
 	owner.Status = task.TaskStatus_Running
 	const failure = "permanent table error"
@@ -315,15 +351,8 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 			_, e := tx.ExecContext(c, "update mo_catalog.mo_cdc_task set state='failed', err_msg=? where account_id=0 and task_id=? and state='running'", failure, taskID)
 			return e
 		}))
-	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-	require.NoError(t, err)
-	var statusErr error
-	require.Eventually(t, func() bool {
-		rows, statusErr = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-		return statusErr == nil && len(rows) == 1 && rows[0].TaskStatus == task.TaskStatus_Error
-	}, 30*time.Second, 100*time.Millisecond, "terminal task status must become visible after CDC publication commits")
-	require.Equal(t, task.TaskStatus_Error, rows[0].TaskStatus)
-	require.Equal(t, "failed", readState())
+	rows[0] = waitTask(task.TaskStatus_Error, owner.Runner)
+	waitCatalog("failed")
 	require.Error(t, ts.UpdateOwnedCDCTask(ctx, owner, taskservice.CDCTaskTransition{Status: task.TaskStatus_Running}, setState("running")))
 	require.Equal(t, "failed", readState(), "an old running owner must not erase a terminal failure")
 	var diagnostic string
@@ -382,10 +411,8 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	_, err = ts.UpdateCDCTask(ctx, task.TaskStatus_RestartRequested,
 		prepareRestart, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
 	require.NoError(t, err)
-	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-	require.NoError(t, err)
-	require.Equal(t, task.TaskStatus_RestartRequested, rows[0].TaskStatus)
-	require.Equal(t, "restarting", readState())
+	rows[0] = waitTask(task.TaskStatus_RestartRequested, owner.Runner)
+	waitCatalog("restarting")
 	require.NoError(t, db.QueryRowContext(ctx, "select err_msg from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&diagnostic))
 	require.Equal(t, failure, diagnostic, "restart admission must preserve the cause until startup succeeds")
 
@@ -404,7 +431,7 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	setCatalogState("failed")
-	require.Equal(t, "failed", readState())
+	waitCatalog("failed")
 	claim := rows[0]
 	claim.TaskStatus = task.TaskStatus_Running
 	claim.TaskRunner = second.ServiceID()
@@ -429,19 +456,18 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	setCatalogState("paused")
+	waitCatalog("paused")
 	claimed, err = ts.GetStorage().ClaimCDCRestart(ctx, claim, first.ServiceID(), staleBefore)
 	require.NoError(t, err)
 	require.False(t, claimed, "a paused catalog must not be reopened by an old restart")
 	require.Equal(t, "paused", readState())
 	setCatalogState("failed")
+	waitCatalog("failed")
 	claimed, err = ts.GetStorage().ClaimCDCRestart(ctx, claim, first.ServiceID(), staleBefore)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-	require.NoError(t, err)
-	require.Equal(t, task.TaskStatus_Running, rows[0].TaskStatus)
-	require.Equal(t, second.ServiceID(), rows[0].TaskRunner)
-	require.Equal(t, "restarting", readState())
+	rows[0] = waitTask(task.TaskStatus_Running, second.ServiceID())
+	waitCatalog("restarting")
 	require.NoError(t, db.QueryRowContext(ctx, "select err_msg from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&diagnostic))
 	require.Equal(t, failure, diagnostic)
 
@@ -591,9 +617,7 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 		claimed, err = ts.GetStorage().ClaimCDCRestart(ctx, claim, "", staleBefore)
 		require.NoError(t, err)
 		require.True(t, claimed, "unassigned restart with nullRunner=%t", nullRunner)
-		require.Equal(t, "restarting", readState())
-		rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
-		require.NoError(t, err)
-		require.Equal(t, second.ServiceID(), rows[0].TaskRunner)
+		waitCatalog("restarting")
+		rows[0] = waitTask(task.TaskStatus_Running, second.ServiceID())
 	}
 }

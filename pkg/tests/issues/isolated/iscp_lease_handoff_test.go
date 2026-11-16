@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
@@ -203,6 +205,7 @@ func TestISCPManagedLeaseHandoff(t *testing.T) {
 	var nearest int64
 	require.NoError(t, conn.QueryRowContext(ctx, "select id from h order by l2_distance(v,'[0,0,0]') limit 1").Scan(&nearest))
 	require.Equal(t, int64(6), nearest)
+	verifyRepairDuringHeartbeat(t, ctx, first, second, conn, ts, tableID, jobID)
 	verifyOptimisticLeaseConflict(t, ctx, first, second, conn, ts)
 }
 
@@ -576,4 +579,113 @@ func verifyISCPRepairDoesNotUndoOptimisticUnregister(t *testing.T, ctx context.C
 	).Scan(&dropped, &jobState))
 	require.True(t, dropped)
 	require.Equal(t, iscp.ISCPJobState_Running, jobState, "subsequent repair must skip retired history")
+}
+
+// Inject a same-owner heartbeat after candidate work and before the lease
+// guard. The scan must not make a healthy owner lose the repair transaction.
+func verifyRepairDuringHeartbeat(t *testing.T, ctx context.Context, first, second embed.ServiceOperator, conn *sql.Conn, ts taskservice.TaskService, tableID, jobID uint64) {
+	t.Helper()
+	var daemonID uint64
+	var owner string
+	require.NoError(t, conn.QueryRowContext(ctx, "select task_id, task_runner from mo_task.sys_daemon_task where task_type='ISCP'").Scan(&daemonID, &owner))
+	old, ok := iscp.GetExecutorRuntime(owner)
+	require.True(t, ok)
+	require.NoError(t, old.Cancel())
+	require.Eventually(t, func() bool { _, ok := iscp.GetExecutorRuntime(owner); return !ok }, 10*time.Second, 10*time.Millisecond)
+
+	ownerCN := first
+	if owner != first.ServiceID() {
+		ownerCN = second
+	}
+	require.Equal(t, owner, ownerCN.ServiceID())
+	svc := ownerCN.RawService().(cnservice.Service)
+	sysCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	execSQL := func(query string, affected uint64) {
+		t.Helper()
+		result, err := svc.GetSQLExecutor().Exec(sysCtx, query, executor.Options{}.WithAccountID(0))
+		defer result.Close()
+		require.NoError(t, err)
+		require.Equal(t, affected, result.AffectedRows)
+	}
+	execSQL(fmt.Sprintf("update mo_catalog.mo_iscp_log set job_state=%d where account_id=0 and table_id=%d and job_name='index_hv' and job_id=%d", iscp.ISCPJobState_Running, tableID, jobID), 1)
+	// Cross the 128-key batch boundary using copies of an existing valid job.
+	seedSQL := fmt.Sprintf(`insert into mo_catalog.mo_iscp_log (account_id,table_id,job_name,job_id,job_spec,job_state,watermark,job_status,create_at,drop_at)
+        select j.account_id,j.table_id,concat('repair_probe_', cast(g.result as varchar(32))),j.job_id+10000+g.result,j.job_spec,%d,j.watermark,j.job_status,j.create_at,null
+        from mo_catalog.mo_iscp_log j cross join generate_series(1,128) g
+        where j.account_id=0 and j.table_id=%d and j.job_name='index_hv' and j.job_id=%d`, iscp.ISCPJobState_Running, tableID, jobID)
+	execSQL(seedSQL, 128)
+	// A previous executor can start another job after this scan begins.
+	lateSQL := fmt.Sprintf(`insert into mo_catalog.mo_iscp_log (account_id,table_id,job_name,job_id,job_spec,job_state,watermark,job_status,create_at,drop_at)
+        select account_id,table_id,'repair_late',job_id+20000,job_spec,%d,watermark,job_status,create_at,null
+        from mo_catalog.mo_iscp_log where account_id=0 and table_id=%d and job_name='index_hv' and job_id=%d`, iscp.ISCPJobState_Completed, tableID, jobID)
+	execSQL(lateSQL, 1)
+	otherCN := first
+	if owner == first.ServiceID() {
+		otherCN = second
+	}
+	otherSvc := otherCN.RawService().(cnservice.Service)
+	daemon, err := ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, daemonID))
+	require.NoError(t, err)
+	require.Len(t, daemon, 1)
+	require.Equal(t, owner, daemon[0].TaskRunner)
+
+	originalExec := iscp.ExecWithResult
+	injected := false
+	iscp.ExecWithResult = func(c context.Context, q, cn string, tx client.TxnOperator) (executor.Result, error) {
+		out, e := originalExec(c, q, cn, tx)
+		if e == nil && !injected && (strings.HasPrefix(strings.TrimSpace(q), "UPDATE mo_catalog.mo_iscp_log") || strings.HasPrefix(q, "SELECT account_id, table_id, job_name, job_id FROM mo_catalog.mo_iscp_log")) {
+			injected = true
+			lateResult, lateErr := otherSvc.GetSQLExecutor().Exec(c, fmt.Sprintf("update mo_catalog.mo_iscp_log set job_state=%d where account_id=0 and table_id=%d and job_name='repair_late'", iscp.ISCPJobState_Running, tableID), executor.Options{}.WithAccountID(0))
+			affected := lateResult.AffectedRows
+			lateResult.Close()
+			if lateErr != nil {
+				out.Close()
+				return executor.Result{}, lateErr
+			}
+			if affected != 1 {
+				out.Close()
+				return executor.Result{}, fmt.Errorf("late job update affected %d rows", affected)
+			}
+			daemon[0].LastHeartbeat = time.Now().UTC()
+			n, heartbeatErr := ts.GetStorage().HeartbeatDaemonTask(c, daemon)
+			if heartbeatErr != nil {
+				out.Close()
+				return executor.Result{}, heartbeatErr
+			}
+			if n != 1 {
+				out.Close()
+				return executor.Result{}, fmt.Errorf("heartbeat affected %d rows", n)
+			}
+		}
+		return out, e
+	}
+	t.Cleanup(func() { iscp.ExecWithResult = originalExec })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+	manual, err := iscp.NewISCPTaskExecutor(ctx, svc.GetEngine(), svc.GetTxnClient(), owner, daemonID, &iscp.ISCPExecutorOption{GCInterval: time.Hour, SyncTaskInterval: time.Hour, FlushWatermarkInterval: time.Hour, RetryTimes: 1}, mp)
+	if manual != nil {
+		t.Cleanup(func() { require.NoError(t, manual.Cancel()) })
+	}
+	require.NoError(t, err)
+	err = manual.Start()
+	require.True(t, injected, "the controlled heartbeat must reach the repair boundary")
+	require.NoError(t, err, "a healthy owner must recover despite a heartbeat during its scan")
+	var state int
+	var readErr error
+	require.Eventually(t, func() bool {
+		readErr = conn.QueryRowContext(ctx, "select job_state from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_hv' and job_id=?", tableID, jobID).Scan(&state)
+		return readErr != nil || state == int(iscp.ISCPJobState_Completed)
+	}, 30*time.Second, 100*time.Millisecond, "the repaired state must reach the other CN")
+	require.NoError(t, readErr)
+	var completed int
+	require.Eventually(t, func() bool {
+		readErr = conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name like 'repair_probe_%' and job_state=?", tableID, iscp.ISCPJobState_Completed).Scan(&completed)
+		return readErr != nil || completed == 128
+	}, 30*time.Second, 100*time.Millisecond, "all selected jobs must be repaired across batches")
+	require.NoError(t, readErr)
+	require.Eventually(t, func() bool {
+		readErr = conn.QueryRowContext(ctx, "select job_state from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='repair_late'", tableID).Scan(&state)
+		return readErr != nil || state == int(iscp.ISCPJobState_Completed)
+	}, 10*time.Second, 100*time.Millisecond, "a job becoming active after selection must also be repaired")
+	require.NoError(t, readErr)
 }
