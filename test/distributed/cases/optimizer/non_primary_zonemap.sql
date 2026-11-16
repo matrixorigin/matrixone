@@ -79,6 +79,45 @@ set @zm_lower=100;
 execute zm_commuted using @zm_lower;
 deallocate prepare zm_commuted;
 
+-- 稳定 IN 不依赖全局排序/选择率估计；重叠值域仍须保留候选块。
+select k from clustered where k in (100,150) order by k;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b",true)
+explain analyze select count(*) from clustered where k in (100,150);
+select k from interleaved where k in (100,150) order by k;
+-- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
+explain analyze select count(*) from interleaved where k in (100,150);
+
+-- 字符串期间、NULL 与重复项：三个小块，两个块包含目标期间。
+create table period_values (id int primary key, period varchar(16), amount decimal(20,7));
+insert into period_values values (1,'2026.12',999),(2,null,999);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+insert into period_values values (3,'2024.12',10),(4,'2024.12',20);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+insert into period_values values (5,'2025.12',30),(6,'2025.12',40);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b",true)
+explain analyze select count(*) from period_values where period in ('2025.12',null,'2024.12','2025.12');
+select count(*) from period_values where period in (null,null);
+select count(*) from period_values where period not in ('2024.12',null);
+prepare zm_in from 'select id from period_values where period in (?,?) order by id';
+set @zm_first='2024.12';
+set @zm_second='2025.12';
+execute zm_in using @zm_first,@zm_second;
+set @zm_first=null;
+execute zm_in using @zm_first,@zm_second;
+set @zm_first='2024.12';
+execute zm_in using @zm_first,@zm_second;
+deallocate prepare zm_in;
+create table period_snapshot as
+with raw_data as (select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period)
+select row_number() over () as row_no, period, total from raw_data limit 2;
+select period,total from period_snapshot order by period;
+
 -- 范围分区裁剪收到物化参数时，NULL 不能中断查询或污染后续执行。
 create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
 insert into range_bound values (1),(11),(21);
@@ -144,6 +183,13 @@ select min(b), max(b) from bool_aggregate;
 
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+select k from clustered where k in (100,150) order by k;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
+explain analyze select count(*) from clustered where k in (100,150);
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
+explain analyze select count(*) from period_values where period in ('2024.12','2025.12');
 select id from bool_values where enabled = true order by id;
 select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
 select count(*) as right_count from bool_values where id in (2,3) and enabled = true;

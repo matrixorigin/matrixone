@@ -20,9 +20,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,6 +118,51 @@ func (ctx *zoneMapStatsTestCompilerContext) Stats(*ObjectRef, *Snapshot) (*stats
 	return ctx.stats, ctx.err
 }
 
+// 真实解析/绑定路径：直列常量 IN 应准入，子查询 IN 不属于该安全域。
+func TestPlanNonPrimaryInBlockFilters(t *testing.T) {
+	for _, tc := range []struct {
+		sql            string
+		scans, filters int
+	}{
+		{"select n_name from nation where n_name in ('2024.12', '2025.12')", 1, 1},
+		{"select n_name from nation where n_name in (null, '2025.12', '2024.12', '2025.12')", 1, 1},
+		{"select n_regionkey from nation where n_regionkey in (1, 3)", 1, 1},
+		{"select n_name from nation where n_name in (select n_name from nation2)", 2, 0},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			mock := NewMockCompilerContext(false)
+			// 避免通用 mock 的 map 遍历序号落入系统表保留 ID。
+			mock.tables["nation"].TblId = 42001
+			mock.tables["nation2"].TblId = 42002
+			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock, stats: &statsinfo.StatsInfo{
+				TableCnt: 60000, BlockNumber: 9,
+				ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"n_name": {Overlap: 1}, "n_regionkey": {Overlap: 1}},
+			}}
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			scans, filters := 0, 0
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_TABLE_SCAN {
+					continue
+				}
+				scans++
+				for _, filter := range node.BlockFilterList {
+					if filter.GetF().GetFunc().GetObjName() == "in" {
+						filters++
+						require.NotNil(t, filter.GetF().Args[0].GetCol())
+						require.True(t, isRuntimeConstExpr(filter.GetF().Args[1]))
+					}
+				}
+			}
+			require.Equal(t, tc.scans, scans)
+			require.Equal(t, tc.filters, filters)
+		})
+	}
+}
+
 func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 	ctx := context.Background()
 	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
@@ -127,6 +175,26 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 	}
 	bound := func(value int64) *planpb.Expr { return MakePlan2Int64ConstExprWithType(value) }
 	rangeExpr := func() *planpb.Expr { return bind("between", column(1), bound(100), bound(150)) }
+	inList := func(items ...*planpb.Expr) *planpb.Expr {
+		return bind("in", column(1), &planpb.Expr{Typ: column(1).Typ, Expr: &planpb.Expr_List{
+			List: &planpb.ExprList{List: items},
+		}})
+	}
+	inExpr := func() *planpb.Expr { return inList(bound(100), bound(150)) }
+	null := &planpb.Expr{Typ: column(1).Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	inVector := func(values []int64) *planpb.Expr {
+		v := vector.NewVec(types.T_int64.ToType())
+		defer v.Free(mp)
+		require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
+		data, err := v.MarshalBinary()
+		require.NoError(t, err)
+		return MakeInExpr(ctx, column(1), int32(len(values)), data, false)
+	}
 
 	type testCase struct {
 		name         string
@@ -138,6 +206,24 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 		want         bool
 	}
 	tests := []testCase{
+		{name: "in full overlap", expr: inExpr, overlap: &statsinfo.ShuffleRange{Overlap: 1}, want: true},
+		{name: "in vector", expr: func() *planpb.Expr { return inVector([]int64{100, 150}) }, want: true},
+		{name: "in empty vector", expr: func() *planpb.Expr { return inVector(nil) }, want: true},
+		{name: "in missing stats", expr: inExpr, missingStats: true, want: true},
+		{name: "in stats error", expr: inExpr, statsErr: true, want: true},
+		{name: "in disabled", expr: inExpr, hints: &OptimizerHints{blockFilter: 2}},
+		{name: "in missing disabled", expr: inExpr, missingStats: true, hints: &OptimizerHints{blockFilter: 2}},
+		{name: "in nullable list", expr: func() *planpb.Expr { return inList(null, bound(100)) }, want: true},
+		{name: "in all null", expr: func() *planpb.Expr { return inList(null) }, want: true},
+		{name: "in parameter list", expr: func() *planpb.Expr {
+			return inList(bound(100), &planpb.Expr{Typ: column(1).Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}})
+		}, want: true},
+		{name: "in correlated list", expr: func() *planpb.Expr { return inList(bound(100), column(0)) }},
+		{name: "in volatile list", expr: func() *planpb.Expr { return inList(bind("rand"), bound(100)) }},
+		{name: "in computed column", expr: func() *planpb.Expr {
+			return bind("in", bind("+", column(1), bound(1)), inExpr().GetF().Args[1])
+		}},
+		{name: "not in", expr: func() *planpb.Expr { return bind("not", inExpr()) }},
 		{name: "missing overlap", expr: rangeExpr, want: true},
 		{name: "full overlap", expr: rangeExpr, overlap: &statsinfo.ShuffleRange{Overlap: 1}, want: true},
 		{name: "default hints", expr: rangeExpr, hints: &OptimizerHints{}, want: true},
