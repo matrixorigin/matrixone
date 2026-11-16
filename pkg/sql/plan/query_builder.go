@@ -137,24 +137,24 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			StmtType: queryType,
 			MaxDop:   int64(maxDop),
 		},
-		compCtx:                ctx,
-		ctxByNode:              []*BindContext{},
-		nameByColRef:           make(map[[2]int32]string),
-		protectedScans:         make(map[int32]int),
-		projectSpecialGuards:   make(map[int32]*specialIndexGuard),
-		setBitmapByDisplayNode: make(map[[2]int32]int32),
-		indexHintOwnerByNode:   make(map[int32]int32),
-		nextBindTag:            0,
-		mysqlCompatible:        mysqlCompatible,
-		aggSpillMem:            aggSpillMem,
-		joinSpillMem:           joinSpillMem,
-		sortSpillMem:           sortSpillMem,
-		tag2Table:              make(map[int32]*TableDef),
-		tag2NodeID:             make(map[int32]int32),
-		isPrepareStatement:     isPrepareStatement,
-		deleteNode:             make(map[uint64]int32),
-		skipStats:              skipStats,
-		optimizationHistory:    make([]string, 0),
+		compCtx:                          ctx,
+		ctxByNode:                        []*BindContext{},
+		nameByColRef:                     make(map[[2]int32]string),
+		protectedScans:                   make(map[int32]int),
+		projectSpecialGuards:             make(map[int32]*specialIndexGuard),
+		mysqlSpecialStorageByDisplayNode: make(map[[2]int32]int32),
+		indexHintOwnerByNode:             make(map[int32]int32),
+		nextBindTag:                      0,
+		mysqlCompatible:                  mysqlCompatible,
+		aggSpillMem:                      aggSpillMem,
+		joinSpillMem:                     joinSpillMem,
+		sortSpillMem:                     sortSpillMem,
+		tag2Table:                        make(map[int32]*TableDef),
+		tag2NodeID:                       make(map[int32]int32),
+		isPrepareStatement:               isPrepareStatement,
+		deleteNode:                       make(map[uint64]int32),
+		skipStats:                        skipStats,
+		optimizationHistory:              make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
@@ -7811,7 +7811,7 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	var orderKeyExpr *plan.Expr
 	if isEnumOrSetDisplayValueExpr(projectExpr) {
 		fn := projectExpr.GetF()
-		if len(fn.Args) != 2 || !isEnumOrSetPlanType(&fn.Args[1].Typ) {
+		if !validMySQLSpecialDisplayCall(fn) || !isEnumOrSetPlanType(&fn.Args[1].Typ) {
 			return expr, nil
 		}
 		if ctx.isDistinct && !mysqlSpecialOrderTypeReversible(&fn.Args[1].Typ) {

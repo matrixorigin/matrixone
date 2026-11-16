@@ -155,10 +155,11 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	// either fails (nil-pointer panic) or compares values in incompatible
 	// representations.
 	return Type{
-		Id:         col.Typ.Id,
-		Width:      col.Typ.Width,
-		Scale:      col.Typ.Scale,
-		Enumvalues: col.Typ.Enumvalues,
+		Id:           col.Typ.Id,
+		Width:        col.Typ.Width,
+		Scale:        col.Typ.Scale,
+		Enumvalues:   col.Typ.Enumvalues,
+		EnumEncoding: col.Typ.EnumEncoding,
 	}
 }
 

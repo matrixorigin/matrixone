@@ -647,6 +647,11 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		want string
 	}{
 		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"framed comma", TableColumn{SQLType: "ENUM", EnumValues: "2#3:a,b1:c", EnumEncoding: 1}, "ENUM('a,b','c')"},
+		{"framed empty", TableColumn{SQLType: "ENUM", EnumValues: "1#0:", EnumEncoding: 1}, "ENUM('')"},
+		{"framed whitespace", TableColumn{SQLType: "ENUM", EnumValues: "1#4: a, ", EnumEncoding: 1}, "ENUM(' a, ')"},
+		{"invalid tag", TableColumn{SQLType: "ENUM", EnumValues: "a,b", EnumEncoding: 257}, ""},
+
 		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
 		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
 		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},

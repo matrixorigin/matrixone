@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -459,6 +460,8 @@ type diffOutputTable struct {
 	tableName      string
 	columnNames    []string
 	projectedIdxes []int
+	// Source domains indexed by INSERT position, including its two metadata columns.
+	enumDomains map[int]plan2.Type
 }
 
 func newDiffOutputTable(
@@ -556,10 +559,30 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
+	output.enumDomains = nil
 	for i, name := range projectedNames {
 		colDef := outputColDefs[i]
+		if colDef.Typ.Id == int32(types.T_enum) {
+			source := dataBranchColumnDefByName(targetTableDef, name)
+			if source == nil {
+				return "", moerr.NewInternalErrorNoCtxf("DATA BRANCH source column %q is unavailable", name)
+			}
+			if equal, err := types.EqualEnumMembers(source.Typ.Enumvalues, source.Typ.EnumEncoding, colDef.Typ.Enumvalues, colDef.Typ.EnumEncoding); err != nil {
+				return "", err
+			} else if !equal {
+				return "", moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM domain differs from its source")
+			}
+			if output.enumDomains == nil {
+				output.enumDomains = make(map[int]plan2.Type)
+			}
+			output.enumDomains[i+2] = source.Typ
+		}
 
-		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
+		typeSQL, err := plan2.FormatColType(colDef.Typ)
+		if err != nil {
+			return "", err
+		}
+		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), typeSQL)
 		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
@@ -687,6 +710,50 @@ func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
 	)
 }
 
+// insert preserves ENUM storage semantics from the frozen spool. All scalar
+// bytes already belong to values; no AST node borrows a reused spool batch.
+func (output *diffOutputTable) insert(ctx context.Context, ses *Session, bh BackgroundExec, values *bytes.Buffer) error {
+	sql := output.insertSQL(values)
+	if len(output.enumDomains) == 0 {
+		return execDataBranchOutputSQL(ctx, bh, sql)
+	}
+	statement, err := mysql.ParseOne(ctx, sql, parserLowerCaseTableNames(ses))
+	if err != nil {
+		return err
+	}
+	defer statement.Free()
+	rows := statement.(*tree.Insert).Rows.Select.(*tree.ValuesClause).Rows
+	for _, row := range rows {
+		if len(row) != len(output.columnNames) {
+			return moerr.NewInternalErrorNoCtx("DATA BRANCH output INSERT row shape mismatch")
+		}
+		for position, domain := range output.enumDomains {
+			value, ok := row[position].(*tree.NumVal)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("DATA BRANCH output ENUM is not a stored ordinal")
+			}
+			if value.ValType == tree.P_null {
+				continue
+			}
+			if value.ValType != tree.P_int64 && value.ValType != tree.P_uint64 {
+				return moerr.NewInternalErrorNoCtx("DATA BRANCH output ENUM is not an integer")
+			}
+			ordinal, valid := value.Uint64()
+			if !valid || ordinal > types.MaxEnumLen {
+				return moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM ordinal is out of range")
+			}
+			row[position] = &tree.StoredEnumValue{
+				Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumEncoding: domain.EnumEncoding,
+			}
+		}
+	}
+	if err := bh.ExecStmt(ctx, statement); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
+}
+
 func materializeDiffOutputAsTable(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -736,7 +803,7 @@ func materializeDiffOutputAsTable(
 		if values.Len() == 0 {
 			return nil
 		}
-		if flushErr := execDataBranchOutputSQL(ctx, bh, output.insertSQL(values)); flushErr != nil {
+		if flushErr := output.insert(ctx, ses, bh, values); flushErr != nil {
 			return flushErr
 		}
 		values.Reset()

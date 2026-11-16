@@ -298,7 +298,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 			// column crossing a query boundary uses its planner provenance.
 			if isEnumOrSetDisplayValueExpr(expr) {
 				fn := expr.GetF()
-				if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+				if validMySQLSpecialDisplayCall(fn) && isEnumOrSetPlanType(&fn.Args[1].Typ) {
 					expr = fn.Args[1]
 				}
 			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {

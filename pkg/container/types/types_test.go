@@ -93,13 +93,13 @@ func TestDecimal128MarshalAndUnmarshal(t *testing.T) {
 
 func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	typ := Type{
-		Oid:     T(1),
-		Charset: 2,
-		notNull: 0,
-		dummy2:  4,
-		Size:    5,
-		Width:   6,
-		Scale:   -1,
+		Oid:          T(1),
+		Charset:      2,
+		notNull:      0,
+		enumEncoding: 4,
+		Size:         5,
+		Width:        6,
+		Scale:        -1,
 	}
 
 	size := typ.ProtoSize()
@@ -111,6 +111,17 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	var ret Type
 	err = ret.Unmarshal(data)
 	require.NoError(t, err)
+	require.Equal(t, typ, ret)
+
+	// Malformed metadata must return an error without publishing a partial type.
+	for prefix := 0; prefix < len(data); prefix++ {
+		before := ret
+		require.ErrorContains(t, ret.Unmarshal(data[:prefix]), "short type encoding", "prefix=%d", prefix)
+		require.Equal(t, before, ret)
+	}
+	// Keep the existing fixed-header decoding contract for trailing bytes.
+	ret = Type{}
+	require.NoError(t, ret.Unmarshal(append(data, 0xff)))
 	require.Equal(t, typ, ret)
 }
 

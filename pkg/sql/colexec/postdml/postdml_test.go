@@ -15,6 +15,7 @@ package postdml
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +122,7 @@ func TestFullText(t *testing.T) {
 	for i, s := range sqls {
 		rs, ok := proc.Base.PostDmlSqlList.Get(i)
 		require.True(t, ok)
-		require.Equal(t, s, rs)
+		require.Equal(t, quoteExpectedFulltextColumns(s), rs)
 	}
 	arg.Free(proc, false, nil)
 
@@ -244,7 +245,7 @@ func TestAuditFullTextStringKeyPreservesQuotedLiteral(t *testing.T) {
 
 			insertSQL, ok := proc.Base.PostDmlSqlList.Get(1)
 			require.True(t, ok)
-			require.Equal(t, tc.wantInsert, insertSQL)
+			require.Equal(t, quoteExpectedFulltextColumns(tc.wantInsert), insertSQL)
 			require.Equal(t, tc.wantInsertLiterals, scanPostDmlStringLiterals(t, insertSQL, tc.sqlMode))
 
 			arg.Free(proc, false, nil)
@@ -253,6 +254,10 @@ func TestAuditFullTextStringKeyPreservesQuotedLiteral(t *testing.T) {
 			require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 		})
 	}
+}
+
+func quoteExpectedFulltextColumns(sql string) string {
+	return strings.NewReplacer("src.pk", "`src`.`pk`", "src.body", "`src`.`body`", "src.title", "`src`.`title`").Replace(sql)
 }
 
 func scanPostDmlStringLiterals(t *testing.T, sql, sqlMode string) []string {

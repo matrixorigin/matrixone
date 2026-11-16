@@ -221,7 +221,7 @@ func lcaProbeColumnLayout(
 			)
 		}
 		layout.attrs = append(layout.attrs, lcaAttrName)
-		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
+		layout.types = append(layout.types, plan2.MakeTypeByPlan2Type(lcaCol.Typ))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
 	}
@@ -358,10 +358,10 @@ func handleDelsOnLCA(
 		selectCols[0] = fmt.Sprintf("pks.%s", quotedOrdinalAlias)
 		for i, colName := range lcaLayout.attrs {
 			colExpr := fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
-			if lcaLayout.types[i].Oid == types.T_uint64 && lcaLayout.enumValues[i] != "" {
-				// SET is stored as uint64 but ordinary SQL projection exposes its
-				// display label. Request the physical bitmap explicitly so the
-				// probe remains lossless even when the SET has an empty member.
+			if lcaLayout.types[i].Oid == types.T_enum || (lcaLayout.types[i].Oid == types.T_uint64 && lcaLayout.enumValues[i] != "") {
+				// ENUM/SET ordinary SQL projection exposes its
+				// display label. Request the physical ordinal/bitmap so the
+				// probe remains lossless even for empty or duplicate display labels.
 				colExpr = fmt.Sprintf("cast(%s as unsigned)", colExpr)
 			}
 			selectCols[i+1] = colExpr
@@ -514,13 +514,10 @@ func handleDelsOnLCA(
 
 			for j := 1; j < len(cols); j++ {
 				targetIdx := resultTargetIdxes[j-1]
-				enumValues := ""
-				if layoutIdx := slices.Index(lcaLayout.targetIdxes, targetIdx); layoutIdx >= 0 {
-					enumValues = lcaLayout.enumValues[layoutIdx]
-				}
+
 				if err = appendLCAProbeValue(
 					dBat.Vecs[targetIdx], cols[j], i,
-					enumValues, ses.proc.Mp(),
+					ses.proc.Mp(),
 				); err != nil {
 					return false
 				}
@@ -589,43 +586,27 @@ func handleDelsOnLCA(
 	return
 }
 
-// appendLCAProbeValue appends a column returned by the LCA SQL probe to the
-// corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
-// VARCHAR labels, so they need to be restored to their physical enum codes
-// before the batch enters the diff pipeline. SET columns are projected as
-// unsigned bitmaps by the SQL probe and therefore arrive with their physical
-// type. Other columns must retain their physical type; copying mismatched vector
-// storage would silently corrupt data.
-func appendLCAProbeValue(
-	dst, src *vector.Vector,
-	row int,
-	enumValues string,
-	mp *mpool.MPool,
-) error {
+// appendLCAProbeValue copies the SQL probe's physical values. ENUM projection
+// uses an explicit unsigned cast, preserving every ordinal without a lossy
+// display-to-label reverse lookup.
+func appendLCAProbeValue(dst, src *vector.Vector, row int, mp *mpool.MPool) error {
 	if dst.GetType().Oid == src.GetType().Oid {
 		return dst.UnionOne(src, int64(row), mp)
 	}
-
-	if dst.GetType().Oid != types.T_enum ||
-		(src.GetType().Oid != types.T_varchar && src.GetType().Oid != types.T_char && src.GetType().Oid != types.T_text) {
-		return moerr.NewInternalErrorNoCtxf(
-			"unexpected LCA probe type conversion: source=%s target=%s",
-			src.GetType().String(), dst.GetType().String(),
-		)
+	if dst.GetType().Oid != types.T_enum || src.GetType().Oid != types.T_uint64 {
+		return moerr.NewInternalErrorNoCtxf("unexpected LCA probe type conversion: source=%s target=%s", src.GetType().String(), dst.GetType().String())
 	}
-
 	if src.IsConstNull() || src.GetNulls().Contains(uint64(row)) {
 		return vector.AppendNull(dst, mp)
 	}
 	if src.IsConst() {
 		row = 0
 	}
-
-	val, err := types.ParseEnum(enumValues, src.UnsafeGetStringAt(row))
-	if err != nil {
-		return err
+	ordinal := vector.GetFixedAtNoTypeCheck[uint64](src, row)
+	if ordinal > uint64(types.MaxEnumLen) {
+		return moerr.NewInvalidInputNoCtxf("LCA probe ENUM ordinal %d overflows storage", ordinal)
 	}
-	return vector.AppendFixed(dst, val, false, mp)
+	return vector.AppendFixed(dst, types.Enum(ordinal), false, mp)
 }
 
 func lcaProbeJoinCastType(typ types.Type) (string, bool) {
