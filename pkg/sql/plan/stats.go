@@ -1681,7 +1681,7 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	fn := expr.GetF()
 	argCount := 2
 	switch fn.GetFunc().GetObjName() {
-	case "=", "<", "<=", ">", ">=":
+	case "=", "<", "<=", ">", ">=", "in":
 	case "between":
 		argCount = 3
 	case "in_range":
@@ -1691,6 +1691,12 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	}
 	if !hasNonNilFunctionArgs(fn, argCount) {
 		return false
+	}
+	if fn.GetFunc().GetObjName() == "in" {
+		// IN 的操作数不可交换；列表在常量折叠前后分别表示为 List/Vec。
+		return fn.Args[0].GetCol() != nil &&
+			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&
+			isRuntimeConstExpr(fn.Args[1])
 	}
 	if fn.Args[0].GetCol() == nil {
 		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
