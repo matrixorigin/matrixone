@@ -36,5 +36,5 @@ part    supp    avail
 3    10    100.00
 select 'fórêst' collate utf8mb4_general_ci like 'forest%' as accent, 'ßx' collate utf8mb4_general_ci like 'sx%' as sharp, 'ßx' collate utf8mb4_general_ci like 'ss%' as double_sharp, 'Forest' collate utf8mb4_bin like 'forest%' as binary_case;
 accent    sharp    double_sharp    binary_case
-true    true    false    false
+1    1    0    0
 drop database aggregate_membership_domain;
