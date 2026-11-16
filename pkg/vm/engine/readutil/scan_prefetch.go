@@ -57,10 +57,10 @@ func (p *ScanPrefetch) Scan() *fileservice.PrefetchScan {
 	return p.scan
 }
 
-// End ends the scan's prefetches.
+// End ends the scan's prefetches and its pace.
 func (p *ScanPrefetch) End() {
 	p.scan.End()
-	p.scan = nil
+	*p = ScanPrefetch{}
 }
 
 // Pace returns the blocks a second the scan reads, at cursor: its own pace once it has

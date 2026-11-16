@@ -1682,6 +1682,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	type admittedDownload struct {
 		download *objectDownload
 		file     io.ReaderAt
+		// waited ends the read's wait for the download, which starts before it is sent.
+		waited func()
 	}
 	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
@@ -1695,7 +1697,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			download := s.diskCache.download(diskPath)
 			if download != nil {
 				if f, ok := download.acquire(); ok {
-					admitted = admittedDownload{download: download, file: f}
+					admitted = admittedDownload{download: download, file: f, waited: download.idle.wait()}
 				}
 			}
 			started <- admitted
@@ -1726,9 +1728,11 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		default:
 		}
 	}
-	// A delete of the object or a close of the cache stops the download, not the read,
-	// which then reads its ranges.
-	stopped := func(err error) bool { return errors.Is(err, context.Canceled) && ctx.Err() == nil }
+	// A delete of the object, a close of the cache or a source that stops sending stops
+	// the download, not the read, which then reads its ranges.
+	stopped := func(err error) bool {
+		return (errors.Is(err, context.Canceled) || errors.Is(err, errSourceIdle)) && ctx.Err() == nil
+	}
 	if admitted.download == nil {
 		if err := waitSet(); err != nil {
 			if stopped(err) {
@@ -1741,8 +1745,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return false, nil
 	}
 	download := admitted.download
-	// The read waits for the download until it returns.
-	defer download.idle.wait()()
+	defer admitted.waited()
 	defer func() {
 		defer download.release()
 		read.finish(download, done && err == nil)

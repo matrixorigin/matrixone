@@ -160,7 +160,7 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 		bids[idx-begin] = blk.BlockID
 	}
 
-	if !policy.Any(fileservice.ColumnPrefetch) && !ioutil.PrefetchSkipped(ctx, rs.fs, policy, blks[0]) {
+	if !ioutil.PrefetchSkipped(ctx, rs.fs, policy, blks[0]) {
 		err := ioutil.Prefetch(
 			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 		if err != nil {

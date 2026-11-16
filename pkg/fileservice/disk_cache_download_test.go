@@ -301,7 +301,7 @@ func TestIdleReaderTimesOnlyDetached(t *testing.T) {
 
 // A whole-object download that a read waits for is not stopped by the idle timeout.
 func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
-	shortIdle(t, 20*time.Millisecond)
+	shortIdle(t, 200*time.Millisecond)
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
 		defer o.idle.mu.Unlock()
 		return o.idle.waiting == 1
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
-	time.AfterFunc(10*sourceIdleTimeout, func() { close(release) })
+	time.AfterFunc(3*sourceIdleTimeout, func() { close(release) })
 	require.True(t, <-waited)
 	select {
 	case err := <-filled:

@@ -273,8 +273,12 @@ whole-object download to amortize them; distributed SSB ran 8–11 times slower
   It stops silently: no read waits for it, so no read fails, and a read that comes later
   reads its own bytes. The stop frees the download's connection, its prefetch memory and
   its cache-write slot.
-- A read that waits for a download gives up after the I/O wait bound and reads its own
-  bytes, so a source that stalls under a waiting read delays that read, without failing it.
+- A read that joins a whole-object download gives up after the I/O wait bound and reads
+  its own bytes. The read that started a download, and the reads of a prefetch range read,
+  wait until their context ends: with a source that stalls, as before the timeout existed,
+  such a read waits as long as its context allows.
+- A download that stops for the timeout fails no read: the read that started it reads its
+  own ranges.
 
 Before this rule the timeout ran while reads waited, and it counted a download's wait
 for a free connection: under load, reads failed with "no bytes from the source within the

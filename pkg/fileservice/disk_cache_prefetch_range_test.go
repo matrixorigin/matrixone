@@ -385,7 +385,7 @@ func TestPrefetchFlightFailsWhenSourceStalls(t *testing.T) {
 
 // A flight that a read waits for is not stopped by the idle timeout.
 func TestPrefetchFlightWaitedIsNotTimed(t *testing.T) {
-	shortIdle(t, 20*time.Millisecond)
+	shortIdle(t, 200*time.Millisecond)
 	fl := newMemoryPrefetchObject(0, 3, time.Now())
 	release := make(chan struct{})
 	readErr := make(chan error, 1)
@@ -404,7 +404,7 @@ func TestPrefetchFlightWaitedIsNotTimed(t *testing.T) {
 		defer fl.idle.mu.Unlock()
 		return fl.idle.waiting == 1 && len(fl.idle.readers) == 1
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
-	time.AfterFunc(10*sourceIdleTimeout, func() { close(release) })
+	time.AfterFunc(3*sourceIdleTimeout, func() { close(release) })
 	require.True(t, <-waited)
 	require.NoError(t, <-readErr)
 	require.Equal(t, []byte("abc"), fl.content())
