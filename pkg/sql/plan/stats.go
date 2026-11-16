@@ -1628,6 +1628,11 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 		}
 	}
 	if fn.GetFunc().GetObjName() == "in" {
+		// 浮点列表（包括执行期参数）可能含 NaN，破坏 AnyIn 二分查找的单调性。
+		// 在消费者支持前，浮点 IN 保留原有的统计/显式 hint 准入策略。
+		if types.T(fn.Args[0].Typ.Id).IsFloat() || types.T(fn.Args[1].Typ.Id).IsFloat() {
+			return false
+		}
 		// IN 的操作数不可交换；列表可在常量折叠前后分别表示为 List/Vec。
 		return fn.Args[0].GetCol() != nil &&
 			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&

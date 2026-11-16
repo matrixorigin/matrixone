@@ -362,6 +362,58 @@ select period,total from period_snapshot order by period;
 ➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
 2024.12  ¦  30.0000000  𝄀
 2025.12  ¦  70.0000000
+create table float_in_values (id int primary key, f float, d double);
+insert into float_in_values values (1,100,100),(2,200,200);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.float_in_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.float_in_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from float_in_values where d in (cast('NaN' as double),100) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from float_in_values where f in (100,cast('NaN' as float)) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from float_in_values where f in (cast('NaN' as float),100) order by id;
+➤ id[4,32,0]  𝄀
+1
+prepare zm_float_in from 'select id from float_in_values where d in (?,?) order by id';
+prepare zm_float32_in from 'select id from float_in_values where f in (?,?) order by id';
+set @zm_float_hit=100;
+set @zm_float_other=150;
+execute zm_float_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+execute zm_float32_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+set @zm_float_other=cast('NaN' as double);
+execute zm_float_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+execute zm_float32_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+set @zm_float_other=150;
+execute zm_float_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+execute zm_float32_in using @zm_float_hit,@zm_float_other;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare zm_float_in;
+deallocate prepare zm_float32_in;
 set optimizer_hints='';
 create table bool_values (id int, enabled bool);
 insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
@@ -528,6 +580,12 @@ select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as m
 ➤ min_length[-5,64,0]  ¦  max_length[-5,64,0]  𝄀
 0  ¦  0
 set optimizer_hints='blockFilter=2';
+select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from float_in_values where f in (100,cast('NaN' as float)) order by id;
+➤ id[4,32,0]  𝄀
+1
 select k from clustered where k in (100,150) order by k;
 ➤ k[4,32,0]  𝄀
 100  𝄀

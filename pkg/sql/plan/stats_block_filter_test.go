@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -164,17 +165,28 @@ func TestPlanNonPrimaryInBlockFilters(t *testing.T) {
 	for _, tc := range []struct {
 		sql            string
 		scans, filters int
+		columnType     types.T
 	}{
-		{"select n_name from nation where n_name in ('2024.12', '2025.12')", 1, 1},
-		{"select n_name from nation where n_name in (null, '2025.12', '2024.12', '2025.12')", 1, 1},
-		{"select n_regionkey from nation where n_regionkey in (1, 3)", 1, 1},
-		{"select n_name from nation where n_name in (select n_name from nation2)", 2, 0},
+		{"select n_name from nation where n_name in ('2024.12', '2025.12')", 1, 1, 0},
+		{"select n_name from nation where n_name in (null, '2025.12', '2024.12', '2025.12')", 1, 1, 0},
+		{"select n_regionkey from nation where n_regionkey in (1, 3)", 1, 1, 0},
+		{"select n_name from nation where n_name in (select n_name from nation2)", 2, 0, 0},
+		{"select n_regionkey from nation where n_regionkey in (100, cast('NaN' as double))", 1, 0, types.T_float64},
+		{"select n_regionkey from nation where n_regionkey in (cast('NaN' as double), 100)", 1, 0, types.T_float64},
+		{"select n_regionkey from nation where n_regionkey in (100, 150)", 1, 0, types.T_float32},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			mock := NewMockCompilerContext(false)
 			// 通用 mock 以 map 遍历序号分配 ID，可能落入系统表保留 ID。
 			mock.tables["nation"].TblId = 42001
 			mock.tables["nation2"].TblId = 42002
+			if tc.columnType != 0 {
+				for _, col := range mock.tables["nation"].Cols {
+					if col.Name == "n_regionkey" {
+						col.Typ = planpb.Type{Id: int32(tc.columnType)}
+					}
+				}
+			}
 			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock, stats: &statsinfo.StatsInfo{
 				TableCnt: 60000, BlockNumber: 9,
 				ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"n_name": {Overlap: 1}, "n_regionkey": {Overlap: 1}},
@@ -200,6 +212,72 @@ func TestPlanNonPrimaryInBlockFilters(t *testing.T) {
 			}
 			require.Equal(t, tc.scans, scans)
 			require.Equal(t, tc.filters, inFilters, "只有稳定常量列表可下推；子查询 IN 不在该准入范围")
+		})
+	}
+}
+
+// 浮点 List/Vec 可能含执行期才出现的 NaN，不能走新增的无估计收益准入。
+func TestFloatInKeepsExistingZoneMapAdmission(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			col := GetColExpr(planpb.Type{Id: int32(oid)}, 1, 1)
+			finite, nan := MakePlan2Float64ConstExprWithType(100), MakePlan2Float64ConstExprWithType(math.NaN())
+			v := vector.NewVec(oid.ToType())
+			defer v.Free(mp)
+			if oid == types.T_float32 {
+				finite, nan = MakePlan2Float32ConstExprWithType(100), MakePlan2Float32ConstExprWithType(float32(math.NaN()))
+				require.NoError(t, vector.AppendFixedList(v, []float32{100, float32(math.NaN())}, nil, mp))
+			} else {
+				require.NoError(t, vector.AppendFixedList(v, []float64{100, math.NaN()}, nil, mp))
+			}
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			list := func(items ...*planpb.Expr) *planpb.Expr {
+				expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{col, {
+					Typ: col.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: items}},
+				}})
+				require.NoError(t, err)
+				return expr
+			}
+			for _, tc := range []struct {
+				name string
+				expr *planpb.Expr
+			}{
+				{"finite list", list(finite, finite)},
+				{"nan last", list(finite, nan)},
+				{"nan first", list(nan, finite)},
+				{"nan vector", MakeInExpr(ctx, col, 2, data, false)},
+				{"parameter", list(finite, &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}})},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					require.False(t, isSimpleZoneMapFilter(tc.expr))
+					for _, missing := range []bool{false, true} {
+						stats := &statsinfo.StatsInfo{TableCnt: 60000, BlockNumber: 9,
+							ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"k": {Overlap: 1}}}
+						if missing {
+							stats = nil
+						}
+						builder := NewQueryBuilder(planpb.Query_SELECT, &zoneMapStatsTestCompilerContext{
+							MockCompilerContext: &MockCompilerContext{ctx: ctx}, stats: stats,
+						}, false, false)
+						filter := DeepCopyExpr(tc.expr)
+						node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42},
+							TableDef: &planpb.TableDef{TblId: 42, Name: "ordinary",
+								Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+								Cols: []*planpb.ColDef{{Name: "id", Primary: true, Typ: planpb.Type{Id: int32(types.T_int32)}},
+									{Name: "k", Seqnum: 1, Typ: col.Typ}}}, FilterList: []*planpb.Expr{filter}}
+						calcScanStats(node, builder)
+						require.Empty(t, node.BlockFilterList, "missing statistics: %v", missing)
+						require.Same(t, filter, node.FilterList[0])
+					}
+				})
+			}
 		})
 	}
 }
