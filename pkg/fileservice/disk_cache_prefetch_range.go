@@ -295,7 +295,24 @@ func (d *DiskCache) prefetchRead(
 			}
 		}
 		pending = memory
-		if need == 0 || f.bytes == 0 || f.bytes+need <= budget {
+		if need == 0 || f.bytes+need <= budget {
+			break
+		}
+		if f.bytes == 0 {
+			// With no run under way, the runs that fit in the budget are read in memory
+			// and the others as FilePrefetchObjects.
+			var admitted int64
+			memory := pending[:0]
+			for _, p := range pending {
+				size := flightBufSize(int64(p[1]-p[0]+1) * block)
+				if len(memory) > 0 && admitted+size > budget {
+					files = append(files, p)
+					continue
+				}
+				admitted += size
+				memory = append(memory, p)
+			}
+			pending = memory
 			break
 		}
 		// Past the bytes of the runs under way, the read waits for runs to end, then
@@ -377,7 +394,15 @@ func (d *DiskCache) prefetchRead(
 		switch b.state {
 		case blockInFlight:
 			if err := b.object.readAt(ctx, b.start, dst); err != nil {
-				return nil, len(runs), false
+				// An object that caches its bytes and ended before the read reached the
+				// block left them in a cached range.
+				if ctx.Err() != nil || !b.object.caches() {
+					return nil, len(runs), false
+				}
+				r, ok := smallestContaining(d.ranges.of(key), b.start, b.end-b.start, nil)
+				if !ok || !d.cache.Contains(r.diskPath) || !d.readCachedRange(ctx, r, b.start, dst, &deadline) {
+					return nil, len(runs), false
+				}
 			}
 		case blockCached:
 			j := i

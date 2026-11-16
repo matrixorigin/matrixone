@@ -212,3 +212,48 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	f.reads.Wait()
 	require.Zero(t, bytes())
 }
+
+// A cold read whose entries make more runs than the buffers may hold reads the runs past
+// the bound as FilePrefetchObjects: the buffers never exceed the bound, each run is read
+// once, and the read gets its bytes.
+func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
+	const (
+		unit   = 64 << 10
+		runs   = 8
+		budget = 2 * unit
+	)
+	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit)
+	fs.diskCache.prefetchFlightBytes = budget
+	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
+	fs.storage = storage
+	f := &fs.diskCache.prefetchObjects
+
+	entries := make([]IOEntry, runs)
+	for i := range entries {
+		entries[i] = IOEntry{Offset: int64(2*i)*unit + 100, Size: 10}
+	}
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
+	done := make(chan error, 1)
+	go func() { done <- fs.Read(context.Background(), vec) }()
+	require.Eventually(t, func() bool { return storage.opens.Load() == runs }, 10*time.Second, time.Millisecond,
+		"every run is read at once")
+	f.mu.Lock()
+	inMemory := f.bytes
+	f.mu.Unlock()
+	require.LessOrEqual(t, inMemory, int64(budget))
+	require.NotZero(t, inMemory)
+
+	close(storage.release)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the read did not return")
+	}
+	for i := range vec.Entries {
+		off := 2*i*unit + 100
+		require.Equal(t, data[off:off+10], vec.Entries[i].Data)
+	}
+	vec.Release()
+	require.Equal(t, int64(runs), storage.opens.Load(), "no run is read twice")
+}
