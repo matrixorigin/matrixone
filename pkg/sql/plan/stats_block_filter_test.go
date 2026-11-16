@@ -282,6 +282,118 @@ func TestFloatInKeepsExistingZoneMapAdmission(t *testing.T) {
 	}
 }
 
+// BuildPlan 之后还会折叠 List/Vec；必须检查完整优化后的 reader 输入。
+func TestFinalInDomainBlockFiltersAreUnique(t *testing.T) {
+	for _, tc := range []struct {
+		name, predicate  string
+		prepared         bool
+		narrow, residual int
+	}{
+		{"ordinary difference", "n_nationkey in (1,2,3,4) and n_nationkey not in (2,3)", false, 2, 1},
+		{"prepared difference", "n_nationkey in (1,2,3,4) and n_nationkey not in (2,3)", true, 2, 1},
+		{"ordinary or", "n_nationkey in (1,2,3,4) and (n_nationkey not in (2,3) or n_nationkey=99)", false, 3, 2},
+		{"prepared or", "n_nationkey in (1,2,3,4) and (n_nationkey not in (2,3) or n_nationkey=99)", true, 3, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockCompilerContext(false)
+			mock.tables["nation"].TblId = 42001
+			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock}
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "select n_nationkey from nation where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			opt := NewBaseOptimizer(ctx)
+			if tc.prepared {
+				opt = NewPrepareOptimizer(ctx)
+			}
+			qry, err := opt.Optimize(stmt, tc.prepared)
+			require.NoError(t, err)
+			scans := 0
+			for _, node := range qry.Nodes {
+				if node.NodeType != planpb.Node_TABLE_SCAN {
+					continue
+				}
+				scans++
+				// 宽域和窄域语义不同，各保留一次；窄域不能执行两次。
+				require.Len(t, node.BlockFilterList, 2)
+				lengths := make([]int32, 0, 2)
+				for _, filter := range node.BlockFilterList {
+					require.Equal(t, "in", filter.GetF().GetFunc().GetObjName())
+					vec := filter.GetF().Args[1].GetVec()
+					require.NotNil(t, vec)
+					lengths = append(lengths, vec.Len)
+				}
+				require.Equal(t, []int32{4, int32(tc.narrow)}, lengths)
+				require.Len(t, node.FilterList, tc.residual)
+				require.Equal(t, int32(tc.narrow), node.FilterList[0].GetF().Args[1].GetVec().Len)
+			}
+			require.Equal(t, 1, scans)
+		})
+	}
+}
+
+func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 0)
+	bound := MakePlan2Int64ConstExprWithType(1)
+	null := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	list := func(items ...*planpb.Expr) *planpb.Expr {
+		return bind("in", col, &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: items}}})
+	}
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	tupleList := list(bound, MakePlan2Int64ConstExprWithType(4))
+	tupleList.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_tuple)}
+	variable := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "block_filter_test"}}}
+	for _, tc := range []struct {
+		name    string
+		filters []*planpb.Expr
+		want    int
+	}{
+		{"empty", nil, 0},
+		{"single", []*planpb.Expr{list(bound)}, 1},
+		{"folded list order", []*planpb.Expr{list(bound, MakePlan2Int64ConstExprWithType(4)), list(MakePlan2Int64ConstExprWithType(4), bound)}, 1},
+		{"vector type annotation", []*planpb.Expr{tupleList, list(bound, MakePlan2Int64ConstExprWithType(4))}, 1},
+		{"different values", []*planpb.Expr{list(bound), list(MakePlan2Int64ConstExprWithType(4))}, 2},
+		{"null bitmap differs", []*planpb.Expr{list(MakePlan2Int64ConstExprWithType(0), bound), list(null, bound), list(null, bound)}, 2},
+		{"same parameter", []*planpb.Expr{list(bound, param(0)), list(bound, param(0))}, 1},
+		{"different parameters", []*planpb.Expr{list(bound, param(0)), list(bound, param(1))}, 2},
+		{"different columns", []*planpb.Expr{bind("=", col, bound), bind("=", GetColExpr(col.Typ, 1, 1), bound)}, 2},
+		{"different types", []*planpb.Expr{bind("=", col, bound), bind("=", GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 1, 0), bound)}, 2},
+		{"variable remains", []*planpb.Expr{list(bound, variable), list(bound, variable)}, 2},
+		{"volatile remains", []*planpb.Expr{bind(">", col, bind("rand")), bind(">", col, bind("rand"))}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filters := DeepCopyExprList(tc.filters)
+			var first *planpb.Expr
+			if len(filters) > 0 {
+				first = filters[0]
+			}
+			node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BlockFilterList: filters, FilterList: DeepCopyExprList(tc.filters)}
+			opt := NewPrepareOptimizer(ctx)
+			opt.qry = &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{node}}
+			_, err := opt.optimize()
+			require.NoError(t, err)
+			require.Len(t, node.BlockFilterList, tc.want)
+			if first != nil {
+				require.Same(t, first, node.BlockFilterList[0], "保留原表达式及顺序，而不是比较视图")
+			}
+			if tc.name == "vector type annotation" {
+				require.Equal(t, int32(types.T_tuple), first.GetF().Args[1].Typ.Id)
+			}
+			for _, removed := range filters[tc.want:] {
+				require.Nil(t, removed, "不能由切片尾部持有已删除的表达式")
+			}
+			require.Len(t, node.FilterList, len(tc.filters), "不能去掉残余行过滤")
+		})
+	}
+}
+
 func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 	ctx := context.Background()
 	col := GetColExpr(planpb.Type{Id: int32(types.T_varchar)}, 1, 0)

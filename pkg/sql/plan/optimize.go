@@ -87,6 +87,64 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 			rule.Apply(n, opt.qry, opt.ctx.GetProcess())
 		}
 	}
+	// 域改写和 List/Vec 折叠完成后再去重，避免 reader 重复执行相同谓词。
+	n.BlockFilterList = deduplicateFinalBlockFilters(n.BlockFilterList)
+}
+
+func deduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
+	if len(filters) < 2 {
+		return filters
+	}
+	buckets := make(map[uint64][]*plan.Expr, len(filters))
+	unique := filters[:0]
+	for _, filter := range filters {
+		if !zoneMapExprIsStable(filter) {
+			unique = append(unique, filter)
+			continue
+		}
+		identity := finalBlockFilterIdentity(filter)
+		hash := exprStructuralHash(identity)
+		duplicate := false
+		for _, previous := range buckets[hash] {
+			if exprStructuralEqual(previous, identity) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			buckets[hash] = append(buckets[hash], identity)
+			unique = append(unique, filter)
+		}
+	}
+	clear(filters[len(unique):])
+	return unique
+}
+
+// Vec 的可执行类型、值和 NULL bitmap 都在 Data 中；外层 Typ 可能仍是
+// 折叠前的 tuple，也可能是元素类型。只规范比较视图，不改 reader 的表达式。
+func finalBlockFilterIdentity(expr *plan.Expr) *plan.Expr {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Vec:
+		return &plan.Expr{Expr: e}
+	case *plan.Expr_F:
+		copyExpr, fn := *expr, *e.F
+		fn.Args = make([]*plan.Expr, len(e.F.Args))
+		for i, arg := range e.F.Args {
+			fn.Args[i] = finalBlockFilterIdentity(arg)
+		}
+		copyExpr.Expr = &plan.Expr_F{F: &fn}
+		return &copyExpr
+	case *plan.Expr_List:
+		copyExpr := *expr
+		items := make([]*plan.Expr, len(e.List.List))
+		for i, item := range e.List.List {
+			items[i] = finalBlockFilterIdentity(item)
+		}
+		copyExpr.Expr = &plan.Expr_List{List: &plan.ExprList{List: items}}
+		return &copyExpr
+	default:
+		return expr
+	}
 }
 
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
