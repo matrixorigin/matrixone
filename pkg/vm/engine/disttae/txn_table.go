@@ -600,6 +600,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 
 		for _, col := range needCols {
 			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
+			// 裁剪用的保守 BOOL 上界不能作为精确的用户可见元数据。
+			zm, err := columnSummaryZoneMap(ctx, meta, location, uint16(col.Seqnum), fs, tbl.getTxn().proc.Mp())
+			if err != nil {
+				return err
+			}
 			infoList = append(infoList, &plan.MetadataScanInfo{
 				ColName:      col.Name,
 				IsHidden:     col.Hidden,
@@ -611,7 +616,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 				NullCnt:      int64(colMeta.NullCnt()),
 				CompressSize: int64(colMeta.Location().Length()),
 				OriginSize:   int64(colMeta.Location().OriginSize()),
-				ZoneMap:      colMeta.ZoneMap(),
+				ZoneMap:      zm,
 				Level:        int32(obj.ObjectStats.GetLevel()),
 			})
 		}
