@@ -399,6 +399,39 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 					}
 				})
 			}
+			if layout.name == "clustered" {
+				t.Run("sorted_in_unknown_summary_consumer", func(t *testing.T) {
+					table, col := *tableDef, *tableDef.Cols[1]
+					col.ClusterBy = true
+					table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
+					table.Cols[1] = &col
+					for unknown, want := range [][]uint16{{0, 1}, {1}, {1, 2}} {
+						t.Run(fmt.Sprintf("unknown=%d", unknown), func(t *testing.T) {
+							modified := append(objectio.ObjectMeta(nil), meta...)
+							modified.MustDataMeta().GetBlockMeta(uint32(unknown)).MustGetColumn(1).SetZoneMap(index.NewZM(types.T_int32, 0))
+							fast, _, object, block, seek, ok, hint := CompileFilterExprs(
+								[]*plan.Expr{filterExpr(1, "in", 100, 150)}, &table, fs,
+							)
+							require.True(t, ok)
+							load := func(context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+								return modified, nil, nil
+							}
+							sortedStats := stats
+							require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&sortedStats, objectZM))
+							var selected objectio.BlockInfoSlice
+							_, _, _, _, _, _, _, _, err := FilterObjects(
+								ctx, engine.RangesParam{}, fast, load, object, block, seek,
+								nil, nil, []objectio.ObjectStats{sortedStats}, &selected, hint, nil, fs,
+							)
+							require.NoError(t, err)
+							require.Equal(t, len(want), selected.Len())
+							for i, id := range want {
+								require.Equal(t, stats.ConstructBlockId(id), selected.Get(i).BlockID)
+							}
+						})
+					}
+				})
+			}
 		})
 	}
 
@@ -408,12 +441,7 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 			col.ClusterBy = sorted
 			table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
 			table.Cols[1] = &col
-			ops := []string{"between", "in_range"}
-			if !sorted {
-				// 本次新增的是普通非排序列 IN 的未知摘要对照。
-				ops = append(ops, "in")
-			}
-			for _, op := range ops {
+			for _, op := range []string{"between", "in_range", "in"} {
 				hints := []uint8{0}
 				if op == "in_range" {
 					hints = []uint8{0, 1, 2, 3}
