@@ -12,15 +12,15 @@ other workload's objects then miss.
 A CN with an index-file cache keeps the objects of IVF-Flat entries tables whole in it,
 as index files beside HNSW and fulltext ones, apart from the shared disk cache.
 
-- **Loading.** `indexfile.OpenObject` opens an object's entry, or reads the object whole
-  into the cache and opens it, as `indexfile.Open` does for an index file: one read per
-  entry at a time, an object of 16 MiB or more read as two ranges at once while fewer than
-  `disk-prefetch-object-split-downloads` whole-object downloads, of index objects and of the disk cache, are in flight; each
-  complete download is a sample of the download rate the prefetcher sizes its queue by. The IVF-Flat
-  search's scan of the entries table opens the objects of its blocks before reading them,
-  eight at once, and holds them until the scan ends. A distributed search assigns whole
-  objects to CNs by object id, so each CN loads its share. An object that cannot be loaded
-  is read the normal way.
+- **Loading.** An object enters the index-file cache by the same whole-object download
+  that fills the disk cache, on a read or prefetch of it that carries `IndexFileObject`;
+  only where the finished file is published differs. Reads of the object during the
+  download join it and are served as its bytes arrive, as for any download of the disk
+  cache, so a search never waits for an object to be loaded before reading it. The
+  download takes no room in the disk cache. An object deleted after its download started
+  is not published. The IVF-Flat search's scan of the entries table holds the entries of
+  the objects of its blocks the cache already has until the scan ends. A distributed search
+  assigns whole objects to CNs by object id, so each CN loads its share.
 - **Reading.** Reads of an entries table carry `IndexFileObject`: its table scans,
   identified by the table type, and the search's own scan. A read with it of an object the
   index-file cache holds is served from there, and the decoded data still enters the
@@ -49,6 +49,8 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
 
 - **Make the index-file cache the disk tier of index tables.** The read and prefetch path
   uses the disk cache directly in about forty places.
+- **Load each object before the scan reads it.** The first scans wait for whole objects
+  they read only parts of.
 - **Load in the background and read the disk cache meanwhile.** A read cannot use an
   object until its load ends, so the first scans read their ranges again beside the load.
 - **Fill each index whole when it is first used.** A distributed search reads only a

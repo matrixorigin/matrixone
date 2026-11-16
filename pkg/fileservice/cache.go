@@ -310,13 +310,14 @@ func (c *CacheConfig) indexFileIdleTTL() (time.Duration, error) {
 }
 
 func (c *fileServiceCaches) close(ctx context.Context) {
-	if c.index != nil {
-		releaseIndexFileCache(ctx, c.index)
-		c.index = nil
-	}
+	// The disk cache's asynchronous publications into the index-file cache end first.
 	if c.disk != nil {
 		c.disk.Close(ctx)
 		c.disk = nil
+	}
+	if c.index != nil {
+		releaseIndexFileCache(ctx, c.index)
+		c.index = nil
 	}
 	if c.memory != nil {
 		c.memory.Close(ctx)

@@ -1014,13 +1014,29 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	fill wholeFill,
 	objectSize objectLayout,
 ) (written bool, err error) {
+	return d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, claimPublication, fill, objectSize, nil)
+}
+
+// writeFileTo writes the file of the object at diskPath and publishes it into target, the
+// disk cache when nil.
+func (d *DiskCache) writeFileTo(
+	ctx context.Context,
+	diskPath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	claimPublication func() bool,
+	fill wholeFill,
+	objectSize objectLayout,
+	target fillTarget,
+) (written bool, err error) {
+	if target == nil {
+		target = diskFillTarget{d: d, diskPath: diskPath}
+	}
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
-	if _, ok := d.cache.Get(ctx, diskPath); ok {
-		if _, err := os.Stat(diskPath); err == nil {
-			return false, nil
-		}
+	if target.heldBeforeLock(ctx) {
+		return false, nil
 	}
 	// A download holds its object-storage connections for long; it reserves them so
 	// range reads keep theirs, before it holds the path, so its wait for a connection
@@ -1090,21 +1106,9 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		return false, err
 	}
 
-	if _, ok := d.cache.Get(ctx, diskPath); ok {
-		if _, err := os.Stat(diskPath); err == nil {
-			// already exists
-			return false, nil
-		} else if os.IsNotExist(err) {
-			// Repair the missing physical file and replace the existing index
-			// after the rewrite so FIFO accounting uses the repaired file size.
-		} else {
-			return false, err
-		}
-	}
-	stat, err := os.Stat(diskPath)
-	if err == nil {
-		// file exists
-		d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+	if held, err := target.held(ctx); err != nil {
+		return false, err
+	} else if held {
 		return false, nil
 	}
 
@@ -1155,7 +1159,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			forceEvict = fileSize(info)
 		}
 	}
-	d.cache.Evict(ctx, nil, forceEvict)
+	target.reserve(ctx, forceEvict)
 
 	var n int64
 	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
@@ -1181,18 +1185,18 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}
 
 	if download != nil && fill != rangeFill {
-		d.noteWholeFile(n)
+		target.noteWritten(n)
 	}
 
 	if asyncFinalize {
-		d.scheduleReservedAsyncFileFinalize(diskPath, f, doneUpdate)
+		d.scheduleReservedAsyncFileFinalize(diskPath, f, doneUpdate, target)
 		asyncSlotOwned = false
 		fileOwned = false
 		updateOwned = false
 		return true, nil
 	}
 
-	if err = d.finalizeFile(ctx, diskPath, f, claimPublication); err != nil {
+	if err = d.finalizeFileTo(ctx, diskPath, f, claimPublication, target); err != nil {
 		return false, err
 	}
 	fileOwned = false
@@ -1204,6 +1208,17 @@ func (d *DiskCache) finalizeFile(
 	diskPath string,
 	f *os.File,
 	claimPublication func() bool,
+) error {
+	return d.finalizeFileTo(ctx, diskPath, f, claimPublication, diskFillTarget{d: d, diskPath: diskPath})
+}
+
+// finalizeFileTo makes f durable and publishes it into target.
+func (d *DiskCache) finalizeFileTo(
+	ctx context.Context,
+	diskPath string,
+	f *os.File,
+	claimPublication func() bool,
+	target fillTarget,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1242,20 +1257,8 @@ func (d *DiskCache) finalizeFile(
 	if d.afterPublicationClaim != nil {
 		d.afterPublicationClaim()
 	}
-	if err := os.Rename(tempPath, diskPath); err != nil {
+	if err := target.publish(ctx, tempPath, size); err != nil {
 		return err
-	}
-	logutil.Debug("disk cache file written",
-		zap.Any("path", diskPath),
-	)
-
-	if !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
-		d.cache.Set(ctx, diskPath, struct{}{}, size)
-	}
-	if !d.cache.Contains(diskPath) {
-		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
 	}
 	if d.afterFilePublication != nil {
 		d.afterFilePublication()
@@ -1703,14 +1706,33 @@ func (d *DiskCache) fillFile(
 	fill wholeFill,
 	objectSize objectLayout,
 ) error {
+	return d.fillFileTo(ctx, filePath, openReader, asyncFinalize, fill, objectSize, nil)
+}
+
+// fillFileTo fills the file of the object at filePath and publishes it into target, the
+// disk cache when nil.
+func (d *DiskCache) fillFileTo(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	fill wholeFill,
+	objectSize objectLayout,
+	target fillTarget,
+) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
-	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize)
-	d.wholeFills.Add(-1)
+	// Only a fill published into the disk cache takes its room.
+	if target == nil {
+		d.wholeFills.Add(1)
+	}
+	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target)
+	if target == nil {
+		d.wholeFills.Add(-1)
+	}
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}

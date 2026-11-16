@@ -38,7 +38,9 @@ func (b *blockList) DataCnt() int                          { return len(b.blocks
 func (b *blockList) GetBlockInfo(i int) objectio.BlockInfo { return b.blocks[i] }
 
 // The objects of a scan's blocks are opened from the index-file cache once each, the
-// in-memory block skipped, and stay cached after the scan.
+// in-memory block skipped. An object the cache does not hold is not waited for: the
+// scan's read of it downloads it whole into the index-file cache, not the disk cache, and
+// the next scan opens it from there.
 func TestOpenIndexObjectsOfScan(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -52,6 +54,8 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 	}, nil, false, false)
 	require.NoError(t, err)
 	defer fs.Close(ctx)
+	// The test opens the objects right after their reads: publish fills before a read returns.
+	fs.SetAsyncUpdate(false)
 
 	data := &blockList{blocks: []objectio.BlockInfo{objectio.EmptyBlockInfo}}
 	names := make([]string, 0, 2)
@@ -59,7 +63,8 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 		id := objectio.NewObjectid()
 		name := objectio.BuildObjectNameWithObjectID(&id)
 		names = append(names, name.String())
-		require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Size: 4096, Data: make([]byte, 4096)}}}))
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name.String(), Policy: fileservice.SkipAllCache,
+			Entries: []fileservice.IOEntry{{Size: 4096, Data: make([]byte, 4096)}}}))
 		for blk := range 2 {
 			loc := objectio.BuildLocation(name, objectio.NewExtent(0, 0, 0, 0), 1, uint16(blk))
 			info := objectio.BlockInfo{BlockID: *objectio.BuildObjectBlockid(name, uint16(blk)), MetaLoc: objectio.ObjectLocation(loc)}
@@ -75,6 +80,16 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, names, indexObjectNames(data), "each object of a persisted block, once")
+	require.Empty(t, openIndexObjects(ctx, services, indexObjectNames(data)), "nothing cached yet")
+
+	readCtx := fileservice.WithFileServicePolicy(ctx, fileservice.IndexFileObject)
+	for _, name := range names {
+		vec := &fileservice.IOVector{FilePath: name, Policy: fileservice.IndexFileObject | fileservice.SkipMemoryCache,
+			Entries: []fileservice.IOEntry{{Offset: 100, Size: 10}}}
+		require.NoError(t, fs.Read(readCtx, vec))
+		vec.Release()
+	}
+
 	files := openIndexObjects(ctx, services, indexObjectNames(data))
 	require.Len(t, files, 2)
 	for _, f := range files {

@@ -60,6 +60,7 @@ type diskCacheAsyncUpdate struct {
 
 type diskCacheAsyncFileFinalize struct {
 	file       *os.File
+	target     fillTarget
 	doneUpdate func() error
 	attempted  bool
 	err        error
@@ -339,6 +340,7 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	diskPath string,
 	file *os.File,
 	doneUpdate func() error,
+	target fillTarget,
 ) {
 	a := &d.async
 	a.startOnce.Do(func() {
@@ -349,6 +351,7 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 		diskPath: diskPath,
 		finalize: &diskCacheAsyncFileFinalize{
 			file:       file,
+			target:     target,
 			doneUpdate: doneUpdate,
 		},
 	}
@@ -414,11 +417,12 @@ func (d *DiskCache) runAsyncUpdates() {
 			if d.async.ctx.Err() == nil {
 				if job.finalize != nil {
 					job.finalize.attempted = true
-					job.finalize.err = d.finalizeFile(
+					job.finalize.err = d.finalizeFileTo(
 						d.async.ctx,
 						job.diskPath,
 						job.finalize.file,
 						d.claimAsyncPublication,
+						job.finalize.target,
 					)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {

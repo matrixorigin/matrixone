@@ -44,6 +44,8 @@ type ObjectPrefetch struct {
 	Scan     *PrefetchScan
 	// deletes is the file service's count of deleted objects when the request was made.
 	deletes uint64
+	// indexObject publishes the download of the whole object into the index-file cache.
+	indexObject bool
 }
 
 // PrefetchRange is a range of an object.
@@ -74,6 +76,7 @@ func (s *PrefetchScan) live() bool {
 func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
 	r.deletes = min(r.deletes, o.deletes)
+	r.indexObject = r.indexObject || o.indexObject
 	if o.share() > r.share() {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
 	}
@@ -488,6 +491,7 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 		if _, ok := s.indexObjectCached(req.FilePath); ok {
 			return nil
 		}
+		req.indexObject = len(req.Ranges) == 0
 	}
 	if s.prefetcher != nil && req.Size > 0 {
 		req.deletes = s.diskCache.prefetched.deletes.Load()
@@ -512,6 +516,11 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	path, err := parseFilePathAtService(req.FilePath, s.name)
 	if err != nil {
 		return true
+	}
+	if req.indexObject && s.cachesIndexObjects() {
+		if _, ok := s.indexObjectCached(req.FilePath); ok {
+			return true
+		}
 	}
 	diskPath := s.diskCache.pathForFile(path.File)
 	if s.diskCache.download(diskPath) != nil {
@@ -553,6 +562,9 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	objectPath := s.diskCache.pathForFile(path.File)
 	s.diskCache.prefetched.storeCurrent(objectPath, req.Size, req.deletes)
 	ctx, done := s.diskCache.startFilePrefetch(ctx, objectPath, 0, req.Size)
+	if req.indexObject {
+		ctx = WithFileServicePolicy(ctx, GetFileServicePolicy(ctx)|IndexFileObject)
+	}
 	err = s.PrefetchFile(ctx, req.FilePath)
 	done(err)
 	if err != nil {

@@ -15,13 +15,12 @@
 package fileservice
 
 import (
-	"cmp"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,41 +37,7 @@ const (
 	indexObjectTouch = time.Minute
 	// indexObjectsTouchedMax is the most index objects remembered as marked used.
 	indexObjectsTouchedMax = 1 << 14
-	// indexObjectSplitParts is how many ranges the download of an index object reads at
-	// once.
-	indexObjectSplitParts = 2
 )
-
-// indexObjectDownloads is the number of index-object downloads in flight.
-var indexObjectDownloads atomic.Int64
-
-// IndexObjectDownload starts the download of an index object of fs of size bytes. It
-// returns the 64KiB-aligned bounds of the ranges to read at once, or nil to read it as one
-// range, and end, to call once when the download ends. The object is split while fewer
-// than disk-prefetch-object-split-downloads whole-object downloads, of index objects and of
-// fs's disk cache, are in flight. A complete download is a sample of the download rate.
-func IndexObjectDownload(fs FileService, size int64) (bounds []int64, end func(complete bool)) {
-	inFlight := indexObjectDownloads.Add(1) - 1
-	limit := int64(DefaultDiskPrefetchObjectSplitDownloads)
-	if s, ok := fs.(*S3FS); ok && s.diskCache != nil {
-		inFlight += int64(s.diskCache.downloading())
-		limit = int64(cmp.Or(s.diskCache.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))
-	}
-	if inFlight < limit {
-		bounds = objectSplitConfig{parts: indexObjectSplitParts, min: DefaultDiskPrefetchObjectSplitMin}.bounds(size, 0)
-	}
-	parts := int64(max(len(bounds)-1, 1))
-	start := time.Now()
-	var once sync.Once
-	return bounds, func(complete bool) {
-		once.Do(func() {
-			indexObjectDownloads.Add(-1)
-			if complete {
-				downloadRates.observe(size/parts, time.Since(start))
-			}
-		})
-	}
-}
 
 // indexObjects is the state of the index objects an S3FS reads from its index-file cache.
 type indexObjects struct {
@@ -105,6 +70,54 @@ func IndexObjectCache(fs FileService) (*IndexFileCache, FileService) {
 
 func (s *S3FS) cachesIndexObjects() bool {
 	return s.indexFileCache != nil
+}
+
+// fillTarget returns where a whole-object fill of the object at filePath for a read
+// under policy publishes: the index-file cache for an IndexFileObject read of an object it
+// keeps, otherwise the disk cache (nil).
+func (s *S3FS) fillTarget(policy Policy, filePath string) fillTarget {
+	if !policy.Any(IndexFileObject) || !s.cachesIndexObjects() {
+		return nil
+	}
+	p, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return nil
+	}
+	return indexFillTarget{s: s, filePath: filePath, name: IndexObjectEntry(p.File), mark: s.indexFileCache.DeleteMark()}
+}
+
+// indexFillTarget publishes the object at filePath into the index-file cache, as entry
+// name, unless the object was deleted after mark.
+type indexFillTarget struct {
+	s        *S3FS
+	filePath string
+	name     string
+	mark     uint64
+}
+
+func (t indexFillTarget) heldBeforeLock(context.Context) bool {
+	_, ok := t.s.indexObjectCached(t.filePath)
+	return ok
+}
+
+func (t indexFillTarget) held(context.Context) (bool, error) {
+	_, ok := t.s.indexObjectCached(t.filePath)
+	return ok, nil
+}
+
+// reserve makes no room: the index-file cache evicts when the entry is put.
+func (t indexFillTarget) reserve(context.Context, int64) {}
+
+func (t indexFillTarget) noteWritten(int64) {}
+
+func (t indexFillTarget) publish(ctx context.Context, tempPath string, _ int64) error {
+	_, err := t.s.indexFileCache.PutUnlessDeleted(ctx, t.name, t.mark,
+		[]IndexCacheFile{{Name: IndexObjectFile, Path: tempPath}})
+	// The put moves the file, copies it across file systems, or does not take it.
+	if rmErr := os.Remove(tempPath); rmErr != nil && !os.IsNotExist(rmErr) {
+		return errors.Join(err, rmErr)
+	}
+	return err
 }
 
 // indexObjectCached returns the disk path of the entry of the object at filePath, and

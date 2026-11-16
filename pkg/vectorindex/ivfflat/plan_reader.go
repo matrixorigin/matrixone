@@ -21,7 +21,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -50,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
@@ -1316,9 +1313,6 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 	return bat, nil
 }
 
-// indexObjectLoaders is the most objects of a scan read into the index-file cache at once.
-const indexObjectLoaders = 8
-
 // indexObjectNames returns the objects of the persisted blocks of relData, each once.
 func indexObjectNames(relData engine.RelData) []string {
 	var objects []string
@@ -1337,33 +1331,23 @@ func indexObjectNames(relData engine.RelData) []string {
 	return objects
 }
 
-// openIndexObjects opens objects from the index-file cache of fs when it keeps index
-// objects, reading the ones it does not hold; the scan then reads them from there. An
-// object that cannot be read into the cache is left to the scan.
+// openIndexObjects opens, held, the objects the index-file cache of fs holds, so the scan
+// reads them from there. A read of another downloads it whole into the cache.
 func openIndexObjects(ctx context.Context, fs fileservice.FileService, objects []string) []*indexfile.File {
-	cache, shared := fileservice.IndexObjectCache(fs)
+	cache, _ := fileservice.IndexObjectCache(fs)
 	if cache == nil || len(objects) == 0 {
 		return nil
 	}
-	files := make([]*indexfile.File, len(objects))
-	sem := make(chan struct{}, indexObjectLoaders)
-	var wg sync.WaitGroup
-	for i, object := range objects {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			f, err := indexfile.OpenObject(ctx, cache, shared, object, 0)
-			if err != nil {
-				if ctx.Err() == nil {
-					logutil.Warn("ivfflat: read object into the index-file cache", zap.String("object", object), zap.Error(err))
-				}
-				return
-			}
-			files[i] = f
-		}()
+	files := make([]*indexfile.File, 0, len(objects))
+	for _, object := range objects {
+		f, err := indexfile.OpenCachedObject(ctx, cache, object)
+		if err != nil {
+			break
+		}
+		if f != nil {
+			files = append(files, f)
+		}
 	}
-	wg.Wait()
 	return files
 }
 

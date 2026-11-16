@@ -529,8 +529,8 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		return nil
 	}
 
-	// load to disk cache
-	if err := s.diskCache.fillFile(
+	// load to disk cache, or to the index-file cache for an object it keeps
+	if err := s.diskCache.fillFileTo(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
@@ -538,6 +538,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		s.asyncUpdate,
 		storageFill,
 		s.prefetchedSize(path.File, 0),
+		s.fillTarget(GetFileServicePolicy(ctx), filePath),
 	); err != nil {
 		return err
 	}
@@ -767,7 +768,10 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			vector.Entries[i].readDeletes = mark
 		}
 	}
+	// The disk cache's eviction of whole objects says nothing of an object the index-file
+	// cache keeps.
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
+		!(vector.Policy.Any(IndexFileObject) && s.cachesIndexObjects()) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
 	}
@@ -1690,7 +1694,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	// The download is a FilePrefetchObject of the whole object.
 	prefetchCtx, endPrefetch := s.diskCache.startFilePrefetch(fillCtx, diskPath, 0, math.MaxInt64)
 	go func() {
-		err := s.diskCache.fillFile(prefetchCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.fillFileTo(prefetchCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			var admitted admittedDownload
@@ -1702,7 +1706,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			}
 			started <- admitted
 			return &lazyObjectReader{ctx: ctx, read: getReader}, nil
-		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)))
+		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)), s.fillTarget(vector.Policy, vector.FilePath))
 		endPrefetch(err)
 		setDone <- err
 	}()
