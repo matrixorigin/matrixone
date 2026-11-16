@@ -4541,6 +4541,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
+		if builder.pushDownOuterCounts(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
