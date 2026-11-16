@@ -7885,7 +7885,8 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		project = append(project, &plan.Expr{
 			Typ: routeTyp,
 			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: crossapply.BindingTags[0], ColPos: int32(len(ftcols))},
+				// This PROJECT consumes APPLY's already-remapped output.
+				Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(ftcols))},
 			},
 		})
 	}

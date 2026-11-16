@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -569,10 +570,30 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous fulltext primary key uses old-key maintenance",
+			name:       "synchronous fulltext primary key remains rejected",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
+			wantReject: true,
+		},
+		{
+			name: "partitioned synchronous fulltext primary key uses routed maintenance",
+			tableDef: func() *TableDef {
+				tableDef := newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body"))
+				tableDef.FeatureFlag |= features.Partitioned
+				return tableDef
+			}(),
+			updateCols: map[string]tree.Expr{"id": nil},
 			wantInline: 1,
+		},
+		{
+			name: "partitioned synchronous vector primary key remains rejected",
+			tableDef: func() *TableDef {
+				tableDef := newTableDef(newIndex("ivf", catalog.MoIndexIvfFlatAlgo.ToString(), "", "vec"))
+				tableDef.FeatureFlag |= features.Partitioned
+				return tableDef
+			}(),
+			updateCols: map[string]tree.Expr{"id": nil},
+			wantReject: true,
 		},
 		{
 			name:       "async primary key stays modern",

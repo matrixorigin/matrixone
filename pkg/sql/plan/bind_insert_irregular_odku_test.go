@@ -268,7 +268,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 	postdml_flag = true
 	t.Cleanup(func() { postdml_flag = oldPostDML })
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
@@ -316,7 +316,8 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 	require.Equal(t, 1, preInsertWithRoute,
 		"routed FULLTEXT maintenance must preserve one complete input layout through PRE_INSERT")
 
-	for _, node := range query.Nodes {
+	var fulltextApplyWithRoute int
+	for applyID, node := range query.Nodes {
 		if node == nil || node.NodeType != planpb.Node_APPLY || len(node.ProjectList) == 0 {
 			continue
 		}
@@ -328,7 +329,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 			child := query.Nodes[childID]
 			if child != nil && child.NodeType == planpb.Node_FUNCTION_SCAN &&
 				child.TableDef != nil && child.TableDef.TblFunc != nil &&
-				child.TableDef.TblFunc.Name == fulltext_index_tokenize_func_name {
+				child.TableDef.TblFunc.Name == fulltextplan.TokenizeFuncName {
 				isFulltextApply = true
 				break
 			}
@@ -336,15 +337,33 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 		if !isFulltextApply {
 			continue
 		}
+		fulltextApplyWithRoute++
 		route := node.ProjectList[len(node.ProjectList)-1].GetCol()
 		require.NotNil(t, route, "partition route must remain a column projection")
 		require.Equal(t, int32(0), route.RelPos,
 			"APPLY result projections read the left input through relation 0")
+		var postApplyRoute int
+		for _, projection := range query.Nodes {
+			if projection == nil || projection.NodeType != planpb.Node_PROJECT ||
+				len(projection.Children) != 1 || projection.Children[0] != int32(applyID) {
+				continue
+			}
+			require.NotEmpty(t, projection.ProjectList)
+			projectedRoute := projection.ProjectList[len(projection.ProjectList)-1].GetCol()
+			require.NotNil(t, projectedRoute)
+			require.Equal(t, int32(0), projectedRoute.RelPos,
+				"post-APPLY PROJECT reads the complete child output through relation 0, not an old binding tag")
+			require.Equal(t, int32(len(node.ProjectList)-1), projectedRoute.ColPos,
+				"the route follows the tokenizer columns in APPLY output")
+			postApplyRoute++
+		}
+		require.Equal(t, 1, postApplyRoute, "inspect the actual post-APPLY projection retaining the route")
 	}
+	require.Equal(t, 1, fulltextApplyWithRoute, "the actual FULLTEXT APPLY route projection must be inspected")
 }
 
 func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	partitionExpr := &planpb.Expr{
@@ -399,7 +418,7 @@ func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *tes
 	})
 
 	t.Run("document primary key changes rebuild both branches", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		base := mock.ctxt.tables["docs_ft"]
 		base.FeatureFlag |= features.Partitioned
 		base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
@@ -434,7 +453,7 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 		"replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]')",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["docs_ft"]
 			base.FeatureFlag |= features.Partitioned
 			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
@@ -710,7 +729,7 @@ func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
 		"insert into constraint_test.docs_ft_dual(id, body, summary, payload) values (1, 'body', 'new', 7) on duplicate key update summary = values(summary)",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["docs_ft_dual"]
 			base.FeatureFlag |= features.Partitioned
 			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "=", []*Expr{
@@ -743,7 +762,7 @@ func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
 }
 
 func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
@@ -789,7 +808,7 @@ func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
 }
 
 func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft_dual"]
 	require.NotNil(t, base)
 	base.FeatureFlag |= features.Partitioned

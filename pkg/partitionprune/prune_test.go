@@ -50,6 +50,7 @@ func TestPrunePartitionByExpr(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(2)
+	defer bat.Clean(mp)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
@@ -141,6 +142,7 @@ func TestPrunePartitionByExpr(t *testing.T) {
 
 		result, err := PrunePartitionByExpr(proc, bat, partition, -1)
 		require.NoError(t, err)
+		defer result.Clean(mp)
 		require.Equal(t, 1, result.RowCount())
 	})
 }
@@ -163,6 +165,7 @@ func TestPrune(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(2)
+	defer bat.Clean(mp)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
@@ -326,6 +329,7 @@ func TestPrune(t *testing.T) {
 
 		result, err := Prune(proc, bat, metadata, -1)
 		require.NoError(t, err)
+		defer result.Close()
 		require.Equal(t, 2, batchCount(result))
 	})
 
@@ -498,5 +502,142 @@ func TestPrunePreservesOtherPartitionColumns(t *testing.T) {
 				require.Equal(t, beforeShifted, shifted)
 			})
 		}
+	}
+}
+
+// All regressions enter through Prune so the original prune.go and types.go
+// can be overlaid together without adapting these tests to a new constructor.
+func TestPruneBatchOwnership(t *testing.T) {
+	for _, scenario := range []string{
+		"success", "uncovered-row", "later-constructor-error", "later-eval-error",
+		"later-copy-error", "later-eval-panic", "later-copy-panic",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
+			proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			defer proc.Free()
+			input := batch.NewWithSize(4)
+			defer input.Clean(mp)
+			input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			input.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+			input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+			input.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+			values := [][]byte{[]byte("first payload exceeding inline capacity"), []byte("second payload exceeding inline capacity")}
+			if scenario == "later-copy-error" {
+				values[1] = []byte{0xff}
+			}
+			for i := range 2 {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i+1), false, mp))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], i == 0, false, mp))
+				require.NoError(t, vector.AppendFixed(input.Vecs[2], i == 1, false, mp))
+				require.NoError(t, vector.AppendBytes(input.Vecs[3], values[i], false, mp))
+			}
+			input.SetRowCount(2)
+			if scenario == "later-copy-error" {
+				// Admit the raw fixture first, then give it a native Unicode
+				// type: UnionOne rejects the second value after allocating its
+				// descriptor and copying the preceding columns. No test hook.
+				input.Vecs[3].SetType(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+			}
+			if scenario == "later-copy-panic" {
+				// A truncated source exposes a panic inside UnionOne after the
+				// earlier columns and earlier partition have already allocated.
+				input.Vecs[3].Free(mp)
+				short, err := vector.NewVecWithDataCopy(types.T_int64.ToType(), 1, make([]byte, 8), nil, mp)
+				require.NoError(t, err)
+				input.Vecs[3] = short
+			}
+			column := func(pos int32) *plan.Expr {
+				return &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+			}
+			metadata := partition.PartitionMetadata{Partitions: []partition.Partition{
+				{PartitionID: 10, Expr: column(1)},
+				{PartitionID: 11, Expr: column(2)},
+			}}
+			switch scenario {
+			case "uncovered-row":
+				metadata.Partitions = metadata.Partitions[:1]
+			case "later-constructor-error":
+				metadata.Partitions[1].Expr = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}}
+			case "later-eval-error":
+				metadata.Partitions[1].Expr = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "prune_missing_resolver"}}}
+			case "later-eval-panic":
+				metadata.Partitions[1].Expr = column(99)
+			}
+			beforeExpr := make([]*plan.Expr, len(metadata.Partitions))
+			for i, part := range metadata.Partitions {
+				beforeExpr[i] = p.DeepCopyExpr(part.Expr)
+			}
+			beforeData := append([]byte(nil), input.Vecs[3].GetData()...)
+			beforeArea := append([]byte(nil), input.Vecs[3].GetArea()...)
+			beforeType := *input.Vecs[3].GetType()
+			beforeLength := input.Vecs[3].Length()
+			baseline := mp.CurrNB()
+			require.Positive(t, baseline, "input remains allocated throughout the prune lifetime")
+			heapBytes, heapObjects := mp.OnHeapOutstanding()
+			if scenario == "later-eval-panic" || scenario == "later-copy-panic" {
+				require.Panics(t, func() {
+					result, err := Prune(proc, input, metadata, -1)
+					defer result.Close()
+					require.NoError(t, err)
+				})
+			} else {
+				result, err := Prune(proc, input, metadata, -1)
+				defer result.Close()
+				if scenario == "success" {
+					require.NoError(t, err)
+					require.False(t, result.Empty())
+					require.Greater(t, mp.OnHeapCurrNB(), heapBytes, "nonempty copies must actually allocate")
+					alias := result
+					var got []int64
+					alias.Iter(func(part partition.Partition, b *batch.Batch) bool {
+						require.Equal(t, uint64(10+len(got)), part.PartitionID)
+						require.NotSame(t, input.Vecs[0], b.Vecs[0])
+						got = append(got, vector.MustFixedColWithTypeCheck[int64](b.Vecs[0])...)
+						require.Equal(t, values[len(got)-1], b.Vecs[3].GetBytesAt(0))
+						return true
+					})
+					require.Equal(t, []int64{1, 2}, got)
+					alias.Close()
+					result.Close()
+					alias.Close()
+				} else {
+					require.Error(t, err)
+					require.True(t, result.Empty())
+					switch scenario {
+					case "uncovered-row":
+						require.Contains(t, err.Error(), "Table has no partition for value from column_list")
+					case "later-constructor-error":
+						require.Contains(t, err.Error(), "unsupported expression executor")
+					case "later-eval-error":
+						require.Contains(t, err.Error(), "resolve variable function is not set")
+					case "later-copy-error":
+						require.Contains(t, err.Error(), "invalid UTF-8")
+					}
+				}
+			}
+			// Keep the input, process and pool alive for all three oracles.
+			require.Equal(t, baseline, mp.CurrNB())
+			bytes, objects := mp.OnHeapOutstanding()
+			require.Equal(t, heapBytes, bytes)
+			require.Equal(t, heapObjects, objects)
+			require.Equal(t, 2, input.RowCount())
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](input.Vecs[0]))
+			require.Equal(t, []bool{true, false}, vector.MustFixedColWithTypeCheck[bool](input.Vecs[1]))
+			require.Equal(t, []bool{false, true}, vector.MustFixedColWithTypeCheck[bool](input.Vecs[2]))
+			require.Equal(t, beforeData, input.Vecs[3].GetData())
+			require.Equal(t, beforeArea, input.Vecs[3].GetArea())
+			require.Equal(t, beforeType, *input.Vecs[3].GetType())
+			require.Equal(t, beforeLength, input.Vecs[3].Length())
+			if scenario != "later-copy-panic" {
+				for i, value := range values {
+					require.Equal(t, value, input.Vecs[3].GetBytesAt(i))
+				}
+			}
+			for i, part := range metadata.Partitions {
+				require.Equal(t, beforeExpr[i], part.Expr)
+			}
+		})
 	}
 }

@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -149,10 +151,15 @@ func TestTruncatePartitions(t *testing.T) {
 }
 
 func TestIterResult(t *testing.T) {
-	res := PruneResult{
-		batches:    make([]*batch.Batch, 10),
-		partitions: make([]partition.Partition, 10),
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	bats := make([]*batch.Batch, 2)
+	for i := range bats {
+		bats[i] = batch.NewWithSize(0)
+		bats[i].SetRowCount(1)
 	}
+	res := NewPruneResult(bats, make([]partition.Partition, len(bats)), mp)
+	defer res.Close()
 
 	n := 0
 	res.Iter(
@@ -162,6 +169,65 @@ func TestIterResult(t *testing.T) {
 		},
 	)
 	require.Equal(t, 1, n)
+}
+
+func TestPruneResultCloseCopies(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+		bytes, objects := mp.OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
+	})
+	var zero PruneResult
+	zero.Close()
+	require.True(t, zero.Empty())
+	zero.Iter(func(partition.Partition, *batch.Batch) bool {
+		t.Fatal("zero result must not iterate")
+		return false
+	})
+
+	// An empty batch can still own capacity; filtering it out of iteration
+	// must release that capacity rather than losing the only cleanup owner.
+	bats := make([]*batch.Batch, 3)
+	for i := range bats {
+		bats[i] = batch.NewWithSize(1)
+		b := bats[i]
+		t.Cleanup(func() { b.Clean(mp) })
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(b.Vecs[0], int64(i), false, mp))
+		b.SetRowCount(1)
+	}
+	bats[1].SetRowCount(0)
+	res := NewPruneResult(bats, []partition.Partition{{PartitionID: 10}, {PartitionID: 11}, {PartitionID: 12}}, mp)
+	defer res.Close()
+	alias := res
+	var ids []uint64
+	alias.Iter(func(p partition.Partition, b *batch.Batch) bool {
+		ids = append(ids, p.PartitionID)
+		require.Equal(t, 1, b.RowCount())
+		return true
+	})
+	require.Equal(t, []uint64{10, 12}, ids)
+	require.Nil(t, bats[1].Vecs)
+	alias.Close()
+	res.Close()
+	alias.Close()
+	require.True(t, res.Empty())
+	require.True(t, alias.Empty())
+	res.Iter(func(partition.Partition, *batch.Batch) bool {
+		t.Fatal("closed result must not iterate")
+		return false
+	})
+	for _, b := range bats {
+		require.Nil(t, b.Vecs)
+		require.Zero(t, b.RowCount())
+	}
+	bytes, objects := mp.OnHeapOutstanding()
+	require.Zero(t, bytes, "release before pool deletion")
+	require.Zero(t, objects)
+	require.Zero(t, mp.CurrNB())
 }
 
 func runTestPartitionServiceTest(
