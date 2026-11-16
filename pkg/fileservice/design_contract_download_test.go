@@ -47,7 +47,7 @@ func (s *gatedStorage) Read(ctx context.Context, key string, min, max *int64) (i
 		s.ranges.Add(1)
 		return r, nil
 	}
-	return &gatedReader{r: r, gateAt: s.gateAt, release: s.release}, nil
+	return &gatedReader{r: r, gateAt: s.gateAt, release: s.release, done: ctx.Done(), ctx: ctx}, nil
 }
 
 type gatedReader struct {
@@ -55,11 +55,19 @@ type gatedReader struct {
 	gateAt  int64
 	read    int64
 	release chan struct{}
+	done    <-chan struct{}
+	ctx     context.Context
 }
 
+// Read stops at gateAt until release, or until the request's context ends, as an HTTP
+// response body does.
 func (g *gatedReader) Read(p []byte) (int, error) {
 	if g.read >= g.gateAt {
-		<-g.release
+		select {
+		case <-g.release:
+		case <-g.done:
+			return 0, g.ctx.Err()
+		}
 	} else if rest := g.gateAt - g.read; int64(len(p)) > rest {
 		p = p[:rest]
 	}
@@ -147,6 +155,11 @@ func TestDesignDownloadFetchedOnce(t *testing.T) {
 // fetches its range instead of waiting, and gets the right bytes.
 func TestDesignDownloadFarBehindReadsRange(t *testing.T) {
 	fs, storage, data := newDownloadContractFS(t, 0)
+	// The download stops before it measures its own rate, and the recent rate puts the
+	// read's bytes seconds after a range read.
+	storage.gateAt = downloadRateMinBytes / 2
+	downloadsRate(t, 1<<20)
+	rangeCosts(t, 0.001, 1<<30)
 
 	_, done := readAsync(fs, 1024, 4)
 	requireReturns(t, done)
