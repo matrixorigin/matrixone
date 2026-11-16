@@ -4178,6 +4178,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
+	if name == "serial_extract" && returnType.Oid == types.T_enum {
+		// ENUM members are present only in the plan type, not the native type.
+		Typ.Enumvalues = args[2].Typ.Enumvalues
+	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{

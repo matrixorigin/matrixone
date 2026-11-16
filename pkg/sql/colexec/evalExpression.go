@@ -121,6 +121,13 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return NewExpressionExecutorWithAllocation(proc, planExpr, nil)
 }
 
+func expressionTypeFromPlan(typ plan.Type) types.Type {
+	if typ.Id == int32(types.T_enum) {
+		return vector.ProtoTypeToType(typ)
+	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
+
 func NewExpressionExecutorWithAllocation(
 	proc *process.Process,
 	planExpr *plan.Expr,
@@ -128,7 +135,7 @@ func NewExpressionExecutorWithAllocation(
 ) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
@@ -136,7 +143,7 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
@@ -144,7 +151,7 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
 			mp:         proc.Mp(),
@@ -161,13 +168,13 @@ func NewExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
 			mp:         proc.Mp(),
@@ -191,7 +198,7 @@ func NewExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
+		typ := expressionTypeFromPlan(resultVecTyp)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -225,7 +232,7 @@ func NewExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := expressionTypeFromPlan(planExpr.Typ)
 
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
