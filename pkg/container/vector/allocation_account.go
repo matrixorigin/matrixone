@@ -50,6 +50,12 @@ type AllocationAccountSelection struct {
 	capacityClass mpool.AllocationCapacityClass
 }
 
+// UsesAccount checks account identity without changing the immutable owner/site
+// provenance, including selections supplied by a native execution factory.
+func (s *AllocationAccountSelection) UsesAccount(account *mpool.AllocationAccount) bool {
+	return s != nil && s.account == account
+}
+
 // AllocationAccountSelectionsEqual reports whether two immutable selections
 // describe the same physical allocation provenance. Separately constructed
 // selections are interchangeable only when they charge the same account,
