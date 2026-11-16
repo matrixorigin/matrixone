@@ -467,6 +467,14 @@ func TestBindStoredValueEqualityEvaluatesStoredIdentity(t *testing.T) {
 		require.True(t, evalStoredValueEquality(t,
 			makeStoredTextLiteral("value", false, types.T_text), concat))
 	})
+
+	t.Run("unicode case-insensitive collation still compares stored bytes", func(t *testing.T) {
+		oldValue := makeStoredTextLiteral("Alpha", false, types.T_varchar)
+		newValue := makeStoredTextLiteral("alpha", false, types.T_varchar)
+		oldValue.Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		newValue.Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		require.False(t, evalStoredValueEquality(t, oldValue, newValue))
+	})
 }
 
 func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {

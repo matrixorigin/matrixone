@@ -52,11 +52,14 @@ func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 		require.Equal(t, []string{"id", "body", "summary"}, columns)
 	})
 
+	charPrimaryKeyTable := *tableDef
+	charPrimaryKeyTable.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "headline", Names: []string{"headline"}}
 	for _, tc := range []struct {
 		name     string
 		tableDef *planpb.TableDef
 		indexDef *planpb.IndexDef
 	}{
+		{name: "char primary key comparison is not document identity", tableDef: &charPrimaryKeyTable, indexDef: &planpb.IndexDef{Parts: []string{"body"}}},
 		{name: "char comparison is not byte identity", tableDef: tableDef, indexDef: &planpb.IndexDef{Parts: []string{"headline"}}},
 		{name: "json comparison is not tokenizer identity", tableDef: tableDef, indexDef: &planpb.IndexDef{Parts: []string{"metadata"}}},
 		{name: "datalink has external content dependency", tableDef: tableDef, indexDef: &planpb.IndexDef{Parts: []string{"body", "resource"}}},

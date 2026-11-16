@@ -40,11 +40,11 @@ type Hooks struct{}
 
 // DMLMaintenanceNoOpColumns declares when an old fulltext posting set is
 // provably identical to the final one. FULLTEXT input includes the row
-// identity/doc_id as well as the indexed values. VARCHAR and TEXT preserve the
-// bytes that determine tokenization; the planner compares those columns as
-// stored bytes rather than with their SQL collation. CHAR, JSON, and DATALINK
-// stay conservative because their SQL NULL-safe equality is not a proof of
-// identical tokenizer input.
+// identity/doc_id as well as the indexed values. VARCHAR and TEXT index values
+// are compared by stored bytes. CHAR index values and primary keys stay
+// conservative because SQL equality can fold case or ignore trailing spaces;
+// JSON and DATALINK index values also remain conservative because their SQL
+// NULL-safe equality does not prove identical tokenizer input.
 func (Hooks) DMLMaintenanceNoOpColumns(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
@@ -58,6 +58,11 @@ func (Hooks) DMLMaintenanceNoOpColumns(
 	}
 	pkPos, ok := tableDef.Name2ColIndex[pkName]
 	if !ok || pkPos < 0 || int(pkPos) >= len(tableDef.Cols) || tableDef.Cols[pkPos] == nil {
+		return nil, false, nil
+	}
+	if types.T(tableDef.Cols[pkPos].Typ.Id) == types.T_char {
+		// CHAR equality can fold case or ignore trailing spaces, so it cannot
+		// prove that the hidden index received the same document identity.
 		return nil, false, nil
 	}
 
