@@ -219,7 +219,13 @@ func (l *store) newestActiveSnapshotIndex(
 func (l *store) cleanupStaleReplica(
 	shardID uint64, replicaID uint64, activeSnapshotIndex uint64,
 ) {
+	// Fence new exports before checking whether an admitted request can still
+	// publish into this replica's export directory.
+	l.markReplicaRetiring(shardID, replicaID)
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
+		if errors.Is(err, errSnapshotExportPending) {
+			return
+		}
 		l.runtime.Logger().Error("remove stale exported snapshots failed",
 			zap.Uint64("shardID", shardID),
 			zap.Uint64("replicaID", replicaID),
@@ -236,8 +242,25 @@ func (l *store) cleanupStaleReplica(
 	l.removeMetadata(shardID, replicaID)
 }
 
+func (l *store) beginExport(shardID, replicaID uint64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, rec := range l.mu.metadata.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
+			l.snapshotMgr.BeginExport(shardID, replicaID)
+			return nil
+		}
+	}
+	return dragonboat.ErrShardNotFound
+}
+
 // exportSnapshot just export the snapshot but do NOT truncate logs.
 func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID uint64) error {
+	if err := l.beginExport(shardID, replicaID); err != nil {
+		return err
+	}
+	var mayFinishLater bool
+	defer func() { l.snapshotMgr.FinishExport(shardID, replicaID, mayFinishLater) }()
 	opts := dragonboat.SnapshotOption{
 		// set to true means just export snapshot, do NOT truncate logs.
 		Exported:   true,
@@ -249,7 +272,7 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 		// These results can arrive after Dragonboat accepted the request;
 		// the export may still reach its final directory later.
 		if errors.Is(err, dragonboat.ErrTimeout) || errors.Is(err, dragonboat.ErrCanceled) {
-			l.snapshotMgr.MarkExportUncertain(shardID, replicaID)
+			mayFinishLater = true
 		}
 		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))
 		return err

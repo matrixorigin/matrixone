@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -167,7 +168,12 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 		}
 	}
 	if err := s.store.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
-		s.runtime.Logger().Error("failed to remove zombie exported snapshots", zap.Error(err))
+		if errors.Is(err, errSnapshotExportPending) {
+			s.runtime.Logger().Warn("defer zombie exported snapshot cleanup until restart",
+				zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID))
+		} else {
+			s.runtime.Logger().Error("failed to remove zombie exported snapshots", zap.Error(err))
+		}
 		return
 	}
 	s.store.removeMetadata(shardID, replicaID)

@@ -538,6 +538,14 @@ func (l *store) startReplicas(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// A retiring replica is already fenced by durable local metadata. It
+	// must also be blocked from the configured initial HAKeeper bootstrap
+	// path, which consults skippedZombies after startReplicas returns.
+	for _, rec := range shards {
+		if rec.Retiring {
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+		}
+	}
 	superseded := make(map[zombieKey]struct{})
 	if !l.catalogExecutor.enabled {
 		// Local metadata records every successful start. When old HAKeeper

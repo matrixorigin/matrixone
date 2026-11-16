@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/google/uuid"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap"
 )
@@ -290,6 +291,7 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
 	}
 
 	l.mu.metadata.Shards = append(l.mu.metadata.Shards, rec)
+	delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
 	l.mustSaveMetadata()
 }
 
@@ -304,7 +306,11 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 		}
 	}
 	l.mu.metadata.Shards = shards
-	delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
+	// The initial HAKeeper bootstrap can run after retirement cleanup. Keep
+	// its blocked-start decision for this process until an explicit re-add.
+	if shardID != hakeeper.DefaultHAKeeperShardID {
+		delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
+	}
 	l.mustSaveMetadata()
 }
 
@@ -315,6 +321,12 @@ func (l *store) markReplicaRetiring(shardID, replicaID uint64) {
 		rec := &l.mu.metadata.Shards[i]
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
 			rec.Retiring = true
+			if shardID == hakeeper.DefaultHAKeeperShardID {
+				if l.mu.skippedZombies == nil {
+					l.mu.skippedZombies = make(map[zombieKey]struct{})
+				}
+				l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}] = struct{}{}
+			}
 			l.mustSaveMetadata()
 			return
 		}

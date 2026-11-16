@@ -146,6 +146,7 @@ func (l *store) catalogStartReplica(p pb.CatalogMetadataStartPermit) error {
 	return l.startHAKeeperReplicaRaw(p.ReplicaID, nil, join)
 }
 func (l *store) catalogStopReplica(p pb.CatalogMetadataStartPermit) error {
+	l.markReplicaRetiring(hakeeper.DefaultHAKeeperShardID, p.ReplicaID)
 	if l.catalogReplicaPresent(p, false) {
 		if err := l.stopReplicaRaw(hakeeper.DefaultHAKeeperShardID, p.ReplicaID); err != nil {
 			return err
