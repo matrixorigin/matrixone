@@ -370,7 +370,17 @@ The byte-boundary reader passes fresh owner tests with -short and -tags=matrixon
 
 A new source-matched native service passes the maintained 121-statement BVT twice with checked-in expected results unchanged (no generation, failure, ignored or abnormal statements), and nine independent public SQL groups execute 185 SQL operations with literal result/error assertions across metadata replay, empty/zero ordinals, ALTER, views, FK and imports. Both service instances stop normally. All task data and temporary files remain under home directories outside /tmp. The test harness uses isolated ports and a task-local Python dependency, preserving the existing instance.
 
-The wider implementation's prior review is reused only for byte-identical artifacts: 138 of the 143 current PR paths match f9c839add0; this follow-up changes the common legacy reader, its boundary/fuzz tests, the real-vector behavior tests and two design/evidence documents. No lifecycle or shared-state code changes, and no new storage/plan encoding is introduced. Prior broader race, upgrade and multi-CN evidence retains its recorded revision and scope.
+The wider implementation's prior review is reused only for byte-identical artifacts: 138 of the 143 PR paths at a65a0508e9 match f9c839add0; this follow-up changes the common legacy reader, its boundary/fuzz tests, the real-vector behavior tests and two design/evidence documents. No lifecycle or shared-state code changes, and no new storage/plan encoding is introduced. Prior broader race, upgrade and multi-CN evidence retains its recorded revision and scope.
+
+### Coverage CI read-buffer cleanup
+
+The [coverage UT failure on a65a0508e9](https://github.com/matrixorigin/matrixone/actions/runs/43801930042/job/133084100487) is a caller-ownership defect in existing toolfs tests: allocated read buffers are retained in IOVector entries, but the tests omit Release. Closing the FileService does not release those caller-owned results. The checked allocator reports a 27-byte missing free after the tests print PASS; allocation sampling and finalizer timing explain the intermittent symptom. The later Coverage merge is blocked by the missing UT profile, before any coverage-rate verdict.
+
+The exact reported test reproduces on clean base 25305b61371e and head a65a0508e9 with Go 1.26.4, -short -tags=matrixone_test, set-mode package coverage, MO_MALLOC_DEBUG=1 and GOGC=1. Both fail with missing free; production and test sources in toolfs are identical between those two revisions.
+
+The fix installs five caller-vector releases before read assertions, including the WriterForRead case, and copies the eviction helper's result before its deferred release. Existing value, checksum and eviction assertions remain. Production sources and coverage policy are unchanged.
+
+Fresh toolfs validation: all 26 roots pass in normal, checked-coverage and race modes without skips. Each of the four affected tests passes 100 same-process checked-coverage repetitions and 100 race repetitions; the exact reported test has matching pre/post commands. All owner build/vet/molint checks exit zero and configured incremental golangci reports zero issues. These are targeted local checks; the complete hosted coverage job must report on the new pushed head.
 
 ### Scope and remaining limitations
 
