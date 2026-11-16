@@ -1,5 +1,8 @@
 # Issue #32814: narrow ENUM-prefix compatibility decision
 
+> `enum_index_mutation_32814.md` further specifies that an identity-0 ENUM
+> prefix mixed with a nonzero ENUM key or PK in the same index is rejected.
+
 Design author: `gpt-6.1-terra`, `max`, session `/root/enum_design_review`, 2026-11-16. Both 4.2-dev and main. This addendum supersedes the broader reject-all-new-ENUM-prefix proposal in `design-enum-prefix-index-32814.md`. It is a proposed design, not a claim that the implementation or required tests have passed; a separately versioned revision requires independent review before implementation. It does not modify a product worktree.
 
 ## Established facts

@@ -1,5 +1,9 @@
 # Issue #32814: physical SET index backfill
 
+> Scope superseded by `enum_index_mutation_32814.md`: SET backfill changes
+> apply only to an index that depends on the new nonzero ENUM identity. The
+> historical SET-only and legacy-ENUM-only index paths remain unchanged.
+
 Design author: `gpt-6.1-terra`, `max`, independent session `/root/enum_design_review`; 2026-11-16. Scope: 4.2-dev and main supported nonunique indexes containing SET, alone or with ENUM. This supplements the approved ENUM index design and narrows its previous “do not change SET” requirement: allow a physical SET reference **only in verified generated backfill owned by a trusted in-process caller**, leaving public SET/serial semantics untouched. No implementation or release is approved here. The exact versioned revision needs an independent design review before production implementation.
 
 ## Evidence and contract
