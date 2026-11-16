@@ -1020,9 +1020,11 @@ func ivfPlanTypeToTreeType(typ plan.Type) (*tree.T, error) {
 		treeType.InternalType.Family = tree.EnumFamily
 		treeType.InternalType.FamilyString = "enum"
 		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_ENUM)
-		if typ.Enumvalues != "" {
-			treeType.InternalType.EnumValues = strings.Split(typ.Enumvalues, ",")
+		members, err := types.DecodeEnumMembers(typ.Enumvalues, typ.EnumEncoding)
+		if err != nil {
+			return nil, err
 		}
+		treeType.InternalType.EnumValues = members
 	case types.T_array_float32:
 		treeType.InternalType.Family = tree.ArrayFamily
 		treeType.InternalType.FamilyString = "vecf32"

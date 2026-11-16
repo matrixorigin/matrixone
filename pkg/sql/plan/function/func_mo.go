@@ -999,101 +999,138 @@ var (
 	}
 )
 
-// enum("a","b","c") -> CastIndexToValue(1) -> "a"
-// CastIndexToValue returns enum type index according to the value
+// enumDomainParameter owns a decoded constant domain for the current batch.
+// The optional third argument is an explicit codec tag; two-argument plans
+// always retain the legacy interpretation, even for framing-looking payloads.
+type enumDomainParameter struct {
+	payload  vector.FunctionParameterWrapper[types.Varlena]
+	encoding vector.FunctionParameterWrapper[int64]
+	constant bool
+	members  types.EnumMembers
+	null     bool
+}
+
+func (p *enumDomainParameter) init(ivecs []*vector.Vector, length int) error {
+	*p = enumDomainParameter{
+		payload:  vector.GenerateFunctionStrParameter(ivecs[0]),
+		constant: ivecs[0].IsConst(),
+	}
+	if len(ivecs) == 3 {
+		p.encoding = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+		p.constant = p.constant && ivecs[2].IsConst()
+	}
+	if p.constant && length > 0 {
+		var err error
+		p.members, p.null, err = p.decode(0)
+		return err
+	}
+	return nil
+}
+
+func (p *enumDomainParameter) decode(row uint64) (types.EnumMembers, bool, error) {
+	payload, isNull := p.payload.GetStrValue(row)
+	if isNull {
+		return nil, true, nil
+	}
+	var encoding int64
+	if p.encoding != nil {
+		var null bool
+		encoding, null = p.encoding.GetValue(row)
+		if null {
+			return nil, true, nil
+		}
+		if encoding < 0 || encoding > int64(types.EnumEncodingFramed) {
+			return nil, false, moerr.NewInvalidInputNoCtxf("unsupported ENUM member encoding %d", encoding)
+		}
+	}
+	// Empty legacy physical types are not complete ENUM domains. Preserve the
+	// old two-argument coercion boundary; a new empty label uses framing.
+	if encoding == 0 && len(payload) == 0 {
+		return nil, false, nil
+	}
+	members, err := types.DecodeEnumMembers(functionUtil.QuickBytesToStr(payload), uint32(encoding))
+	return members, false, err
+}
+
+func (p *enumDomainParameter) get(row uint64) (types.EnumMembers, bool, error) {
+	if p.constant {
+		return p.members, p.null, nil
+	}
+	return p.decode(row)
+}
+
+// CastIndexToValue renders stored ordinals. Ordinal zero is the error member,
+// distinct from a declared empty label at a nonzero ordinal.
 func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	indexs := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
-
+	var domain enumDomainParameter
+	if err := domain.init(ivecs, length); err != nil {
+		return err
+	}
+	indexes := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
 	for i := uint64(0); i < uint64(length); i++ {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
-		indexVal, indexnull := indexs.GetValue(i)
-		if typeEnumNull || indexnull {
+		members, domainNull, err := domain.get(i)
+		if err != nil {
+			return err
+		}
+		index, valueNull := indexes.GetValue(i)
+		if domainNull || valueNull {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			// MySQL stores an invalid ENUM value as index 0. It is distinct from
-			// NULL and displays as the empty string.
-			if indexVal == 0 {
-				if err := rs.AppendBytes([]byte{}, false); err != nil {
-					return err
-				}
-				continue
-			}
-			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var enumVlaue string
-
-			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
+			continue
+		}
+		var value string
+		if index != 0 {
+			value, err = members.Value(index)
 			if err != nil {
-				// Ordinal zero is MySQL's ENUM error member.  INSERT IGNORE can
-				// store it for an invalid label and it is displayed as the empty
-				// string, regardless of whether the declaration also has an empty
-				// member at a non-zero ordinal.
-				if indexVal == 0 {
-					if err = rs.AppendBytes([]byte{}, false); err != nil {
-						return err
-					}
-					continue
-				}
 				return err
 			}
-
-			if err = rs.AppendBytes([]byte(enumVlaue), false); err != nil {
-				return err
-			}
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(value), false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// enum("a","b","c") -> CastValueToIndex("a") -> 1
-// CastValueToIndex returns enum type index according to the value
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
-	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
-	var valueIndex *enumValueIndex
-	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
-		if !typeEnumNull {
-			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
-		}
+	var domain enumDomainParameter
+	if err := domain.init(ivecs, length); err != nil {
+		return err
 	}
-
+	values := vector.GenerateFunctionStrParameter(ivecs[1])
+	var valueIndex *enumValueIndex
+	if domain.constant && !domain.null {
+		valueIndex = buildEnumValueIndexForBatch(domain.members, length)
+	}
 	for i := uint64(0); i < uint64(length); i++ {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
-		enumValue, enumValNull := enumValues.GetStrValue(i)
-		if typeEnumNull || enumValNull {
+		members, domainNull, err := domain.get(i)
+		if err != nil {
+			return err
+		} // A malformed definition is never IGNORE-coercible.
+		value, valueNull := values.GetStrValue(i)
+		if domainNull || valueNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var index types.Enum
+		if valueIndex != nil {
+			index, err = valueIndex.parse(functionUtil.QuickBytesToStr(value))
 		} else {
-			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			enumStr := functionUtil.QuickBytesToStr(enumValue)
-
-			var (
-				index types.Enum
-				err   error
-			)
-			if valueIndex != nil {
-				index, err = valueIndex.parse(enumStr)
-			} else {
-				index, err = types.ParseEnum(typeEnumVal, enumStr)
-			}
-			if err != nil {
-				if !statementIgnore(proc) {
-					return err
-				}
-				// MySQL INSERT IGNORE stores the ENUM error member (ordinal 0)
-				// for an unrecognized label instead of rejecting the row.
-				index = 0
-			}
-
-			if err := rs.Append(index, false); err != nil {
+			index, err = members.Parse(functionUtil.QuickBytesToStr(value))
+		}
+		if err != nil {
+			if !statementIgnore(proc) {
 				return err
 			}
+			index = 0
+		}
+		if err := rs.Append(index, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1104,19 +1141,13 @@ const (
 	enumValueIndexMinLabels = 8
 )
 
-// Small batches and short definitions stay on ParseEnum's existing linear
-// path: benchmarks show that hash/fold overhead does not amortize for fewer
-// than eight labels, especially for numeric and case-insensitive inputs. The
-// index is reserved for batches large enough to amortize both maps.
-func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex {
-	if length < enumValueIndexMinRows {
+// Hash/fold setup does not amortize for short domains or small batches.
+// Count actual decoded labels; commas inside a label are not members.
+func buildEnumValueIndexForBatch(values types.EnumMembers, length int) *enumValueIndex {
+	if length < enumValueIndexMinRows || len(values) < enumValueIndexMinLabels {
 		return nil
 	}
-	labelCount := strings.Count(enumValues, ",") + 1
-	if labelCount < enumValueIndexMinLabels {
-		return nil
-	}
-	return buildEnumValueIndex(enumValues)
+	return buildEnumMemberIndex(values)
 }
 
 // enumValueIndex makes every label lookup O(1) after Unicode case folding. The
@@ -1128,12 +1159,7 @@ type enumValueIndex struct {
 	foldedIndexes map[string]types.Enum
 }
 
-func buildEnumValueIndex(enumValues string) *enumValueIndex {
-	if enumValues == "" {
-		return nil
-	}
-
-	values := strings.Split(enumValues, ",")
+func buildEnumMemberIndex(values types.EnumMembers) *enumValueIndex {
 	index := &enumValueIndex{
 		values:        values,
 		exactIndexes:  make(map[string]types.Enum, len(values)),
@@ -1188,36 +1214,35 @@ func enumEqualFoldKey(value string) string {
 	return folded.String()
 }
 
-// enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
-// CastIndexValueToIndex returns enum type index according to the index value
+// CastIndexValueToIndex checks a numeric input against the actual member count.
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
-	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
-
+	var domain enumDomainParameter
+	if err := domain.init(ivecs, length); err != nil {
+		return err
+	}
+	values := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 	for i := uint64(0); i < uint64(length); i++ {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
-		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
-		if typeEnumNull || enumValNull {
+		members, domainNull, err := domain.get(i)
+		if err != nil {
+			return err
+		}
+		value, valueNull := values.GetValue(i)
+		if domainNull || valueNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var index types.Enum
-
-			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
-			if err != nil {
-				if !statementIgnore(proc) {
-					return err
-				}
-				// Invalid numeric ENUM input is adjusted to the error member.
-				index = 0
-			}
-
-			if err = rs.Append(index, false); err != nil {
+			continue
+		}
+		index, err := members.ParseValue(value)
+		if err != nil {
+			if !statementIgnore(proc) {
 				return err
 			}
+			index = 0
+		}
+		if err := rs.Append(index, false); err != nil {
+			return err
 		}
 	}
 	return nil

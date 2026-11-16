@@ -523,33 +523,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		if funErr != nil {
 			return nil, funErr
 		}
-		astArgs := []tree.Expr{
-			tree.NewNumVal(typ.Enumvalues, typ.Enumvalues, false, tree.P_char),
-		}
-
-		// bind ast function's args
-		args := make([]*Expr, len(astArgs)+1)
-		for idx, arg := range astArgs {
-			if idx == len(args)-1 {
-				continue
-			}
-			expr, err := b.impl.BindExpr(arg, depth, false)
-			if err != nil {
-				return nil, err
-			}
-			args[idx] = expr
-		}
-		args[len(args)-1] = &Expr{
+		storageExpr := &Expr{
 			Typ: *typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: relPos,
-					ColPos: colPos,
-					Name:   col,
-				},
-			},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: relPos, ColPos: colPos, Name: col,
+			}},
 		}
-
+		args := mysqlSpecialTypeArgs(typ, storageExpr)
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
@@ -4727,10 +4707,7 @@ func makeEnumOrSetDisplayValue(ctx context.Context, expr *Expr) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
-		makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
-		expr,
-	})
+	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, mysqlSpecialTypeArgs(&expr.Typ, expr))
 }
 
 func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
@@ -4746,6 +4723,7 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 	// SET value. Clear the member metadata so downstream assignment treats it
 	// as an ordinary bitmap and does not convert it back through SET semantics.
 	bitmap.Typ.Enumvalues = ""
+	bitmap.Typ.EnumEncoding = 0
 	return bitmap, true
 }
 
@@ -4762,7 +4740,7 @@ func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
 		return expr, false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || !validMySQLSpecialDisplayCall(fn) {
 		return expr, false
 	}
 	return DeepCopyExpr(fn.Args[1]), true
@@ -4923,18 +4901,19 @@ func isSetDisplayValueExpr(expr *Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun && validMySQLSpecialDisplayCall(fn)
 }
 
-func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
-	if isSetDisplayValueExpr(expr) {
-		return true
-	}
+func isEnumDisplayValueExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun && validMySQLSpecialDisplayCall(fn)
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	return isSetDisplayValueExpr(expr) || isEnumDisplayValueExpr(expr)
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {

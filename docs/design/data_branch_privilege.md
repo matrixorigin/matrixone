@@ -1,5 +1,10 @@
 # Data Branch Privilege Model Design
 
+The reviewed [4.2 database identity amendment](data_branch_identity_42.md)
+supersedes the zero-table restrictions below for databases carrying its durable
+branch marker. Unmarked empty databases and databases containing ordinary tables
+without active receipts still fail closed; the privilege requirements remain.
+
 ## 1. Overview
 
 Issue #24840 exposes a systemic privilege problem in `DATA BRANCH`

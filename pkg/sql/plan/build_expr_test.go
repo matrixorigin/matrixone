@@ -771,12 +771,11 @@ func containsEnumOrSetDisplayValue(expr *plan.Expr) bool {
 
 func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
-	displayExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varchar)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: moEnumCastIndexToValueFun},
-		}},
-	}
+	displayExpr, err := makeEnumOrSetDisplayValue(ctx, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b"},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	})
+	require.NoError(t, err)
 	jsonType := plan.Type{Id: int32(types.T_json)}
 
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
@@ -823,12 +822,11 @@ func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
 
 func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
-	displayExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varchar)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
-		}},
-	}
+	displayExpr, err := makeEnumOrSetDisplayValue(ctx, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y"},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	})
+	require.NoError(t, err)
 	jsonType := plan.Type{Id: int32(types.T_json)}
 
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
@@ -852,13 +850,8 @@ func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {
 			ColPos: 2,
 		}},
 	}
-	displayExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varchar)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
-			Args: []*plan.Expr{{}, raw},
-		}},
-	}
+	displayExpr, err := makeEnumOrSetDisplayValue(NewMockCompilerContext(true).GetContext(), raw)
+	require.NoError(t, err)
 
 	for _, target := range []plan.Type{
 		{Id: int32(types.T_int64)},
