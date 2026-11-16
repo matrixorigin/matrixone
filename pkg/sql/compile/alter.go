@@ -2745,14 +2745,24 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 				return err
 			}
 
-			st, _ := parsers.ParseOne(
+			st, err := parsers.ParseOne(
 				c.proc.Ctx,
 				dialect.MYSQL,
 				qry.RawSQL,
 				c.getLower(),
 			)
+			if err != nil {
+				// Propagate the original parse error instead of dropping
+				// it and asserting the statement type downstream.
+				return err
+			}
+			alterPartitionStmt, ok := st.(*tree.AlterTable)
+			if !ok {
+				return moerr.NewParseError(c.proc.Ctx,
+					fmt.Sprintf("not an ALTER TABLE statement: %s", qry.RawSQL))
+			}
 			return c.alterPartitionTables(
-				st.(*tree.AlterTable),
+				alterPartitionStmt,
 				metadata.Partitions,
 				hasAlterAutoIncrementReset(qry.Actions),
 				cleanup,

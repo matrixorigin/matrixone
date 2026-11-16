@@ -1,0 +1,26 @@
+drop database if exists index32211_bvt;
+create database index32211_bvt;
+use index32211_bvt;
+create table t1 (id int primary key, nm varchar(32), c1 int) partition by range (id) (partition p0 values less than (10), partition p1 values less than (maxvalue));
+insert into t1 values (1,'k01',1),(5,'k05',5),(20,'k20',20),(30,'k30',30);
+create index idx_nm on t1 (nm);
+select id from t1 force index (idx_nm) where nm = 'k20';
+➤ id[4,32,0]  𝄀
+20
+select id from t1 where nm = 'k05';
+➤ id[4,32,0]  𝄀
+5
+update t1 set nm = 'k20b' where nm = 'k20';
+select id from t1 force index (idx_nm) where nm = 'k20b';
+➤ id[4,32,0]  𝄀
+20
+select id from t1 where nm = 'k20';
+➤ id[4,32,0]
+delete from t1 where id in (1, 20);
+select id from t1 force index (idx_nm) where nm = 'k30';
+➤ id[4,32,0]  𝄀
+30
+create index idx_cpx on t1 (c1 desc);
+create unique index uidx_nm on t1 (nm);
+create unique index ubt_nm on t1 (nm) using btree;
+drop database index32211_bvt;

@@ -250,6 +250,7 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	hashJoin.ctr.dictionaryBoundary.BeginCall()
 	if hashJoin.AsofBuildLeft {
 		return hashJoin.callAsofBuildLeft(proc)
 	}
@@ -741,6 +742,12 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 		}
 	}
+	var probeCopy vector.UnionMultiFunc = (*vector.Vector).UnionMulti
+	if hashJoin.NonEqCond == nil && !ctr.probeHashOnPK && !batchMembership && ctr.probeRightSemiAnti {
+		// This invocation retains one probe input through every continuation.
+		// Refresh the stateless choice on the next call, including reused headers.
+		probeCopy = vector.GetUnionMultiFunction(ctr.leftBat.Vecs)
+	}
 
 	for {
 		switch ctr.probeState {
@@ -996,7 +1003,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if ctr.probeRightSemiAnti {
 					for j, rp := range hashJoin.ResultCols {
 						if rp.Rel == 0 {
-							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
+							err = probeCopy(ctr.resBat.Vecs[j], ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
 							if err != nil {
 								return err
 							}
