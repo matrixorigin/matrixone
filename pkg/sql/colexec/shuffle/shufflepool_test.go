@@ -246,6 +246,44 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolWholeBucketResumesWithoutSelection(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 1, true)
+	require.True(t, sp.hold())
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows*4, proc.Mp())
+	defer input.Clean(proc.Mp())
+	bucket, offset, waiter, done, err := sp.tryWriteMode(input, nil, 0, 0, 0, true, proc)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, objectio.BlockMaxRows*2, offset)
+	rows := 0
+	for !done {
+		ready := sp.getAnyFullBatch()
+		require.NotNil(t, ready)
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+		select {
+		case <-waiter:
+		default:
+			t.Fatal("freeing a ready batch did not wake the range writer")
+		}
+		bucket, offset, waiter, done, err = sp.tryWriteMode(input, nil, 0, bucket, offset, true, proc)
+		require.NoError(t, err)
+	}
+	for ready := sp.getAnyFullBatch(); ready != nil; ready = sp.getAnyFullBatch() {
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+	}
+	if last := sp.getAnyLastBatch(); last != nil {
+		rows += last.RowCount()
+		sp.discardBatch(last, proc.Mp())
+	}
+	require.Equal(t, input.RowCount(), rows)
+	_, ownsStats := sp.release(proc.Mp(), false)
+	require.True(t, ownsStats)
+}
+
 func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
