@@ -306,6 +306,10 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 		}
 	}
 
+	// The outer join reads only the candidate rows of the base table; the copied scan
+	// reads the whole table.
+	readColumnRanges(scanNode)
+
 	// Outer join doesn't add extra project, let global column pruning optimizer handle it
 	return outerJoinNodeID, true, nil
 }

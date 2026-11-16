@@ -436,32 +436,42 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 
 func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, budget, global, overlap, planParallel, engine, heavy, plan, expected, engineShards string }{
-		{"default-safe", "", "8", "1", "1", "0", "0", "0", "0", "6"},
-		{"global-one", "", "1", "1", "1", "0", "0", "0", "0", "1"},
-		{"global-two", "", "2", "1", "1", "0", "0", "0", "0", "2"},
-		{"global-three", "", "3", "1", "1", "0", "0", "0", "0", "3"},
-		{"global-six", "", "6", "1", "1", "0", "0", "0", "0", "6"},
-		{"global-caps-explicit", "4", "2", "1", "1", "0", "0", "0", "0", "2"},
-		{"explicit-three", "3", "8", "", "1", "0", "0", "0", "0", "3"},
-		{"overlap", "3", "8", "1", "1", "0", "0", "0", "0", "3"},
-		{"plan-two-slots", "3", "8", "1", "2", "0", "0", "0", "0", "3"},
-		{"engine-failure", "3", "8", "1", "1", "7", "0", "0", "1", "3"},
-		{"heavy-failure", "3", "8", "1", "1", "0", "8", "0", "1", "3"},
-		{"plan-failure", "3", "8", "1", "1", "0", "0", "9", "1", "3"},
-		{"plan-undrained", "3", "8", "1", "1", "0", "0", "125", "1", "3"},
-		{"plan-undrained-sequential", "3", "8", "0", "1", "0", "0", "125", "1", "3"},
-		{"engine-undrained", "3", "8", "1", "1", "125", "0", "0", "1", "3"},
-		{"sequential-baseline", "3", "8", "0", "1", "0", "0", "0", "0", "3"},
-		{"one-slot", "1", "8", "1", "1", "0", "0", "0", "0", "1"},
-		{"two-slots", "2", "8", "1", "1", "0", "0", "0", "0", "2"},
-		{"one-budget-two-plan-slots", "1", "8", "1", "2", "0", "0", "0", "0", "1"},
+	for _, tc := range []struct{ name, budget, global, overlap, planParallel, engine, heavy, plan, expected, engineShards, osPrefix, planShards, defaultBudget string }{
+		{"default-safe", "", "8", "1", "1", "0", "0", "0", "0", "6", "linux", "1", "3"},
+		{"global-one", "", "1", "1", "1", "0", "0", "0", "0", "1", "linux", "1", "3"},
+		{"global-two", "", "2", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"global-three", "", "3", "1", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"global-six", "", "6", "1", "1", "0", "0", "0", "0", "6", "linux", "1", "3"},
+		{"global-caps-explicit", "4", "2", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"explicit-three", "3", "8", "", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"overlap", "3", "8", "1", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"plan-two-slots", "3", "8", "1", "2", "0", "0", "0", "0", "3", "linux", "2", "3"},
+		{"engine-failure", "3", "8", "1", "1", "7", "0", "0", "1", "3", "linux", "1", "3"},
+		{"heavy-failure", "3", "8", "1", "1", "0", "8", "0", "1", "3", "linux", "1", "3"},
+		{"plan-failure", "3", "8", "1", "1", "0", "0", "9", "1", "3", "linux", "1", "3"},
+		{"plan-undrained", "3", "8", "1", "1", "0", "0", "125", "1", "3", "linux", "1", "3"},
+		{"plan-undrained-sequential", "3", "8", "0", "1", "0", "0", "125", "1", "3", "linux", "1", "3"},
+		{"engine-undrained", "3", "8", "1", "1", "125", "0", "0", "1", "3", "linux", "1", "3"},
+		{"sequential-baseline", "3", "8", "0", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"one-slot", "1", "8", "1", "1", "0", "0", "0", "0", "1", "linux", "1", "3"},
+		{"two-slots", "2", "8", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"one-budget-two-plan-slots", "1", "8", "1", "2", "0", "0", "0", "0", "1", "linux", "2", "3"},
+		{"default-linux-two-plan-slots", "", "8", "1", "2", "0", "0", "0", "0", "6", "linux", "2", "4"},
+		{"default-darwin-two-plan-slots", "", "8", "1", "2", "0", "0", "0", "0", "6", "darwin", "2", "3"},
+		{"default-other-plan-generations", "", "8", "1", "2", "0", "0", "0", "0", "6", "linux", "4", "3"},
+		{"default-sequential-two-plan-slots", "", "8", "0", "2", "0", "0", "0", "0", "6", "linux", "2", "3"},
+		{"explicit-four-two-plan-slots", "4", "8", "1", "2", "0", "0", "0", "0", "4", "linux", "2", "4"},
+		{"profile-engine-failure", "", "8", "1", "2", "7", "0", "0", "1", "6", "linux", "2", "4"},
+		{"profile-heavy-failure", "", "8", "1", "2", "0", "8", "0", "1", "6", "linux", "2", "4"},
+		{"profile-plan-failure", "", "8", "1", "2", "0", "0", "9", "1", "6", "linux", "2", "4"},
+		{"profile-plan-undrained", "", "8", "1", "2", "0", "0", "125", "1", "6", "linux", "2", "4"},
+		{"profile-engine-undrained", "", "8", "1", "2", "125", "0", "0", "1", "6", "linux", "2", "4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expectedOverlap := "0"
 			effectiveBudget := tc.budget
 			if effectiveBudget == "" {
-				effectiveBudget = "3"
+				effectiveBudget = tc.defaultBudget
 			}
 			budget, err := strconv.Atoi(effectiveBudget)
 			if err != nil {
@@ -475,6 +485,7 @@ func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 				expectedOverlap = "1"
 			}
 			script := `source ./run_ut.sh UT
+OSTYPE_PREFIX="${UT_TEST_OS_PREFIX}"
 trap handle_ut_termination TERM
 function logger() { :; }
 function report_cgroup_memory_usage() {
@@ -556,7 +567,7 @@ printf '\nREPORT\n'
 			if expectedHeavyParallel == "" {
 				expectedHeavyParallel = "3"
 			}
-			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "UT_PARALLEL="+tc.global, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+tc.engineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "UT_PARALLEL="+tc.global, "UT_TEST_OS_PREFIX="+tc.osPrefix, "PLAN_RACE_SHARDS="+tc.planShards, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+tc.engineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if tc.plan == "125" || tc.engine == "125" {
 				exit, ok := err.(*exec.ExitError)
 				if !ok || exit.ExitCode() != 125 {
@@ -569,6 +580,9 @@ printf '\nREPORT\n'
 			}
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), "#  HEAVY/PLAN UT:   "+effectiveBudget+" total package slots\n") {
+				t.Fatalf("displayed heavy budget differs from dispatch: %s", out)
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)

@@ -261,9 +261,10 @@ func (d *DiskCache) scheduleAsyncUpdate(
 		filePath: filePath,
 		diskPath: diskPath,
 		entry: IOEntry{
-			Offset: entry.Offset,
-			Size:   entry.Size,
-			Data:   bytes.Clone(entry.Data),
+			Offset:      entry.Offset,
+			Size:        entry.Size,
+			Data:        bytes.Clone(entry.Data),
+			readDeletes: entry.readDeletes,
 		},
 		callbacks: append([]OnDiskCacheWrittenFunc(nil), callbacks...),
 	}
@@ -378,12 +379,9 @@ func (d *DiskCache) runAsyncUpdates() {
 					)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
-					written, _ := d.writeEntry(
-						d.async.ctx,
-						job.diskPath,
-						job.entry,
-						d.claimAsyncPublication,
-					)
+					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+						return d.writeEntry(d.async.ctx, job.diskPath, job.entry, claim)
+					})
 					retainForCallbacks = written && len(job.callbacks) > 0
 				}
 			}

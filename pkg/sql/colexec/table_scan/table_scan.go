@@ -61,7 +61,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(tableScan.ctr.filterExecutors) == 0 && len(tableScan.FilterExprs) > 0 {
-		tableScan.ctr.filterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableScan.FilterExprs)
+		tableScan.ctr.filterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, tableScan.FilterExprs, tableScan.OutputAllocation)
 		if err != nil {
 			return
 		}
@@ -70,7 +70,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 
 	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
 	if len(tableScan.RuntimeFilterExprs) > 0 {
-		tableScan.ctr.runtimeFilterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableScan.RuntimeFilterExprs)
+		tableScan.ctr.runtimeFilterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, tableScan.RuntimeFilterExprs, tableScan.OutputAllocation)
 		if err != nil {
 			return
 		}
@@ -88,7 +88,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.configureLateMaterialization()
 	tableScan.prepareReaderFilter(proc)
 
-	err = tableScan.PrepareProjection(proc)
+	err = tableScan.PrepareProjectionWithAllocation(proc, tableScan.OutputAllocation)
 	if err != nil {
 		return err
 	}
@@ -109,6 +109,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
+	tableScan.ctr.dictionaryBoundary.BeginCall()
 	start := time.Now()
 
 	analyzer := tableScan.OpAnalyzer
@@ -143,7 +144,27 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(tableScan.ctr.allFilterExecutors) > 0 {
+			tableScan.prepareSelectionWorkspace()
+		}
 		// read data from storage engine
+		for col, workspace := range tableScan.ctr.readerWorkspace {
+			if workspace != nil {
+				header := tableScan.ctr.buf.Vecs[col]
+				reusable := header.IsDictionary()
+				header.CleanOnlyData()
+				if reusable && len(tableScan.ctr.readerHeaders) == len(tableScan.ctr.buf.Vecs) {
+					if old := tableScan.ctr.readerHeaders[col]; old != nil {
+						old.Free(proc.Mp())
+					}
+					tableScan.ctr.readerHeaders[col] = header
+				} else {
+					header.Free(proc.Mp())
+				}
+				tableScan.ctr.buf.Vecs[col] = workspace
+				tableScan.ctr.readerWorkspace[col] = nil
+			}
+		}
 		tableScan.ctr.buf.CleanOnlyData()
 		tableScan.ctr.filterReadMetrics = false
 		tableScan.ctr.filterLateMaterialized = false
@@ -190,22 +211,48 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			// record storage I/O metrics before filtering
-			analyzer.InputBlock()
-			analyzer.ScanBytes(tableScan.ctr.buf)
-			analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
-			batSize := tableScan.ctr.buf.Size()
-			tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
-
-			// inline filter evaluation: filter rows before returning to caller
-			if len(tableScan.ctr.allFilterExecutors) > 0 {
-				if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
-					return vm.CancelResult, err
+			if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && !tableScan.ctr.padCharToFullLength && len(tableScan.ctr.allFilterExecutors) > 0 && len(tableScan.ctr.buf.ExtraBuf) == 0 {
+				selection, selectErr := tableScan.selectReaderFilter(proc, tableScan.ctr.buf, nil)
+				if selectErr != nil {
+					return vm.CancelResult, selectErr
+				}
+				if !selection.All {
+					next, retained, selectErr := colexec.SelectBatchColumns(tableScan.ctr.buf, nil, selection.Sels, proc.Mp(), tableScan.OutputAllocation, true)
+					if selectErr != nil {
+						return vm.CancelResult, selectErr
+					}
+					if retained {
+						tableScan.OpAnalyzer.GetOpStats().AddExtraStat("DictionaryScanSelectedRows", int64(next.RowCount()))
+					}
+					for col, source := range tableScan.ctr.buf.Vecs {
+						tableScan.ctr.readerWorkspace[col] = source
+						tableScan.ctr.buf.Vecs[col] = nil
+					}
+					tableScan.ctr.buf.Clean(proc.Mp())
+					tableScan.ctr.buf = next
 				}
 				if tableScan.ctr.buf.IsEmpty() {
-					continue // all rows filtered out, read next block
+					continue
+				}
+			} else {
+				// record storage I/O metrics before filtering
+				analyzer.InputBlock()
+				analyzer.ScanBytes(tableScan.ctr.buf)
+				analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
+				batSize := tableScan.ctr.buf.Size()
+				tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
+
+				// inline filter evaluation: filter rows before returning to caller
+				if len(tableScan.ctr.allFilterExecutors) > 0 {
+					if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
+						return vm.CancelResult, err
+					}
+					if tableScan.ctr.buf.IsEmpty() {
+						continue // all rows filtered out, read next block
+					}
 				}
 			}
+
 		}
 
 		if tableScan.ctr.padCharToFullLength {

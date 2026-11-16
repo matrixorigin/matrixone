@@ -909,7 +909,6 @@ func (mgr *TxnManager) Stop() {
 }
 
 func (mgr *TxnManager) onPreWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		if !op.preWalEnqueuedAt.IsZero() {
@@ -924,16 +923,9 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 			panic(err)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onPreWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) onWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
@@ -957,12 +949,6 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 			)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {

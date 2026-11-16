@@ -279,8 +279,16 @@ func (p *preloadUsage) recordRemoval(g *groupUsage, served, size int64, group ui
 	}
 	g.samples++
 	if !g.thrashing && (g.samples >= preloadUsageMinSamples && g.average < preloadUnusedShare ||
-		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) {
+		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) &&
+		!p.lessReadGroupEvicting(g, at) {
 		g.thrashing = true
+		// The other groups' evictions so far were partly made by this group's files.
+		for _, o := range p.groups {
+			if !o.thrashing {
+				o.samples = 0
+				o.epoch++
+			}
+		}
 		if !g.ended.IsZero() && at.Sub(g.ended) < 2*g.quiet {
 			g.quiet = min(2*g.quiet, preloadQuietPeriodMax)
 		} else {
@@ -293,6 +301,18 @@ func (p *preloadUsage) recordRemoval(g *groupUsage, served, size int64, group ui
 			zap.Duration("quiet-period", g.quiet),
 		)
 	}
+}
+
+// lessReadGroupEvicting reports whether another group not thrashing, whose files are
+// read less than g's, had a whole-object file evicted within its quiet period: that
+// group thrashes first.
+func (p *preloadUsage) lessReadGroupEvicting(g *groupUsage, now time.Time) bool {
+	for _, o := range p.groups {
+		if o != g && !o.thrashing && o.samples > 0 && o.average < g.average && now.Sub(o.lastEvict) <= o.quiet {
+			return true
+		}
+	}
+	return false
 }
 
 // forgetIdleGroups forgets the groups with no eviction, and no end of thrashing,
@@ -352,6 +372,12 @@ type WholeObjectPreloads interface {
 // FullFilePreloadSkipped reports whether a read of filePath from fs under policy,
 // for ctx's group, skips the whole-object preload.
 func FullFilePreloadSkipped(ctx context.Context, fs FileService, policy Policy, filePath string) bool {
+	// An object the index-file cache holds is not preloaded into the disk cache.
+	if s, ok := fs.(*S3FS); ok && policy.Any(IndexFileObject) && s.cachesIndexObjects() {
+		if _, cached := s.indexObjectCached(filePath); cached {
+			return true
+		}
+	}
 	if policy.Any(SkipFullFilePreloads) {
 		return true
 	}

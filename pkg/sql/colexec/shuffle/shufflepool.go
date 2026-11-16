@@ -874,18 +874,29 @@ func (sp *ShufflePool) notifyAnyBatch() {
 	}
 }
 
-// tryWrite writes selections starting at bucket/offset. It never mutates the
+// tryWrite writes selections starting at visit-position/offset. It never mutates the
 // blocked chunk, so the operator can safely retain and resume the child batch.
 func (sp *ShufflePool) tryWrite(
 	srcBatch *batch.Batch,
 	sels [][]int32,
 	producer int32,
-	startBucket int,
+	startPosition int,
 	startOffset int,
 	proc *process.Process,
-) (nextBucket int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+	return sp.tryWriteMode(srcBatch, sels, producer, startPosition, startOffset, false, proc)
+}
+
+func (sp *ShufflePool) tryWriteMode(
+	srcBatch *batch.Batch,
+	sels [][]int32,
+	producer int32,
+	startPosition, startOffset int,
+	wholeBucket bool,
+	proc *process.Process,
+) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
 	if producer < 0 || len(sp.batchSets) == 0 {
-		return startBucket, startOffset, nil, false, moerr.NewInternalErrorf(
+		return startPosition, startOffset, nil, false, moerr.NewInternalErrorf(
 			proc.Ctx,
 			"invalid shuffle producer %d for %d configured holders",
 			producer,
@@ -899,59 +910,94 @@ func (sp *ShufflePool) tryWrite(
 		lane = int32(max(1, int(sp.maxHolders)))
 		maxRows = objectio.BlockMaxRows
 	}
-	for bucket := startBucket; bucket < len(sp.batchSets); bucket++ {
-		offset := 0
-		if bucket == startBucket {
-			offset = startOffset
+	bucketCount := len(sp.batchSets)
+	bucket, limit := startPosition, bucketCount
+	first, visitBase := 0, 0
+	if wholeBucket {
+		limit = startPosition + 1
+	} else {
+		first = int(producer)
+		if first >= bucketCount {
+			first %= bucketCount
 		}
-		current := sels[bucket]
-		for offset < len(current) {
-			// BatchSet historically assumed its maximum was at least the input
-			// batch size. Producer-local lanes deliberately use a smaller maximum
-			// at high DOP, so split selections at that boundary before Union. This
-			// keeps ReadyDeltaFor and the batches actually published in lockstep.
-			end := min(offset+maxRows, len(current))
-			chunk := current[offset:end]
-			sp.batchLocks[bucket].Lock()
-			if sp.closed[bucket] {
-				sp.batchLocks[bucket].Unlock()
-				break
+		bucket += first
+		visitBase = -first
+		if bucket >= bucketCount {
+			bucket -= bucketCount
+			limit = first
+			visitBase += bucketCount
+		}
+	}
+	// Traverse at most two ordinary ascending ranges. Keep wrap arithmetic
+	// outside the hot bucket loop, including for the unrotated producer.
+	offset := startOffset
+	for {
+		for ; bucket < limit; bucket++ {
+			var current []int32
+			count := srcBatch.RowCount()
+			if !wholeBucket {
+				current = sels[bucket]
+				count = len(current)
 			}
-			batchSet := sp.batchSets[bucket][lane]
-			readyDelta := batchSet.ReadyDeltaFor(srcBatch, len(chunk))
-			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
-			if !ok {
-				sp.batchLocks[bucket].Unlock()
-				return bucket, offset, wait, false, nil
-			}
+			for offset < count {
+				// BatchSet historically assumed its maximum was at least the input
+				// batch size. Producer-local lanes deliberately use a smaller maximum
+				// at high DOP, so split selections at that boundary before Union. This
+				// keeps ReadyDeltaFor and the batches actually published in lockstep.
+				end := min(offset+maxRows, count)
+				sp.batchLocks[bucket].Lock()
+				if sp.closed[bucket] {
+					sp.batchLocks[bucket].Unlock()
+					break
+				}
+				batchSet := sp.batchSets[bucket][lane]
+				readyDelta := batchSet.ReadyDeltaFor(srcBatch, end-offset)
+				wait, ok := sp.reserveReady(int32(bucket), readyDelta)
+				if !ok {
+					sp.batchLocks[bucket].Unlock()
+					return bucket + visitBase, offset, wait, false, nil
+				}
 
-			oldReady := batchSet.ReadyCount()
-			oldLength := batchSet.Length()
-			buf := sp.getBatchFromPool(producer)
-			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
-			if !consumed && buf != nil {
-				sp.putBatchToPool(buf, proc.Mp())
+				oldReady := batchSet.ReadyCount()
+				oldLength := batchSet.Length()
+				buf := sp.getBatchFromPool(producer)
+				var consumed bool
+				var writeErr error
+				if wholeBucket {
+					consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
+				} else {
+					consumed, writeErr = batchSet.Union(proc.Mp(), srcBatch, current[offset:end], buf)
+				}
+				if !consumed && buf != nil {
+					sp.putBatchToPool(buf, proc.Mp())
+				}
+				// Union can only grow the previous writable tail and append new
+				// batches. Full batches before that tail are immutable, so avoid
+				// rescanning the entire bucket after every chunk.
+				sp.syncBatchSetFrom(batchSet, max(0, oldLength-1), producer)
+				actualDelta := batchSet.ReadyCount() - oldReady
+				if actualDelta < readyDelta {
+					sp.releaseReady(int32(bucket), readyDelta-actualDelta)
+				}
+				for range actualDelta {
+					sp.readyProducers[bucket] = append(
+						sp.readyProducers[bucket], lane,
+					)
+				}
+				sp.batchLocks[bucket].Unlock()
+				sp.publishReady(int32(bucket), actualDelta)
+				if writeErr != nil {
+					return bucket + visitBase, offset, nil, false, writeErr
+				}
+				offset = end
 			}
-			// Union can only grow the previous writable tail and append new
-			// batches. Full batches before that tail are immutable, so avoid
-			// rescanning the entire bucket after every chunk.
-			sp.syncBatchSetFrom(batchSet, max(0, oldLength-1), producer)
-			actualDelta := batchSet.ReadyCount() - oldReady
-			if actualDelta < readyDelta {
-				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
-			}
-			for range actualDelta {
-				sp.readyProducers[bucket] = append(
-					sp.readyProducers[bucket], lane,
-				)
-			}
-			sp.batchLocks[bucket].Unlock()
-			sp.publishReady(int32(bucket), actualDelta)
-			if writeErr != nil {
-				return bucket, offset, nil, false, writeErr
-			}
-			offset = end
+			offset = 0
 		}
+		if wholeBucket || first == 0 || limit == first {
+			break
+		}
+		bucket, limit = 0, first
+		visitBase += bucketCount
 	}
 	return len(sp.batchSets), 0, nil, true, nil
 }
