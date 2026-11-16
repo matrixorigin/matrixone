@@ -40,6 +40,24 @@ func scopedOwnedColumns(request *engine.ReaderFilterRequest, width int) bool {
 	return true
 }
 
+// Scoped filtering can precede JSON publication when no JSON column is read
+// early and there is no already-published row mapping to compose. The late
+// column loader then publishes the reader with the selected physical rows.
+func scopedJSONPublicationSafe(publication *objectio.JSONReadSet, columns []types.Type, early []int) bool {
+	if !publication.MatchesJSONColumns(columns) {
+		return true
+	}
+	if len(publication.Readers()) != 0 {
+		return false
+	}
+	for _, pos := range early {
+		if pos < 0 || pos >= len(columns) || columns[pos].Oid == types.T_json {
+			return false
+		}
+	}
+	return true
+}
+
 // blockDataReadScopedOwned is admitted only without visibility/tombstone/RowID/
 // storage-selection/TopK work. Every escaping value is owned; scoped cache bytes
 // stay protected by the loader's IOVector until filtering and gathering finish.
