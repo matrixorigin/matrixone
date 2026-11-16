@@ -523,4 +523,41 @@ select * from selected_sample_composite;
 select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g);
 select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by chosen+1,g;
 
+-- 全局 DISTINCT 合并真实 NULL 和小计 NULL；显式选出的 GROUPING 标记仍是不同结果。
+create table enum_distinct_src(k enum('b','a','c'));
+insert into enum_distinct_src values('a'),('b'),('a'),(null);
+select distinct k from enum_distinct_src group by k with rollup order by k;
+-- @sortkey:0
+select distinct k from enum_distinct_src group by k with rollup;
+select distinct k from enum_distinct_src group by grouping sets ((k),()) order by k;
+select distinct k from enum_distinct_src group by k order by k;
+select k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+select distinct k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+create table enum_distinct_result as select distinct k from enum_distinct_src group by k with rollup order by k;
+select * from enum_distinct_result order by k;
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from enum_distinct_result;
+
+create table set_distinct_src(k set('b','a','c'));
+insert into set_distinct_src values('a'),('b'),('a,b'),(null);
+select distinct k from set_distinct_src group by k with rollup order by k;
+-- @sortkey:0
+select distinct k from set_distinct_src group by k with rollup;
+select distinct k from set_distinct_src group by grouping sets ((k),()) order by k;
+select distinct k,grouping(k) flag from set_distinct_src group by k with rollup order by k,flag;
+create table set_distinct_result as select distinct k from set_distinct_src group by k with rollup;
+select * from set_distinct_result order by k;
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from set_distinct_result;
+
+-- 键宽改变哈希实现时，NULL 去重语义也不能改变；二进制键仍保留原类型。
+create table wide_distinct_src(k bigint,b varbinary(16));
+insert into wide_distinct_src values(1,'a'),(1,'a'),(1,'b'),(null,null);
+select distinct k from wide_distinct_src group by k with rollup order by k;
+select distinct b from wide_distinct_src group by b with rollup order by b;
+select distinct k,b from wide_distinct_src group by grouping sets ((k,b),()) order by k,b;
+create table wide_distinct_result as select distinct b from wide_distinct_src group by b with rollup;
+select hex(b) from wide_distinct_result order by b;
+select table_name,column_name,data_type,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name in ('enum_distinct_result','set_distinct_result','wide_distinct_result')
+and column_name in ('k','b') order by table_name,ordinal_position;
+
 drop database grouping_ctas_test;
