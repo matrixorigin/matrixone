@@ -122,19 +122,9 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 					physical = 0
 				}
 				value := &view.Values[physical]
-				if !value.IsSmall() {
+				code, ok := compactInlineCharCode(value)
+				if !ok {
 					return groupInsertPreview{}, false, nil
-				}
-				raw := value.ByteSlice()
-				for len(raw) > 0 && raw[len(raw)-1] == ' ' {
-					raw = raw[:len(raw)-1]
-				}
-				if len(raw) > 1 {
-					return groupInsertPreview{}, false, nil
-				}
-				var code uint32
-				if len(raw) != 0 {
-					code = uint32(raw[0]) + 1
 				}
 				if col == 0 {
 					lookup.codes[i] = code
@@ -150,19 +140,9 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 			value := &vals[start+i]
 			// CHAR(1) normally has an inline payload. Other representations retain
 			// the generic encoder's validation and canonicalization.
-			if !value.IsSmall() {
+			code, ok := compactInlineCharCode(value)
+			if !ok {
 				return groupInsertPreview{}, false, nil
-			}
-			raw := value.ByteSlice()
-			for len(raw) > 0 && raw[len(raw)-1] == ' ' {
-				raw = raw[:len(raw)-1]
-			}
-			if len(raw) > 1 {
-				return groupInsertPreview{}, false, nil
-			}
-			var code uint32
-			if len(raw) != 0 {
-				code = uint32(raw[0]) + 1
 			}
 			if col == 0 {
 				lookup.codes[i] = code
