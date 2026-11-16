@@ -736,6 +736,7 @@ var predefinedFunids = map[int]int{
 	SQL_TVF_CONNECT:               565,
 	SQL_TVF_DISCONNECT:            566,
 	LAST_KAFKA_MESSAGE_ID:         567,
+	ENUM_DISPLAY_TO_INDEX:         568,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	CHECK_ASYNC_DATALINK_SOURCE: 599,

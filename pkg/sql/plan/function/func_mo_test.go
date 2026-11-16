@@ -413,6 +413,82 @@ func TestEnumEncodedConversion(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestEnumDisplayToIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	typ := types.T_enum.ToType()
+	for _, tc := range []struct {
+		name    string
+		domains []string
+		tags    []int64
+		values  []string
+		nulls   []bool
+		want    []types.Enum
+	}{
+		{
+			name:    "exact bytes and null",
+			domains: []string{"4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b"},
+			tags:    []int64{1, 1, 1, 1, 1},
+			values:  []string{"a", "A", "", "a,b", ""},
+			nulls:   []bool{false, false, false, false, true},
+			want:    []types.Enum{1, 2, 3, 4, 0},
+		},
+		{
+			name:    "changing and legacy domains",
+			domains: []string{"a,b", "a,b", "", "1#0:"},
+			tags:    []int64{0, 0, 0, 1},
+			values:  []string{"", "b", "", ""},
+			want:    []types.Enum{0, 2, 0, 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), tc.domains, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls),
+				NewFunctionTestInput(types.T_int64.ToType(), tc.tags, nil),
+			}, NewFunctionTestResult(typ, false, tc.want, tc.nulls), EnumDisplayToIndex)
+			ok, info := check.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	// Exercise the indexed batch path and retain the first ordinal for exact
+	// duplicates without conflating distinct spellings that fold identically.
+	const count = 64
+	domains, tags := make([]string, count), make([]int64, count)
+	values, want := make([]string, count), make([]types.Enum, count)
+	for i := range count {
+		domains[i] = "a,A,,b,c,d,a,f"
+		values[i] = []string{"a", "A", ""}[i%3]
+		want[i] = []types.Enum{1, 2, 3}[i%3]
+	}
+	check := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), domains, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), tags, nil),
+	}, NewFunctionTestResult(typ, false, want, nil), EnumDisplayToIndex)
+	ok, info := check.RunAndFree()
+	require.True(t, ok, info)
+
+	for _, tc := range []struct {
+		domain string
+		tag    int64
+		value  string
+	}{
+		{"a,b", 0, "missing"},
+		{"1#9:x", 1, ""},
+	} {
+		check := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.domain}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.tag}, nil),
+		}, NewFunctionTestResult(typ, true, nil, nil), EnumDisplayToIndex)
+		ok, info := check.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
 func TestEnumChangingDomains(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// The same payload has different members under the two encoding tags.

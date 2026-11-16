@@ -1526,9 +1526,15 @@ func compileFilterExpr(
 				minVal := vec.GetRawBytesAt(0)
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(minVal)
-					})
+					// 未知摘要可以出现在任意位置，不能把它当作二分搜索的不匹配项。
+					// 只跳过能够证明低于 IN 最小值的连续前缀。
+					for i := range blockCnt {
+						zm := meta.GetBlockMeta(uint32(i)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						if !zm.IsInited() || zm.AnyGEByValue(minVal) {
+							return i
+						}
+					}
+					return blockCnt
 				}
 			}
 		case "=":
