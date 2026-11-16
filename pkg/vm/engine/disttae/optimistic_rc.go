@@ -16,7 +16,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -137,7 +136,7 @@ func validateOptimisticWriteEntry(ctx context.Context, tbl *txnTable, e Entry, f
 		stats := objectio.ObjectStats(e.bat.Vecs[statsPos].GetBytesAt(n))
 		var checkErr error
 		objectio.ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-			cols, release, err := ioutil.LoadColumns2(ctx, []uint16{seqnum}, nil, tbl.eng.(*Engine).fs, blk.MetaLocation(), fileservice.ExactColumnsRead, false, nil)
+			cols, release, err := ioutil.LoadColumns2(ctx, []uint16{seqnum}, nil, tbl.eng.(*Engine).fs, blk.MetaLocation(), 0, false, nil)
 			if err != nil {
 				checkErr = err
 				return false
