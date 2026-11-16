@@ -45,6 +45,7 @@ const (
 	SpatialIndexCondition        = 3
 	RangeIndexCondition          = 4
 	CompositeRangeIndexCondition = 5
+	KeySetIndexCondition         = 6
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -1434,6 +1435,34 @@ func translateForceIndexRequirementsThroughProject(projectNode *plan.Node, requi
 	return translated
 }
 
+func hasCompositeUniqueKeySetCandidate(indexes []*IndexDef, node *plan.Node) bool {
+	budget := newIndexKeySetWorkBudget()
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		if _, ok := completeUniqueKeySetFilters(idxDef, node, budget); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter selection can choose any hinted regular index, including through the
+// complete-equality fallback. Do not expose that phase to truncated keys.
+func regularIndexesHaveFullValueParts(indexes []*IndexDef) bool {
+	for _, idxDef := range indexes {
+		if idxDef == nil || !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || len(prefixLengths) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if scanNode == nil {
 		return -1, nil
@@ -1508,6 +1537,20 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 				}
 			}
 			return accessNodeID, nil
+		}
+		if hintSet.scan.forceSpecified {
+			filterIndexes := builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes)
+			if hasCompositeUniqueKeySetCandidate(filterIndexes, scanNode) {
+				if regularIndexesHaveFullValueParts(filterIndexes) {
+					// Let ordinary filter selection construct the bounded lookup. Publishing
+					// the generic hinted fallback here would hide its exact key set.
+					return scanNode.NodeId, nil
+				}
+				// A mixed full-value/prefix hint set must retain base access: the
+				// ordinary phase can otherwise select a truncated equality probe.
+				builder.protectedScans[scanNode.NodeId]++
+				return scanNode.NodeId, nil
+			}
 		}
 		if hintSet.join.forceSpecified {
 			return builder.applyForcedHintAccessToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
@@ -2382,6 +2425,20 @@ func regularIndexHasDeclaredPrefix(idxDef *IndexDef) bool {
 	return err != nil || len(prefixLengths) > 0
 }
 
+func (builder *QueryBuilder) boundedUniqueKeySetWithinScanLimits(node *plan.Node, keySetSize int) bool {
+	if node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || keySetSize <= 0 || !hasKnownScanCardinality(node.Stats) {
+		return false
+	}
+	rows := float64(keySetSize)
+	selectivity := rows / node.Stats.TableCnt
+	if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+		(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+		return false
+	}
+	return selectivity < InFilterSelectivityLimit &&
+		rows < float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))
+}
+
 type regularIndexAccessCandidate struct {
 	indexPos           int
 	shape              encodedRegularIndexCostShape
@@ -2389,6 +2446,8 @@ type regularIndexAccessCandidate struct {
 	filterIdx          []int32
 	leadingEqual       bool
 	residualLeadingPos []int32
+	keySetSize         int
+	unknownStatsRank   int
 	work               float64
 	observation        *indexCostObservation
 }
@@ -2438,6 +2497,18 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, lateBaseStatsFinalized bool) (int32, error) {
+	builder.addFunctionalIndexFilters(node)
+	budget := newIndexKeySetWorkBudget(builder.GetContext())
+	budget.proc = builder.compCtx.GetProcess()
+	return builder.applyIndicesForFiltersRegularIndexAttempt(nodeID, node, colRefCnt, idxColMap, lateBaseStatsFinalized, budget, nil)
+}
+
+// A declined optional key set consumes its reservation and is retried without
+// that index. The shared budget and decline set bound all attempts for one scan.
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
+	nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr,
+	lateBaseStatsFinalized bool, keySetBudget *indexKeySetWorkBudget, declinedKeySets map[int]struct{},
+) (int32, error) {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID, nil
 	}
@@ -2449,7 +2520,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 		// Do not build or score partial secondary candidates for a singleton.
 		return nodeID, nil
 	}
-	builder.addFunctionalIndexFilters(node)
 
 	preferSortedScan := false
 	for i := range node.FilterList {
@@ -2522,6 +2592,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	}
 
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	costCtx.keySetBudget = keySetBudget
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
@@ -2550,10 +2621,20 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 		if prefixCandidate && !forceIndex && costCtx.valid && costCtx.baseRows <= float64(objectio.BlockMaxRows) {
 			return true, nil
 		}
-		if candidate.shape == encodedRegularIndexCostBackfill && !prefixCandidate && !allowOrdinaryBackfill {
+		if candidate.shape == encodedRegularIndexCostBackfill && !prefixCandidate && !allowOrdinaryBackfill &&
+			(candidate.filterType != KeySetIndexCondition ||
+				!builder.boundedUniqueKeySetWithinScanLimits(node, candidate.keySetSize)) {
 			return true, nil
 		}
 		idxDef := indexes[candidate.indexPos]
+		if !hasKnownScanCardinality(node.Stats) {
+			switch {
+			case candidate.filterType == EqualIndexCondition && idxDef.Unique && len(candidate.filterIdx) == len(idxDef.Parts):
+				candidate.unknownStatsRank = 2
+			case candidate.filterType == KeySetIndexCondition:
+				candidate.unknownStatsRank = 1
+			}
+		}
 		scoring := costCtx
 		var estimate *encodedRegularIndexEstimate
 		if access := candidate.observation; access != nil {
@@ -2571,7 +2652,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 			observed := access.estimate
 			observed.fixedWork = 0
 			estimate = &observed
-			lower, skip, valid := scoring.scoreWithEstimate(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate)
+			lower, skip, valid := scoring.scoreWithEstimateAndKeySet(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate, candidate.keySetSize)
 			if valid && (skip || lower >= access.baseWork || best.indexPos != -1 && lower >= best.work) && len(access.scan.FilterList) == 1 {
 				// Reuse the comparison owner's input proof after observation reentry.
 				// The generated VARCHAR physical key is valid by construction.
@@ -2589,7 +2670,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 			}
 			estimate.fixedWork = fixed
 		}
-		work, skip, valid := scoring.scoreWithEstimate(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate)
+		work, skip, valid := scoring.scoreWithEstimateAndKeySet(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate, candidate.keySetSize)
 		candidate.work = work
 		if candidate.observation != nil {
 			if valid && !skip && work < candidate.observation.baseWork && (best.indexPos == -1 || work < best.work) {
@@ -2625,6 +2706,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 			return true, nil
 		}
 		if ignoreStats {
+			// Default statistics cannot rank a bounded key set against a schema-proven
+			// singleton by estimated cost. Once either point form is present, retain
+			// catalog order within a rank and leave ordinary-only selection unchanged.
+			if !hasKnownScanCardinality(node.Stats) && (candidate.unknownStatsRank > 0 || best.unknownStatsRank > 0) {
+				if best.indexPos == -1 || candidate.unknownStatsRank > best.unknownStatsRank {
+					best = candidate
+				}
+				return true, nil
+			}
 			// FORCE and small tables bypass cost rejection because their estimates
 			// are not an automatic cross-shape selection oracle. Preserve the
 			// established access-shape priority: any covering scan precedes every
@@ -2671,8 +2761,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 		if admitNecessary && indexComparisonMatches(node, idxDef, comparison) && costCtx.indexCoversRequiredColumns(idxDef) {
 			necessaryIndexes = append(necessaryIndexes, idx)
 		}
+		_, keySetDeclined := declinedKeySets[idx]
 		if !preferSortedScan {
-			for alternative, match := range builder.matchRegularIndexOnlyScans(idxDef, node, costCtx) {
+			for alternative, match := range builder.matchRegularIndexOnlyScans(idxDef, node, costCtx, !keySetDeclined) {
 				if match == nil {
 					continue
 				}
@@ -2680,12 +2771,23 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 					indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
 					filterType: match.filterType, filterIdx: match.filterIdx,
 					leadingEqual: match.leadingEqual, residualLeadingPos: match.residualLeadingPos,
+					keySetSize: match.keySetSize,
 				}, alternative == 0); err != nil {
 					return nodeID, err
 				}
 			}
 		}
 		if !pointBlocked {
+			if !keySetDeclined {
+				if filterIdx, keySetSize := costCtx.matchUniqueKeySet(idxDef); len(filterIdx) > 0 {
+					if _, err := consider(regularIndexAccessCandidate{
+						indexPos: idx, shape: encodedRegularIndexCostBackfill,
+						filterType: KeySetIndexCondition, filterIdx: filterIdx, keySetSize: keySetSize,
+					}, true); err != nil {
+						return nodeID, err
+					}
+				}
+			}
 			if filterIdx := costCtx.matchPointBackfill(idxDef, ignoreStats); len(filterIdx) > 0 {
 				if _, err := consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostBackfill,
@@ -2747,17 +2849,48 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 			return nodeID, cause
 		}
 	}
+	retryKeySet := func(failed int) (int32, error) {
+		if declinedKeySets == nil {
+			declinedKeySets = make(map[int]struct{})
+		}
+		declinedKeySets[failed] = struct{}{}
+		return builder.applyIndicesForFiltersRegularIndexAttempt(
+			nodeID, node, colRefCnt, idxColMap, lateBaseStatsFinalized, keySetBudget, declinedKeySets,
+		)
+	}
+	reserveKeySet := func(candidate regularIndexAccessCandidate) *indexKeySetReservation {
+		work, ok := keySetBudget.estimate(node.FilterList, candidate.filterIdx)
+		if !ok || !keySetBudget.charge(work) {
+			return nil
+		}
+		return &indexKeySetReservation{budget: keySetBudget, work: work}
+	}
 	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
-		match := &regularIndexOnlyMatch{filterIdx: best.filterIdx, filterType: best.filterType, leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos, observation: best.observation}
+		match := &regularIndexOnlyMatch{filterIdx: best.filterIdx, filterType: best.filterType, leadingEqual: best.leadingEqual, keySetSize: best.keySetSize, residualLeadingPos: best.residualLeadingPos, observation: best.observation}
+		if best.filterType == KeySetIndexCondition {
+			match.keySetReservation = reserveKeySet(best)
+			if match.keySetReservation == nil {
+				return retryKeySet(best.indexPos)
+			}
+		}
 		if best.observation != nil || !forceIndex && !ignoreStats && !preferSortedScan && builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized) {
 			match.cost = costCtx
 		}
 		ret, err := builder.applyRegularIndexOnlyScan(indexes[best.indexPos], node, idxColMap, scanSnapshot, match)
 		if err != nil {
+			if best.filterType == KeySetIndexCondition {
+				if control := keySetPlanningControlError(builder.GetContext(), err); control != nil {
+					return nodeID, control
+				}
+				return retryKeySet(best.indexPos)
+			}
 			return nodeID, err
 		}
 		if ret != -1 {
 			return ret, nil
+		}
+		if best.filterType == KeySetIndexCondition {
+			return retryKeySet(best.indexPos)
 		}
 		return nodeID, nil
 	}
@@ -2774,10 +2907,20 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	}
 	if best.indexPos != -1 {
 		idxDef := indexes[best.indexPos]
-		retID, idxTableNodeID := builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot)
+		var reservation *indexKeySetReservation
+		if best.filterType == KeySetIndexCondition {
+			reservation = reserveKeySet(best)
+			if reservation == nil {
+				return retryKeySet(best.indexPos)
+			}
+		}
+		retID, idxTableNodeID := builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot, reservation)
 		if idxTableNodeID != -1 {
 			builder.applyExtraFiltersOnIndex(idxDef, node, builder.qry.Nodes[idxTableNodeID], best.filterIdx)
 			return retID, nil
+		}
+		if best.filterType == KeySetIndexCondition {
+			return retryKeySet(best.indexPos)
 		}
 	}
 
@@ -3543,6 +3686,7 @@ type encodedRegularIndexCostContext struct {
 	requiredCols  []int32
 
 	unknownRangeLowerSelectivities map[int32]float64
+	keySetBudget                   *indexKeySetWorkBudget
 
 	leadingFilters []bool
 	coveredCols    []bool
@@ -3726,6 +3870,8 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	}
 
 	ctx.relPos = node.BindingTags[0]
+	ctx.keySetBudget = newIndexKeySetWorkBudget(builder.GetContext())
+	ctx.keySetBudget.proc = builder.compCtx.GetProcess()
 	ctx.force = builder.scanHintsForceIndexes(node)
 	ctx.statsTableCnt = node.Stats.TableCnt
 	var statsInfo *statspb.StatsInfo
@@ -3942,6 +4088,49 @@ func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef, 
 		return nil
 	}
 	return filterIdx
+}
+
+// matchUniqueKeySet recognizes one finite IN dimension together with equality
+// bindings for every other part of a complete unique key. The input count is a
+// safe cardinality upper bound; lowering may only reduce it by deduplication.
+func (ctx *encodedRegularIndexCostContext) matchUniqueKeySet(idxDef *IndexDef) ([]int32, int) {
+	if idxDef == nil || ctx.node == nil || ctx.node.TableDef == nil || ctx.keySetBudget == nil {
+		return nil, 0
+	}
+	filterIdx, ok := completeUniqueKeySetFilters(idxDef, ctx.node, ctx.keySetBudget)
+	if !ok {
+		return nil, 0
+	}
+	keySetSize := 0
+	for partPos, pos := range filterIdx {
+		fn := ctx.node.FilterList[pos].GetF()
+		if fn == nil || fn.Func == nil {
+			return nil, 0
+		}
+		switch fn.Func.ObjName {
+		case "=":
+			if !ctx.builder.regularIndexEqualityUsable(idxDef, ctx.node.TableDef, fn, partPos) {
+				return nil, 0
+			}
+		case "in":
+			_, count, ok := indexKeySetFilter(ctx.node.FilterList[pos], ctx.builder.GetContext())
+			if !ok {
+				return nil, 0
+			}
+			keySetSize = count
+		default:
+			return nil, 0
+		}
+	}
+	if keySetSize == 0 || !indexKeySetWorthwhile(
+		ctx.builder.indexKeySetCostStats(ctx.node.Stats), keySetSize, ctx.force,
+	) {
+		return nil, 0
+	}
+	if _, ok := ctx.keySetBudget.estimate(ctx.node.FilterList, filterIdx); !ok {
+		return nil, 0
+	}
+	return filterIdx, keySetSize
 }
 
 // matchRangeBackfills retains the historical first match and, if available,
@@ -4323,6 +4512,17 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 	shape encodedRegularIndexCostShape,
 	estimate *encodedRegularIndexEstimate,
 ) (work float64, shouldReject bool, valid bool) {
+	return ctx.scoreWithEstimateAndKeySet(idxDef, leadingPos, residualLeadingPos, shape, estimate, 0)
+}
+
+func (ctx *encodedRegularIndexCostContext) scoreWithEstimateAndKeySet(
+	idxDef *IndexDef,
+	leadingPos []int32,
+	residualLeadingPos []int32,
+	shape encodedRegularIndexCostShape,
+	estimate *encodedRegularIndexEstimate,
+	keySetSize int,
+) (work float64, shouldReject bool, valid bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || !ctx.valid {
 		return 0, false, false
 	}
@@ -4333,6 +4533,9 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 			return 0, false, false
 		}
 		outputRows = estimate.outputRows
+	}
+	if keySetSize > 0 {
+		outputRows = min(outputRows, float64(keySetSize))
 	}
 	ctx.resetScratch()
 	if cap(ctx.partWidths) < len(idxDef.Parts) {
@@ -4415,6 +4618,10 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 	}
 	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
 	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
+	if keySetSize > 0 {
+		leadingCandidateRows = min(leadingCandidateRows, float64(keySetSize))
+		lowerCandidateRows = min(lowerCandidateRows, float64(keySetSize))
+	}
 	candidateRows := max(outputRows, leadingCandidateRows)
 	if !finitePositive(candidateRows) {
 		ctx.resetScratch()
@@ -4560,6 +4767,11 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 		hiddenRows = max(outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
 		budgetRows = max(outputRows, ctx.node.Stats.TableCnt*budgetSelectivity)
 		lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
+	}
+	if keySetSize > 0 {
+		hiddenRows = min(hiddenRows, float64(keySetSize))
+		budgetRows = min(budgetRows, float64(keySetSize))
+		lowerHiddenRows = min(lowerHiddenRows, float64(keySetSize))
 	}
 	if math.IsNaN(hiddenRows) || math.IsInf(hiddenRows, 0) || hiddenRows < 0 {
 		ctx.resetScratch()
@@ -4769,6 +4981,8 @@ type regularIndexOnlyMatch struct {
 	filterIdx          []int32
 	filterType         int
 	leadingEqual       bool
+	keySetSize         int
+	keySetReservation  *indexKeySetReservation
 	residualLeadingPos []int32
 	cost               *encodedRegularIndexCostContext
 	observation        *indexCostObservation
@@ -4806,11 +5020,23 @@ func (ctx *encodedRegularIndexCostContext) indexCoversRequiredColumns(idxDef *In
 // matchRegularIndexOnlyScans keeps the historical match first, then lets one
 // logical-prefix alternative compete on cost. A rejected alternative must not
 // suppress the historical fallback; equal costs retain the first match.
-func (builder *QueryBuilder) matchRegularIndexOnlyScans(idxDef *IndexDef, node *plan.Node, costCtx *encodedRegularIndexCostContext) (matches [2]*regularIndexOnlyMatch) {
-	matches[0], _ = builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+func (builder *QueryBuilder) matchRegularIndexOnlyScans(idxDef *IndexDef, node *plan.Node, costCtx *encodedRegularIndexCostContext, allowKeySet ...bool) (matches [2]*regularIndexOnlyMatch) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil {
 		return matches
 	}
+	if len(allowKeySet) > 0 && allowKeySet[0] &&
+		!indexUnsafeForRead(idxDef, node.TableDef) && !regularIndexHasDeclaredPrefix(idxDef) &&
+		functionalIndexColumn(node.TableDef, idxDef) == nil && regularIndexFiltersHaveStableEvaluation(node) &&
+		costCtx.indexCoversRequiredColumns(idxDef) {
+		if filterIdx, keySetSize := costCtx.matchUniqueKeySet(idxDef); len(filterIdx) > 0 {
+			matches[0] = &regularIndexOnlyMatch{
+				filterIdx: filterIdx, filterType: KeySetIndexCondition,
+				leadingEqual: true, keySetSize: keySetSize,
+			}
+			return matches
+		}
+	}
+	matches[0], _ = builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	col, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
 	if !ok || col < 0 || int(col) >= len(costCtx.firstPrefixes) {
 		return matches
@@ -5018,6 +5244,18 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(idxDef *IndexDef, node *p
 	return id, nil
 }
 
+// Optional key-set candidates may decline an ordinary resolution or encoding
+// error and try another access path. Cancellation and deadlines remain fatal.
+func keySetPlanningControlError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if context.Cause(ctx) != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return regularIndexPlanningError(ctx, err)
+	}
+	return nil
+}
+
 // regularIndexPlanningError preserves a substantive error and the request's
 // cancellation cause when an error wraps the context's cancellation sentinel.
 func regularIndexPlanningError(ctx context.Context, err error) error {
@@ -5136,6 +5374,14 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		}
 		return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata")
 	}
+	if match.filterType == KeySetIndexCondition {
+		if match.keySetReservation == nil || !match.keySetReservation.budget.revalidate(
+			node.FilterList, match.filterIdx, match.keySetReservation.work,
+			builder.indexKeySetCostStats(node.Stats), builder.scanHintsForceIndexes(node),
+		) {
+			return nil, nil
+		}
+	}
 	var hint *plan.Expr
 	if necessary {
 		proc := builder.compCtx.GetProcess()
@@ -5169,7 +5415,12 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	}
 	var leading *plan.Expr
 	if !necessary {
-		if match.filterType == RangeIndexCondition {
+		if match.filterType == KeySetIndexCondition {
+			leading = builder.replaceKeySetCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
+			if leading == nil {
+				return nil, nil
+			}
+		} else if match.filterType == RangeIndexCondition {
 			leading, err = builder.replaceRangePairCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
 		} else if match.filterType == CompositeRangeIndexCondition {
 			leading, err = builder.replaceCompositeRangeCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
@@ -5850,7 +6101,7 @@ func (builder *QueryBuilder) replaceCompositeRangeCondition(
 	return result, nil
 }
 
-func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot, keySetReservations ...*indexKeySetReservation) (int32, int32) {
 	if node == nil {
 		return -1, -1
 	}
@@ -5860,13 +6111,33 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
+		if filterType == KeySetIndexCondition && keySetPlanningControlError(builder.GetContext(), err) == nil {
+			return node.NodeId, -1
+		}
 		panic(err)
+	}
+	if filterType == KeySetIndexCondition {
+		if idxObjRef == nil || idxTableDef == nil || len(keySetReservations) != 1 || keySetReservations[0] == nil {
+			return node.NodeId, -1
+		}
+		reservation := keySetReservations[0]
+		if !reservation.budget.revalidate(
+			node.FilterList, filterIdx, reservation.work,
+			builder.indexKeySetCostStats(node.Stats), builder.scanHintsForceIndexes(node),
+		) {
+			return node.NodeId, -1
+		}
 	}
 
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
 		idxFilter, err = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
 		if err != nil {
+			return node.NodeId, -1
+		}
+	} else if filterType == KeySetIndexCondition {
+		idxFilter = builder.replaceKeySetCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		if idxFilter == nil {
 			return node.NodeId, -1
 		}
 	} else if filterType == SpatialIndexCondition {
