@@ -71,7 +71,9 @@ func rangeTestData(n int) []byte {
 }
 
 func readEntry(t *testing.T, cache *DiskCache, offset, size int64) IOEntry {
+	t.Helper()
 	vec := &IOVector{FilePath: "123obj", Entries: []IOEntry{{Offset: offset, Size: size}}}
+	t.Cleanup(vec.Release)
 	require.NoError(t, cache.Read(context.Background(), vec))
 	return vec.Entries[0]
 }
