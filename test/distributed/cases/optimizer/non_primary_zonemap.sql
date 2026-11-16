@@ -118,6 +118,20 @@ with raw_data as (select period, sum(amount) as total from period_values where p
 select row_number() over () as row_no, period, total from raw_data limit 2;
 select period,total from period_snapshot order by period;
 
+-- 长二进制的全 FF 前缀没有有限上界，不能以30字节摘要排除 IN 命中。
+create table binary_in_values (id int primary key, k varbinary(128));
+insert into binary_in_values values (1,unhex(repeat('ff',31))),(2,unhex(repeat('ff',30))),(3,repeat('z',31)),(4,null);
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select count(*) from binary_in_values where k in (null,null);
+-- @regex("Table Scan on non_primary_zonemap[.]binary_in_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=4\b",true)
+explain analyze select count(*) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128)));
+
 -- 范围分区裁剪收到物化参数时，NULL 不能中断查询或污染后续执行。
 create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
 insert into range_bound values (1),(11),(21);
@@ -183,6 +197,10 @@ select min(b), max(b) from bool_aggregate;
 
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
 select k from clustered where k in (100,150) order by k;
 -- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
 explain analyze select count(*) from clustered where k in (100,150);

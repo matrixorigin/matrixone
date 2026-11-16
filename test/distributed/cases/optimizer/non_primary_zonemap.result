@@ -362,6 +362,50 @@ select period,total from period_snapshot order by period;
 ➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
 2024.12  ¦  30.0000000  𝄀
 2025.12  ¦  70.0000000
+create table binary_in_values (id int primary key, k varbinary(128));
+insert into binary_in_values values (1,unhex(repeat('ff',31))),(2,unhex(repeat('ff',30))),(3,repeat('z',31)),(4,null);
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.binary_in_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+3
+select count(*) from binary_in_values where k in (null,null);
+➤ count(*)[-5,64,0]  𝄀
+0
+explain analyze select count(*) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128)));
+-- @regex("Table Scan on non_primary_zonemap[.]binary_in_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=116 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.binary_in_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=4 outputRows=1 (min=1, max=1) InputSize=188 bytes OutputSize=116 bytes ReadSize=118 bytes|0 bytes|0 bytes MemorySize=308 bytes (min=308 bytes, max=308 bytes)  𝄀
+              Filter Cond: binary_in_values.k in ([\x00 \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff])  𝄀
+              Block Filter Cond: binary_in_values.k in ([\x00 \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff])
 create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
 insert into range_bound values (1),(11),(21);
 prepare zm_partition from 'select a from range_bound where a = ?';
@@ -523,6 +567,18 @@ select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 null  ¦  null
 set optimizer_hints='blockFilter=2';
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+3
 select k from clustered where k in (100,150) order by k;
 ➤ k[4,32,0]  𝄀
 100  𝄀
@@ -557,7 +613,7 @@ Project  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on non_primary_zonemap.period_values  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=211 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=227 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
               Filter Cond: period_values.period in ([2024.12 2025.12])
 select id from bool_values where enabled = true order by id;
 ➤ id[4,32,0]  𝄀
