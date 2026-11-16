@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -203,13 +204,36 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.earlyColumns[i] = i
 		}
 	}
+	if len(tableScan.ctr.earlyColumns) == 0 && tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 &&
+		len(tableScan.Attrs) == len(tableScan.Types) {
+		// Keep the eager path's all-column schedule. Scoped filtering may
+		// still avoid intermediate copies when publication requires owned data.
+		tableScan.ctr.earlyColumns = make([]int, len(tableScan.Types))
+		for i := range tableScan.ctr.earlyColumns {
+			tableScan.ctr.earlyColumns[i] = i
+		}
+	}
 	if len(tableScan.ctr.earlyColumns) == 0 {
 		tableScan.ctr.readerFilter = nil
 		return
 	}
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
+		SnapshotSlots:   tableScan.ctr.readerSnapshots,
+		SelectionSlot:   tableScan.ctr.readerSelection,
+		Workspace:       tableScan.ctr.readerWorkspace,
+		ReusableHeaders: tableScan.ctr.readerHeaders,
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			return tableScan.applyReaderFilter(proc, bat, loaded)
+		},
+		OutputAllocation: tableScan.OutputAllocation,
+		ObserveSelection: func(rows, columns int, logicalBytes int64) {
+			stats := tableScan.OpAnalyzer.GetOpStats()
+			stats.AddExtraStat("DictionaryReaderSelectedRows", int64(rows))
+			stats.AddExtraStat("DictionaryReaderViewColumns", int64(columns))
+			stats.AddExtraStat("DictionaryReaderLogicalBytes", logicalBytes)
+			if tableScan.allocationAccount != nil {
+				stats.SetMaxExtraStat("DictionaryAccountUsedBytes", int64(tableScan.allocationAccount.Snapshot().Used))
+			}
 		},
 		Exact: objectio.NewExactScanState(program),
 		Observe: func(stats objectio.ExactScanStats) {
@@ -227,5 +251,36 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.filterReadMetrics = true
 			tableScan.ctr.filterLateMaterialized = false
 		},
+	}
+	if tableScan.OutputAllocation != nil && !tableScan.ctr.padCharToFullLength {
+		tableScan.ctr.readerFilter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			return tableScan.selectReaderFilter(proc, bat, loaded)
+		}
+	}
+}
+
+// prepareSelectionWorkspace is called only after the downstream edge admits
+// views. Flat-only scans never allocate publication/snapshot/map banks.
+func (tableScan *TableScan) prepareSelectionWorkspace() {
+	tableScan.prepareColumnUses()
+	if tableScan.ctr.readerWorkspace == nil {
+		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
+	}
+	if tableScan.ctr.readerHeaders == nil {
+		tableScan.ctr.readerHeaders = make([]*vector.Vector, len(tableScan.Types))
+	}
+	if tableScan.ctr.readerSnapshots == nil {
+		tableScan.ctr.readerSnapshots = make([]*vector.DictionaryVectorSlot, len(tableScan.Types))
+		for i := range tableScan.ctr.readerSnapshots {
+			tableScan.ctr.readerSnapshots[i] = &vector.DictionaryVectorSlot{}
+		}
+		tableScan.ctr.readerSelection = &vector.DictionaryVectorSlot{}
+	}
+	if request := tableScan.ctr.readerFilter; request != nil {
+		request.ColumnUses = tableScan.ctr.columnUses
+		request.Workspace = tableScan.ctr.readerWorkspace
+		request.ReusableHeaders = tableScan.ctr.readerHeaders
+		request.SnapshotSlots = tableScan.ctr.readerSnapshots
+		request.SelectionSlot = tableScan.ctr.readerSelection
 	}
 }

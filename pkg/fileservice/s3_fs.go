@@ -639,6 +639,20 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	return err
 }
 
+// canReplayWriteEntries only admits contiguous in-memory input. Streaming
+// readers and gaps keep the original upload-capture path.
+func canReplayWriteEntries(entries []IOEntry) bool {
+	var offset int64
+	for _, entry := range entries {
+		if entry.ReaderForWrite != nil || entry.Size < 0 || entry.Offset != offset ||
+			int64(len(entry.Data)) != entry.Size || entry.Size > math.MaxInt64-offset {
+			return false
+		}
+		offset += entry.Size
+	}
+	return true
+}
+
 func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
@@ -653,25 +667,27 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		return cmp.Compare(a.Offset, b.Offset)
 	})
 
-	// reader
-	var reader io.Reader
-	reader = newIOEntriesReader(ctx, vector.Entries)
-	var n atomic.Int64
-	reader = &countingReader{
-		R: reader,
-		C: &n,
-	}
-
-	// disk cache
+	// A validated in-memory vector can be read with a cursor for both the
+	// upload and the cache fill, without cloning or mutating its entries.
+	size := vector.size()
 	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
+	replayDiskCache := writeDiskCache && vector.Policy.Any(ReplayDataForDiskCache) && size != nil && canReplayWriteEntries(vector.Entries)
+	var reader io.Reader
+	if replayDiskCache {
+		reader = &replayDataReader{ctx: ctx, entries: vector.Entries, remaining: *size}
+	} else {
+		reader = newIOEntriesReader(ctx, vector.Entries)
+	}
+	var n atomic.Int64
+	reader = &countingReader{R: reader, C: &n}
+
 	var diskCacheBuf *bytes.Buffer
-	if writeDiskCache {
+	if writeDiskCache && !replayDiskCache {
 		diskCacheBuf = new(bytes.Buffer)
 		reader = io.TeeReader(reader, diskCacheBuf)
 	}
 
 	// some SDKs can't handle unknown reader type
-	size := vector.size()
 	if size != nil {
 		reader = io.LimitReader(reader, *size)
 	}
@@ -725,10 +741,18 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// write to disk cache
 	if writeDiskCache {
-		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.setFileContent(ctx, vector.FilePath, content, s.asyncUpdate); err != nil {
-			return 0, err
+		var cacheErr error
+		if replayDiskCache {
+			consumed := n.Load()
+			cacheErr = s.diskCache.fillFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(&replayDataReader{ctx: context.Background(), entries: vector.Entries, remaining: consumed}), nil
+			}, s.asyncUpdate, contentFill, nil)
+		} else {
+			cacheErr = s.diskCache.setFileContent(ctx, vector.FilePath, diskCacheBuf.Bytes(), s.asyncUpdate)
+		}
+		if cacheErr != nil {
+			return 0, cacheErr
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
