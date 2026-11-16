@@ -31,7 +31,8 @@ import (
 
 type fallbackSubscriptionSQL struct{ meta, queries int }
 
-func (s *fallbackSubscriptionSQL) GetCompilerContext() any { return nil }
+func (s *fallbackSubscriptionSQL) GetCompilerContext() any                          { return nil }
+func (s *fallbackSubscriptionSQL) CheckDatabaseWrite(context.Context, string) error { return nil }
 func (s *fallbackSubscriptionSQL) ExecSql(string) ([][]interface{}, error) {
 	panic("unexpected contextless SQL")
 }

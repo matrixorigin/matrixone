@@ -137,7 +137,8 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
-	validate := func(query *Query) error {
+	var domainTypes map[int]*plan.Type
+	validate := func(query *Query, bindCtx *BindContext) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
@@ -151,6 +152,15 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				tableName = node.TableDef.Name
 			}
 			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		// ENUM/SET are projected as display strings. Preserve their exact
+		// logical provenance before optimization remaps those projections;
+		// explicit casts and other string expressions have no such provenance.
+		domainTypes = make(map[int]*plan.Type)
+		for i := range bindCtx.headings {
+			if typ := bindCtx.mysqlSpecialOrderTypeForProject(int32(i)); typ != nil {
+				domainTypes[i] = typ
+			}
 		}
 		return nil
 	}
@@ -194,6 +204,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				Expr:         nil,
 				OriginString: "",
 			},
+		}
+		if typ := domainTypes[idx]; typ != nil {
+			cols[idx].Typ = *typ
+			cols[idx].Typ.NotNullable = expr.Typ.NotNullable
 		}
 	}
 	tableDef.Cols = cols
@@ -282,9 +296,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		case *plan.Expr_F:
 			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
+			if validMySQLSpecialDisplayCall(e.F) && e.F.Args[1].GetCol() != nil {
 				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
+				colRef := e.F.Args[1].GetCol()
 				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
 				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
 					typ = binding.types[binding.colIdByName[colName]]
@@ -982,7 +996,7 @@ func buildCreateTable(
 
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
-		// current/default SQL mode, then restore the structured metadata below.
+		// ordinary SQL mode, then restore the structured metadata below.
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			tableDef,
@@ -5771,11 +5785,12 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:          col.Typ.Id,
-			Width:       col.Typ.Width,
-			Scale:       col.Typ.Scale,
-			Enumvalues:  col.Typ.Enumvalues,
-			NullAbility: nullable,
+			Id:           col.Typ.Id,
+			Width:        col.Typ.Width,
+			Scale:        col.Typ.Scale,
+			Enumvalues:   col.Typ.Enumvalues,
+			EnumEncoding: col.Typ.EnumEncoding,
+			NullAbility:  nullable,
 		})
 	}
 

@@ -48,7 +48,19 @@ type terminalTCPProbe struct {
 
 func terminalTCPConn(conn net.Conn) *net.TCPConn {
 	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if tlsConn == nil {
+			return nil
+		}
 		conn = tlsConn.NetConn()
+	}
+	// A TLS upgrade may have retained a read-ahead ClientHello in this
+	// frontend-owned wrapper. The terminal probe still needs the physical TCP
+	// connection after TLS has consumed those bytes.
+	if buffered, ok := conn.(*bufferedNetConn); ok {
+		if buffered == nil {
+			return nil
+		}
+		conn = buffered.Conn
 	}
 	tcp, _ := conn.(*net.TCPConn)
 	return tcp
@@ -68,9 +80,18 @@ func newTerminalTCPProbe(tcp *net.TCPConn) *terminalTCPProbe {
 }
 
 func (probe *terminalTCPProbe) checkFD(fd uintptr) {
-	probe.pollFD[0] = unix.PollFd{Fd: int32(fd)}
+	probe.pollFD[0] = unix.PollFd{Fd: int32(fd), Events: unix.POLLRDHUP}
 	_, probe.err = unix.Poll(probe.pollFD[:], 0)
-	if probe.err != nil || probe.pollFD[0].Revents&unix.POLLNVAL != 0 || probe.pollFD[0].Revents&unix.POLLERR == 0 {
+	if probe.err != nil || probe.pollFD[0].Revents&unix.POLLNVAL != 0 {
+		return
+	}
+	// A peer FIN and a write-half-close are indistinguishable here. Both end
+	// request admission on this connection, even if input remains unread.
+	if probe.pollFD[0].Revents&unix.POLLRDHUP != 0 {
+		probe.closed = true
+		return
+	}
+	if probe.pollFD[0].Revents&unix.POLLERR == 0 {
 		return
 	}
 	// POLLERR alone may indicate an error queue on a usable socket. TCP_INFO
@@ -110,7 +131,7 @@ func (monitor *connectionLivenessMonitor) snapshot(now time.Time) {
 			continue
 		}
 		startedAt := routine.activeRequestStartedAt()
-		if startedAt == 0 || nowValue-startedAt < 0 {
+		if startedAt == 0 {
 			continue
 		}
 		monitor.requests = append(monitor.requests, livenessRequest{
@@ -129,11 +150,11 @@ func (monitor *connectionLivenessMonitor) scan(now time.Time) {
 	}
 	legacy := monitor.requests[:0]
 	for _, request := range monitor.requests {
-		if request.legacyEligible {
-			legacy = append(legacy, request)
-		}
 		tcp := terminalTCPConn(request.conn.RawConn())
 		if tcp == nil {
+			if request.legacyEligible {
+				legacy = append(legacy, request)
+			}
 			continue
 		}
 		probe := monitor.probes[request.conn]
@@ -152,7 +173,7 @@ func (monitor *connectionLivenessMonitor) scan(now time.Time) {
 		probe.seen = true
 		if probe.terminal() && request.routine.retireTerminalConnection() {
 			delete(monitor.probes, request.conn)
-			logutil.Infof("cancel active query after terminal client connection error: connection=%s", request.conn.RemoteAddress())
+			logutil.Infof("cancel active query after client connection shutdown: connection=%s", request.conn.RemoteAddress())
 		}
 	}
 	for conn, probe := range monitor.probes {
@@ -167,14 +188,22 @@ func (monitor *connectionLivenessMonitor) scan(now time.Time) {
 		monitor.probes = nil
 	}
 
-	// Legacy close may wait for a lifecycle lock. Finish the terminal pass
-	// first, and do not retain references to the other requests while waiting.
+	// Non-TCP transports retain the legacy probe and request-age policy. The
+	// close attempt must not hold up future TCP scans when a lifecycle lock is
+	// busy; retry inconclusive or contended requests on a later scan.
 	clear(monitor.requests[len(legacy):])
 	monitor.requests = legacy
 	for i := range monitor.requests {
 		request := monitor.requests[i].activeClientRequest
 		monitor.requests[i] = livenessRequest{}
-		cancelDisconnectedRequest(request, connectionPeerClosed)
+		closed, err := connectionPeerClosed(request.conn.RawConn())
+		if err != nil {
+			logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
+			continue
+		}
+		if closed && request.routine.tryBeginCloseForRequest(clientRequestClockValue(now), clientDisconnectProbeGrace) {
+			logutil.Infof("cancel active query after client disconnect: connection=%s", request.conn.RemoteAddress())
+		}
 	}
 	if cap(monitor.requests) > terminalRequestScratchLimit {
 		monitor.requests = nil

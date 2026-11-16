@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -349,6 +350,17 @@ func (s *LogtailServer) onReadBarrier(
 	session, err := s.getSession(stream)
 	if err != nil {
 		return err
+	}
+	if table := req.GetTableReadTarget(); table != nil {
+		if lookup, ok := s.logtailer.(interface {
+			TableReadTarget(api.TableID) (timestamp.Timestamp, bool)
+		}); ok {
+			if target, supported := lookup.TableReadTarget(*table); supported {
+				// This target is not a publication event. The client waits for
+				// its actual logtail apply progress independently.
+				return session.TrySendReadBarrierResponse(sendCtx, req.BarrierId, target)
+			}
+		}
 	}
 	target, err := s.logtailer.ReadBarrier(sendCtx)
 	if err != nil {

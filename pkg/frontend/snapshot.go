@@ -670,6 +670,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
 		return stats, err
 	}
+	if err = preflightRestoreSnapshotEntry(ctx, ses, bh, stmt, *snapshot); err != nil {
+		return stats, err
+	}
 
 	// default restore to src account
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
@@ -1179,14 +1182,16 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
-	var createDbSql string
+	var definition logicalRestoreDatabaseDefinition
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
+	definition, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
+	createDbSql := definition.createSQL
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	toCtx = prepareLogicalRestoreDatabase(toCtx, definition)
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
@@ -2236,24 +2241,24 @@ func getCreateDatabaseSql(ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string,
-	accountId uint32) (string, error) {
+	accountId uint32) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Debug(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 func getTableInfo(
@@ -2652,6 +2657,14 @@ func restoreToCluster(ctx context.Context,
 	pastExistsAccount, err = getPastExistsAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
 	if err != nil {
 		return err
+	}
+	// Account removal terminates sessions and cannot be undone by catalog
+	// rollback. Validate every source definition before the first account effect.
+	for _, account := range pastExistsAccount {
+		accountID := uint32(account.accountId)
+		if err = preflightLogicalRestoreAccountFromTS(ctx, ses.GetService(), bh, snapshotTs, accountID, accountID); err != nil {
+			return err
+		}
 	}
 
 	var currentMap = make(map[string]bool)

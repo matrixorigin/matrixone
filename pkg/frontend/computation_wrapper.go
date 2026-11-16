@@ -66,7 +66,7 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
+	// stmtBorrowed means PrepareStmt or an ExecStmt caller owns the AST; this
 	// wrapper must not return it to the AST pool. The zero value intentionally
 	// means owned so ordinary wrappers preserve their existing lifecycle.
 	stmtBorrowed bool

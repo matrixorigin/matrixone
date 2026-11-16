@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
@@ -135,6 +136,8 @@ type ExternalErrorMode struct {
 }
 
 type ExParam struct {
+	// Decoded constant ENUM definitions, owned by this scan generation.
+	enumMembers []types.EnumMembers
 	// ErrorMode is resolved in Prepare from the pruned attributes.
 	ErrorMode ExternalErrorMode
 	Fileparam *ExFileparam
@@ -340,6 +343,7 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 		external.ctr.buf = nil
 	}
 	if external.Es != nil {
+		external.Es.enumMembers = nil
 		// Release Iceberg-only execution state without changing External's legacy
 		// terminal file cursor contract. Cached prepared Iceberg scans are rejected
 		// at the compile-cache boundary and receive a freshly planned operator.
@@ -387,6 +391,7 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.fileOpened = false
 	}
 	if external.Es != nil {
+		external.Es.enumMembers = nil
 		external.Es.releaseIcebergObjectIORef()
 	}
 	if external.ctr.buf != nil {

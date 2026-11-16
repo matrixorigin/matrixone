@@ -82,7 +82,7 @@ where user_id='target' and run_id='long-run'
   and idempotency_key in ('user_intent:x',null,'user_intent_applied:x')
 order by event_idx;
 
--- Incomplete prefixes and IN on a nontrailing part keep their fallback semantics.
+-- Incomplete prefixes and IN on a nontrailing part retain SQL results.
 select event_idx from events
 where user_id='target'
   and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x')

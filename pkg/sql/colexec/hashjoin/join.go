@@ -350,7 +350,9 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	if buildErr := dep.BuildError(); buildErr != nil {
 		// A terminal BuildError is a failed dependency, never an empty build.
 		// Return before consuming probe input so no successful rows can escape.
-		return buildErr.AsMoErr()
+		// AsError keeps cancellation identity so a build that merely observed the
+		// pipeline cancel cannot mask the error that canceled it.
+		return buildErr.AsError()
 	}
 	ctr.mp = dep.JoinMap()
 

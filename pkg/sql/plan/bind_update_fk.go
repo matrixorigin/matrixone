@@ -854,7 +854,7 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 		if parentCol.Typ.Id != childCol.Typ.Id ||
 			parentCol.Typ.Width != childCol.Typ.Width ||
 			parentCol.Typ.Scale != childCol.Typ.Scale ||
-			parentCol.Typ.Enumvalues != childCol.Typ.Enumvalues {
+			!sameTypeMemberDomain(&parentCol.Typ, &childCol.Typ) {
 			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 	}

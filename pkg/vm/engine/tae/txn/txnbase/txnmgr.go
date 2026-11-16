@@ -170,16 +170,20 @@ func (w *txnWaiter) Wait(ctx context.Context) error {
 
 type TxnManager struct {
 	sm.ClosedState
-	preWalQueue     sm.Queue
-	walQueue        sm.Queue
-	applyQueue      sm.Queue
-	IdAlloc         *common.TxnIDAllocator
-	MaxCommittedTS  atomic.Pointer[types.TS]
-	TxnStoreFactory TxnStoreFactory
-	TxnFactory      TxnFactory
-	Exception       *atomic.Value
-	CommitListener  *batchTxnCommitListener
-	workers         *ants.Pool
+	preWalQueue    sm.Queue
+	walQueue       sm.Queue
+	applyQueue     sm.Queue
+	IdAlloc        *common.TxnIDAllocator
+	MaxCommittedTS atomic.Pointer[types.TS]
+	// catalogReadTarget bounds acknowledged catalog mutations. It is seeded
+	// only after writer recovery and raised before a commit is acknowledged.
+	catalogReadTarget atomic.Pointer[types.TS]
+	readTargetsReady  atomic.Bool
+	TxnStoreFactory   TxnStoreFactory
+	TxnFactory        TxnFactory
+	Exception         *atomic.Value
+	CommitListener    *batchTxnCommitListener
+	workers           *ants.Pool
 
 	heartbeatJob atomic.Pointer[tasks.CancelableJob]
 
@@ -670,11 +674,42 @@ func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 		return
 	}
 	new := txn.GetCommitTS()
+	if memo := txn.GetMemo(); memo != nil && memo.HasCatalogChanges() {
+		mgr.updateCatalogReadTarget(new)
+	}
 	for old := mgr.MaxCommittedTS.Load(); new.GT(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
 			return
 		}
 	}
+}
+
+func (mgr *TxnManager) updateCatalogReadTarget(ts types.TS) {
+	for old := mgr.catalogReadTarget.Load(); old == nil || ts.GT(old); old = mgr.catalogReadTarget.Load() {
+		candidate := ts
+		if mgr.catalogReadTarget.CompareAndSwap(old, &candidate) {
+			return
+		}
+	}
+}
+
+// InitializeTableReadTargets is called after checkpoint and WAL recovery in
+// write mode. The recovery floor covers data restored without per-table WAL.
+func (mgr *TxnManager) InitializeTableReadTargets() {
+	if ts := mgr.MaxCommittedTS.Load(); ts != nil {
+		mgr.updateCatalogReadTarget(*ts)
+		mgr.readTargetsReady.Store(true)
+	}
+}
+
+func (mgr *TxnManager) CatalogReadTarget() (types.TS, bool) {
+	if !mgr.readTargetsReady.Load() {
+		return types.TS{}, false
+	}
+	if ts := mgr.catalogReadTarget.Load(); ts != nil {
+		return *ts, true
+	}
+	return types.TS{}, false
 }
 func (mgr *TxnManager) preWal(op *OpTxn) bool {
 	// Idempotent check
@@ -863,7 +898,6 @@ func (mgr *TxnManager) Stop() {
 }
 
 func (mgr *TxnManager) onPreWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
@@ -874,16 +908,9 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 			panic(err)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onPreWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) onWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
@@ -904,12 +931,6 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 			)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {

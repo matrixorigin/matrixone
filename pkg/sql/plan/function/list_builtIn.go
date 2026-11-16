@@ -3180,10 +3180,14 @@ var supportedStringBuiltIns = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				t01.Scale = max(t01.Scale, t02.Scale)
-				t1.Scale = t01.Scale
-				t2.Scale = t01.Scale
+			if t01.Oid.IsDecimal() {
+				target, ok := decimalComparisonTarget([]types.Type{t01, t1, t2}, inputs[:3])
+				if !ok {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				if !inputs[0].Eq(target) || !inputs[1].Eq(target) || !inputs[2].Eq(target) {
+					return newCheckResultWithCast(0, []types.Type{target, target, target, inputs[3]})
+				}
 			}
 
 			if has0 || has1 {
@@ -13642,6 +13646,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastIndexToValue
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_enum, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexToValue
+				},
+			},
 		},
 	},
 
@@ -13665,6 +13681,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastValueToIndex
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_enum.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastValueToIndex
+				},
+			},
 		},
 	},
 
@@ -13679,6 +13707,18 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar, types.T_uint16},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_enum.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexValueToIndex
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_uint16, types.T_int64},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {

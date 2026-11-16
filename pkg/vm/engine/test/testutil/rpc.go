@@ -141,8 +141,12 @@ func (s *MockRPCClientStream) ID() uint64 {
 
 func (s *MockRPCClientStream) Send(ctx context.Context, request morpc.Message) error {
 	request.SetID(s.ID())
-	s.sender <- request
-	return nil
+	select {
+	case s.sender <- request:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *MockRPCClientStream) Receive() (chan morpc.Message, error) {

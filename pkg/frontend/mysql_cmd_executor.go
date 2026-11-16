@@ -56,7 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1208,7 +1207,12 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		var value interface{}
-		if useGlobal {
+		if name == ProtectedDatabases && ses.GetFromRealUser() {
+			value, err = protectedPolicyValueForStatement(execCtx.reqCtx, ses)
+			if err != nil {
+				return err
+			}
+		} else if useGlobal {
 			if value, err = ses.GetGlobalSysVar(name); err != nil {
 				continue
 			}
@@ -3638,6 +3642,12 @@ func authenticateStatementRequirement(reqCtx context.Context, ses *Session, stmt
 		if priv == nil {
 			priv = determinePrivilegeSetOfStatement(stmt)
 		}
+		if ses.GetFromRealUser() && !canWriteProtectedDatabase(ses) &&
+			(len(priv.writeDatabaseTargets) != 0 || priv.writeDatabaseAndTableDirectly || stmt.GetQueryType() == tree.QueryTypeDML) {
+			if _, err := protectedPolicyValueForStatement(reqCtx, ses); err != nil {
+				return stats, err
+			}
+		}
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
 			// The privilege model has no external-connection USAGE object yet.
 			// Fail closed instead of letting any ordinary CREATE TABLE holder use
@@ -3680,7 +3690,11 @@ func authenticateStatementRequirement(reqCtx context.Context, ses *Session, stmt
 		//!!!note: clone table executed in the frontend.
 		//handle privilege check here for it
 		if priv.objectType() == objectTypeTable {
-			if !checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv) {
+			allowed, err := checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv)
+			if err != nil {
+				return stats, err
+			}
+			if !allowed {
 				return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			}
 		}
@@ -3753,6 +3767,9 @@ func authenticatePreparedStatement(reqCtx context.Context, ses *Session, stmt tr
 		admission = saved.admission
 	} else {
 		admission = determinePrivilegeSetOfStatement(stmt)
+	}
+	if prepared != nil {
+		admission = bindPreparedWriteAuthorization(admission, p, prepared.defaultDatabase)
 	}
 	delta, err := authenticateStatementRequirement(reqCtx, ses, stmt, admission)
 	if err != nil {
@@ -4296,10 +4313,14 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if err != nil || hasRecovered {
 		return err
 	}
-	if _, userSession := ses.(*Session); userSession && txnOp.Txn().Isolation == pbtxn.TxnIsolation_RC && execCtx.authorizationSnapshot.IsEmpty() {
+	if _, userSession := ses.(*Session); userSession && txnOp.Txn().Isolation == pbtxn.TxnIsolation_RC {
+		execCtx.authorizationMu.Lock()
 		// IncrStatementID has established this execution's RC visibility. An
 		// earlier protected native check may already own its independent view.
-		execCtx.authorizationSnapshot = txnOp.SnapshotTS()
+		if execCtx.authorizationSnapshot.IsEmpty() {
+			execCtx.authorizationSnapshot = txnOp.SnapshotTS()
+		}
+		execCtx.authorizationMu.Unlock()
 	}
 	stats := statistic.StatsInfoFromContext(newCtx)
 	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
@@ -4850,7 +4871,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
-		execCtx.authorizationSnapshot = timestamp.Timestamp{}
+		execCtx.resetAuthorization()
 		execCtx.prepareStmt = nil
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)

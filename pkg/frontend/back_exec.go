@@ -128,7 +128,7 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
-	return back.exec(ctx, sql, "", false)
+	return back.exec(ctx, sql, "", false, nil)
 }
 
 func (back *backExec) execWithProcessHook(ctx context.Context, sql string, hook backExecProcessHook) error {
@@ -138,17 +138,20 @@ func (back *backExec) execWithProcessHook(ctx context.Context, sql string, hook 
 	previous := back.backSes.processHook
 	back.backSes.processHook = hook
 	defer func() { back.backSes.processHook = previous }()
-	return back.exec(ctx, sql, "", false)
+	return back.exec(ctx, sql, "", false, nil)
 }
 
 // ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
 // is retained so DDL which persists its source text, such as CREATE VIEW, is
 // not rewritten during execution.
 func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode string) (retErr error) {
-	return back.exec(ctx, sql, sqlMode, true)
+	return back.exec(ctx, sql, sqlMode, true, nil)
 }
 
-func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
+func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool, statement tree.Statement) (retErr error) {
+	if ctx == nil {
+		return moerr.NewInternalError(context.Background(), "context is nil")
+	}
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	defer func() {
@@ -156,9 +159,6 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 			back.SetLastAffectedRows(-1)
 		}
 	}()
-	if ctx == nil {
-		return moerr.NewInternalError(context.Background(), "context is nil")
-	}
 	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
@@ -176,7 +176,9 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	}
 
 	var statements []tree.Statement
-	if useSQLMode {
+	if statement != nil {
+		statements = []tree.Statement{statement}
+	} else if useSQLMode {
 		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
 	} else {
 		statements, err = mysql.Parse(ctx, sql, v.(int64))
@@ -184,11 +186,13 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	if err != nil {
 		return err
 	}
-	defer func() {
-		for _, stmt := range statements {
-			stmt.Free()
-		}
-	}()
+	if statement == nil {
+		defer func() {
+			for _, stmt := range statements {
+				stmt.Free()
+			}
+		}()
+	}
 
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
@@ -235,6 +239,7 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	userInput := &UserInput{
 		sql:              sql,
+		stmt:             statement,
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
@@ -335,11 +340,16 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
 }
 
+// ExecStmt borrows statement until it returns; the caller remains its Free owner.
+// Formatting is only for diagnostics. Compilation consumes the original AST.
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
-	return nil
+	if statement == nil {
+		return moerr.NewInvalidInput(ctx, "statement is nil")
+	}
+	return back.exec(ctx, tree.String(statement, dialect.MYSQL), "", false, statement)
 }
 
 func (back *backExec) GetExecResultSet() []interface{} {
@@ -649,6 +659,9 @@ func executeStmtInBack(backSes *backSession,
 	var cmpBegin time.Time
 	var ret interface{}
 
+	if err = checkProcedureProtectedWrites(execCtx.reqCtx, backSes, execCtx.stmt, nil); err != nil {
+		return err
+	}
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontendInBack(backSes, execCtx)
@@ -708,6 +721,11 @@ func executeStmtInBack(backSes *backSession,
 	// cw.Compile may rewrite the stmt in the EXECUTE statement, we fetch the latest version
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		if err = checkProcedureProtectedWrites(execCtx.reqCtx, backSes, execCtx.stmt, cw.Plan()); err != nil {
+			return err
+		}
+	}
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontendInBack(backSes, execCtx)
@@ -824,7 +842,9 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 	}
 
 	for _, stmt := range stmts {
-		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
+		wrapper := InitTxnComputationWrapper(ses, stmt, proc)
+		wrapper.stmtBorrowed = input.getStmt() != nil
+		cw = append(cw, wrapper)
 	}
 	return cw, nil
 }
@@ -1048,6 +1068,7 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 type backSession struct {
 	feSessionImpl
 	parentBackSession *backSession
+	protectedPolicy   *derivedProtectedPolicy
 	// routingIntent is the immutable statement-owned scheduling snapshot. A
 	// back session has no process of its own, so it must keep the snapshot here
 	// until doComQueryInBack seeds the child process. In particular, this keeps
@@ -1555,6 +1576,51 @@ func (backSes *backSession) GetRestoreFail() bool {
 
 type SqlHelper struct {
 	ses *Session
+}
+
+func (sh *SqlHelper) CheckDatabaseWrite(ctx context.Context, db string) error {
+	allowed, err := checkProtectedDatabaseWrite(ctx, sh.ses, db)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
+	// A sequence function can be evaluated after the enclosing SELECT was
+	// authorized. Loading a fresh policy at that point must not combine it
+	// with privileges from an older snapshot. Recheck the enclosing statement
+	// once against the policy snapshot before any sequence mutation.
+	if sh.ses.GetFromRealUser() && !canWriteProtectedDatabase(sh.ses) {
+		compiler := sh.ses.GetTxnCompileCtx()
+		if compiler == nil {
+			return moerr.NewInternalError(ctx, "sequence authorization has no execution context")
+		}
+		compiler.mu.Lock()
+		execution := compiler.execCtx
+		compiler.mu.Unlock()
+		if execution == nil || execution.ses != sh.ses || execution.stmt == nil {
+			return moerr.NewInternalError(ctx, "sequence authorization has no current statement")
+		}
+		execution.sequenceAuthorization.Do(func() {
+			wrapper, ok := execution.cw.(*TxnComputationWrapper)
+			if !ok {
+				execution.sequenceAuthErr = moerr.NewInternalError(ctx, "sequence authorization has no statement plan")
+				return
+			}
+			if execution.prepareStmt != nil {
+				_, execution.sequenceAuthErr = authenticatePreparedStatement(ctx, sh.ses, execution.stmt, wrapper.plan, execution.prepareStmt)
+				return
+			}
+			_, execution.sequenceAuthErr = authenticateUserCanExecuteStatement(ctx, sh.ses, execution.stmt)
+			if execution.sequenceAuthErr == nil && wrapper.plan != nil {
+				_, execution.sequenceAuthErr = authenticateCanExecuteStatementAndPlan(ctx, sh.ses, execution.stmt, wrapper.plan)
+			}
+		})
+		if execution.sequenceAuthErr != nil {
+			return execution.sequenceAuthErr
+		}
+	}
+	return nil
 }
 
 func (sh *SqlHelper) GetCompilerContext() any {

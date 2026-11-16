@@ -570,10 +570,15 @@ func (d *DiskCache) writeFile(
 	}
 	d.cache.Evict(ctx, nil, forceEvict)
 
-	var buf []byte
-	put := ioBufferPool.Get(&buf)
-	defer put.Put()
-	_, err = io.CopyBuffer(f, from, buf)
+	if _, ok := from.(io.WriterTo); ok {
+		// io.CopyBuffer would ignore its buffer for a WriterTo source.
+		_, err = io.Copy(f, from)
+	} else {
+		var buf []byte
+		put := ioBufferPool.Get(&buf)
+		defer put.Put()
+		_, err = io.CopyBuffer(f, from, buf)
+	}
 	if err != nil {
 		return false, err
 	}

@@ -1752,6 +1752,13 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
+				valueType := vecs[rid].GetType()
+				if lhs.GetType().IsDecimal() &&
+					(lhs.GetType() != valueType.Oid || lhs.GetScale() != valueType.Scale) {
+					// AnyIn compares raw decimal coefficients.
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 

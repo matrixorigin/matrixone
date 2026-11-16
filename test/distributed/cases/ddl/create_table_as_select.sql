@@ -1,3 +1,23 @@
+-- CTAS 的默认库仅作用于直接填充，不能污染自增服务的系统库选择。
+drop database if exists ctas_internal_database;
+create database ctas_internal_database;
+-- @session:id=90&user=sys:dump&password=111
+select database();
+-- 10001 是默认自增分配窗口 10000 的下一边界，不能用小结果替代。
+create table ctas_internal_database.no_default as select result as v from generate_series(1,10001) g;
+select count(*), min(v), max(v), sum(v) from ctas_internal_database.no_default;
+create table ctas_internal_database.high_no_default (id bigint auto_increment primary key) as select cast(100002 as bigint) as id;
+insert into ctas_internal_database.high_no_default values (null);
+select id from ctas_internal_database.high_no_default order by id;
+use ctas_internal_database;
+create table selected_default as select result as v from generate_series(1,10001) g;
+select count(*), min(v), max(v), sum(v) from selected_default;
+create table high_selected_default (id bigint auto_increment primary key) as select cast(100002 as bigint) as id;
+insert into high_selected_default values (null);
+select id from high_selected_default order by id;
+-- @session
+drop database ctas_internal_database;
+
 create database test;
 use test;
 

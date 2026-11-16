@@ -1112,6 +1112,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 
+	c.installMarkScanGuard(qry, steps)
 	return steps, err
 }
 
@@ -1307,29 +1308,17 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
-		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		orderedGroupConcat := hasOrderedGroupConcat(node)
 		if c.canCompileShuffleGroup(node) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
-			return ss, nil
-		}
-		if orderedGroupConcat {
-			ss = c.compileOrderedGroupConcat(node, ss, nodes)
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-			return ss, nil
-		}
-		if c.IsSingleScope(ss) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
-			return ss, nil
+			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
-			return ss, nil
+			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
 		}
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_SAMPLE:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -5352,6 +5341,16 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
+func (c *Compile) compileGroupWithoutShuffle(node *plan.Node, ss []*Scope, ns []*plan.Node, singleStage bool) []*Scope {
+	if hasOrderedGroupConcat(node) {
+		return c.compileOrderedGroupConcat(node, ss, ns)
+	}
+	if c.IsSingleScope(ss) {
+		return c.compileTPGroup(node, ss, ns)
+	}
+	return c.compileMergeGroup(node, ss, ns, singleStage)
+}
+
 func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
 	// for less memory usage while merge group,
 	// we do not run the group-operator in parallel once this has a distinct aggregation.
@@ -5453,6 +5452,7 @@ func supportsRemoteOrderedAggregates(service string) bool {
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
+		!plan2.RequiresSingleStageDistinctAgg(node) &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates())
 }
@@ -5483,6 +5483,10 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+	// Reused shuffles retain their ownership. A new shuffle needs multiple owners.
+	if node.Stats.Dop <= 1 && len(stageNodes) <= 1 {
+		return c.compileGroupWithoutShuffle(node, inputSS, nodes, plan2.RequiresSingleStageDistinctAgg(node))
 	}
 	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)
@@ -6927,6 +6931,17 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	// 持久化 BOOL 上界可能为历史兼容而保守放宽，不能作为精确 MAX。
+	// 在任何提前返回或聚合改写前检查完整列表；原始摘要也可能已损坏。
+	for _, expr := range node.AggList {
+		agg := expr.Expr.(*plan.Expr_F).F
+		if agg.Func.ObjName == "max" && node.TableDef != nil {
+			if col, ok := agg.Args[0].Expr.(*plan.Expr_Col); ok &&
+				node.TableDef.Cols[int(col.Col.ColPos)].Typ.Id == int32(types.T_bool) {
+				return nil, nil, nil
+			}
+		}
+	}
 	partialResults := make([]any, len(node.AggList))
 	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)
@@ -7369,6 +7384,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
+	return c.runSqlWithResultAndOptionsInDatabase(sql, accountId, options, c.db)
+}
+
+// 数据库选项只属于这一次直接执行，不能通过 context 覆盖后代执行器自己的选库。
+func (c *Compile) runSqlWithResultAndOptionsInDatabase(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+	database string,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -7408,7 +7433,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
-		WithDatabase(c.db).
+		WithDatabase(database).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).

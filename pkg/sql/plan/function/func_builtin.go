@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -369,7 +371,9 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			ts := typ.String()
 			ret := ""
 			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
@@ -464,7 +468,27 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
+func sessionNoBackslashEscapes(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if value, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := value.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	if mode == process.EmptySqlModeSentinel {
+		mode = ""
+	}
+	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
+}
+
 func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	noBackslashEscapes := sessionNoBackslashEscapes(proc)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -475,6 +499,9 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		err := types.Decode(s, typ)
 		if err != nil {
 			return nil, err
+		}
+		if enumStr == "" && typ.Oid != types.T_enum {
+			return nil, nil
 		}
 		typeName := "ENUM"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
@@ -513,23 +540,25 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		// get enum values
-		enums := strings.Split(enumStr, ",")
-		enumVal := ""
-		for i, e := range enums {
-			enumVal += fmt.Sprintf("'%s'", e)
-			if i < len(enums)-1 {
-				enumVal += ","
+		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_enum {
+			members, err = types.DecodeEnumMembers(enumStr, typ.GetEnumEncoding())
+			if err != nil {
+				return nil, err
 			}
 		}
-		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
+		for i := range members {
+			members[i] = sqlquote.StringWithMode(members[i], noBackslashEscapes)
+		}
+		ret := typeName + "(" + strings.Join(members, ",") + ")"
+
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		enumStr, null2 := enumVal.GetStrValue(i)
-		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+		if null1 || null2 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

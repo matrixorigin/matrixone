@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -560,6 +562,36 @@ func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
 		require.ErrorIs(t, got, process.ErrPipelineTerminalWithoutCause)
 	default:
 		t.Fatal("Dispatch.Reset did not notify remote receiver")
+	}
+}
+
+func TestDispatchRemoteJoinMapErrorWireCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code uint16
+	}{
+		{"cancellation", message.NewJoinMapBuildError(context.Canceled).AsError(), moerr.ErrQueryInterrupted},
+		{"deadline", message.NewJoinMapBuildError(context.DeadlineExceeded).AsError(), moerr.ErrRPCTimeout},
+		{"substantive sibling", errors.Join(message.NewJoinMapBuildError(context.Canceled).AsError(), moerr.NewErrFKNoReferencedRow2(context.Background())), moerr.ErrFKNoReferencedRow2},
+		{"generic sibling", errors.Join(message.NewJoinMapBuildError(context.Canceled).AsError(), errors.New("cleanup failed")), moerr.ErrInternal},
+		{"timeout then generic sibling", errors.Join(message.NewJoinMapBuildError(context.Canceled).AsError(), moerr.NewRPCTimeout(context.Background()), errors.New("cleanup failed")), moerr.ErrRPCTimeout},
+		{"generic then timeout sibling", errors.Join(errors.New("cleanup failed"), moerr.NewRPCTimeout(context.Background()), message.NewJoinMapBuildError(context.Canceled).AsError()), moerr.ErrRPCTimeout},
+		{"deadline then foreign key", errors.Join(message.NewJoinMapBuildError(context.DeadlineExceeded).AsError(), moerr.NewErrFKNoReferencedRow2(context.Background())), moerr.ErrFKNoReferencedRow2},
+		{"foreign key then deadline", errors.Join(moerr.NewErrFKNoReferencedRow2(context.Background()), message.NewJoinMapBuildError(context.DeadlineExceeded).AsError()), moerr.ErrFKNoReferencedRow2},
+		{"deadline then generic", errors.Join(message.NewJoinMapBuildError(context.DeadlineExceeded).AsError(), errors.New("cleanup failed")), moerr.ErrInternal},
+		{"generic then deadline", errors.Join(errors.New("cleanup failed"), message.NewJoinMapBuildError(context.DeadlineExceeded).AsError()), moerr.ErrInternal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errCh := make(chan error, 1)
+			d := &Dispatch{ctr: &container{isRemote: true, remoteReceivers: []*process.WrapCs{{Err: errCh}}}}
+			d.Reset(nil, true, tc.err)
+			wire := &pipeline.Message{}
+			wire.SetMoError(context.Background(), <-errCh)
+			got, ok := wire.TryToGetMoErr()
+			require.True(t, ok)
+			require.True(t, moerr.IsMoErrCode(got, tc.code), got)
+		})
 	}
 }
 

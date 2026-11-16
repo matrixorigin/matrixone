@@ -89,10 +89,10 @@ func TestCompositeUniqueTrailingInPointAccess(t *testing.T) {
 		{name: "forced trailing IN", fromAndWhere: "composite_unique_in_t force index(uk_abc) where a=1 and b=2 and c in (3,4,5)", wantIndex: "uk_abc", wantLookup: "in", wantItems: 3, wantBaseFilts: 3},
 		{name: "forced trailing IN with residual and ORDER BY", fromAndWhere: "composite_unique_in_t force index(uk_abc) where a=1 and b=2 and c in (3,4,5) and payload=7 order by payload", wantIndex: "uk_abc", wantLookup: "in", wantItems: 3, wantBaseFilts: 4},
 		{name: "duplicate and absent keys", fromAndWhere: "composite_unique_in_t where a=1 and b=2 and c in (99,99,100)", wantIndex: "uk_abc", wantLookup: "in", wantItems: 2, wantBaseFilts: 3},
-		{name: "NULL list item", fromAndWhere: "composite_unique_in_t where a=1 and b=2 and c in (3,null,5)", wantIndex: "uk_abc", wantLookup: "in", wantItems: 3, wantBaseFilts: 3},
+		{name: "NULL list item uses ordinary access", fromAndWhere: "composite_unique_in_t where a=1 and b=2 and c in (3,null,5)", wantIndex: "idx_c", wantBaseFilts: 3},
 		{name: "residual payload predicate", fromAndWhere: "composite_unique_in_t where a=1 and b=2 and c in (3,4,5) and payload=7", wantIndex: "uk_abc", wantLookup: "in", wantItems: 3, wantBaseFilts: 4},
 		{name: "incomplete unique prefix", fromAndWhere: "composite_unique_in_t use index(idx_c,uk_abc) where a=1 and c in (3,4,5)", wantIndex: "idx_c", wantBaseFilts: 2},
-		{name: "IN on nontrailing part", fromAndWhere: "composite_unique_in_t use index(idx_c,uk_abc) where a in (1,2) and b=2 and c=3", wantIndex: "idx_c", wantBaseFilts: 3},
+		{name: "IN on leading part", fromAndWhere: "composite_unique_in_t use index(idx_c,uk_abc) where a in (1,2) and b=2 and c=3", wantIndex: "uk_abc", wantLookup: "in", wantItems: 2, wantBaseFilts: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
@@ -116,15 +116,12 @@ func TestCompositeUniqueTrailingInPointAccess(t *testing.T) {
 			if tc.wantItems == 0 {
 				return
 			}
-			values := lookup.Args[1].GetList()
+			values := lookup.Args[1].GetVec()
 			require.NotNil(t, values)
-			require.Len(t, values.List, tc.wantItems)
-			for _, value := range values.List {
-				serial := value.GetF()
-				require.NotNil(t, serial)
-				require.Equal(t, "serial", serial.Func.ObjName)
-				require.Len(t, serial.Args, 3)
-			}
+			require.Equal(t, int32(tc.wantItems), values.Len)
+			keys := vector.NewVec(types.T_any.ToType())
+			require.NoError(t, keys.UnmarshalBinary(values.Data))
+			require.Equal(t, tc.wantItems, keys.Length())
 		})
 	}
 }
@@ -228,11 +225,8 @@ func TestCompositeUniqueForcedOrderRejectsCompetingPrefixAccess(t *testing.T) {
 				GetColExpr(table.Cols[2].Typ, tag, 2), makePlan2StringConstExprWithType("abcdef"),
 			})
 			require.NoError(t, err)
-			inFilter := makeParamInFilterExpr(tag, 3, 2)
-			for i, item := range inFilter.GetF().Args[1].GetList().List {
-				item.Expr = &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_I64Val{I64Val: int64(i + 3)}}}
-			}
-			filters := []*pb.Expr{makeRangeFilterExpr(tag, 1, "=", 1), bFilter, inFilter}
+			inFilter := makeCompositeUniqueInt32VecInFilterExpr(t, tag, 3, 3, 4)
+			filters := []*pb.Expr{makeCompositeUniqueInt32EqualFilterExpr(tag, 1, 1), bFilter, inFilter}
 			filters[0].Selectivity = 0.01
 			filters[1].Selectivity = 0
 			filters[2].Selectivity = 1
@@ -258,8 +252,7 @@ func TestCompositeUniqueForcedOrderRejectsCompetingPrefixAccess(t *testing.T) {
 			builder.applyIndicesForFilters(scan, builder.qry.Nodes[scan], colRefCnt, idxColMap)
 			p := &pb.Plan{Plan: &pb.Plan_Query{Query: builder.qry}}
 			selected := findFirstIndexScanName(p)
-			t.Logf("selected index: %s", selected)
-			require.NotEqual(t, "uk_prefix", selected)
+			require.Empty(t, selected, "a mixed full-value/prefix hint set keeps the base scan protected")
 		})
 	}
 }
@@ -297,14 +290,11 @@ func TestCompositeUniqueMissingStatsPreferCompleteEquality(t *testing.T) {
 			table := addFullValueCompetingUniqueIndexesForTest(mock, tc.reverse)
 			builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
 			tag := builder.genNewBindTag()
-			inFilter := makeParamInFilterExpr(tag, 2, 5000)
-			for i, item := range inFilter.GetF().Args[1].GetList().List {
-				item.Expr = &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_I64Val{I64Val: int64(i + 1)}}}
-			}
+			inFilter := makeCompositeUniqueInt32VecInFilterExpr(t, tag, 2, 1, 2, 3)
 			filters := []*pb.Expr{
-				makeRangeFilterExpr(tag, 1, "=", 1),
+				makeCompositeUniqueInt32EqualFilterExpr(tag, 1, 1),
 				inFilter,
-				makeRangeFilterExpr(tag, 3, "=", 1),
+				makeCompositeUniqueInt32EqualFilterExpr(tag, 3, 1),
 			}
 			node := &pb.Node{
 				NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table,
@@ -326,40 +316,15 @@ func TestCompositeUniqueMissingStatsPreferCompleteEquality(t *testing.T) {
 	}
 }
 
-func TestCompositeUniqueTrailingInPreparedParameters(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	addCompositeUniqueInTableForTest(mock)
-	builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
-	tag := builder.genNewBindTag()
-	table := mock.ctxt.tables["composite_unique_in_t"]
-	table.Indexes = table.Indexes[1:]
-	filters := []*pb.Expr{
-		makeParamEqFilterExpr(tag, 1, 0),
-		makeParamEqFilterExpr(tag, 2, 1),
-		makeParamInFilterExpr(tag, 3, 2),
-	}
-	for i, item := range filters[2].GetF().Args[1].GetList().List {
-		item.GetP().Pos = int32(i + 2)
-	}
-	node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: filters, Stats: DefaultStats()}
-	scan := builder.appendNode(node, NewBindContext(builder, nil))
-	got := builder.applyIndicesForFiltersRegularIndex(scan, builder.qry.Nodes[scan], map[[2]int32]int{{tag, 4}: 1}, map[[2]int32]*pb.Expr{})
-	require.NotEqual(t, scan, got)
-	join := builder.qry.Nodes[got]
-	require.Equal(t, pb.Node_INDEX, join.JoinType)
-	indexScan := builder.qry.Nodes[join.Children[1]]
-	require.Equal(t, "uk_abc", indexScan.IndexScanInfo.IndexName)
-	lookup := indexScan.FilterList[0].GetF()
-	require.Equal(t, "in", lookup.Func.ObjName)
-	for i, value := range lookup.Args[1].GetList().List {
-		serial := value.GetF()
-		require.NotNil(t, serial)
-		require.Equal(t, "serial", serial.Func.ObjName)
-		require.Len(t, serial.Args, 3)
-		require.Equal(t, int32(0), serial.Args[0].GetP().Pos)
-		require.Equal(t, int32(1), serial.Args[1].GetP().Pos)
-		require.Equal(t, int32(i+2), serial.Args[2].GetP().Pos)
-	}
+func makeCompositeUniqueInt32EqualFilterExpr(relPos, colPos, value int32) *pb.Expr {
+	typ := pb.Type{Id: int32(types.T_int32)}
+	return &pb.Expr{Typ: pb.Type{Id: int32(types.T_bool)}, Expr: &pb.Expr_F{F: &pb.Function{
+		Func: &pb.ObjectRef{ObjName: "="},
+		Args: []*pb.Expr{
+			GetColExpr(typ, relPos, colPos),
+			{Typ: typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_I32Val{I32Val: value}}}},
+		},
+	}}}
 }
 
 func makeCompositeUniqueInt32VecInFilterExpr(t *testing.T, relPos, colPos int32, values ...int32) *pb.Expr {
@@ -382,119 +347,4 @@ func makeCompositeUniqueInt32VecInFilterExpr(t *testing.T, relPos, colPos int32,
 			{Typ: typ, Expr: &pb.Expr_Vec{Vec: &pb.LiteralVec{Len: int32(len(values)), Data: data}}},
 		},
 	}}}
-}
-
-func TestCompositeUniqueTrailingInFoldedVector(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	addCompositeUniqueInTableForTest(mock)
-	builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
-	tag := builder.genNewBindTag()
-	table := mock.ctxt.tables["composite_unique_in_t"]
-	table.Indexes = table.Indexes[1:]
-	filters := []*pb.Expr{
-		makeRangeFilterExpr(tag, 1, "=", 1),
-		makeRangeFilterExpr(tag, 2, "=", 2),
-		makeCompositeUniqueInt32VecInFilterExpr(t, tag, 3, 3, 4, 5),
-	}
-	node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: filters, Stats: DefaultStats()}
-	scan := builder.appendNode(node, NewBindContext(builder, nil))
-	got := builder.applyIndicesForFiltersRegularIndex(scan, builder.qry.Nodes[scan], map[[2]int32]int{{tag, 4}: 1}, map[[2]int32]*pb.Expr{})
-	require.NotEqual(t, scan, got)
-	join := builder.qry.Nodes[got]
-	require.Same(t, filters[2], builder.qry.Nodes[join.Children[0]].FilterList[2])
-	indexScan := builder.qry.Nodes[join.Children[1]]
-	lookup := indexScan.FilterList[0].GetF()
-	require.Equal(t, "in", lookup.Func.ObjName)
-	require.Len(t, lookup.Args[1].GetList().List, 3)
-	for _, value := range lookup.Args[1].GetList().List {
-		require.Equal(t, "serial", value.GetF().Func.ObjName)
-		require.Len(t, value.GetF().Args, 3)
-	}
-}
-
-func TestCompositeUniqueTrailingInRejectsUnsupportedLists(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		makeFilter func(relPos int32) *pb.Expr
-	}{
-		{name: "non-runtime item", makeFilter: func(relPos int32) *pb.Expr {
-			filter := makeParamInFilterExpr(relPos, 3, 3)
-			filter.GetF().Args[1].GetList().List[1] = GetColExpr(pb.Type{Id: int32(types.T_int32)}, relPos, 4)
-			return filter
-		}},
-		{name: "mixed item type", makeFilter: func(relPos int32) *pb.Expr {
-			filter := makeParamInFilterExpr(relPos, 3, 3)
-			filter.GetF().Args[1].GetList().List[1].Typ.Id = int32(types.T_int64)
-			return filter
-		}},
-		{name: "floating key", makeFilter: func(relPos int32) *pb.Expr {
-			filter := makeParamInFilterExpr(relPos, 3, 3)
-			filter.GetF().Args[0].Typ.Id = int32(types.T_float64)
-			return filter
-		}},
-		{name: "empty folded vector", makeFilter: func(relPos int32) *pb.Expr {
-			return makeCompositeUniqueInt32VecInFilterExpr(t, relPos, 3)
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
-			addCompositeUniqueInTableForTest(mock)
-			builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
-			tag := builder.genNewBindTag()
-			table := mock.ctxt.tables["composite_unique_in_t"]
-			table.Indexes = table.Indexes[1:]
-			filters := []*pb.Expr{
-				makeRangeFilterExpr(tag, 1, "=", 1),
-				makeRangeFilterExpr(tag, 2, "=", 2),
-				tc.makeFilter(tag),
-			}
-			node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: filters, Stats: DefaultStats()}
-			scan := builder.appendNode(node, NewBindContext(builder, nil))
-			got := builder.applyIndicesForFiltersRegularIndex(scan, builder.qry.Nodes[scan], map[[2]int32]int{{tag, 4}: 1}, map[[2]int32]*pb.Expr{})
-			require.Equal(t, scan, got)
-			require.Same(t, filters[2], builder.qry.Nodes[scan].FilterList[2])
-		})
-	}
-}
-
-func TestCompositeUniqueTrailingInCardinalityAdmission(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		outcnt      float64
-		selectivity float64
-		wantIndex   bool
-	}{
-		{name: "bounded key set", outcnt: 3, selectivity: 0.000003, wantIndex: true},
-		{name: "broad scan estimate falls back", outcnt: 500000, selectivity: 0.5},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
-			addCompositeUniqueInTableForTest(mock)
-			builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
-			tag := builder.genNewBindTag()
-			table := mock.ctxt.tables["composite_unique_in_t"]
-			table.Indexes = table.Indexes[1:]
-			filters := []*pb.Expr{
-				makeRangeFilterExpr(tag, 1, "=", 1),
-				makeRangeFilterExpr(tag, 2, "=", 2),
-				makeParamInFilterExpr(tag, 3, 100),
-			}
-			for _, filter := range filters {
-				filter.Selectivity = 0.001
-			}
-			node := &pb.Node{
-				NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table,
-				BindingTags: []int32{tag}, FilterList: filters,
-			}
-			scan := builder.appendNode(node, NewBindContext(builder, nil))
-			builder.qry.Nodes[scan].Stats = &pb.Stats{TableCnt: 1000000, Cost: 1000000, Outcnt: tc.outcnt, Selectivity: tc.selectivity}
-			got := builder.applyIndicesForFiltersRegularIndex(scan, builder.qry.Nodes[scan], map[[2]int32]int{{tag, 4}: 1}, map[[2]int32]*pb.Expr{})
-			if tc.wantIndex {
-				require.NotEqual(t, scan, got)
-				require.Equal(t, pb.Node_INDEX, builder.qry.Nodes[got].JoinType)
-			} else {
-				require.Equal(t, scan, got)
-			}
-		})
-	}
 }

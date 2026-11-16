@@ -458,6 +458,10 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 
 	// 3. switch the txnmgr to write mode
 	c.db.TxnMgr.ToWriteMode()
+	// Replay has advanced MaxCommittedTS while this database was read-only.
+	// Publish that floor before accepting requests so table-target reads remain
+	// available after failover as well as during initial writer recovery.
+	c.db.TxnMgr.InitializeTableReadTargets()
 
 	c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
 	c.db.MergeScheduler.Start()
@@ -680,6 +684,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)
+	db.LogtailMgr.SetTableReadTarget(db.tableReadTarget)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 
 	db.TxnMgr.Start(db.Opts.Ctx)
@@ -804,6 +809,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		}
 		replayCtl.Stop()
 		replayCtl = nil
+		db.TxnMgr.InitializeTableReadTargets()
 	}
 
 	db.MergeScheduler = merge.NewMergeScheduler(

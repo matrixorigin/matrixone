@@ -149,6 +149,10 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 
 	param := external.Es
+	param.enumMembers = nil
+	if err := param.initEnumMembers(); err != nil {
+		return err
+	}
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
@@ -726,6 +730,10 @@ func getTailSizeNoStrict(r io.ReadCloser) int64 {
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	enumMembers, err := decodeExternalEnumMembers(cols)
+	if err != nil {
+		return 0, err
+	}
 	bufR := bufio.NewReader(r)
 	// ensure the first character is not field quote symbol
 	quoteByte := byte('"')
@@ -762,13 +770,18 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 		if len(fields) < len(cols) {
 			continue
 		}
-		if isLegalLine(param, cols, fields) {
+		if isLegalLineWithEnums(param, cols, fields, enumMembers) {
 			return csvReader.Pos() + skipCount, nil
 		}
 	}
 }
 
 func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
+	members, err := decodeExternalEnumMembers(cols)
+	return err == nil && isLegalLineWithEnums(param, cols, fields, members)
+}
+
+func isLegalLineWithEnums(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field, enumMembers []types.EnumMembers) bool {
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
@@ -776,12 +789,12 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		// whitespace bytes are data and must not be trimmed.
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_bit {
+			id != types.T_bit && id != types.T_enum {
 			field.Val = strings.TrimSpace(field.Val)
 		}
 		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
 		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink && id != types.T_enum {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -993,22 +1006,8 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				return false
 			}
 		case types.T_enum:
-			_, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				continue
-			} else if errors.Is(err, strconv.ErrSyntax) {
-				_, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-				if err != nil {
-					return false
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					return false
-				}
+			if _, err := parseExternalEnum(enumMembers[idx], field.Val); err != nil {
+				return false
 			}
 		case types.T_decimal64:
 			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
@@ -1051,7 +1050,7 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return vector.ProtoTypeToType(*typ)
 }
 
 // isDirectParallelLoadType identifies types that must be decoded by the
@@ -1556,7 +1555,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	// otherwise even be converted to NULL below).
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit {
+		id != types.T_bit && id != types.T_enum {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -1994,34 +1993,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_enum:
-		d, err := strconv.ParseUint(field.Val, 10, 16)
-		if err == nil {
-			if err := vector.AppendFixed(vec, types.Enum(d), false, mp); err != nil {
-				return err
-			}
-		} else if errors.Is(err, strconv.ErrSyntax) {
-			v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return err
-			}
-			if err := vector.AppendFixed(vec, types.Enum(v), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if errors.Is(err, strconv.ErrRange) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, types.Enum(f), false, mp); err != nil {
-				return err
-			}
+		if err := param.initEnumMembers(); err != nil {
+			return err
 		}
+		value, err := parseExternalEnum(param.enumMembers[colIdx], field.Val)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, mp)
+
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
@@ -2119,4 +2099,55 @@ func loadFormatIsValid(param *tree.ExternParam) bool {
 		return true
 	}
 	return false
+}
+
+// decodeExternalEnumMembers validates definitions before data errors may be
+// tolerated and keeps framing work out of the per-cell conversion path.
+func decodeExternalEnumMembers(cols []*plan.ColDef) ([]types.EnumMembers, error) {
+	var members []types.EnumMembers
+	for i, col := range cols {
+		if col == nil || col.Typ.Id != int32(types.T_enum) {
+			continue
+		}
+		if members == nil {
+			members = make([]types.EnumMembers, len(cols))
+		}
+		var err error
+		members[i], err = types.DecodeEnumMembers(col.Typ.Enumvalues, col.Typ.EnumEncoding)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return members, nil
+}
+
+func (param *ExternalParam) initEnumMembers() error {
+	if param.enumMembers != nil {
+		return nil
+	}
+	members, err := decodeExternalEnumMembers(param.Cols)
+	if err != nil {
+		return err
+	}
+	param.enumMembers = members
+	return nil
+}
+
+// Textual labels take precedence over numeric fallback, including numeric-looking
+// declared labels. Domain parsing belongs to the scan; this helper never frames.
+func parseExternalEnum(members types.EnumMembers, value string) (types.Enum, error) {
+	if ordinal, _ := members.ParseName(value); ordinal != 0 {
+		return ordinal, nil
+	}
+	number, err := strconv.ParseUint(value, 10, 16)
+	if errors.Is(err, strconv.ErrSyntax) {
+		number, err = strconv.ParseUint(value, 0, 16)
+	}
+	if err != nil {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid ENUM input %q", value)
+	}
+	if number == 0 {
+		return 0, nil
+	}
+	return members.ParseValue(uint16(number))
 }

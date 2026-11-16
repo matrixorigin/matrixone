@@ -287,14 +287,15 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) plan.Type {
 	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale,
+		EnumEncoding: typ.GetEnumEncoding(),
 	}
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	t := types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	t.SetEnumEncoding(typ.EnumEncoding)
+	return t
 }
 
 func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {

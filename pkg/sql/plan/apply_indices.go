@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -36,6 +37,7 @@ const (
 	NonEqualIndexCondition    = 2
 	SpatialIndexCondition     = 3
 	RangeIndexCondition       = 4
+	KeySetIndexCondition      = 5
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -959,17 +961,44 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
-		// This index cannot provide the requested ordering/grouping. Only the
-		// full-value composite unique trailing-IN rewrite may use the filter phase;
+		// This index cannot provide the requested ordering/grouping. Only an
+		// eligible full-value bounded unique key set may use the filter phase;
 		// exposing other point lookups can probe truncated prefix keys.
 		filterIndexes := builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes)
 		if !builder.scanHintsForceIndexes(scanNode) || !regularIndexesHaveFullValueParts(filterIndexes) ||
-			!hasCompositeUniqueTrailingInCandidate(filterIndexes, scanNode) {
+			!hasCompositeUniqueKeySetCandidate(filterIndexes, scanNode) {
 			builder.protectedScans[scanNode.NodeId]++
 		}
 		return scanNode.NodeId, nil
 	}
 	return scanNode.NodeId, nil
+}
+
+func hasCompositeUniqueKeySetCandidate(indexes []*IndexDef, node *plan.Node) bool {
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		if _, ok := completeUniqueKeySetFilters(idxDef, node, newIndexKeySetWorkBudget()); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter selection can choose any hinted regular index, including through the
+// complete-equality fallback. Do not expose that phase to truncated keys.
+func regularIndexesHaveFullValueParts(indexes []*IndexDef) bool {
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || len(prefixLengths) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
@@ -1646,35 +1675,104 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 		}
 	}
-	//small table means this table maybe not flushed yet, or it's not worse to go index
+	// Small tables may not be flushed yet, or an index may not be more expensive.
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
+	keySetBudget := newIndexKeySetWorkBudget()
+	var declinedKeySets map[int]struct{}
 	idxToChoose := -1
 	var filterIdx []int32
+	keySetSize := 0
 	if !pointBlocked {
-		idxToChoose, filterIdx = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
 	}
-	// Only an equality on every unique-key part proves singleton output. A
-	// trailing IN remains subject to the aggregate cardinality guard below.
-	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
-		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats) &&
-		node.FilterList[filterIdx[len(filterIdx)-1]].GetF().Func.ObjName == "="
-	if !ignoreStats && !singletonPoint {
-		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
-			// for cluster by table, make it less prone to go index
-			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
-				return nodeID
+	selectEqualityFallback := func() {
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, false, keySetBudget, nil)
+	}
+	allowedByScanStats := func() bool {
+		// A schema-proven singleton may bypass the broad-scan guard. A key
+		// set is not a singleton, and must use the ordinary guard.
+		singletonPoint := idxToChoose != -1 && keySetSize == 0 && indexes[idxToChoose].Unique &&
+			len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
+		if ignoreStats || singletonPoint {
+			return true
+		}
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK) {
+			return false
+		}
+		return !(node.Stats.Selectivity >= InFilterSelectivityLimit ||
+			node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)))
+	}
+	if !allowedByScanStats() {
+		// A rejected broad scan estimate can hide a complete unique key set,
+		// including when a nonunique candidate was ranked first. Only admit
+		// one after exact lowering establishes its actual candidate bound.
+		if !pointBlocked {
+			if retID, idxTableNodeID := builder.applyBoundedUniqueKeySet(indexes, node, scanSnapshot, sortedSelectivity, keySetBudget, declinedKeySets); idxTableNodeID >= 0 {
+				return retID
 			}
 		}
-		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+		if keySetSize == 0 {
+			return nodeID
+		}
+		// The key-set gate must not mask a previously usable equality point.
+		selectEqualityFallback()
+		if !allowedByScanStats() {
 			return nodeID
 		}
 	}
 
-	// Apply unique/secondary indices for point select
-	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
-		return retID
+	// Apply unique/secondary indices for point select or a finite key set.
+	for idxToChoose != -1 {
+		condType := EqualIndexCondition
+		var reservation *indexKeySetReservation
+		if keySetSize > 0 {
+			condType = KeySetIndexCondition
+			work, ok := keySetBudget.estimate(node.FilterList, filterIdx)
+			if !ok || !keySetBudget.charge(work) {
+				// The candidate must not hide a cheaper key set or equality.
+				if declinedKeySets == nil {
+					declinedKeySets = make(map[int]struct{})
+				}
+				declinedKeySets[idxToChoose] = struct{}{}
+				idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+				continue
+			}
+			reservation = &indexKeySetReservation{budget: keySetBudget, work: work}
+		}
+		retID, idxTableNodeID := int32(-1), int32(-1)
+		if reservation != nil {
+			prepared, err := builder.prepareIndexJoinWithBudget(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot, reservation)
+			propagateKeySetControlError(builder.GetContext(), err)
+			if err == nil && prepared != nil {
+				retID, idxTableNodeID = builder.publishIndexJoin(prepared, node)
+			}
+		} else {
+			retID, idxTableNodeID = builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
+		}
+		if idxTableNodeID >= 0 {
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
+		if keySetSize == 0 {
+			return nodeID
+		}
+		// Failed key-set lowering has published no nodes and changed no scan
+		// state. Try another affordable key set or the prior equality path.
+		if declinedKeySets == nil {
+			declinedKeySets = make(map[int]struct{})
+		}
+		declinedKeySets[idxToChoose] = struct{}{}
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+		if !allowedByScanStats() {
+			if retID, scanID := builder.applyBoundedUniqueKeySet(indexes, node, scanSnapshot, sortedSelectivity, keySetBudget, declinedKeySets); scanID >= 0 {
+				return retID
+			}
+			selectEqualityFallback()
+			if !allowedByScanStats() {
+				return nodeID
+			}
+		}
 	}
 
 	if sortedSelectivity < 1 {
@@ -1687,8 +1785,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			condType = RangeIndexCondition
 		}
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
-		return retID
+		if idxTableNodeID >= 0 {
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
 	}
 
 	idxToChoose, filterIdx = builder.getIndexForSpatialCond(spatialIndexes, node)
@@ -1699,6 +1799,207 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//no index applied
 	return nodeID
+}
+
+// applyBoundedUniqueKeySet considers only complete unique key sets when the
+// ordinary scan gate rejected the initially selected candidate. Preparation
+// does not publish a node; an exact, non-NULL IN vector must exist before its
+// deduplicated cardinality can justify admission or candidate ranking.
+func (builder *QueryBuilder) applyBoundedUniqueKeySet(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32) {
+	if retID, scanID, ok := builder.applyBoundedUniqueKeySetRanked(indexes, node, snapshot, sortedSelectivity, budget, declined); ok {
+		return retID, scanID
+	}
+	return builder.applyBoundedUniqueKeySetExhaustive(indexes, node, snapshot, sortedSelectivity, budget, declined)
+}
+
+// Rank by the exact count of distinct serial encodings of the IN component,
+// then materialize candidates in score order until one succeeds. The input
+// count can be shared only by the same IN filter; prepared keys and filters
+// always belong to their own ordered index. Any unproved input or mismatch
+// returns to the exhaustive path before publishing a node.
+func (builder *QueryBuilder) applyBoundedUniqueKeySetRanked(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32, bool) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1, true
+	}
+	type candidate struct {
+		index       *IndexDef
+		filters     []int32
+		count       int
+		selectivity float64
+		work        uint64
+	}
+	candidates := []candidate{}
+	counts := make(map[int32]int)
+	for index, idxDef := range indexes {
+		if _, skip := declined[index]; skip {
+			continue
+		}
+		filters, ok := completeUniqueKeySetFilters(idxDef, node, budget)
+		if !ok {
+			continue
+		}
+		work, ok := budget.estimate(node.FilterList, filters)
+		if !ok {
+			continue
+		}
+		inPos := int32(-1)
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filter := node.FilterList[pos]
+			fn := filter.GetF()
+			if fn.Func.ObjName == "in" {
+				inPos = pos
+			} else {
+				// A literal is invariant over every tuple. Dynamic or NULL
+				// equality expressions keep the exhaustive fallback semantics.
+				lit := fn.Args[1].GetLit()
+				if lit == nil || lit.Isnull || lit.Src != nil {
+					return -1, -1, false
+				}
+			}
+			filterSelectivity *= filter.Selectivity
+		}
+		if inPos < 0 {
+			return -1, -1, false
+		}
+		if !indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), budget.inputBound(node.FilterList[inPos]).count, builder.scanHintsForceIndexes(node)) {
+			continue
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		count, exists := counts[inPos]
+		if !exists {
+			// Distinct counting can itself encode each IN component. Reserve
+			// that work once per filter, including failed count attempts.
+			if !budget.charge(budget.inputBound(node.FilterList[inPos]).bytes) {
+				continue
+			}
+			count, ok = distinctKeySetComponentCount(node.FilterList[inPos])
+			if !ok {
+				return -1, -1, false
+			}
+			counts[inPos] = count
+		}
+		rows := float64(count)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		selectivity = min(filterSelectivity, selectivity)
+		if selectivity >= sortedSelectivity {
+			continue
+		}
+		if len(candidates) == 0 {
+			// Avoid allocating when no candidate is eligible.
+			candidates = make([]candidate, 0, len(indexes))
+		}
+		candidates = append(candidates, candidate{index: idxDef, filters: filters, count: count, selectivity: selectivity, work: work})
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.selectivity < b.selectivity {
+			return -1
+		}
+		if a.selectivity > b.selectivity {
+			return 1
+		}
+		return 0
+	})
+	for _, c := range candidates {
+		if !budget.charge(c.work) {
+			continue
+		}
+		prepared, err := builder.prepareIndexJoinWithBudget(c.index, node, KeySetIndexCondition, c.filters, snapshot, &indexKeySetReservation{budget: budget, work: c.work})
+		propagateKeySetControlError(builder.GetContext(), err)
+		if err != nil || prepared == nil {
+			continue
+		}
+		count, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		if count != c.count {
+			return -1, -1, false
+		}
+		retID, scanID := builder.publishIndexJoin(prepared, node)
+		builder.applyExtraFiltersOnIndex(c.index, node, builder.qry.Nodes[scanID], c.filters)
+		return retID, scanID, true
+	}
+	return -1, -1, true
+}
+
+func (builder *QueryBuilder) applyBoundedUniqueKeySetExhaustive(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1
+	}
+	bestSelectivity := sortedSelectivity
+	var best *preparedIndexJoin
+	var bestFilters []int32
+	for index, idxDef := range indexes {
+		if _, skip := declined[index]; skip {
+			continue
+		}
+		filters, ok := completeUniqueKeySetFilters(idxDef, node, budget)
+		if !ok {
+			continue
+		}
+		work, ok := budget.estimate(node.FilterList, filters)
+		if !ok {
+			continue
+		}
+		var count int
+		for _, pos := range filters {
+			if bound := budget.inputBound(node.FilterList[pos]); bound.ok {
+				count = bound.count
+				break
+			}
+		}
+		if !indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), count, builder.scanHintsForceIndexes(node)) || !budget.charge(work) {
+			continue
+		}
+		prepared, err := builder.prepareIndexJoinWithBudget(idxDef, node, KeySetIndexCondition, filters, snapshot, &indexKeySetReservation{budget: budget, work: work})
+		propagateKeySetControlError(builder.GetContext(), err)
+		if err != nil || prepared == nil {
+			continue
+		}
+		keyCount, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		rows := float64(keyCount)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filterSelectivity *= node.FilterList[pos].Selectivity
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		candidateSelectivity := min(filterSelectivity, selectivity)
+		if candidateSelectivity >= bestSelectivity {
+			continue
+		}
+		bestSelectivity, best, bestFilters = candidateSelectivity, prepared, filters
+	}
+	if best == nil {
+		return -1, -1
+	}
+	retID, idxTableNodeID := builder.publishIndexJoin(best, node)
+	builder.applyExtraFiltersOnIndex(best.idxDef, node, builder.qry.Nodes[idxTableNodeID], bestFilters)
+	return retID, idxTableNodeID
 }
 
 // regularIndexColumnMap describes the values available in a regular index scan.
@@ -1889,28 +2190,6 @@ func isFloatIndexFilterExpr(expr *plan.Expr) bool {
 	return typ == types.T_float32 || typ == types.T_float64
 }
 
-// compositeUniqueInValues admits only a finite, runtime-constant list whose
-// values can be serialized with the preceding unique-key equality values.
-func compositeUniqueInValues(filter *plan.Expr) ([]*plan.Expr, bool) {
-	fn := filter.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 || !hasNonNilFunctionArgs(fn, 2) {
-		return nil, false
-	}
-	if fn.Args[0].GetCol() == nil || isFloatIndexFilterExpr(fn.Args[0]) {
-		return nil, false
-	}
-	values, ok := inRHSValues(fn.Args[1], fn.Args[0].Typ)
-	if !ok || len(values) == 0 {
-		return nil, false
-	}
-	for _, value := range values {
-		if value == nil || !isRuntimeConstExpr(value) || value.Typ.Id != fn.Args[0].Typ.Id {
-			return nil, false
-		}
-	}
-	return values, true
-}
-
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 	for i := range node.FilterList {
@@ -1930,9 +2209,20 @@ func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	return nil, false
 }
 
+// bindOptionalIndexFunc declines an unconstructable optional access path while
+// preserving cancellation and deadline errors from the planner.
+func (builder *QueryBuilder) bindOptionalIndexFunc(name string, args []*plan.Expr) *plan.Expr {
+	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+	propagateKeySetControlError(builder.GetContext(), err)
+	if err != nil {
+		return nil
+	}
+	return expr
+}
+
 func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
 	numParts := len(idxDef.Parts)
-	if numParts == 1 { //directly equal
+	if numParts == 1 {
 		expr := DeepCopyExpr(filterList[filterPos[0]])
 		args := expr.GetF().Args
 		args[0].GetCol().RelPos = idxTag
@@ -1940,57 +2230,26 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		return expr
 	}
 
-	// a=1 and b=2, change to prefix_eq
 	compositeFilterSel := 1.0
-	if numParts > 1 && idxDef.Unique && len(filterPos) == numParts {
-		lastFilter := filterList[filterPos[len(filterPos)-1]]
-		if values, ok := compositeUniqueInValues(lastFilter); ok {
-			prefixValues := make([]*plan.Expr, numParts-1)
-			for i := range prefixValues {
-				filter := filterList[filterPos[i]]
-				prefixValues[i] = filter.GetF().Args[1]
-				compositeFilterSel *= filter.Selectivity
-			}
-			compositeFilterSel *= lastFilter.Selectivity
-
-			keys := make([]*plan.Expr, len(values))
-			for i, value := range values {
-				args := append(DeepCopyExprList(prefixValues), DeepCopyExpr(value))
-				keys[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), args)
-			}
-			leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-			rightArg := &plan.Expr{Typ: leadingColExpr.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: keys}}}
-			args := []*plan.Expr{leadingColExpr, rightArg}
-			keyType := makeTypeByPlan2Expr(leadingColExpr)
-			overload, err := function.GetFunctionByName(builder.GetContext(), "in", []types.Type{keyType, keyType})
-			if err != nil {
-				panic(err)
-			}
-			overloadID := overload.GetEncodedOverloadID()
-			resultType := overload.GetReturnType()
-			typ := makePlan2Type(&resultType)
-			typ.NotNullable = function.DeduceNotNullable(overloadID, args)
-			return &plan.Expr{Typ: typ, Selectivity: compositeFilterSel, Expr: &plan.Expr_F{F: &plan.Function{
-				Func: getFunctionObjRef(overloadID, "in"), Args: args,
-			}}}
-		}
-	}
-
 	serialArgs := make([]*plan.Expr, len(filterPos))
 	for i := range filterPos {
 		filter := filterList[filterPos[i]]
 		serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
-		compositeFilterSel = compositeFilterSel * filter.Selectivity
+		compositeFilterSel *= filter.Selectivity
 	}
-	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
-
-	funcName := "="
+	rightArg := builder.bindOptionalIndexFunc(indexTableLookupSerialFunc(idxDef), serialArgs)
+	if rightArg == nil {
+		return nil
+	}
+	name := "="
 	if len(filterPos) < numParts {
-		funcName = "prefix_eq"
+		name = "prefix_eq"
 	}
-	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
-	expr.Selectivity = compositeFilterSel
+	leading := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	expr := builder.bindOptionalIndexFunc(name, []*plan.Expr{leading, rightArg})
+	if expr != nil {
+		expr.Selectivity = compositeFilterSel
+	}
 	return expr
 }
 
@@ -1999,16 +2258,20 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
 	if fn.Func.ObjName == "or" {
-		for i := range expr.GetF().Args {
-			expr.GetF().Args[i] = builder.replaceNonEqualCondition(idxDef, expr.GetF().Args[i], idxTag, idxTableDef)
+		for i := range fn.Args {
+			fn.Args[i] = builder.replaceNonEqualCondition(idxDef, fn.Args[i], idxTag, idxTableDef)
+			if fn.Args[i] == nil {
+				return nil
+			}
 		}
 		return expr
 	}
 
+	commuted := false
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
-		// Canonicalize: ensure column is on the left
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			commuted = true
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			switch fn.Func.ObjName {
 			case ">":
@@ -2027,23 +2290,38 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 	if numParts > 1 {
-		serialFunc := indexTableLookupSerialFunc(idxDef)
-		switch fn.Func.ObjName {
+		name := fn.Func.ObjName
+		positions := []int{1}
+		switch name {
 		case "between":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
+			name = "prefix_between"
+			positions = []int{1, 2}
 		case "in":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
-		case ">", ">=", "<", "<=":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+			name = "prefix_in"
 		case "in_range":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", fn.Args)
+			name = "prefix_in_range"
+			positions = []int{1, 2}
+			if indexFunctionComparesByteStringColumn(filter.GetF()) {
+				var ok bool
+				fn.Args[3], ok = closePrefixRangeLowerBound(fn.Args[3])
+				if !ok {
+					return nil
+				}
+			}
 		}
+		for _, pos := range positions {
+			fn.Args[pos] = builder.bindOptionalIndexFunc(indexTableLookupSerialFunc(idxDef), []*plan.Expr{fn.Args[pos]})
+			if fn.Args[pos] == nil {
+				return nil
+			}
+		}
+		expr = builder.bindOptionalIndexFunc(name, fn.Args)
+	} else if commuted {
+		// Swapping operands must also rebind the executable comparison overload.
+		expr = builder.bindOptionalIndexFunc(fn.Func.ObjName, fn.Args)
+	}
+	if expr != nil {
+		expr.Selectivity = filter.Selectivity
 	}
 	return expr
 }
@@ -2094,7 +2372,16 @@ func indexFilterNeedsDecodedResidual(expr *plan.Expr) bool {
 	case "between":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case ">", ">=", "<", "<=":
-		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+		if len(fn.Args) < 2 {
+			return false
+		}
+		op := canonicalRangeOp(fn)
+		column := indexComparisonColumn(fn)
+		if (op == "<" || op == "<=") && column != nil && !column.Typ.NotNullable {
+			// serial_full stores NULL before every non-NULL upper bound.
+			return true
+		}
+		return runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1])
 	case "in_range":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
@@ -2116,6 +2403,8 @@ func runtimeConstMayBeNull(expr *plan.Expr) bool {
 		return true
 	case *plan.Expr_Lit:
 		return exprImpl.Lit != nil && exprImpl.Lit.GetIsnull()
+	case *plan.Expr_Vec:
+		return literalVectorMayContainNull(exprImpl.Vec)
 	case *plan.Expr_List:
 		if exprImpl.List == nil {
 			return false
@@ -2136,6 +2425,17 @@ func runtimeConstMayBeNull(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+func literalVectorMayContainNull(literal *plan.LiteralVec) (mayContainNull bool) {
+	// Malformed vectors are optional access predicates; keep the SQL residual.
+	defer func() {
+		if recover() != nil {
+			mayContainNull = true
+		}
+	}()
+	vec, _, ok := decodeLiteralVec(literal)
+	return !ok || vec.IsConstNull() || vec.HasNull()
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
@@ -2163,6 +2463,17 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 	if leadingEqualCond {
 		leadingPos = tryMatchMoreLeadingFilters(idxDef, node, leadingPos[0])
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return -1
+	}
+	for i := range leadingPos {
+		if prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])] > 0 {
+			// Full values cannot probe a truncated key, even if the column is
+			// also available from a full primary-key component.
+			return -1
+		}
 	}
 
 	if !leadingEqualCond && node.Stats != nil && node.Stats.TableCnt >= 50000 {
@@ -2235,12 +2546,19 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			return -1
 		}
 	}
+	indexFilters, ok := normalizeIndexAccessFilters(builder.GetContext(), idxDef, node.TableDef, node.FilterList, leadingPos, false)
+	if !ok {
+		return -1
+	}
+	newLeadingFilter := builder.replaceLeadingFilter(idxDef, indexFilters, leadingPos, leadingEqualCond, idxTag, idxTableDef)
+	if newLeadingFilter == nil {
+		return -1
+	}
 	for key, expr := range colMap {
 		idxColMap[key] = expr
 	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 
-	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
 	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
@@ -2406,6 +2724,14 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if !idxDef.Unique {
 			numParts--
 		}
+		if numParts <= 0 {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || prefixLengths[catalog.ResolveAlias(idxDef.Parts[0])] > 0 {
+			// The range/IN bounds below are full values, not index prefixes.
+			continue
+		}
 		if idxDef.Unique && numParts == 1 {
 			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
 		} else if !idxDef.Unique && numParts >= 1 {
@@ -2445,10 +2771,25 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 			if !ok {
 				continue
 			}
+			idxDef := indexes[idxPos]
+			colType := node.TableDef.Cols[col.ColPos].Typ
+			if indexTableStoresSerializedKey(idxDef) && !serializedIndexComparisonUsable(fn, colType) {
+				continue
+			}
 			if rangeCol, _ := classifyRangeBound(fn); rangeCol != nil {
 				lowerIdx, hasLower := colLowerBounds[rangeCol.ColPos]
 				upperIdx, hasUpper := colUpperBounds[rangeCol.ColPos]
 				if hasLower && hasUpper && int32(i) == min(lowerIdx, upperIdx) {
+					lowerFn, upperFn := node.FilterList[lowerIdx].GetF(), node.FilterList[upperIdx].GetF()
+					if indexTableStoresSerializedKey(idxDef) &&
+						(!serializedIndexComparisonUsable(lowerFn, colType) ||
+							!serializedIndexComparisonUsable(upperFn, colType)) {
+						continue
+					}
+					if !indexTableStoresSerializedKey(idxDef) &&
+						(mixedTemporalIndexComparison(lowerFn) || mixedTemporalIndexComparison(upperFn)) {
+						continue
+					}
 					if shouldSkipLargeRangeIndexByStats(node) {
 						continue
 					}
@@ -2566,8 +2907,11 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 
 	if numParts > 1 {
 		serialFunc := indexTableLookupSerialFunc(idxDef)
-		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
-		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{upperVal})
+		lowerVal = builder.bindOptionalIndexFunc(serialFunc, []*plan.Expr{lowerVal})
+		upperVal = builder.bindOptionalIndexFunc(serialFunc, []*plan.Expr{upperVal})
+		if lowerVal == nil || upperVal == nil {
+			return nil
+		}
 	}
 
 	if lowerOp == ">=" && upperOp == "<=" {
@@ -2575,8 +2919,10 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 		if numParts > 1 {
 			funcName = "prefix_between"
 		}
-		expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
-		expr.Selectivity = compositeFilterSel
+		expr := builder.bindOptionalIndexFunc(funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
+		if expr != nil {
+			expr.Selectivity = compositeFilterSel
+		}
 		return expr
 	}
 
@@ -2587,34 +2933,118 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	if upperOp == "<" {
 		flag |= 2
 	}
+	if numParts > 1 && indexFunctionComparesByteStringColumn(lowerFn) {
+		// Prefix comparison can equate a string with an escaped-NUL peer.
+		flag &^= 1
+	}
 	funcName := "in_range"
 	if numParts > 1 {
 		funcName = "prefix_in_range"
 	}
-	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
-	expr.Selectivity = compositeFilterSel
+	expr := builder.bindOptionalIndexFunc(funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
+	if expr != nil {
+		expr.Selectivity = compositeFilterSel
+	}
 	return expr
 }
 
-func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+type preparedIndexJoin struct {
+	idxDef      *IndexDef
+	idxTag      int32
+	idxObjRef   *ObjectRef
+	idxTableDef *TableDef
+	idxFilter   *plan.Expr
+}
+
+type indexKeySetReservation struct {
+	budget *indexKeySetWorkBudget
+	work   uint64
+}
+
+// Preserve cancellation and deadline identities while treating an unavailable
+// optional key-set candidate like the existing broad-scan fallback does.
+func propagateKeySetControlError(ctx context.Context, err error) {
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		panic(err)
+	}
+}
+
+// prepareIndexJoin may decline an optional key set without publishing a scan or
+// changing the original node. Its exact key count can then be used for costing.
+func (builder *QueryBuilder) prepareIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (*preparedIndexJoin, error) {
+	return builder.prepareIndexJoinWithBudget(idxDef, node, filterType, filterIdx, scanSnapshot, nil)
+}
+
+func (builder *QueryBuilder) prepareIndexJoinWithBudget(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot, reservation *indexKeySetReservation) (*preparedIndexJoin, error) {
+	if len(filterIdx) == 0 || filterType == RangeIndexCondition && len(filterIdx) < 2 {
+		return nil, nil
+	}
+	for _, idx := range filterIdx {
+		if idx < 0 || int(idx) >= len(node.FilterList) {
+			return nil, nil
+		}
+	}
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
-
+	if filterType == KeySetIndexCondition && (idxObjRef == nil || idxTableDef == nil) {
+		return nil, nil
+	}
+	if reservation != nil && !reservation.budget.revalidate(node.FilterList, filterIdx, reservation.work, builder.indexKeySetCostStats(node.Stats), builder.scanHintsForceIndexes(node)) {
+		return nil, nil
+	}
+	indexFilters := node.FilterList
+	if filterType != SpatialIndexCondition {
+		if !indexTableStoresSerializedKey(idxDef) && filterType == RangeIndexCondition &&
+			(mixedTemporalIndexComparison(node.FilterList[filterIdx[0]].GetF()) ||
+				mixedTemporalIndexComparison(node.FilterList[filterIdx[1]].GetF())) {
+			return nil, nil
+		}
+		var ok bool
+		indexFilters, ok = normalizeIndexAccessFilters(builder.GetContext(), idxDef, node.TableDef, node.FilterList, filterIdx, filterType == RangeIndexCondition)
+		if !ok {
+			return nil, nil
+		}
+	}
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
-		idxFilter = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		idxFilter = builder.replaceEqualCondition(idxDef, indexFilters, filterIdx, idxTag, idxTableDef)
+	} else if filterType == KeySetIndexCondition {
+		idxFilter = builder.replaceKeySetCondition(idxDef, indexFilters, filterIdx, idxTag, idxTableDef)
 	} else if filterType == SpatialIndexCondition {
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
 	} else if filterType == RangeIndexCondition {
-		idxFilter = builder.replaceRangePairCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		idxFilter = builder.replaceRangePairCondition(idxDef, indexFilters, filterIdx, idxTag, idxTableDef)
 	} else {
-		idxFilter = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
+		idxFilter = builder.replaceNonEqualCondition(idxDef, indexFilters[filterIdx[0]], idxTag, idxTableDef)
 	}
+
+	// A declined key-set lowering must not publish an invalid scan or mutate
+	// the original scan. The caller will retry the ordinary access paths.
+	if idxFilter == nil {
+		return nil, nil
+	}
+	return &preparedIndexJoin{idxDef: idxDef, idxTag: idxTag, idxObjRef: idxObjRef, idxTableDef: idxTableDef, idxFilter: idxFilter}, nil
+}
+
+func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	prepared, err := builder.prepareIndexJoin(idxDef, node, filterType, filterIdx, scanSnapshot)
+	if err != nil {
+		panic(err)
+	}
+	if prepared == nil {
+		return -1, -1
+	}
+	return builder.publishIndexJoin(prepared, node)
+}
+
+func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node *plan.Node) (int32, int32) {
+	idxDef, idxTag := prepared.idxDef, prepared.idxTag
+	idxObjRef, idxTableDef, idxFilter := prepared.idxObjRef, prepared.idxTableDef, prepared.idxFilter
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	// recod index table scan info
 	idxScanInfo := plan.IndexScanInfo{
@@ -2671,129 +3101,119 @@ func hasKnownScanCardinality(stats *plan.Stats) bool {
 		!math.IsNaN(stats.TableCnt) && !math.IsInf(stats.TableCnt, 0)
 }
 
-func pointSelectFilterIndexes(node *plan.Node) (map[int32]int32, map[int32]int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32, int) {
+	return builder.getMostSelectiveIndexForPointSelectWithKeySets(indexes, node, ignoreStats, maxSelectivity, true)
+}
+
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelectWithKeySets(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool) (int, []int32, int) {
+	return builder.selectPointIndexWithBudget(indexes, node, ignoreStats, maxSelectivity, allowKeySet, newIndexKeySetWorkBudget(), nil)
+}
+
+func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int, []int32, int) {
+	currentSel := maxSelectivity
+	currentIdx := -1
+	knownCardinality := hasKnownScanCardinality(node.Stats)
+	forced := builder.scanHintsForceIndexes(node)
+	selectedUnknownStatsRank := 0
+	savedFilterIdx := make([]int32, 0)
+	savedKeySetSize := 0
+
 	col2filter := make(map[int32]int32)
-	col2infilter := make(map[int32]int32)
+	inCol2filter := make(map[int32]int32)
+	inFilterSize := make(map[int32]int)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = int32(i)
-		} else if _, ok := compositeUniqueInValues(node.FilterList[i]); ok {
-			col2infilter[col.ColPos] = int32(i)
-		}
-	}
-	return col2filter, col2infilter
-}
-
-// matchCompositeUniqueTrailingIn admits only exact keys whose stored parts all
-// contain complete base values. Complete equality takes precedence over IN on
-// the final part, matching ordinary point-candidate selection.
-func matchCompositeUniqueTrailingIn(idxDef *IndexDef, node *plan.Node, col2filter, col2infilter map[int32]int32) ([]int32, bool) {
-	if !usableRegularHintIndex(idxDef) || !idxDef.Unique || len(idxDef.Parts) < 2 || node == nil || node.TableDef == nil {
-		return nil, false
-	}
-	lastPart := len(idxDef.Parts) - 1
-	lastCol, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[lastPart])]
-	if !ok {
-		return nil, false
-	}
-	if _, equal := col2filter[lastCol]; equal {
-		return nil, false
-	}
-	lastFilter, ok := col2infilter[lastCol]
-	if !ok {
-		return nil, false
-	}
-
-	filterIdx := make([]int32, len(idxDef.Parts))
-	for j := 0; j < lastPart; j++ {
-		colIdx, exists := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
-		if !exists {
-			return nil, false
-		}
-		filterIdx[j], ok = col2filter[colIdx]
-		if !ok {
-			return nil, false
-		}
-	}
-	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-	if err != nil || len(prefixLengths) > 0 {
-		return nil, false
-	}
-	filterIdx[lastPart] = lastFilter
-	return filterIdx, true
-}
-
-func hasCompositeUniqueTrailingInCandidate(indexes []*IndexDef, node *plan.Node) bool {
-	col2filter, col2infilter := pointSelectFilterIndexes(node)
-	for _, idxDef := range indexes {
-		if _, ok := matchCompositeUniqueTrailingIn(idxDef, node, col2filter, col2infilter); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// Filter selection can choose any hinted regular index, including through the
-// complete-equality fallback. Do not expose that phase to truncated keys.
-func regularIndexesHaveFullValueParts(indexes []*IndexDef) bool {
-	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) {
 			continue
 		}
-		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-		if err != nil || len(prefixLengths) > 0 {
-			return false
+		fn := node.FilterList[i].GetF()
+		if allowKeySet && fn != nil && fn.Func != nil && fn.Func.ObjName == "in" {
+			if bound := budget.inputBound(node.FilterList[i]); bound.ok {
+				inCol2filter[bound.column] = int32(i)
+				inFilterSize[bound.column] = bound.count
+			}
 		}
 	}
-	return true
-}
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
-	currentSel := maxSelectivity
-	currentIdx := -1
-	knownCardinality := hasKnownScanCardinality(node.Stats)
-	selectedUnknownStatsRank := 0
-	savedFilterIdx := make([]int32, 0)
-
-	col2filter, col2infilter := pointSelectFilterIndexes(node)
-
-	filterIdx := make([]int32, 0, len(col2filter))
+	filterIdx := make([]int32, 0, len(col2filter)+len(inCol2filter))
+	var keySetFilterIdx []int32
 	for i, idxDef := range indexes {
 		numParts := len(idxDef.Parts)
 		numKeyParts := numParts
 		if !idxDef.Unique {
 			numKeyParts--
 		}
-		if numKeyParts == 0 {
+		if numKeyParts <= 0 {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
 			continue
 		}
 
-		usePartialIndex := false
-		trailingIn := false
-
 		filterIdx = filterIdx[:0]
-		if trailingFilterIdx, ok := matchCompositeUniqueTrailingIn(idxDef, node, col2filter, col2infilter); ok {
-			filterIdx = append(filterIdx, trailingFilterIdx...)
-			trailingIn = true
-		} else {
+		for j := 0; j < numKeyParts; j++ {
+			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
+			if prefixLengths[tmpName] > 0 {
+				// Equality lowering serializes the full value. Stop before a
+				// truncated key part so the fallback cannot lose matching rows.
+				break
+			}
+			colIdx := node.TableDef.Name2ColIndex[tmpName]
+			idx, ok := col2filter[colIdx]
+			if !ok || !regularIndexEqualityUsable(idxDef, node.TableDef, node.FilterList[idx].GetF(), j) {
+				break
+			}
+			filterIdx = append(filterIdx, idx)
+		}
+
+		// A bounded IN on any one user key part completes a finite composite
+		// key set when every other part is equality bound. Keep the original
+		// equality-only candidate when this general form does not apply.
+		candidateKeySetSize := 0
+		_, wasDeclined := declined[i]
+		if allowKeySet && !wasDeclined && numKeyParts > 1 && len(inCol2filter) > 0 && keySetIndexSupported(idxDef) {
+			keySetFilterIdx = keySetFilterIdx[:0]
+			inCount := 0
 			for j := 0; j < numKeyParts; j++ {
-				tmpName := catalog.ResolveAlias(idxDef.Parts[j])
-				colIdx := node.TableDef.Name2ColIndex[tmpName]
-				idx, ok := col2filter[colIdx]
-				if !ok {
+				colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
+				if idx, ok := col2filter[colIdx]; ok {
+					if !regularIndexEqualityUsable(idxDef, node.TableDef, node.FilterList[idx].GetF(), j) {
+						break
+					}
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+				} else if idx, ok := inCol2filter[colIdx]; ok {
+					if indexTableStoresSerializedKey(idxDef) &&
+						!serializedIndexComparisonUsable(node.FilterList[idx].GetF(), node.TableDef.Cols[colIdx].Typ) {
+						break
+					}
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+					inCount++
+					candidateKeySetSize = inFilterSize[colIdx]
+				} else {
 					break
 				}
-				filterIdx = append(filterIdx, idx)
+			}
+			if inCount == 1 && len(keySetFilterIdx) == numKeyParts &&
+				indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), candidateKeySetSize, forced) {
+				if _, ok := budget.estimate(node.FilterList, keySetFilterIdx); ok {
+					filterIdx = append(filterIdx[:0], keySetFilterIdx...)
+				} else {
+					candidateKeySetSize = 0
+				}
+			} else {
+				candidateKeySetSize = 0
 			}
 		}
+
+		usePartialIndex := false
 		for _, idx := range filterIdx {
 			filter := node.FilterList[idx]
 			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
 			}
 		}
-
 		if len(filterIdx) < numParts && (idxDef.Unique || !usePartialIndex) {
 			continue
 		}
@@ -2806,7 +3226,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			candidateRank := 0
 			if completeUnique {
 				candidateRank = 1
-				if !trailingIn {
+				if candidateKeySetSize == 0 {
 					candidateRank = 2
 				}
 			}
@@ -2823,8 +3243,12 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			if math.IsNaN(compositeFilterSel) || math.IsInf(compositeFilterSel, 0) || compositeFilterSel < 0 || compositeFilterSel > 1 {
 				continue
 			}
-			if completeUnique && !trailingIn {
-				compositeFilterSel = min(compositeFilterSel, 1/node.Stats.TableCnt)
+			if completeUnique {
+				maxRows := 1.0
+				if candidateKeySetSize > 1 {
+					maxRows = float64(candidateKeySetSize)
+				}
+				compositeFilterSel = min(compositeFilterSel, maxRows/node.Stats.TableCnt)
 			}
 			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
 			if compositeFilterSel >= currentSel && !forceFallback {
@@ -2835,8 +3259,9 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		currentIdx = i
 		savedFilterIdx = savedFilterIdx[:0]
 		savedFilterIdx = append(savedFilterIdx, filterIdx...)
+		savedKeySetSize = candidateKeySetSize
 	}
-	return currentIdx, savedFilterIdx
+	return currentIdx, savedFilterIdx, savedKeySetSize
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -2951,202 +3376,219 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
-	for _, idxDef := range indexes {
-		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
-			continue
-		}
-
-		numParts := len(idxDef.Parts)
-		numKeyParts := numParts
-		if !idxDef.Unique {
-			numKeyParts--
-		}
-		if numKeyParts == 0 || numKeyParts > len(col2Cond) {
-			continue
-		}
-
-		condIdx = condIdx[:0]
-		for i := 0; i < numKeyParts; i++ {
-			tmpName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
-			idx, ok := col2Cond[colIdx]
-			if !ok {
-				break
+	// Preserve the existing priority of complete-key candidates. Partial
+	// prefixes are fallbacks and must not displace them by catalog order.
+selectIndex:
+	for _, completeKey := range []bool{true, false} {
+		for _, idxDef := range indexes {
+			if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
+				continue
 			}
 
-			condIdx = append(condIdx, idx)
-		}
-
-		if len(condIdx) < numKeyParts {
-			continue
-		}
-
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
-		if err != nil {
-			return -1, err
-		}
-		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
-			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
-		}
-		pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
-		if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
-		}
-
-		idxTag := builder.genNewBindTag()
-		builder.addNameByColRef(idxTag, idxTableDef)
-
-		rfTag := builder.genNewMsgTag()
-
-		var rfBuildExpr *plan.Expr
-		var componentProbeExprs []*plan.Expr
-		if numParts == 1 {
-			condition := node.OnList[condIdx[0].exprIdx].GetF()
-			rfBuildExpr = &plan.Expr{
-				Typ: condition.Args[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(condIdx[0].hashSlot),
-					},
-				},
+			numParts := len(idxDef.Parts)
+			numKeyParts := numParts
+			if !idxDef.Unique {
+				numKeyParts--
 			}
-		} else {
-			serialArgs := make([]*plan.Expr, len(condIdx))
-			componentProbeExprs = make([]*plan.Expr, len(condIdx))
-			for i := range condIdx {
-				componentProbeExprs[i] =
-					node.OnList[condIdx[i].exprIdx].GetF().Args[0]
-				serialArgs[i] = &plan.Expr{
-					Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+			if numKeyParts == 0 {
+				continue
+			}
+
+			condIdx = condIdx[:0]
+			comparisonDomainSafe := true
+			for i := 0; i < numKeyParts; i++ {
+				tmpName := catalog.ResolveAlias(idxDef.Parts[i])
+				colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
+				idx, ok := col2Cond[colIdx]
+				if !ok {
+					break
+				}
+				condition := node.OnList[idx.exprIdx].GetF()
+				if !sameIndexComparisonDomain(makeTypeByPlan2Type(leftChild.TableDef.Cols[colIdx].Typ), makeTypeByPlan2Expr(condition.Args[1])) {
+					comparisonDomainSafe = false
+				}
+
+				condIdx = append(condIdx, idx)
+			}
+
+			// Only a contiguous leading prefix can prune the serialized index key.
+			if len(condIdx) == 0 {
+				continue
+			}
+			if (len(condIdx) == numKeyParts) != completeKey {
+				continue
+			}
+
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+			if err != nil {
+				return -1, err
+			}
+			if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
+				leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
+			}
+			pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
+			if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
+			}
+
+			idxTag := builder.genNewBindTag()
+			builder.addNameByColRef(idxTag, idxTableDef)
+
+			rfTag := builder.genNewMsgTag()
+
+			var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
+			var hasRuntimeFilter bool
+			if comparisonDomainSafe {
+				var rfBuildExpr *plan.Expr
+				var componentProbeExprs []*plan.Expr
+				if numParts == 1 {
+					condition := node.OnList[condIdx[0].exprIdx].GetF()
+					rfBuildExpr = &plan.Expr{
+						Typ: condition.Args[1].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: -1,
+								ColPos: int32(condIdx[0].hashSlot),
+							},
+						},
+					}
+				} else {
+					serialArgs := make([]*plan.Expr, len(condIdx))
+					componentProbeExprs = make([]*plan.Expr, len(condIdx))
+					for i := range condIdx {
+						componentProbeExprs[i] =
+							node.OnList[condIdx[i].exprIdx].GetF().Args[0]
+						serialArgs[i] = &plan.Expr{
+							Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: -1,
+									ColPos: int32(condIdx[i].hashSlot),
+								},
+							},
+						}
+					}
+					rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
+				}
+
+				probeExpr := &plan.Expr{
+					Typ: idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: -1,
-							ColPos: int32(condIdx[i].hashSlot),
+							RelPos: idxTag,
+							ColPos: 0,
 						},
 					},
 				}
+				if len(componentProbeExprs) == 0 {
+					nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+						builder.makeExactRuntimeFilterPair(
+							rfTag,
+							len(condIdx) < numParts,
+							GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+							probeExpr,
+							rfBuildExpr,
+							false,
+						)
+				} else {
+					nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+						builder.makeSerializedExactRuntimeFilterPair(
+							rfTag,
+							len(condIdx) < numParts,
+							GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+							probeExpr,
+							rfBuildExpr,
+							componentProbeExprs,
+							false,
+						)
+				}
 			}
-			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
-		}
+			if !hasRuntimeFilter && (!forceJoinIndex || len(condIdx) < numKeyParts) {
+				// The index lookup cost model assumes targeted runtime-filter
+				// pruning. Without a materializable exact pair this rewrite would
+				// scan the index table under a no-op PASS dependency. A partial key
+				// has no bounded access without its exact prefix filter.
+				continue
+			}
+			// Full-key FORCE INDEX remains an explicit request to use the index even
+			// when its serialized lookup key has no proven exact-filter contract. Honor
+			// the hint without publishing a no-op dependency or optimistic stats.
 
-		probeExpr := &plan.Expr{
-			Typ: idxTableDef.Cols[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 0,
-				},
-			},
-		}
-		var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
-		var hasRuntimeFilter bool
-		if len(componentProbeExprs) == 0 {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					false,
-				)
-		} else {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeSerializedExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					componentProbeExprs,
-					false,
-				)
-		}
-		if !hasRuntimeFilter && !forceJoinIndex {
-			// The index lookup cost model assumes targeted runtime-filter
-			// pruning.  Without a materializable exact pair this rewrite would
-			// scan the index table under a no-op PASS dependency.
-			continue
-		}
-		// FORCE INDEX remains an explicit request to use the index even when
-		// its serialized lookup key has no proven exact-filter contract. Honor
-		// the hint without publishing a no-op dependency or optimistic stats.
+			// recod index table scan info
+			idxScanInfo := plan.IndexScanInfo{
+				IsIndexScan:    true,
+				IndexName:      idxDef.IndexName,
+				BelongToTable:  leftChild.ObjRef.ObjName,
+				Parts:          slices.Clone(idxDef.Parts),
+				IsUnique:       idxDef.Unique,
+				IndexTableName: idxDef.IndexTableName,
+			}
 
-		// recod index table scan info
-		idxScanInfo := plan.IndexScanInfo{
-			IsIndexScan:    true,
-			IndexName:      idxDef.IndexName,
-			BelongToTable:  leftChild.ObjRef.ObjName,
-			Parts:          slices.Clone(idxDef.Parts),
-			IsUnique:       idxDef.Unique,
-			IndexTableName: idxDef.IndexTableName,
-		}
+			idxTableNode := &plan.Node{
+				NodeType:      plan.Node_TABLE_SCAN,
+				TableDef:      idxTableDef,
+				ObjRef:        idxObjRef,
+				IndexScanInfo: idxScanInfo,
+				ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
+				BindingTags:   []int32{idxTag},
+				ScanSnapshot:  leftChild.ScanSnapshot,
+				OriginViews:   append([]string(nil), leftChild.OriginViews...),
+				DirectView:    leftChild.DirectView,
+			}
+			if hasRuntimeFilter {
+				idxTableNode.RuntimeFilterProbeList =
+					[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
+			}
+			// The index is another access path for the left scan. A JOIN context
+			// can be absent or belong to an enclosing view, so authorization must
+			// follow the original scan's complete view chain and direct view.
+			idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
+			builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
-		idxTableNode := &plan.Node{
-			NodeType:      plan.Node_TABLE_SCAN,
-			TableDef:      idxTableDef,
-			ObjRef:        idxObjRef,
-			IndexScanInfo: idxScanInfo,
-			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:   []int32{idxTag},
-			ScanSnapshot:  leftChild.ScanSnapshot,
-			OriginViews:   append([]string(nil), leftChild.OriginViews...),
-			DirectView:    leftChild.DirectView,
-		}
-		if hasRuntimeFilter {
-			idxTableNode.RuntimeFilterProbeList =
-				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
-		}
-		// The index is another access path for the left scan. A JOIN context
-		// can be absent or belong to an enclosing view, so authorization must
-		// follow the original scan's complete view chain and direct view.
-		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
-		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
+			if hasRuntimeFilter {
+				node.RuntimeFilterBuildList = append(
+					node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
+				recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+			}
 
-		if hasRuntimeFilter {
-			node.RuntimeFilterBuildList = append(
-				node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
-			recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
-		}
-
-		pkExpr := &plan.Expr{
-			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: leftChild.BindingTags[0],
-					ColPos: pkIdx,
-				},
-			},
-		}
-		pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			pkExpr,
-			{
-				Typ: pkExpr.Typ,
+			pkExpr := &plan.Expr{
+				Typ: leftChild.TableDef.Cols[pkIdx].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: idxTag,
-						ColPos: 1,
+						RelPos: leftChild.BindingTags[0],
+						ColPos: pkIdx,
 					},
 				},
-			},
-		})
+			}
+			pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				pkExpr,
+				{
+					Typ: pkExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTag,
+							ColPos: 1,
+						},
+					},
+				},
+			})
 
-		idxJoinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{node.Children[0], idxTableNodeID},
-			JoinType: plan.Node_INDEX,
-			Limit:    leftChild.Limit,
-			Offset:   leftChild.Offset,
-			OnList:   []*plan.Expr{pkJoinCond},
-		}, builder.ctxByNode[leftChild.NodeId])
+			idxJoinNodeID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{node.Children[0], idxTableNodeID},
+				JoinType: plan.Node_INDEX,
+				Limit:    leftChild.Limit,
+				Offset:   leftChild.Offset,
+				OnList:   []*plan.Expr{pkJoinCond},
+			}, builder.ctxByNode[leftChild.NodeId])
 
-		leftChild.Limit, leftChild.Offset = nil, nil
+			leftChild.Limit, leftChild.Offset = nil, nil
 
-		node.Children[0] = idxJoinNodeID
+			node.Children[0] = idxJoinNodeID
 
-		break
+			break selectIndex
+		}
 	}
 
 	return nodeID, nil

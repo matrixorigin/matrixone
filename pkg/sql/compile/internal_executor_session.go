@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type internalExecutorSessionKey struct{}
+type internalExecutorRewriteOptionKey struct{}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.
@@ -50,6 +52,42 @@ func getInternalExecutorSession(ctx context.Context) process.Session {
 		}
 	}
 	return nil
+}
+
+// 规则 AST 由调用方持有，只在本次 CTAS 的同步内部执行中传递，
+// 不能从可能已脱敏的诊断 SQL 重新解析执行策略。
+func attachInternalExecutorRewriteOption(ctx context.Context, option *tree.RewriteOption) context.Context {
+	if option == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, internalExecutorRewriteOptionKey{}, option)
+}
+
+func getInternalExecutorRewriteOption(ctx context.Context) *tree.RewriteOption {
+	if ctx == nil {
+		return nil
+	}
+	option, _ := ctx.Value(internalExecutorRewriteOptionKey{}).(*tree.RewriteOption)
+	return option
+}
+
+// CTAS 生成的 INSERT 仅将规则附加到读取源，不改写写入目标。
+func attachRewriteOptionToStatement(stmt tree.Statement, option *tree.RewriteOption) {
+	if option == nil {
+		return
+	}
+	insert, ok := stmt.(*tree.Insert)
+	if !ok || insert == nil || insert.Rows == nil {
+		return
+	}
+	for source := insert.Rows; source != nil; {
+		source.RewriteOption = option
+		paren, ok := source.Select.(*tree.ParenSelect)
+		if !ok {
+			break
+		}
+		source = paren.Select
+	}
 }
 
 func attachInternalExecutorPrivilegeCheck(ctx context.Context) context.Context {

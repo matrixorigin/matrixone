@@ -87,13 +87,6 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug(
-			"Transaction.Relation",
-			zap.String("txn", db.op.Txn().DebugString()),
-			zap.String("name", name),
-		)
-	})
 	txn := db.getTxn()
 	if _, err := txnIsValid(txn.op); err != nil {
 		return nil, err

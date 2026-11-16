@@ -225,3 +225,33 @@ func TestToPathQuotedCredentialsAndQuery(t *testing.T) {
 	require.Equal(t, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,\"secret=a,b\"\"c\"\n:/path", got)
 	require.Equal(t, "q=keep", query)
 }
+
+func TestParseStageURLLogicalNames(t *testing.T) {
+	for _, tc := range []struct{ uri, name, prefix, query string }{
+		{"stage://simple/a.csv?offset=1", "simple", "/a.csv", "offset=1"},
+		{"stage:///two%20words/a.csv", "two words", "/a.csv", ""},
+		{"stage:///o%27connor%7Bv1%7D/a.csv", "o'connor{v1}", "/a.csv", ""},
+		{"stage:///part%2Fname/a%20b.csv", "part/name", "/a b.csv", ""},
+		{"stage:///literal%252F/a.csv", "literal%2F", "/a.csv", ""},
+		{"stage://../a.csv", "..", "/a.csv", ""},
+		{"stage://user@simple/a.csv#fragment", "simple", "/a.csv", ""},
+	} {
+		t.Run(tc.uri, func(t *testing.T) {
+			u, err := url.Parse(tc.uri)
+			require.NoError(t, err)
+			name, prefix, query, err := ParseStageUrl(u)
+			require.NoError(t, err)
+			require.Equal(t, tc.name, name)
+			require.Equal(t, tc.prefix, prefix)
+			require.Equal(t, tc.query, query)
+		})
+	}
+	for _, raw := range []string{"stage:foo/a", "stage:/foo/a", "stage:///", "stage:///../a", "stage:///%2e/a", "stage:///%00/a", "stage:///%FF/a", "stage:///x/a#fragment", "stage://user@/x/a"} {
+		t.Run(raw, func(t *testing.T) {
+			u, err := url.Parse(raw)
+			require.NoError(t, err)
+			_, _, _, err = ParseStageUrl(u)
+			require.Error(t, err)
+		})
+	}
+}

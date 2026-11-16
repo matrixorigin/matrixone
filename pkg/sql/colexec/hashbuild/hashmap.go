@@ -84,16 +84,18 @@ type HashmapBuilder struct {
 	// error. It becomes false before a destructive Dedup rewrite starts. From
 	// that point, Batches are no longer equivalent to the original ingress and
 	// must not be retried or re-spilled.
-	runtimeFilterCollectionFallback bool
-	runtimeFilterKeysRequired       bool
-	uniqueKeyRowsHint               int
-	retainedBatchRecoverySafe       bool
-	mapAllocationAccount            *mpool.AllocationAccount
-	mapAllocation                   *hashtable.AllocationAccountSelection
-	iteratorAllocation              *hashmap.IteratorAllocation
-	batchAllocation                 *vector.AllocationAccountSelection
-	uniqueKeyAllocation             *vector.AllocationAccountSelection
-	recoveryCapacityClass           mpool.AllocationCapacityClass
+	runtimeFilterCollectionFallback  bool
+	runtimeFilterKeysRequired        bool
+	optionalRuntimeFilterMaxKeyBytes int
+	optionalRuntimeFilterMaxKeys     int
+	uniqueKeyRowsHint                int
+	retainedBatchRecoverySafe        bool
+	mapAllocationAccount             *mpool.AllocationAccount
+	mapAllocation                    *hashtable.AllocationAccountSelection
+	iteratorAllocation               *hashmap.IteratorAllocation
+	batchAllocation                  *vector.AllocationAccountSelection
+	uniqueKeyAllocation              *vector.AllocationAccountSelection
+	recoveryCapacityClass            mpool.AllocationCapacityClass
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -260,6 +262,8 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterKeysRequired = false
+	hb.optionalRuntimeFilterMaxKeyBytes = 0
+	hb.optionalRuntimeFilterMaxKeys = 0
 	hb.uniqueKeyRowsHint = 0
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Destroy them here; immutable allocation selections remain installed until
@@ -286,6 +290,8 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterCollectionFallback = false
 	hb.runtimeFilterKeysRequired = false
+	hb.optionalRuntimeFilterMaxKeyBytes = 0
+	hb.optionalRuntimeFilterMaxKeys = 0
 	hb.uniqueKeyRowsHint = 0
 	hb.retainedBatchRecoverySafe = false
 }

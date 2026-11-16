@@ -508,6 +508,7 @@ type Process struct {
 
 type sqlHelper interface {
 	GetCompilerContext() any
+	CheckDatabaseWrite(context.Context, string) error
 	ExecSql(string) ([][]interface{}, error)
 	ExecSqlWithCtx(context.Context, string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)

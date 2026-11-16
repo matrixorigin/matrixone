@@ -156,7 +156,7 @@ func samePlanType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr && left.Width == right.Width &&
 		left.Scale == right.Scale && left.Table == right.Table &&
-		left.Enumvalues == right.Enumvalues
+		sameTypeMemberDomain(&left, &right)
 }
 
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {

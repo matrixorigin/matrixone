@@ -250,6 +250,8 @@ func TestPrivilegeCacheCompoundDoesNotCarryAdmission(t *testing.T) {
 	defer ses.Close()
 	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", TenantID: 3, UserID: 4, DefaultRoleID: 5})
 	ses.SetFromRealUser(true)
+	// This test isolates compound privilege evaluation after policy admission.
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: t.Context(), ses: ses, protectedPolicyLoaded: true})
 	cache := ses.GetPrivilegeCache()
 	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "source", PrivilegeTypeSelect)
 	cache.add(objectTypeTable, privilegeLevelDatabaseTable, moCatalog, "target", PrivilegeTypeInsert)
@@ -273,7 +275,7 @@ func TestPrivilegeCacheCompoundDoesNotCarryAdmission(t *testing.T) {
 		ok, err := checkPrivilegeInCache(t.Context(), ses, priv, true)
 		require.NoError(t, err)
 		require.Equal(t, items[1].privilegeTyp == PrivilegeTypeSelect && items[0].privilegeTyp == PrivilegeTypeSelect, ok, "compound items: %+v", items)
-		cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+		cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 		require.NoError(t, err)
 		require.Equal(t, cold, ok, "cache and SQL evaluators must agree")
 	}

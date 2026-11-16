@@ -53,25 +53,18 @@ func TestRemapAggToTimeWindowResultAggUsesRegularSumForPartialSums(t *testing.T)
 }
 
 func TestGroupConcatOrderKeyUsesEnumAndSetStorageValue(t *testing.T) {
-	for _, name := range []string{moEnumCastIndexToValueFun, moSetCastIndexToValueFun} {
-		t.Run(name, func(t *testing.T) {
-			raw := &plan.Expr{
-				Typ:  plan.Type{Id: int32(types.T_uint16)},
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
-			}
-			display := &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_varchar)},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: name},
-					Args: []*plan.Expr{{}, raw},
-				}},
-			}
-
-			binder := &HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}
-			orderKey, err := binder.groupConcatOrderKey(display)
-			require.NoError(t, err)
-			require.Same(t, raw, orderKey)
-		})
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "a,b"},
+		{Id: int32(types.T_enum), Enumvalues: "2#3:a,b1:c", EnumEncoding: 1},
+		{Id: int32(types.T_uint64), Enumvalues: "x,y"},
+	} {
+		raw := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}}
+		display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
+		require.NoError(t, err)
+		binder := &HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}
+		orderKey, err := binder.groupConcatOrderKey(display)
+		require.NoError(t, err)
+		require.Same(t, raw, orderKey)
 	}
 }
 

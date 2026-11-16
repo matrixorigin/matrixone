@@ -137,13 +137,39 @@ func evalValue(
 		}
 	})
 
+	colType := tblDef.Cols[colPos].Typ
 	if isVec {
-		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
+		if types.T(colType.Id).IsDecimal() && !decimalVectorMatchesColumn(val, colType) {
+			return false, 0, nil
+		}
+		return true, types.T(colType.Id), [][]byte{val}
+	}
+	if types.T(colType.Id).IsDecimal() {
+		for i, value := range valExprs {
+			if exprImpl.F.Func.ObjName == "in_range" && i == 2 {
+				continue
+			}
+			if value.Typ.Id != colType.Id || value.Typ.Scale != colType.Scale {
+				return false, 0, nil
+			}
+		}
 	}
 	if mixedTemporalColumnAndValues(types.T(tblDef.Cols[colPos].Typ.Id), valExprs) {
 		return false, 0, nil
 	}
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
+}
+
+// Raw decimal membership requires the vector payload's actual physical type.
+func decimalVectorMatchesColumn(data []byte, colType plan.Type) bool {
+	if err := validatePKInVectorEncoding(data); err != nil {
+		return false
+	}
+	vec := vector.NewVec(types.T_any.ToType())
+	if err := vec.UnmarshalBinary(data); err != nil || validatePKInVectorShape(vec) != nil {
+		return false
+	}
+	return int32(vec.GetType().Oid) == colType.Id && vec.GetType().Scale == colType.Scale
 }
 
 // A BasePKFilter compares persisted primary-key bytes directly. DATETIME and

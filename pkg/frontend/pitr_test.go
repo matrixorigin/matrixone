@@ -1536,8 +1536,8 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1662,8 +1662,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1785,8 +1785,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1902,8 +1902,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2026,8 +2026,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2144,8 +2144,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2272,8 +2272,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2394,8 +2394,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2516,8 +2516,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"

@@ -35,7 +35,8 @@ import (
 // candidates.
 const lateMaterializationMinVarlenWidth = 256
 
-func isLateMaterializationCandidate(typ plan.Type) bool {
+// IsLateMaterializationCandidate reports whether a column can benefit from selected-row reads.
+func IsLateMaterializationCandidate(typ plan.Type) bool {
 	switch types.T(typ.Id) {
 	case types.T_text,
 		types.T_blob,
@@ -57,7 +58,8 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 	}
 }
 
-func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
+// CollectFilterColumnPositions records the input columns needed to evaluate a filter.
+func CollectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -77,7 +79,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.F.Args {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -87,7 +89,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.List.List {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -96,7 +98,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 		if item.Lit == nil {
 			return false
 		}
-		return collectFilterColumnPositions(item.Lit.Src, columns)
+		return CollectFilterColumnPositions(item.Lit.Src, columns)
 	case *plan.Expr_P:
 		return item.P != nil
 	case *plan.Expr_V:
@@ -132,12 +134,12 @@ func (tableScan *TableScan) configureLateMaterialization() {
 
 	filterColumns := make([]bool, len(tableScan.Types))
 	for _, expr := range tableScan.RuntimeFilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
 	for _, expr := range tableScan.FilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
@@ -146,7 +148,7 @@ func (tableScan *TableScan) configureLateMaterialization() {
 	}
 
 	for pos, typ := range tableScan.Types {
-		if !filterColumns[pos] && isLateMaterializationCandidate(typ) {
+		if !filterColumns[pos] && IsLateMaterializationCandidate(typ) {
 			tableScan.ctr.lateColumns = append(tableScan.ctr.lateColumns, pos)
 		} else {
 			tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, pos)
