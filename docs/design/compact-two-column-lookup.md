@@ -49,3 +49,20 @@ dictionary work when resolving future source overlaps, without depending on it.
 The requester approved the four proposed fixes with “then fix”.
 
 Read the existing fixed Varlena length and payload directly, bounded by VarlenaInlineSize, so the canonicalizer can inline without unsafe-slice checks. Preserve all existing key/publication semantics. Require the same instruction and fallback controls before whole-query acceptance.
+# Approved taken-branch revision — 2026-11-16
+
+The requester approved the bounded fix after equal-work counters showed one
+additional taken branch per row in one-column miss/late-unsupported controls,
+despite fewer instructions and unchanged branch misses. Keep the private decoder
+contract and add a direct one-byte path: SPACE maps to zero, any other byte maps
+to byte+1. The existing path retains empty/PAD SPACE, longer and unsupported
+representation handling. Keep all metadata, collation, scratch-publication,
+admission and generation/spill contracts.
+
+Use the fused flat tuple helper only when the chunk contains more than one row;
+single-row tuples use the existing common route to avoid fixed helper-call cost.
+No public API, state, allocation or copy mechanism changes. Verify inlining and
+all18 caller-shape controls, including equal-work cycles/taken branches, before
+isolated all22 local acceptance. Reuse matching main captures and the approved
+controlled-disk condition. Compile and time after ongoing Q13/Q20 collection.
+
