@@ -46,12 +46,14 @@ where match(body) against('+branch' in boolean mode) order by id;
 select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 
--- HNSW may safely fall back until its rebuilt generation covers both writes.
+-- Selecting the HNSW plan does not mean that asynchronous maintenance and
+-- the querying CN's cache have caught up with both branch writes.
 -- @wait_expect(1, 60)
 -- @separator:table
 -- @regex("Vector Index Scan on", true)
 explain select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
+-- @wait_expect(1, 60)
 select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
 select id from leaf_t
