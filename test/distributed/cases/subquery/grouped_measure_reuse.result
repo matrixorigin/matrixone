@@ -25,4 +25,9 @@ k    label    qty
 select d.k,d.label,sum(f.v) as qty from d join f on d.k=f.k where d.k in (select k from f group by k having sum(v)>0) group by d.k,d.label order by qty desc,d.k limit 1;
 k    label    qty
 1    A    30.00
+create table p(k int primary key,label varchar(10));
+insert into p values (1,'P'),(99,'orphan');
+select d.k,p.label,sum(f.v) as qty from d join p on d.k=p.k join f on d.k=f.k where d.k in (select k from f group by k having sum(v)>0) group by d.k,p.label order by d.k;
+k    label    qty
+1    P    30.00
 drop database grouped_measure_reuse;

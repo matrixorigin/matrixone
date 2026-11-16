@@ -33,7 +33,7 @@ type groupedMeasureRegion struct {
 // key-preserving dimension joins. No producer is replayed or materialized.
 func (builder *QueryBuilder) reuseGroupedMeasures(rootID int32) bool {
 	if builder.qry.StmtType != plan.Query_SELECT || builder.isForUpdate || builder.qry.Correlation != nil ||
-		(builder.optimizerHints != nil && builder.optimizerHints.aggPushDown != 0) {
+		(builder.optimizerHints != nil && (builder.optimizerHints.aggPushDown != 0 || builder.optimizerHints.pushDownSemiAntiJoins != 0)) {
 		return false
 	}
 	owners := make(map[int32]int)
@@ -248,6 +248,14 @@ func (builder *QueryBuilder) reuseGroupedMeasure(agg *plan.Node, owners map[int3
 		}
 	}
 	if build == nil || probe.GetCol() == nil {
+		return
+	}
+	// Keep qualification ahead of dimension materialization. Normal SEMI
+	// pushdown must already have lowered this edge to its surviving probe scan;
+	// converting a join-spanning SEMI earlier lets join ordering lift the filter.
+	probeScan := builder.qry.Nodes[semi.Children[0]]
+	if probeScan.NodeType != plan.Node_TABLE_SCAN || probeScan.NodeId == fact.NodeId ||
+		probe.GetCol().RelPos != probeScan.BindingTags[0] {
 		return
 	}
 	factKey := GetColExpr(key.Typ, fact.BindingTags[0], keyCol.ColPos)

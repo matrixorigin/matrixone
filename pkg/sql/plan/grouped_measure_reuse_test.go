@@ -78,7 +78,7 @@ func groupedMeasureTestBuilder(t *testing.T) (*QueryBuilder, int32) {
 func TestGroupedMeasureReuseCarriesExactMeasure(t *testing.T) {
 	b, root := groupedMeasureTestBuilder(t)
 	oldType := b.qry.Nodes[7].AggList[0].Typ
-	b.reuseGroupedMeasures(root)
+	require.True(t, b.reuseGroupedMeasures(root))
 	projection := b.qry.Nodes[7]
 	require.Equal(t, plan.Node_PROJECT, projection.NodeType)
 	require.Len(t, projection.ProjectList, 3)
@@ -110,7 +110,7 @@ func TestGroupedMeasureReuseCarriesExactMeasure(t *testing.T) {
 }
 
 func TestGroupedMeasureReuseRejectsDifferentBagsAndMultiplicity(t *testing.T) {
-	for _, name := range []string{"nonunique", "changed-filter", "different-table", "different-argument", "distinct", "no-key-group", "unsafe-sum", "outer", "having", "shared", "cost", "disabled", "multiple fact connectors"} {
+	for _, name := range []string{"nonunique", "changed-filter", "different-table", "different-argument", "distinct", "no-key-group", "unsafe-sum", "outer", "having", "shared", "cost", "disabled", "disabled-semi-pushdown", "join-spanning-probe", "retired-fact-probe", "multiple fact connectors"} {
 		t.Run(name, func(t *testing.T) {
 			b, root := groupedMeasureTestBuilder(t)
 			fact, dim, join, agg := b.qry.Nodes[1], b.qry.Nodes[2], b.qry.Nodes[6], b.qry.Nodes[7]
@@ -140,11 +140,30 @@ func TestGroupedMeasureReuseRejectsDifferentBagsAndMultiplicity(t *testing.T) {
 				b.qry.Nodes[4].Stats.Outcnt = 10000
 			case "disabled":
 				b.optimizerHints = &OptimizerHints{aggPushDown: 1}
+			case "disabled-semi-pushdown":
+				b.optimizerHints = &OptimizerHints{pushDownSemiAntiJoins: 1}
+			case "join-spanning-probe":
+				other := DeepCopyNode(dim)
+				other.BindingTags = []int32{b.genNewBindTag()}
+				other.ObjRef.Obj, other.TableDef.TblId = 1002, 1002
+				equality, err := BindFuncExprImplByPlanExpr(b.GetContext(), "=", []*plan.Expr{
+					GetColExpr(dim.TableDef.Cols[0].Typ, dim.BindingTags[0], 0),
+					GetColExpr(other.TableDef.Cols[0].Typ, other.BindingTags[0], 0),
+				})
+				require.NoError(t, err)
+				otherID := b.appendNode(other, nil)
+				probeID := b.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER,
+					Children: []int32{dim.NodeId, otherID}, OnList: []*plan.Expr{equality}}, nil)
+				b.qry.Nodes[5].Children[0] = probeID
+			case "retired-fact-probe":
+				semi := b.qry.Nodes[5]
+				semi.Children[0], join.Children[1] = fact.NodeId, dim.NodeId
+				semi.OnList[0].GetF().Args[0] = GetColExpr(fact.TableDef.Cols[0].Typ, fact.BindingTags[0], 0)
 			case "multiple fact connectors":
 				join.OnList = append(join.OnList, DeepCopyExpr(join.OnList[0]))
 			}
 			before := proto.Clone(b.qry)
-			b.reuseGroupedMeasures(root)
+			require.False(t, b.reuseGroupedMeasures(root))
 			require.True(t, proto.Equal(before, b.qry), "a rejected proposal must keep its original graph")
 		})
 	}
@@ -183,6 +202,20 @@ func TestGroupedMeasureSQLReachability(t *testing.T) {
 	query := p.GetQuery()
 	seen := make(map[int32]bool)
 	facts := 0
+	customerJoins := 0
+	var containsAggregate func(int32) bool
+	containsAggregate = func(id int32) bool {
+		n := query.Nodes[id]
+		if n.NodeType == plan.Node_AGG {
+			return true
+		}
+		for _, child := range n.Children {
+			if containsAggregate(child) {
+				return true
+			}
+		}
+		return false
+	}
 	var visit func(int32)
 	visit = func(id int32) {
 		if seen[id] {
@@ -190,6 +223,16 @@ func TestGroupedMeasureSQLReachability(t *testing.T) {
 		}
 		seen[id] = true
 		n := query.Nodes[id]
+		if n.NodeType == plan.Node_JOIN {
+			for side, child := range n.Children {
+				scan := query.Nodes[child]
+				if scan.NodeType == plan.Node_TABLE_SCAN && scan.TableDef.Name == "customer" {
+					customerJoins++
+					require.True(t, containsAggregate(n.Children[1-side]),
+						"qualify orders before materializing their customer join")
+				}
+			}
+		}
 		if n.NodeType == plan.Node_TABLE_SCAN && n.TableDef.Name == "lineitem" {
 			facts++
 			require.Empty(t, n.FilterList, "retiring a fact connector must not generate self-equality row filters")
@@ -204,4 +247,5 @@ func TestGroupedMeasureSQLReachability(t *testing.T) {
 		visit(root)
 	}
 	require.Equal(t, 1, facts, "unchanged Q18 must retire its repeated fact scan: %s", query.String())
+	require.Equal(t, 1, customerJoins, "exercise the surviving dimension-join ordering assertion")
 }
