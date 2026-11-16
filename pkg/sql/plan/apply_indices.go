@@ -1361,7 +1361,9 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 		}
 	}
-	if plainOrderForce && len(scanNode.FilterList) > 0 {
+	// Truncated index keys cannot safely participate in forced point selection.
+	allowForcedFilter := plainOrderForce && regularIndexesHaveFullValueParts(builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes))
+	if allowForcedFilter && len(scanNode.FilterList) > 0 {
 		access := builder.applyIndicesForFilters(scanNode.NodeId, scanNode, colRefCnt, idxColMap)
 		if access != scanNode.NodeId {
 			builder.protectedScans[scanNode.NodeId]++
@@ -1432,6 +1434,10 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			return accessNodeID, nil
 		}
 		if plainOrderForce && requirement.scope == forceIndexForOrder {
+			if !allowForcedFilter {
+				builder.protectedScans[scanNode.NodeId]++
+				return scanNode.NodeId, nil
+			}
 			return builder.applyForcedCoveringAccess(scanNode, colRefCnt, idxColMap, memo)
 		}
 		// This index cannot provide the requested ordering/grouping. Only an
@@ -1445,6 +1451,10 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		return scanNode.NodeId, nil
 	}
 	if plainOrderForce {
+		if !allowForcedFilter {
+			builder.protectedScans[scanNode.NodeId]++
+			return scanNode.NodeId, nil
+		}
 		return builder.applyForcedCoveringAccess(scanNode, colRefCnt, idxColMap, memo)
 	}
 	return scanNode.NodeId, nil
