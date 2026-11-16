@@ -1,0 +1,35 @@
+-- Batch argument reuse must not change values when constant and dynamic
+-- column names occur alongside NULL inputs.
+drop database if exists col_extrema_batch;
+create database col_extrema_batch;
+use col_extrema_batch;
+create table t(a int, b int);
+insert into t values (1, 2), (9, 8);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'col_extrema_batch.t');
+
+select mo_table_col_max('col_extrema_batch', 't', 'a') as mx,
+       mo_table_col_min('col_extrema_batch', 't', 'a') as mn
+from (select 1 as n union all select 2 union all select 3) x;
+
+select mo_table_col_max('col_extrema_batch', 't', case when n = 2 then 'b' else 'a' end) as mx,
+       mo_table_col_min('col_extrema_batch', 't', case when n = 2 then 'b' else 'a' end) as mn
+from (select 1 as n union all select 1 union all select 2 union all select 1) x
+order by n;
+
+select mo_table_col_max('col_extrema_batch', 't', case when n = 2 then null else 'a' end) as mx
+from (select 1 as n union all select 2 union all select 1) x
+order by n;
+
+select mo_table_col_max('col_extrema_batch', 't', 'a') as mx,
+       mo_table_col_min('col_extrema_batch', 't', 'a') as mn
+from information_schema.tables limit 1;
+
+select mo_table_col_max('col_extrema_batch', 't', 'a') as mx,
+       mo_table_col_min('col_extrema_batch', 't', 'a') as mn;
+
+create table empty_t(a int);
+select mo_table_col_max('col_extrema_batch', 'empty_t', 'a') as mx
+from (select 1 as n union all select 2) x;
+
+drop database col_extrema_batch;

@@ -825,6 +825,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		sysAccountCtx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 	}
 
+	// All rows in this invocation share the same transaction snapshot. Avoid
+	// loading the same table's object metadata again for repeated arguments.
+	type cacheValue struct {
+		value  string
+		isNull bool
+	}
+	cache := make(map[[3]string]cacheValue)
+
 	for i := uint64(0); i < uint64(length); i++ {
 		getValueFailed := false
 		db, null1 := dbNames.GetStrValue(i)
@@ -843,6 +851,17 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			}
 			if columnStr == "__mo_rowid" {
 				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
+			}
+			key := [3]string{dbStr, tableStr, columnStr}
+			if cached, ok := cache[key]; ok {
+				if cached.isNull {
+					if err := rs.AppendMustNullForBytesResult(); err != nil {
+						return err
+					}
+				} else if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(cached.value)); err != nil {
+					return err
+				}
+				continue
 			}
 
 			ctx := proc.Ctx
@@ -912,6 +931,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 						if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
 							return err
 						}
+						cache[key] = cacheValue{value: strval}
 						getValueFailed = false
 						break
 					}
@@ -921,6 +941,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
 					return appendErr
 				}
+				cache[key] = cacheValue{isNull: true}
 			}
 		}
 	}
