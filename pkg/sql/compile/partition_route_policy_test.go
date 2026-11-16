@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPartitionRouteDoesNotAddProtocolFloor(t *testing.T) {
+func TestPartitionRouteRequiresProtocol(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
@@ -33,15 +33,42 @@ func TestPartitionRouteDoesNotAddProtocolFloor(t *testing.T) {
 			{MultiUpdate: &pipeline.MultiUpdate{UpdateCtxList: []*plan.UpdateCtx{{PartitionIndexCtx: &plan.PartitionIndexCtx{}}}}}},
 	}}}
 	client.version = defines.MORPCVersion134
+	require.Equal(t, defines.MORPCVersion135, minimumRemotePartitionUpdateProtocol(&pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{PreInsert: &pipeline.PreInsert{PreserveInput: true}}},
+	}))
+	require.Equal(t, defines.MORPCVersion135, minimumRemotePartitionUpdateProtocol(&pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{MultiUpdate: &pipeline.MultiUpdate{
+			UpdateCtxList: []*plan.UpdateCtx{{PartitionIndexCtx: &plan.PartitionIndexCtx{}}},
+		}}},
+	}))
+	require.Equal(t, defines.MORPCVersion135, minimumRemotePartitionUpdateProtocol(p))
+	require.ErrorContains(t, validateRemotePartitionUpdatePipelineProtocol(c.proc, p), "version 135")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 	var required int64
 	calls := client.calls
-	require.NoError(t, validateRemoteExpressionDestinationWithProtocol(c.proc, p, plan.RemoteExpressionFeatures{}, &required))
-	require.Zero(t, required)
-	require.Equal(t, calls, client.calls, "routing alone must not initiate a capability probe")
+	required = defines.MORPCVersion134
+	require.ErrorContains(t, validatePartitionUpdateDestinationWithProtocol(c.proc, p, &required), "version 135")
+	require.Equal(t, defines.MORPCVersion135, required)
+	require.Equal(t, calls+1, client.calls, "the actual remote destination must be probed")
+
+	client.version = defines.MORPCVersion135
+	require.NoError(t, validateRemotePartitionUpdatePipelineProtocol(c.proc, p))
+	required = defines.MORPCVersion134
+	require.NoError(t, validatePartitionUpdateDestinationWithProtocol(c.proc, p, &required))
+	require.Equal(t, defines.MORPCVersion135, required, "the stream floor must include routing fields")
 	require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(c.proc, p))
 
+	// Pipelines without the new fields retain their existing protocol floor.
+	plain := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{PreInsert: &pipeline.PreInsert{}}}}
+	require.Zero(t, minimumRemotePartitionUpdateProtocol(plain))
+	required = defines.MORPCVersion134
+	require.NoError(t, validatePartitionUpdateDestinationWithProtocol(c.proc, plain, &required))
+	require.Equal(t, defines.MORPCVersion134, required)
+
 	// Unrelated existing feature gates continue to reject unsupported peers.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
 	client.version = defines.MORPCVersion97 - 1
+	required = 0
 	features := plan.RemoteExpressionFeatures{DecimalDivisionSemantics: true}
 	require.Error(t, validateRemoteExpressionDestinationWithProtocol(c.proc, p, features, &required))
 	client.version = defines.MORPCVersion97
