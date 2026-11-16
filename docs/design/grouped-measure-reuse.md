@@ -39,3 +39,9 @@ swap or script data/result verification. Fewer scans do not imply a 2x speedup.
 R2: bag identity, join multiplicity and expression remapping require functional
 and public-path closure. Existing aggregate/operator resource ownership remains
 authoritative. Confirmed regressions require diagnosis and a reviewed revision.
+
+## Approved regression revision — 2026-11-16
+
+The requester approved the four proposed fixes with “then fix”.
+
+Preserve the original dimension-join tree and predicate placement. Prune the unique repeated fact leaf only when its sole ordinary key connector is implied by the retained qualifying join and no other region predicate references the retired fact. Convert the existing SEMI edge to INNER, expose the SUM, and retain the original sibling subtree. Generate no self-equalities or Cartesian dimension reconstruction. Verify unchanged surviving scan predicates and normal qualifier parallelism before timing.
