@@ -1135,6 +1135,9 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 
 	readCtx, idle := newIdleReader(ctx)
 	defer idle.Close()
+	if download != nil {
+		download.idle.add(idle)
+	}
 	from, err := openReader(readCtx)
 	if err != nil {
 		return false, &diskCacheSourceError{err: err}

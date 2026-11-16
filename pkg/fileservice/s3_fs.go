@@ -1741,6 +1741,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return false, nil
 	}
 	download := admitted.download
+	// The read waits for the download until it returns.
+	defer download.idle.wait()()
 	defer func() {
 		defer download.release()
 		read.finish(download, done && err == nil)

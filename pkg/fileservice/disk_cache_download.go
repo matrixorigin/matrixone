@@ -40,7 +40,8 @@ type objectDownload struct {
 	ended       bool           // no more bytes will be written
 	complete    bool           // every byte of the object was written
 	waiters     byteWaiters
-	file        *os.File // closed once the download is retired and no reader holds it
+	idle        idleReaders // the readers of the download's source
+	file        *os.File    // closed once the download is retired and no reader holds it
 	readers     int
 	onReadsDone []func() // eviction accounting deferred until active readers finish
 	retired     bool
@@ -330,6 +331,7 @@ func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout ti
 	if !covered() && !o.ended {
 		ch := o.waiters.add(off, end)
 		o.mu.Unlock()
+		done := o.idle.wait()
 		timer := time.NewTimer(timeout)
 		select {
 		case <-ch:
@@ -337,25 +339,31 @@ func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout ti
 		case <-timer.C:
 		}
 		timer.Stop()
+		done()
 		o.mu.Lock()
 		o.waiters.remove(ch)
 	}
 	return o.availableLocked(off), covered()
 }
 
-// sourceIdleTimeout is how long a read of a cache fill's source may wait for bytes before
-// the fill fails.
+// sourceIdleTimeout is how long a read of a cache fill's source may wait for bytes, while
+// no read waits for the fill, before the fill stops.
 var sourceIdleTimeout = readWriteTimeout
 
 var errSourceIdle = moerr.NewInternalErrorNoCtx("fileservice: no bytes from the source within the idle timeout")
 
 // idleReader reads r, which reads through ctx, and cancels ctx when a Read waits for
-// bytes past sourceIdleTimeout.
+// bytes past sourceIdleTimeout while it is not attached. While attached, a Read is
+// bounded by ctx only.
 type idleReader struct {
 	r      io.Reader
 	ctx    context.Context
 	cancel context.CancelCauseFunc
-	timer  *time.Timer
+
+	mu       sync.Mutex
+	attached int
+	reading  bool
+	timer    *time.Timer
 }
 
 // newIdleReader returns a context to open the source through and the reader that guards
@@ -366,24 +374,102 @@ func newIdleReader(ctx context.Context) (context.Context, *idleReader) {
 }
 
 func (r *idleReader) Read(b []byte) (int, error) {
-	if r.timer == nil {
-		r.timer = time.AfterFunc(sourceIdleTimeout, func() { r.cancel(errSourceIdle) })
-	} else {
-		r.timer.Reset(sourceIdleTimeout)
-	}
+	r.mu.Lock()
+	r.reading = true
+	r.armLocked()
+	r.mu.Unlock()
 	n, err := r.r.Read(b)
-	r.timer.Stop()
+	r.mu.Lock()
+	r.reading = false
+	r.stopLocked()
+	r.mu.Unlock()
 	if err != nil && err != io.EOF && errors.Is(context.Cause(r.ctx), errSourceIdle) {
 		err = errSourceIdle
 	}
 	return n, err
 }
 
-func (r *idleReader) Close() {
+// attach stops timing reads until the matching detach.
+func (r *idleReader) attach() {
+	r.mu.Lock()
+	r.attached++
+	r.stopLocked()
+	r.mu.Unlock()
+}
+
+// detach ends an attach; a Read under way is timed from then once none remain.
+func (r *idleReader) detach() {
+	r.mu.Lock()
+	r.attached--
+	r.armLocked()
+	r.mu.Unlock()
+}
+
+func (r *idleReader) armLocked() {
+	if !r.reading || r.attached > 0 {
+		return
+	}
+	if r.timer == nil {
+		r.timer = time.AfterFunc(sourceIdleTimeout, func() { r.cancel(errSourceIdle) })
+		return
+	}
+	r.timer.Reset(sourceIdleTimeout)
+}
+
+func (r *idleReader) stopLocked() {
 	if r.timer != nil {
 		r.timer.Stop()
 	}
+}
+
+func (r *idleReader) Close() {
+	r.mu.Lock()
+	r.stopLocked()
+	r.mu.Unlock()
 	r.cancel(nil)
+}
+
+// idleReaders are the idle readers of the source of a download, attached while a read
+// waits for the download.
+type idleReaders struct {
+	mu      sync.Mutex
+	waiting int
+	readers []*idleReader
+}
+
+// add registers r, attached when a read waits.
+func (w *idleReaders) add(r *idleReader) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.readers = append(w.readers, r)
+	if w.waiting > 0 {
+		r.attach()
+	}
+}
+
+// wait attaches the readers until done is called.
+func (w *idleReaders) wait() (done func()) {
+	w.mu.Lock()
+	w.waiting++
+	if w.waiting == 1 {
+		for _, r := range w.readers {
+			r.attach()
+		}
+	}
+	w.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			w.mu.Lock()
+			w.waiting--
+			if w.waiting == 0 {
+				for _, r := range w.readers {
+					r.detach()
+				}
+			}
+			w.mu.Unlock()
+		})
+	}
 }
 
 type downloadProgressWriter struct {
@@ -510,6 +596,7 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, open ra
 	}
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
+	download.idle.add(idle)
 	r, err := open(ctx, start, openEnd)
 	if err != nil {
 		return &diskCacheSourceError{err: err}

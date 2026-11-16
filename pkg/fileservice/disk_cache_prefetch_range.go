@@ -708,6 +708,7 @@ type memoryPrefetchObject struct {
 	n        int64 // bytes of buf read
 	finished bool  // no more bytes arrive
 	waiters  byteWaiters
+	idle     idleReaders // the reader of the range's source
 	// readDeletes marks the range's cache entry; see IOEntry.readDeletes.
 	readDeletes uint64
 	// refs counts the holders of buf: the flight until it is forgotten, and each read
@@ -856,6 +857,7 @@ func (f *memoryPrefetchObject) read(ctx context.Context, open rangeOpener) error
 	f.mu.Unlock()
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
+	f.idle.add(idle)
 	t0 := time.Now()
 	r, err := open(ctx, f.start, f.end)
 	if err != nil {
@@ -941,10 +943,12 @@ func (f *memoryPrefetchObject) waitFor(ctx context.Context, end int64) ([]byte, 
 	if f.start+f.n < end && !f.finished {
 		ch := f.waiters.add(f.start, end)
 		f.mu.Unlock()
+		done := f.idle.wait()
 		select {
 		case <-ch:
 		case <-ctx.Done():
 		}
+		done()
 		f.mu.Lock()
 		f.waiters.remove(ch)
 	}

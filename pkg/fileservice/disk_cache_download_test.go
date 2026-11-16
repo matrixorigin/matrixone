@@ -203,8 +203,8 @@ func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
 	require.NoError(t, <-filled)
 }
 
-// A download whose source stops sending fails after the idle timeout, and a read that
-// waited for it then reads its range.
+// A read waits for a download whose source stops sending until its context ends; the
+// download then fails after the idle timeout.
 func TestDiskCacheReadLeavesStalledDownload(t *testing.T) {
 	rangeReadsCost(t, 20*time.Millisecond)
 	idle0 := sourceIdleTimeout
@@ -222,7 +222,9 @@ func TestDiskCacheReadLeavesStalledDownload(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
-	vec := waitVector(t, readRange(ctx, cache, 1, 3))
+	readCtx, cancel := context.WithTimeout(ctx, 10*sourceIdleTimeout)
+	defer cancel()
+	vec := waitVector(t, readRange(readCtx, cache, 1, 3))
 	require.False(t, vec.Entries[0].done)
 	select {
 	case err := <-filled:
@@ -246,6 +248,93 @@ func (r *stalledReader) Read(b []byte) (int, error) {
 	}
 	<-r.ctx.Done()
 	return 0, r.ctx.Err()
+}
+
+// lateReader returns data once release is closed, then io.EOF.
+type lateReader struct {
+	ctx     context.Context
+	release chan struct{}
+	data    []byte
+}
+
+func (r *lateReader) Read(b []byte) (int, error) {
+	select {
+	case <-r.release:
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	}
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+// shortIdle sets the source idle timeout for the test.
+func shortIdle(t *testing.T, d time.Duration) {
+	idle0 := sourceIdleTimeout
+	sourceIdleTimeout = d
+	t.Cleanup(func() { sourceIdleTimeout = idle0 })
+}
+
+// An attached idle reader waits for its source past the idle timeout; once detached, a
+// source that stops sending fails it.
+func TestIdleReaderTimesOnlyDetached(t *testing.T) {
+	shortIdle(t, 20*time.Millisecond)
+	ctx, idle := newIdleReader(context.Background())
+	defer idle.Close()
+	late := &lateReader{ctx: ctx, release: make(chan struct{}), data: []byte("abc")}
+	idle.r = late
+	idle.attach()
+	release := time.AfterFunc(10*sourceIdleTimeout, func() { close(late.release) })
+	defer release.Stop()
+	b := make([]byte, 8)
+	n, err := idle.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), b[:n])
+	idle.detach()
+	idle.r = &stalledReader{ctx: ctx}
+	_, err = idle.Read(b)
+	require.ErrorIs(t, err, errSourceIdle)
+}
+
+// A whole-object download that a read waits for is not stopped by the idle timeout.
+func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
+	shortIdle(t, 20*time.Millisecond)
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+	release := make(chan struct{})
+	filled := make(chan error, 1)
+	go func() {
+		filled <- cache.SetFile(ctx, "obj", func(ctx context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(&lateReader{ctx: ctx, release: release, data: []byte("abcdef")}), nil
+		})
+	}()
+	var o *objectDownload
+	require.Eventually(t, func() bool { o = cache.download(cache.pathForFile("obj")); return o != nil },
+		diskCacheLifecycleTestTimeout, time.Millisecond)
+	waited := make(chan bool, 1)
+	go func() {
+		_, ok := o.waitFor(ctx, 0, 3, diskCacheLifecycleTestTimeout)
+		waited <- ok
+	}()
+	require.Eventually(t, func() bool {
+		o.idle.mu.Lock()
+		defer o.idle.mu.Unlock()
+		return o.idle.waiting == 1
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	time.AfterFunc(10*sourceIdleTimeout, func() { close(release) })
+	require.True(t, <-waited)
+	select {
+	case err := <-filled:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the download did not end")
+	}
+	require.True(t, cache.cache.Contains(cache.pathForFile("obj")))
 }
 
 // A read whose bytes the download writes later than a range read fetches them goes to a

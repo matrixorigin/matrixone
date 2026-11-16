@@ -383,6 +383,33 @@ func TestPrefetchFlightFailsWhenSourceStalls(t *testing.T) {
 	require.Equal(t, []byte("abc"), fl.content())
 }
 
+// A flight that a read waits for is not stopped by the idle timeout.
+func TestPrefetchFlightWaitedIsNotTimed(t *testing.T) {
+	shortIdle(t, 20*time.Millisecond)
+	fl := newMemoryPrefetchObject(0, 3, time.Now())
+	release := make(chan struct{})
+	readErr := make(chan error, 1)
+	go func() {
+		readErr <- fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+			return io.NopCloser(&lateReader{ctx: ctx, release: release, data: []byte("abc")}), nil
+		})
+	}()
+	waited := make(chan bool, 1)
+	go func() {
+		_, ok := fl.waitFor(context.Background(), 3)
+		waited <- ok
+	}()
+	require.Eventually(t, func() bool {
+		fl.idle.mu.Lock()
+		defer fl.idle.mu.Unlock()
+		return fl.idle.waiting == 1 && len(fl.idle.readers) == 1
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	time.AfterFunc(10*sourceIdleTimeout, func() { close(release) })
+	require.True(t, <-waited)
+	require.NoError(t, <-readErr)
+	require.Equal(t, []byte("abc"), fl.content())
+}
+
 // Objects whose paths have a separator read their ranges alone: the range index does
 // not hold their range files.
 func TestS3FSPrefetchRangeSkipsPathsWithSeparator(t *testing.T) {
