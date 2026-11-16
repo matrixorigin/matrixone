@@ -1,0 +1,133 @@
+-- @suite
+-- @case
+-- @desc: ENUM assignment respects the target collation and domain (#32814)
+-- @label:bvt
+drop database if exists enum_collation_assignment;
+create database enum_collation_assignment;
+use enum_collation_assignment;
+set @saved_mode=@@sql_mode;
+set sql_mode='STRICT_TRANS_TABLES';
+
+create table src(id int, e enum('A','a','x') collate utf8mb4_bin);
+create table dst(id int, e enum('x','a','A') collate utf8mb4_bin);
+insert into src values (1,1),(2,2),(3,3);
+insert into dst select id,e from src;
+select id,hex(cast(e as char)),e+0 from dst order by id;
+create table distinct_dst(e enum('x','a','A') collate utf8mb4_bin);
+insert into distinct_dst select distinct e from src;
+select hex(cast(e as char)),e+0 from distinct_dst order by e+0;
+-- The same ordered labels are not the same logical domain across collations.
+create table same_src(e enum('A','a') collate utf8mb4_bin);
+create table same_dst(e enum('A','a') collate utf8mb4_general_ci);
+insert into same_src values ('a');
+insert into same_dst select e from same_src;
+select hex(cast(e as char)),e+0 from same_dst;
+
+create table assignment(id int primary key,e enum('a','A') collate utf8mb4_bin);
+prepare p from 'insert into assignment values (?,?)';
+set @id=1,@value='A';
+execute p using @id,@value;
+deallocate prepare p;
+update assignment set e='a' where id=1;
+select hex(cast(e as char)),e+0 from assignment;
+update assignment set e='Z' where id=1;
+select hex(cast(e as char)),e+0 from assignment;
+create table ci(e enum('a','b') collate utf8mb4_general_ci);
+insert into ci values ('A'),('á');
+select hex(cast(e as char)),e+0 from ci;
+-- utf8mb3 and utf8mb4 do not have the same character repertoire.
+create table invalid_column(e enum('a') character set latin1 collate utf8mb4_bin);
+create table invalid_table(e int) character set latin1 collate utf8mb4_bin;
+create table empty_table_default(i int) collate '';
+create table empty_column(e enum('a') collate '') collate utf8mb4_bin;
+create table empty_marker(e enum('a') collate '') collate utf8mb4_0900_ai_ci;
+create table mb3_column(e enum('😀') character set utf8mb3 collate utf8mb3_bin);
+create table mb3_unicode(e enum('😀') character set utf8mb3 collate utf8_unicode_ci);
+create table mb3_mismatch(e enum('a') character set utf8 collate utf8mb4_bin);
+create table utf32_column(e enum('a') character set utf32);
+create table mb4_column(e enum('😀') character set utf8mb4 collate utf8mb4_bin);
+insert into mb4_column values ('😀');
+select hex(cast(e as char)),e+0 from mb4_column;
+create table mb3_default(id int) character set utf8mb3;
+alter table mb3_default add e enum('a','b');
+show create table mb3_default;
+create table mb3_default_copy like mb3_default;
+alter table mb3_default_copy add e enum('a','b');
+create table mb3_unicode_default(id int) collate utf8_unicode_ci;
+show create table mb3_unicode_default;
+alter table mb3_unicode_default add e enum('a');
+create table mb3_unicode_copy like mb3_unicode_default;
+alter table mb3_unicode_copy add e enum('a');
+create table mixed_default(id int) character set utf8 collate utf8mb4_bin;
+show create table mixed_default;
+alter table mixed_default add e enum('a');
+alter table mixed_default add e enum('a') collate utf8mb4_bin;
+create table utf32_default(id int) character set utf32;
+show create table utf32_default;
+create table utf32_default_copy like utf32_default;
+alter table utf32_default_copy add e enum('a');
+-- Internal replay spellings preserve old ENUM and table defaults across SHOW/LIKE.
+create table legacy_replay(e enum('A','a') collate __mo_enum_legacy_main_v1, v varchar(8) collate utf8mb4_general_ci) collate=__mo_table_legacy_main_v1;
+show create table legacy_replay;
+insert ignore into legacy_replay values('á','x');
+select e+0 from legacy_replay;
+create table legacy_replay_copy like legacy_replay;
+alter table legacy_replay_copy add next_e enum('A','a');
+insert into legacy_replay_copy(e,next_e,v) values('a','a','x');
+select e+0,next_e+0 from legacy_replay_copy;
+create table invalid_legacy_text(v varchar(8) collate __mo_enum_legacy_main_v1);
+create table invalid_legacy_charset(e enum('a') character set utf8mb4 collate __mo_enum_legacy_main_v1);
+create table invalid_legacy_table(id int) collate=__mo_table_legacy_main_v1;
+
+create table empty_src(id int,e enum('','x') collate utf8mb4_bin);
+create table empty_dst(id int,e enum('x','') collate utf8mb4_bin);
+insert into empty_src values (1,1),(3,null);
+insert ignore into empty_src values (2,'invalid');
+insert into empty_dst select id,e from empty_src;
+select id,e+0,e is null from empty_dst order by id;
+create table union_dst(id int,e enum('x','') collate utf8mb4_bin);
+insert into union_dst select id,e from empty_src where id=1 union all select id,e from empty_src where id=2;
+select id,e+0 from union_dst order by id;
+create table no_empty(id int,e enum('x') collate utf8mb4_bin);
+insert into no_empty select id,e from empty_src where id=2;
+insert into no_empty select id,e from empty_src where id=1;
+select id,e+0 from no_empty;
+
+-- Preserve the generic string alias but refuse to claim unimplemented 0900 ENUM semantics.
+create table unsupported_default(id int) collate=utf8mb4_0900_ai_ci;
+alter table unsupported_default add e enum('a','A');
+alter table unsupported_default add e enum('a','A') collate utf8mb4_bin;
+insert into unsupported_default values(1,'A');
+create table unsupported_copy like unsupported_default;
+insert into unsupported_copy values(2,'A');
+select id,hex(cast(e as char)),e+0 from unsupported_copy;
+alter table unsupported_default add x int;
+alter table unsupported_default add missing enum('x','X');
+show create table unsupported_default;
+
+-- UCA4 distinguishes a trailing NBSP member from ASCII-space padding.
+create table unicode_members(id int,e enum('a','a ') collate utf8mb4_unicode_ci);
+insert into unicode_members values(1,'a '),(2,'a ');
+select id,hex(cast(e as char)),e+0 from unicode_members order by id;
+create table unicode_one(e enum('a') collate utf8mb4_unicode_ci);
+insert ignore into unicode_one values('a '),('a ');
+show warnings;
+select hex(cast(e as char)),e+0 from unicode_one order by e+0;
+create table unicode_invalid(id int,e enum('','a','?') collate utf8mb4_unicode_ci);
+insert into unicode_invalid values(1,unhex('ff')),(2,unhex('61ff')),(3,unhex('ff61')),(4,unhex('3fff'));
+select id,hex(cast(e as char)),e+0 from unicode_invalid order by id;
+insert into unicode_one values(unhex('ff'));
+insert ignore into unicode_one values(unhex('ff'));
+show warnings;
+select hex(cast(e as char)),e+0 from unicode_one order by e+0;
+create table unsupported_column(e enum('a','b') collate utf8mb4_0900_ai_ci);
+alter table unsupported_default convert to character set utf8mb4 collate utf8mb4_bin;
+create table atomic_check(id int) collate=utf8mb4_general_ci;
+alter table atomic_check default collate=utf8mb4_0900_ai_ci, add e enum('a','b');
+show create table atomic_check;
+-- This ALTER changes only the ENUM marker while the generic id stays 3.
+alter table unsupported_default default collate=utf8mb4_general_ci, add exact_e enum('a','b');
+insert into unsupported_default(id,e,x,exact_e) values(3,'A',0,'A');
+select id,e+0,exact_e+0 from unsupported_default where id=3;
+set sql_mode=@saved_mode;
+drop database enum_collation_assignment;

@@ -1151,7 +1151,7 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
 		// whitespace bytes are data and must not be trimmed.
 		if id == types.T_enum || isSet {
-			field.Val, emptyIsNull = normalizeEnumSetCSVValueWithContext(ctx, id, col.Typ.Enumvalues, field.Val)
+			field.Val, emptyIsNull = normalizeEnumSetCSVValueWithContext(ctx, id, col.Typ.Enumvalues, field.Val, col.Typ.EnumCollation)
 		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 			id != types.T_bit {
@@ -1393,7 +1393,7 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 				return false
 			}
 		case types.T_enum:
-			if _, err := types.ParseEnumWithContext(ctx, col.Typ.Enumvalues, field.Val); err != nil {
+			if _, err := types.ParseEnumCollatedWithContext(ctx, col.Typ.Enumvalues, field.Val, col.Typ.EnumCollation); err != nil {
 				return false
 			}
 		case types.T_decimal64:
@@ -1587,12 +1587,26 @@ func isPaddedSetInputWithContext(ctx context.Context, setValues, val string) boo
 // policy between row conversion and strict parallel-read boundary detection.
 // Callers use it only for ENUM or uint64 with SET domain metadata, and apply
 // explicit NULL markers to the returned text before parsing it.
-func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, emptyIsNull bool) {
-	return normalizeEnumSetCSVValueWithContext(moerr.Context(), id, definition, val)
+func normalizeEnumSetCSVValue(id types.T, definition, val string, enumCollation uint32) (text string, emptyIsNull bool) {
+	return normalizeEnumSetCSVValueWithContext(moerr.Context(), id, definition, val, enumCollation)
 }
 
-func normalizeEnumSetCSVValueWithContext(ctx context.Context, id types.T, definition, val string) (text string, emptyIsNull bool) {
+func normalizeEnumSetCSVValueWithContext(ctx context.Context, id types.T, definition, val string, enumCollation uint32) (text string, emptyIsNull bool) {
 	if id == types.T_enum {
+		if enumCollation != types.EnumCollationLegacy {
+			// The collation-aware resolver owns whitespace and matching rules.
+			// An empty CSV field remains NULL only when it has no equivalent
+			// member; UCA can equate it with a nonempty, zero-weight label.
+			if val == "" {
+				ordinal, _, err := types.ParseEnumCollatedAssignment(definition, val, enumCollation)
+				if err != nil {
+					// Let the normal parser report malformed/unknown metadata.
+					return val, false
+				}
+				return val, ordinal == 0
+			}
+			return val, false
+		}
 		if isEnumMember(definition, val) {
 			return val, false
 		}
@@ -2163,7 +2177,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
 	// otherwise even be converted to NULL below).
 	if id == types.T_enum || isSet {
-		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val, col.Typ.EnumCollation)
 	} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 		id != types.T_bit {
@@ -2675,7 +2689,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_enum:
-		v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
+		v, err := types.ParseEnumCollated(col.Typ.Enumvalues, field.Val, col.Typ.EnumCollation)
 		if err != nil {
 			return err
 		}

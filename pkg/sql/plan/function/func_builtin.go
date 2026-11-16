@@ -1352,6 +1352,27 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 				return err
 			}
 			switch typ.Oid {
+			case types.T_enum:
+				// Legacy ENUM metadata has no known SQL collation. New ENUM
+				// identities share the physical byte but not text semantics.
+				var code int64
+				switch uint32(typ.Charset) {
+				case types.EnumCollationUTF8Bin:
+					code = 1
+				case types.EnumCollationGeneralCI:
+					code = 3
+				case types.EnumCollationUTF8MB4UnicodeCI:
+					code = 5
+				default:
+					if err := rs.Append(0, true); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := rs.Append(code, false); err != nil {
+					return err
+				}
+				continue
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				if err := rs.Append(2, false); err != nil {
 					return err

@@ -2615,11 +2615,12 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 		}
 		enumValues := dt.Enumvalues
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+			return processStringToFixedWithTrim(proc.Ctx, mp, page, proc, vec,
 				func(data []byte) (types.Enum, error) {
-					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+					return types.ParseEnumCollated(enumValues, util.UnsafeBytesToString(data), dt.EnumCollation)
 				},
 				types.Enum(0),
+				dt.EnumCollation == types.EnumCollationLegacy,
 			)
 		}
 	case types.T_array_float32:

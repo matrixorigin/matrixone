@@ -30,6 +30,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestBackExecStmtBorrowedAST(t *testing.T) {
+	stmt := &trackedStatement{}
+	wrappers, err := GetComputationWrapperInBack(&ExecCtx{reqCtx: t.Context()}, "",
+		&UserInput{sql: "select 1", stmt: stmt, borrowedStmt: true}, "", nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, wrappers, 1)
+	wrappers[0].Free()
+	require.Zero(t, stmt.freed)
+	stmt.Free()
+	require.Equal(t, 1, stmt.freed)
+	var back backExec
+	require.Error(t, back.ExecStmt(nil, nil))
+	require.Error(t, back.ExecStmt(t.Context(), nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	cancelled := &trackedStatement{}
+	require.ErrorIs(t, back.ExecStmt(ctx, cancelled), context.Canceled)
+	require.Zero(t, cancelled.freed)
+	cancelled.Free()
+}
+
 func TestBindBackExecSession(t *testing.T) {
 	clientSessionID := uuid.New()
 	backSessionID := uuid.New()

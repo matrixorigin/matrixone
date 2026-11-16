@@ -45,6 +45,40 @@ func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
 	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
 }
 
+func TestFuncCastForEnumTypeRemapsDistinctDomainsWithEnumBranches(t *testing.T) {
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "x,", EnumCollation: types.EnumCollationUTF8Bin},
+		{Id: int32(types.T_enum), Enumvalues: ",x", EnumCollation: types.EnumCollationGeneralCI},
+	} {
+		source := plan.Type{Id: int32(types.T_enum), Enumvalues: ",x", EnumCollation: types.EnumCollationUTF8Bin}
+		expr := &plan.Expr{Typ: source, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "e"}}}
+		got, err := funcCastForEnumType(context.Background(), expr, target)
+		require.NoError(t, err)
+		require.Equal(t, target, got.Typ)
+		fn := got.GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, "case", fn.Func.ObjName)
+		require.Len(t, fn.Args, 3)
+		require.Equal(t, target, fn.Args[1].Typ)
+		require.Equal(t, uint32(0), fn.Args[1].GetLit().GetEnumVal())
+		require.Equal(t, target, fn.Args[2].Typ)
+		require.Equal(t, moEnumCastValueToIndexFun, fn.Args[2].GetF().Func.ObjName)
+	}
+}
+
+func TestFuncCastForEnumTypeRetainsExistingAssignmentDomain(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A", EnumCollation: types.EnumCollationUTF8Bin}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(int64(target.EnumCollation)),
+	})
+	require.NoError(t, err)
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	require.Equal(t, moEnumCastValueToIndexFun, got.GetF().Func.ObjName)
+}
+
 func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}

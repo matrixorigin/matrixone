@@ -52,8 +52,11 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
+	colType, err := getColumnTypeFromAstWithEnumDefault(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil, tableDef.EnumUnsupportedDefault)
 	if err != nil {
+		return false, err
+	}
+	if err = requireEnumCollationMetadataProtocol(ctx.GetContext(), ctx.GetProcess(), &plan.ColDef{Typ: colType}, true); err != nil {
 		return false, err
 	}
 	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {

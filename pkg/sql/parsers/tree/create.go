@@ -1269,6 +1269,8 @@ type ColumnTableDef struct {
 	Name       *UnresolvedName
 	Type       ResolvableTypeReference
 	Attributes []ColumnAttribute
+	// ReplayEnumCollation is set only by internal schema reconstruction.
+	ReplayEnumCollation *uint32
 }
 
 func (node *ColumnTableDef) Format(ctx *FmtCtx) {

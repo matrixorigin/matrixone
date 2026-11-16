@@ -1861,6 +1861,19 @@ func TestDataBranchOutputStagedDeleteRejectsIncompleteKeyLayout(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid Data Branch staged delete key layout")
 }
 
+func TestDataBranchStagedDeleteUsesStoredEnumKey(t *testing.T) {
+	info := &applyBatchInfo{
+		deleteKeyNames:   []string{"e", "id"},
+		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
+		deleteKeyTypes:   []types.Type{types.T_enum.ToType(), types.T_int64.ToType()},
+	}
+	sql, err := info.stagedDeleteSQL("`db`.`base`", "`db`.`stage`")
+	require.NoError(t, err)
+	require.Contains(t, sql, "cast(branch_apply_base.`e` as unsigned) = cast(branch_apply_stage.`branch_apply_key_0` as unsigned)")
+	require.Contains(t, sql, "branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_1`")
+	require.Contains(t, sql, " join ")
+}
+
 func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 	batchInfo := &applyBatchInfo{
 		dbName:           "db1",
@@ -2267,7 +2280,10 @@ func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector
 
 type lateFailingWriteFS struct {
 	fileservice.FileService
-	deleteCalls int
+	deleteCalls       int
+	failCleanup       bool
+	cleanupContextErr error
+	cleanupRemaining  time.Duration
 }
 
 func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
@@ -2283,6 +2299,13 @@ func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVe
 
 func (fs *lateFailingWriteFS) Delete(ctx context.Context, filePaths ...string) error {
 	fs.deleteCalls++
+	if fs.failCleanup && fs.deleteCalls > 1 {
+		fs.cleanupContextErr = ctx.Err()
+		if deadline, ok := ctx.Deadline(); ok {
+			fs.cleanupRemaining = time.Until(deadline)
+		}
+		return moerr.NewInternalErrorNoCtx("mock cleanup delete failure")
+	}
 	return fs.FileService.Delete(ctx, filePaths...)
 }
 
@@ -2635,6 +2658,35 @@ func TestDataBranchOutputReturnsLateFileWriteFailure(t *testing.T) {
 	require.EqualError(t, err, "internal error: mock late write failure")
 	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
 	require.Equal(t, 2, targetFS.deleteCalls, "prepare and failed-output cleanup must both delete")
+}
+
+func TestDataBranchOutputReportsFileCleanupFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	targetFS := &lateFailingWriteFS{FileService: localFS, failCleanup: true}
+	installDataBranchTestFileService(t, ses, targetFS)
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.worker = pool
+	retCh := make(chan batchWithKind)
+	close(retCh)
+	stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"}}
+	err = satisfyDiffOutputOpt(ctx, cancel, func() {}, ses, nil, stmt, branchMetaInfo{}, tblStuff, retCh)
+	require.ErrorContains(t, err, "mock late write failure")
+	require.ErrorContains(t, err, "mock cleanup delete failure")
+	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, 2, targetFS.deleteCalls)
+	require.NoError(t, targetFS.cleanupContextErr)
+	require.Greater(t, targetFS.cleanupRemaining, time.Duration(0))
+	require.LessOrEqual(t, targetFS.cleanupRemaining, diffOutputCleanupTimeout)
 }
 
 func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {

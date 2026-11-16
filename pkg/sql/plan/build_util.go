@@ -184,6 +184,16 @@ func getColumnTypeFromAst(
 	tableCharset uint32,
 	replay *persistedDDLReplay,
 ) (plan.Type, error) {
+	return getColumnTypeFromAstWithEnumDefault(ctx, column, tableCharset, replay, "")
+}
+
+func getColumnTypeFromAstWithEnumDefault(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	tableCharset uint32,
+	replay *persistedDDLReplay,
+	unsupportedEnumDefault string,
+) (plan.Type, error) {
 	astType, isVarchar := column.Type.(*tree.T)
 	isVarchar = isVarchar && strings.EqualFold(astType.InternalType.FamilyString, "varchar")
 	internal := defines.IsInternalExecutor(ctx)
@@ -203,8 +213,22 @@ func getColumnTypeFromAst(
 	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
 		typ.Width = astType.InternalType.DisplayWith
 	}
+	if isEnumPlanType(&typ) && unsupportedEnumDefault != "" && column.ReplayEnumCollation == nil {
+		explicit := false
+		for _, attr := range column.Attributes {
+			if _, ok := attr.(*tree.AttributeCollate); ok {
+				explicit = true
+			}
+		}
+		if !explicit {
+			return plan.Type{}, moerr.NewNotSupportedf(ctx, "ENUM cannot inherit unsupported table collation %s; specify a supported column COLLATE", unsupportedEnumDefault)
+		}
+	}
 	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
 		return plan.Type{}, err
+	}
+	if column.ReplayEnumCollation != nil && isEnumPlanType(&typ) {
+		typ.EnumCollation = *column.ReplayEnumCollation
 	}
 	if internal {
 		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
@@ -539,8 +563,14 @@ func applyDefaultAndColumnAttributesToType(
 				return moerr.NewNotSupported(ctx, "invisible columns")
 			}
 		case *tree.AttributeCharset:
+			if isEnumPlanType(colType) && attribute.Charset == "" {
+				return moerr.NewInvalidInput(ctx, "empty ENUM CHARACTER SET")
+			}
 			columnCharset = attribute.Charset
 		case *tree.AttributeCollate:
+			if isEnumPlanType(colType) && attribute.Collate == "" {
+				return moerr.NewInvalidInput(ctx, "empty ENUM COLLATE")
+			}
 			columnCollation = attribute.Collate
 		case *tree.AttributeSRID:
 			if !isGeometry {
@@ -550,6 +580,13 @@ func applyDefaultAndColumnAttributesToType(
 			srid = sridAttr.Value
 			sridDefined = true
 		}
+	}
+	if isEnumPlanType(colType) && strings.EqualFold(columnCollation, legacyEnumCollationName) {
+		if columnCharset != "" {
+			return moerr.NewInvalidInput(ctx, "legacy ENUM replay collation cannot specify a character set")
+		}
+		colType.EnumCollation = types.EnumCollationLegacy
+		return nil
 	}
 	// Charset and collation clauses are independent attributes. Resolve both
 	// after scanning the list so a compatible COLLATE wins regardless of
@@ -575,6 +612,39 @@ func applyDefaultAndColumnAttributesToType(
 		return moerr.NewInvalidInputf(ctx,
 			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
 			columnCollation, columnCharset)
+	}
+	if isEnumPlanType(colType) {
+		if columnCharset != "" && columnCollation != "" && !enumCharsetCollationCompatible(columnCharset, columnCollation) {
+			return moerr.NewInvalidInputf(ctx, "COLLATION '%s' is not valid for CHARACTER SET '%s'", columnCollation, columnCharset)
+		}
+		if columnCollation != "" && !exactEnumCollationName(columnCollation) {
+			return moerr.NewNotSupportedf(ctx, "ENUM collation %s", columnCollation)
+		}
+		if (strings.EqualFold(columnCharset, "utf8") || strings.EqualFold(columnCharset, "utf8mb3") || strings.EqualFold(columnCharset, "utf32")) && columnCollation == "" {
+			return moerr.NewNotSupportedf(ctx, "ENUM CHARACTER SET %s requires a supported explicit collation", columnCharset)
+		}
+		identity := tableCharset
+		if columnCharset != "" {
+			identity = charset
+		}
+		if columnCollation != "" {
+			identity = collation
+		}
+		if identity == types.EnumCollationUTF8UnicodeCI {
+			return moerr.NewNotSupported(ctx, "ENUM utf8mb3 collation")
+		}
+		if err := types.ValidateEnumCollation(identity); err != nil {
+			return err
+		}
+		if identity == types.EnumCollationUTF8UnicodeCI || identity == types.EnumCollationUTF8MB4UnicodeCI {
+			for _, member := range strings.Split(colType.Enumvalues, ",") {
+				if _, err := types.EnumMemberKey(identity, member); err != nil {
+					return moerr.NewInvalidInputf(ctx, "invalid ENUM member for collation %s: %v", columnCollation, err)
+				}
+			}
+		}
+		colType.EnumCollation = identity
+		return nil
 	}
 	// Resolve the effective identity before applying it. In particular, a binary
 	// table default converts VARCHAR to VARBINARY; applying that conversion before
@@ -713,6 +783,7 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 	var tableCharsetName string
 	var tableCollationName string
 	hasTableCollation := false
+	legacyReplayDefault := false
 	for _, option := range options {
 		switch opt := option.(type) {
 		case *tree.TableOptionCharset:
@@ -724,6 +795,12 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 			}
 		case *tree.TableOptionCollate:
 			tableCollationName = opt.Collate
+			legacyReplayDefault = strings.EqualFold(opt.Collate, legacyTableCollationName)
+			if legacyReplayDefault {
+				tableCollation = uint32(types.CharsetLegacy)
+				hasTableCollation = true
+				continue
+			}
 			var ok bool
 			tableCollation, ok = collationForName(opt.Collate)
 			if !ok {
@@ -731,6 +808,9 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 			}
 			hasTableCollation = true
 		}
+	}
+	if legacyReplayDefault && tableCharsetName != "" {
+		return 0, moerr.NewInvalidInput(ctx.GetContext(), "legacy table replay collation cannot specify a character set")
 	}
 	if tableCharsetName != "" && tableCollationName != "" &&
 		!charsetAndCollationCompatible(tableCharsetName, tableCollationName) {

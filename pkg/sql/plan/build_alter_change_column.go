@@ -398,6 +398,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 	if oldCol == nil || newCol == nil || oldCol.Name == "" ||
 		(oldCol.Typ.Id == newCol.Typ.Id &&
 			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.EnumCollation == newCol.Typ.EnumCollation &&
 			oldCol.Typ.CollationVersion == newCol.Typ.CollationVersion) {
 		return nil
 	}

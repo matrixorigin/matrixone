@@ -1091,8 +1091,15 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	var encodings, identities vector.FunctionParameterWrapper[int64]
+	if len(ivecs) == 4 {
+		encodings = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+		identities = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3])
+	}
 	var valueIndex *enumValueIndex
+	var collatedIndex *types.EnumCollatedIndex
 	indexAttempted := false
+	collatedIndexAttempted := false
 	allowAdjustment := allowEnumSetAdjustment(proc)
 	var warnings process.WarningAccumulator
 	defer warnings.Reset()
@@ -1106,14 +1113,32 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
-		if typeEnumNull || enumValNull {
+		identity, metaNull := uint32(0), false
+		if identities != nil {
+			encoding, encodingNull := encodings.GetValue(i)
+			raw, identityNull := identities.GetValue(i)
+			metaNull = encodingNull || identityNull
+			if !metaNull {
+				if encoding != 0 {
+					return moerr.NewInvalidInputNoCtxf("unsupported ENUM member encoding %d", encoding)
+				}
+				if raw < 0 || raw > int64(^uint32(0)) {
+					return moerr.NewInvalidInputNoCtxf("unsupported ENUM collation %d", raw)
+				}
+				identity = uint32(raw)
+				if err := types.ValidateEnumCollation(identity); err != nil {
+					return err
+				}
+			}
+		}
+		if typeEnumNull || enumValNull || metaNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
-			if !indexAttempted && ivecs[0].IsConst() {
+			if !indexAttempted && ivecs[0].IsConst() && identities == nil {
 				indexAttempted = true
 				valueIndex = buildEnumValueIndexForBatch(typeEnumVal, length)
 			}
@@ -1123,7 +1148,23 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				truncated bool
 				err       error
 			)
-			if valueIndex != nil {
+			if identities != nil && identity != types.EnumCollationLegacy {
+				if !collatedIndexAttempted && ivecs[0].IsConst() && ivecs[3].IsConst() && length >= enumValueIndexMinRows {
+					collatedIndexAttempted = true
+					if strings.Count(typeEnumVal, ",")+1 >= enumValueIndexMinLabels {
+						members := strings.Split(typeEnumVal, ",")
+						collatedIndex, err = types.NewEnumCollatedIndex(members, identity)
+						if err != nil {
+							return err
+						}
+					}
+				}
+				if collatedIndex != nil {
+					index, truncated, err = collatedIndex.Parse(enumStr)
+				} else {
+					index, truncated, err = types.ParseEnumCollatedAssignment(typeEnumVal, enumStr, identity)
+				}
+			} else if valueIndex != nil {
 				index, truncated, err = valueIndex.parse(enumStr)
 			} else {
 				index, truncated, err = types.ParseEnumAssignment(typeEnumVal, enumStr)

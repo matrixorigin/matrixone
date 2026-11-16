@@ -134,6 +134,7 @@ func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
 	oldTyp, newTyp := oldCol.Typ, newCol.Typ
 	return oldTyp.Id == newTyp.Id &&
 		oldTyp.Charset == newTyp.Charset &&
+		oldTyp.EnumCollation == newTyp.EnumCollation &&
 		oldTyp.CollationVersion == newTyp.CollationVersion &&
 		oldTyp.NotNullable == newTyp.NotNullable &&
 		oldTyp.AutoIncr == newTyp.AutoIncr &&
@@ -1248,6 +1249,7 @@ func alterCopyForeignKeyColumnMayChangeValues(source, target Type) bool {
 	if source.Id != target.Id ||
 		source.Scale != target.Scale ||
 		source.Enumvalues != target.Enumvalues ||
+		source.EnumCollation != target.EnumCollation ||
 		source.Charset != target.Charset ||
 		source.PadSpace != target.PadSpace {
 		return true
@@ -1297,6 +1299,7 @@ func alterCopyColumnTypeMayChangeValues(source, target Type) bool {
 		source.Width != target.Width ||
 		source.Scale != target.Scale ||
 		source.Enumvalues != target.Enumvalues ||
+		source.EnumCollation != target.EnumCollation ||
 		source.Charset != target.Charset ||
 		source.PadSpace != target.PadSpace
 }
@@ -1460,6 +1463,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+	}
+	if err := requireEnumCollationMetadataProtocol(ctx.GetContext(), ctx.GetProcess(), tableDef, false); err != nil {
+		return nil, err
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
@@ -1691,6 +1697,11 @@ func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterT
 	defaults := alterTableCharsetDefaultOptions(options)
 	if len(defaults) == 0 {
 		return nil
+	}
+	for _, option := range defaults {
+		if collate, ok := option.(*tree.TableOptionCollate); ok && strings.EqualFold(collate.Collate, legacyTableCollationName) {
+			return moerr.NewNotSupported(ctx.GetContext(), "legacy table replay collation in ALTER TABLE")
+		}
 	}
 	_, err = tableDefaultCharset(ctx, defaults)
 	if err != nil {
@@ -2024,7 +2035,7 @@ func isInplaceColumnDefinition(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset, tableDef.EnumUnsupportedDefault)
 	if err != nil {
 		return
 	}
@@ -2070,9 +2081,10 @@ func storageAgnosticType(
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
 	defaultCharset uint32,
+	unsupportedEnumDefault string,
 ) (ok bool, err error) {
 
-	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
+	nTy, err := getColumnTypeFromAstWithEnumDefault(ctx, nCol, defaultCharset, nil, unsupportedEnumDefault)
 	if err != nil {
 		return
 	}
@@ -2082,6 +2094,7 @@ func storageAgnosticType(
 	if oTy.Id != nTy.Id ||
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
+		oTy.EnumCollation != nTy.EnumCollation ||
 		oTy.AutoIncr != nTy.AutoIncr ||
 		oTy.Charset != nTy.Charset ||
 		oTy.CollationVersion != nTy.CollationVersion ||

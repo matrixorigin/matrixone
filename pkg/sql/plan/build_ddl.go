@@ -3012,6 +3012,9 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
+		if tableDef.EnumUnsupportedDefault != "" && tableDef.DefaultCharset == uint32(types.CharsetLegacy) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "CREATE TABLE LIKE cannot replay split ENUM and text defaults")
+		}
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
 		if sub != nil {
 			ctx.SetQueryingSubscription(previousSubscription)
@@ -3030,6 +3033,14 @@ func buildCreateTable(
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			for _, item := range stmtLike.Defs {
+				if col, ok := item.(*tree.ColumnTableDef); ok {
+					if old := FindColumn(tableDef.Cols, col.Name.ColName()); old != nil && isEnumPlanType(&old.Typ) {
+						id := old.Typ.EnumCollation
+						col.ReplayEnumCollation = &id
+					}
+				}
+			}
 			// The subscription binding belongs to the LIKE source only. The
 			// rewritten statement names the local target, so plan it with the
 			// caller's subscription context instead of the publisher binding.
@@ -3123,6 +3134,9 @@ func buildCreateTable(
 	}
 
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
+		return nil, err
+	}
+	if err = requireEnumCollationMetadataProtocol(ctx.GetContext(), ctx.GetProcess(), createTable.TableDef, true); err != nil {
 		return nil, err
 	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
@@ -3680,7 +3694,7 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 	// retain its historical bytewise ordering. SHOW CREATE uses the same public
 	// compatibility spelling for catalog rows that still contain legacy text.
 	clone := DeepCopyTableDef(tableDef, true)
-	if clone.DefaultCharset == uint32(types.CharsetLegacy) {
+	if clone.DefaultCharset == uint32(types.CharsetLegacy) && !hasLegacyEnumColumn(clone) {
 		clone.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 	}
 	for _, col := range clone.Cols {
@@ -3816,6 +3830,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	useServerEnumDefault := defaults == nil || defaults.Version == 0
+	if defines.IsInternalExecutor(ctx.GetContext()) && DatabaseDefaultsSystemDatabase(createTable.Database) {
+		// Bootstrap and tenant catalog initialization must be possible before
+		// the distributed authoring gate opens. Their system DDLs retain the
+		// historical normalized server default; explicit options still get a
+		// marker and go through the ordinary protocol admission checks.
+		useServerEnumDefault = false
+	}
+	createTable.TableDef.EnumUnsupportedDefault = enumUnsupportedTableDefault(ctx, stmt.Options, useServerEnumDefault)
 	if types.IsUnicodeCollation(uint8(tableCharset)) {
 		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
 	} else {
@@ -3847,7 +3870,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewErrTooManyFields(ctx.GetContext())
 				}
 			}
-			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
+			cType, err := getColumnTypeFromAstWithEnumDefault(ctx.GetContext(), def, tableCharset, replay, createTable.TableDef.EnumUnsupportedDefault)
 			if err != nil {
 				return err
 			}
@@ -3874,7 +3897,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
+			colType, err := getColumnTypeFromAstWithEnumDefault(ctx.GetContext(), def, tableCharset, replay, createTable.TableDef.EnumUnsupportedDefault)
 			if err != nil {
 				return err
 			}
@@ -4807,6 +4830,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if err := validateVirtualTimestampExpansion(ctx.GetContext(), createTable.TableDef); err != nil {
 			return err
 		}
+	}
+	if hasLegacyTableReplayOption(stmt.Options) && (stmt.IsClusterTable || stmt.Temporary || !hasLegacyEnumColumn(createTable.TableDef)) {
+		return moerr.NewNotSupported(ctx.GetContext(), "legacy table replay collation requires an ordinary table with a legacy ENUM")
 	}
 	return nil
 }
@@ -7615,7 +7641,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	if err := applyAlterTableCharsetDefault(ctx, currentTableDef, stmt.Options); err != nil {
 		return nil, err
 	}
-	if currentTableDef.DefaultCharset != tableDef.DefaultCharset || currentTableDef.CollationVersion != tableDef.CollationVersion {
+	if currentTableDef.DefaultCharset != tableDef.DefaultCharset || currentTableDef.CollationVersion != tableDef.CollationVersion || currentTableDef.EnumUnsupportedDefault != tableDef.EnumUnsupportedDefault {
 		// Default/schema replacement and index actions must share the same
 		// evolving definition; otherwise replacement resurrects dropped indexes.
 		alterTable.CopyTableDef = currentTableDef
@@ -9684,12 +9710,13 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:          col.Typ.Id,
-			Width:       col.Typ.Width,
-			Scale:       col.Typ.Scale,
-			Enumvalues:  col.Typ.Enumvalues,
-			Charset:     col.Typ.Charset,
-			NullAbility: nullable,
+			Id:            col.Typ.Id,
+			Width:         col.Typ.Width,
+			Scale:         col.Typ.Scale,
+			Enumvalues:    col.Typ.Enumvalues,
+			EnumCollation: col.Typ.EnumCollation,
+			Charset:       col.Typ.Charset,
+			NullAbility:   nullable,
 		})
 	}
 

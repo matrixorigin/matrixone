@@ -80,13 +80,14 @@ func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 	metadata := SourceColumnMetadata{
 		NullAbility: col.Default == nil || col.Default.NullAbility,
 		Typ: plan.Type{
-			Id:          typ.Id,
-			NotNullable: typ.NotNullable,
-			AutoIncr:    typ.AutoIncr,
-			Width:       typ.Width,
-			Scale:       typ.Scale,
-			Table:       typ.Table,
-			Enumvalues:  typ.Enumvalues,
+			Id:            typ.Id,
+			NotNullable:   typ.NotNullable,
+			AutoIncr:      typ.AutoIncr,
+			Width:         typ.Width,
+			Scale:         typ.Scale,
+			Table:         typ.Table,
+			Enumvalues:    typ.Enumvalues,
+			EnumCollation: typ.EnumCollation,
 		},
 	}
 	if col.Default == nil {

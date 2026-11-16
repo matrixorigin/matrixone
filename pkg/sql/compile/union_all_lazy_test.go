@@ -462,6 +462,14 @@ func TestUnionNestedTopClearsAllocationOwners(t *testing.T) {
 	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	c := newLazyUnionAllTestCompile(t)
+	// Other tests can change the shared process-local spill ledger. This test
+	// exercises allocation ownership, so give it a deterministic private
+	// budget instead of inheriting a previous test's 128-byte limit.
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGenerationWithSpillCaps(1, 1<<20, 1<<20, 256)
+	require.NoError(t, err)
+	require.NoError(t, c.proc.SetExecutionResourceBudgetForTesting(generation))
+	t.Cleanup(func() { generation.Close(); budget.Close() })
 	c.isPrepare = false
 	c.pn = logicPlan
 	c.MessageBoard = message.NewMessageBoard()

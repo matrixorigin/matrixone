@@ -463,8 +463,17 @@ func tableDumpManifestCreateSQL(
 	}
 	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
 	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
-		!canReconstructTableSchema(def) {
+	needsEnumRebuild, hasLegacyEnum := tableDumpEnumMetadata(def)
+	if def.DefaultCharset == uint32(types.CharsetLegacy) && def.EnumUnsupportedDefault != "" {
+		return "", moerr.NewNotSupportedNoCtx("cannot replay split ENUM and text table defaults")
+	}
+	if !canReconstructTableSchema(def) {
+		if needsEnumRebuild {
+			return "", moerr.NewNotSupportedNoCtx("DUMP TABLE cannot faithfully reconstruct ENUM metadata")
+		}
+		return def.Createsql, nil
+	}
+	if !sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild && !needsEnumRebuild {
 		return def.Createsql, nil
 	}
 	clone := sqlplan.CloneTableDefForPlan(def, true)
@@ -479,12 +488,27 @@ func tableDumpManifestCreateSQL(
 		// and CREATE LIKE so dump/load preserves both the table default and any
 		// partially migrated column overrides.
 		normalizeTableDumpLegacyTextMetadata(clone)
+		if hasLegacyEnum && def.DefaultCharset == uint32(types.CharsetLegacy) && def.EnumUnsupportedDefault == "" {
+			// Keep the table's ENUM inheritance while normalizing old text.
+			clone.DefaultCharset = uint32(types.CharsetLegacy)
+		}
 	}
 	canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, clone, nil, false, nil)
 	if err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
+}
+
+func tableDumpEnumMetadata(def *plan.TableDef) (needsRebuild, hasLegacyEnum bool) {
+	needsRebuild = def.EnumUnsupportedDefault != ""
+	for _, col := range def.Cols {
+		if col != nil && !col.Hidden && types.T(col.Typ.Id) == types.T_enum {
+			needsRebuild = true
+			hasLegacyEnum = hasLegacyEnum || col.Typ.EnumCollation == types.EnumCollationLegacy
+		}
+	}
+	return needsRebuild, hasLegacyEnum
 }
 
 func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {

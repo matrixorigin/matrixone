@@ -5491,6 +5491,11 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 	typ := colDef.Typ
 	switch {
 	case isEnumPlanType(&typ):
+		if raw, ok, materializeErr := builder.materializeEnumUnionAllForInsert(projExpr); materializeErr != nil {
+			return nil, materializeErr
+		} else if ok {
+			projExpr = raw
+		}
 		return funcCastForEnumType(builder.GetContext(), projExpr, typ)
 	case isSetPlanType(&typ):
 		return funcCastForSetType(builder.GetContext(), projExpr, typ)

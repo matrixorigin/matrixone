@@ -25,6 +25,11 @@ import (
 // 255 is reserved for an existing numeric CAST marker outside string types.
 type Identity uint8
 
+// LegacyEnumReplayName is a MatrixOne-only SQL carrier for an existing ENUM
+// whose member lookup predates persisted collation identities. It is not a
+// MySQL collation and must not be used for ordinary string types.
+const LegacyEnumReplayName = "__mo_enum_legacy_main_v1"
+
 const (
 	LegacyIdentity Identity = iota
 	BinaryIdentity
@@ -227,6 +232,36 @@ func ResolveDDLCharset(name string) (Identity, bool) {
 		name = "utf8mb4"
 	}
 	return ResolveCharset(name)
+}
+
+// ValidateEnumUnsupportedDefault checks the separately persisted ENUM
+// inheritance marker against the generic table default. A legacy-zero split
+// may originate in 4.2, where unsupported names were retained without a
+// generic identity; its eventual cross-version replay needs a separate bridge.
+func ValidateEnumUnsupportedDefault(identity uint32, name string) error {
+	if name == "" {
+		return nil
+	}
+	switch strings.ToLower(name) {
+	case "utf8mb4_bin", "utf8mb4_general_ci":
+		return moerr.NewInvalidInputNoCtx("supported ENUM collation cannot be an unsupported-default marker")
+	case "utf8mb4_unicode_ci":
+		if identity != uint32(LegacyIdentity) {
+			return moerr.NewInvalidInputNoCtx("supported ENUM collation cannot be an unsupported-default marker")
+		}
+	}
+	if identity == uint32(LegacyIdentity) {
+		return nil
+	}
+	resolved, ok := ResolveDDLCollation(name)
+	if definition, found := Lookup(name); found && definition.Semantics == UCA400 {
+		// DDL preserves the native UCA4 identity, which has no legacy alias.
+		resolved, ok = definition.Identity, true
+	}
+	if !ok || uint32(resolved) != identity {
+		return moerr.NewInvalidInputNoCtx("conflicting ENUM table collation metadata")
+	}
+	return nil
 }
 
 func ResolveCharset(name string) (Identity, bool) {

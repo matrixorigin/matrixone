@@ -466,10 +466,11 @@ type QueryBuilder struct {
 	// this the SORT-anchored entry point would claim the classic
 	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
 	// column information and with it the index-only scan.
-	projectAnchoredSorts   map[int32]struct{}
-	setBitmapByDisplayNode map[[2]int32]int32
-	indexHintsByScan       map[int32]*indexHintSet
-	indexHintOwnerByNode   map[int32]int32
+	projectAnchoredSorts     map[int32]struct{}
+	setBitmapByDisplayNode   map[[2]int32]int32
+	enumOrdinalByDisplayNode map[[2]int32]int32
+	indexHintsByScan         map[int32]*indexHintSet
+	indexHintOwnerByNode     map[int32]int32
 	// normalizedForcedJoins records INNER joins whose forced table was moved
 	// from build to probe before physical distribution planning. The marker is
 	// statement-local so applyIndicesForJoins can retain generic hint fallback
@@ -1287,10 +1288,11 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ           Type
-	cols          []string // Name-only SHOW scope; mutually exclusive with columns.
-	columns       []*ColDef
-	allowSubquery bool
+	typ              Type
+	cols             []string // Name-only SHOW scope; mutually exclusive with columns.
+	columns          []*ColDef
+	allowSubquery    bool
+	storedEnumDomain *storedEnumDomain
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`

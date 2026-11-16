@@ -224,10 +224,10 @@ select id,e+0 as ordinal,s+0 as bitmap from special_single_empty where id in (3,
 3  ¦  1  ¦  0  𝄀
 9  ¦  1  ¦  0
 show create table special_single_empty;
-➤ Table[12,20,0]  ¦  Create Table[12,170,0]  𝄀
+➤ Table[12,20,0]  ¦  Create Table[12,197,0]  𝄀
 special_single_empty  ¦  CREATE TABLE `special_single_empty` (
   `id` int NOT NULL,
-  `e` enum('') DEFAULT '',
+  `e` enum('') COLLATE utf8mb4_general_ci DEFAULT '',
   `s` set('') DEFAULT '',
   `u` bigint unsigned DEFAULT NULL,
   PRIMARY KEY (`id`)

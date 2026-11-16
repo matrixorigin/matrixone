@@ -401,6 +401,7 @@ const (
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
+	EnumCollation                 bool
 	SessionLastInsertIDBaseline   bool
 	ODKUStatementResult           bool
 	JSONMinMaxTypedComparison     bool
@@ -473,7 +474,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.EnumCollation || features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
@@ -1014,6 +1015,7 @@ func isMySQLBooleanConditionContractNode(expr *Expr, fn *Function, id int32) boo
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			features.EnumCollation = features.EnumCollation || current.Typ.EnumCollation != 0
 			// Typed prepared FLOAT parameters still arrive through TEXT transport
 			// and execute a private cast in the parameter executor.
 			if current.GetP() != nil && (current.Typ.Id == 30 || current.Typ.Id == 31) {
@@ -1040,6 +1042,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				return nil
 			}
 			if fn.Func != nil {
+				features.EnumCollation = features.EnumCollation || (int32(fn.Func.Obj>>32) == 306 && len(fn.Args) == 4)
 				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				// LAST_INSERT_ID() is function237/overload0; remote evaluation
@@ -1328,6 +1331,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		// when there are no session-function expressions. Getter interfaces
 		// avoid coupling plan to pipeline, which already imports plan.
 		switch metadata := owner.(type) {
+		case *TableDef:
+			features.EnumCollation = features.EnumCollation || metadata.EnumUnsupportedDefault != ""
+		case *ColDef:
+			features.EnumCollation = features.EnumCollation || metadata.Typ.EnumCollation != 0
 		case interface{ GetTrackOdkuResult() bool }:
 			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
 		case interface{ GetOdkuResultTracking() bool }:

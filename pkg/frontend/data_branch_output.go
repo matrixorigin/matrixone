@@ -36,6 +36,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -298,12 +300,21 @@ func (batchInfo *applyBatchInfo) deleteNeedsExactFloatKeyMatch() bool {
 	return false
 }
 
+func (batchInfo *applyBatchInfo) deleteNeedsStoredEnumKeyMatch() bool {
+	for _, typ := range batchInfo.deleteKeyTypes {
+		if typ.Oid == types.T_enum {
+			return true
+		}
+	}
+	return false
+}
+
 func (batchInfo *applyBatchInfo) stagedDeleteSQL(baseTable, deleteTable string) (string, error) {
 	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
 		return "", err
 	}
 	deleteStageNames := batchInfo.deleteStageNames
-	if !batchInfo.deleteNeedsExactFloatKeyMatch() {
+	if !batchInfo.deleteNeedsExactFloatKeyMatch() && !batchInfo.deleteNeedsStoredEnumKeyMatch() {
 		pkExpr := quoteIdentifierForSQL(batchInfo.deleteKeyNames[0])
 		if len(batchInfo.deleteKeyNames) > 1 {
 			pkExpr = fmt.Sprintf("(%s)", joinQuotedColumnNames(batchInfo.deleteKeyNames))
@@ -539,6 +550,7 @@ type diffOutputTable struct {
 	tableName      string
 	columnNames    []string
 	projectedIdxes []int
+	enumDomains    map[int]plan2.Type
 }
 
 func newDiffOutputTable(
@@ -636,10 +648,34 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
+	output.enumDomains = nil
 	for i, name := range projectedNames {
 		colDef := outputColDefs[i]
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
+		if colDef.Typ.Id == int32(types.T_enum) {
+			source := dataBranchColumnDefByName(targetTableDef, name)
+			if source == nil || source.Typ.Id != colDef.Typ.Id ||
+				source.Typ.Enumvalues != colDef.Typ.Enumvalues || source.Typ.EnumCollation != colDef.Typ.EnumCollation {
+				return "", moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM domain differs from its source")
+			}
+			switch colDef.Typ.EnumCollation {
+			case types.EnumCollationLegacy:
+				columnDef += " COLLATE " + collation.LegacyEnumReplayName
+			case types.EnumCollationUTF8Bin:
+				columnDef += " COLLATE utf8mb4_bin"
+			case types.EnumCollationGeneralCI:
+				columnDef += " COLLATE utf8mb4_general_ci"
+			case types.EnumCollationUTF8MB4UnicodeCI:
+				columnDef += " COLLATE utf8mb4_unicode_ci"
+			default:
+				return "", moerr.NewInvalidInputNoCtx("unsupported DATA BRANCH ENUM collation")
+			}
+			if output.enumDomains == nil {
+				output.enumDomains = make(map[int]plan2.Type)
+			}
+			output.enumDomains[i+2] = source.Typ
+		}
 		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
@@ -767,6 +803,56 @@ func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
 	)
 }
 
+// insert binds already-stored ordinals with their source domain. In
+// particular, ordinary SQL literal 0 must retain its strict-mode behavior.
+func (output *diffOutputTable) insert(ctx context.Context, ses *Session, bh BackgroundExec, values *bytes.Buffer) error {
+	sql := output.insertSQL(values)
+	if len(output.enumDomains) == 0 {
+		return execDataBranchOutputSQL(ctx, bh, sql)
+	}
+	statement, err := mysql.ParseOne(ctx, sql, parserLowerCaseTableNames(ses))
+	if err != nil {
+		return err
+	}
+	defer statement.Free()
+	insert, ok := statement.(*tree.Insert)
+	if !ok || insert.Rows == nil {
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH output expected an INSERT VALUES statement")
+	}
+	valuesClause, ok := insert.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH output expected INSERT VALUES rows")
+	}
+	rows := valuesClause.Rows
+	for _, row := range rows {
+		if len(row) != len(output.columnNames) {
+			return moerr.NewInternalErrorNoCtx("DATA BRANCH output INSERT row shape mismatch")
+		}
+		for position, domain := range output.enumDomains {
+			value, ok := row[position].(*tree.NumVal)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("DATA BRANCH output ENUM is not a stored ordinal")
+			}
+			if value.ValType == tree.P_null {
+				continue
+			}
+			if value.ValType != tree.P_int64 && value.ValType != tree.P_uint64 {
+				return moerr.NewInternalErrorNoCtx("DATA BRANCH output ENUM is not an integer")
+			}
+			ordinal, valid := value.Uint64()
+			if !valid || ordinal > types.MaxEnumLen {
+				return moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM ordinal is out of range")
+			}
+			row[position] = &tree.StoredEnumValue{Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumCollation: domain.EnumCollation}
+		}
+	}
+	if err := bh.ExecStmt(ctx, statement); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
+}
+
 func materializeDiffOutputAsTable(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -816,7 +902,7 @@ func materializeDiffOutputAsTable(
 		if values.Len() == 0 {
 			return nil
 		}
-		if flushErr := execDataBranchOutputSQL(ctx, bh, output.insertSQL(values)); flushErr != nil {
+		if flushErr := output.insert(ctx, ses, bh, values); flushErr != nil {
 			return flushErr
 		}
 		values.Reset()
@@ -1285,7 +1371,7 @@ func satisfyDiffOutputOpt(
 			fullFilePath string
 			writeFile    func([]byte) error
 			release      func() error
-			cleanup      func()
+			cleanup      func() error
 			succeeded    bool
 		)
 
@@ -1294,7 +1380,7 @@ func satisfyDiffOutputOpt(
 				err = errors.Join(err, release())
 			}
 			if !succeeded && cleanup != nil {
-				cleanup()
+				err = errors.Join(err, cleanup())
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
 			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
@@ -1368,6 +1454,9 @@ func satisfyDiffOutputOpt(
 		if err = appender.flushAll(); err != nil {
 			first = err
 			cancel()
+		}
+		if first != nil {
+			return first
 		}
 		if first == nil {
 			if err = dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
@@ -2183,6 +2272,11 @@ func appendOrStageDataBranchApplyRow(
 	directUpdate, stageUpdate bool,
 	restoreMissing bool,
 ) error {
+	if appender.writeFile != nil {
+		if err := validatePortableDataBranchEnumValues(tblStuff.def.colTypes, row); err != nil {
+			return err
+		}
+	}
 	if stageUpdate {
 		return appendDataBranchApplyRowAsSQLValues(
 			ctx, ses, tblStuff, diffUpdate, row, tmpValsBuffer, appender,
@@ -2196,6 +2290,29 @@ func appendOrStageDataBranchApplyRow(
 	return appendOrExecuteDataBranchApplyRow(
 		ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender, directUpdate, restoreMissing,
 	)
+}
+
+// SQL files do not have the typed stored-ordinal expression used by OUTPUT AS.
+// A numeric zero can only be assigned to an ENUM in non-strict mode; writing
+// such a file as successful would make replay dependent on the caller's mode.
+// The file owner removes the incomplete output when this error is returned.
+func validatePortableDataBranchEnumValues(colTypes []types.Type, row []any) error {
+	if len(colTypes) != len(row) {
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH SQL output row shape mismatch")
+	}
+	for i, typ := range colTypes {
+		if typ.Oid != types.T_enum || row[i] == nil {
+			continue
+		}
+		value, ok := row[i].(types.Enum)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("DATA BRANCH SQL output expected a stored ENUM ordinal")
+		}
+		if value == 0 {
+			return moerr.NewNotSupportedNoCtx("DATA BRANCH SQL output cannot safely replay ENUM error ordinal 0")
+		}
+	}
+	return nil
 }
 
 func appendOrExecuteDataBranchApplyRow(
@@ -2323,7 +2440,7 @@ func prepareFSForDiffAsFile(
 	sqlRetPath, sqlRetHint string,
 	writeFile func([]byte) error,
 	release func() error,
-	cleanup func(),
+	cleanup func() error,
 	err error,
 ) {
 	ctx = process.SQLFileAccessContext(ctx, ses.proc)
@@ -2396,14 +2513,35 @@ func prepareFSForDiffAsFile(
 		ownsTargetFS = true
 	}
 
-	cleanup = func() {
-		_ = targetFS.Delete(context.Background(), targetPath)
+	cleanup = func() error {
+		// The writer must finish before cleanup. Its release also closes an
+		// owned ETL service, so obtain a fresh handle for those destinations.
+		// Preserve authorization values even when the request was canceled.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diffOutputCleanupTimeout)
+		defer cancel()
+		cleanupFS, cleanupPath := targetFS, targetPath
+		if ownsTargetFS {
+			var etlFS fileservice.ETLFileService
+			var openErr error
+			etlFS, cleanupPath, openErr = fileservice.GetForETL(cleanupCtx, nil, fullFilePath)
+			if openErr != nil {
+				return fmt.Errorf("open file service for incomplete DATA BRANCH SQL output cleanup: %w", openErr)
+			}
+			defer etlFS.Close(cleanupCtx)
+			cleanupFS = etlFS
+		}
+		if deleteErr := cleanupFS.Delete(cleanupCtx, cleanupPath); deleteErr != nil &&
+			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
+			return fmt.Errorf("remove incomplete DATA BRANCH SQL output: %w", deleteErr)
+		}
+		return nil
 	}
 
 	defer func() {
 		if err != nil {
 			if cleanup != nil {
-				cleanup()
+				err = errors.Join(err, cleanup())
+				cleanup = nil
 			}
 			if ownsTargetFS {
 				targetFS.Close(ctx)

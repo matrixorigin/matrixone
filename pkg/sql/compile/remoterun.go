@@ -162,6 +162,11 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if features.FloatConversionSemantics && requiredProtocol != nil {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
 	}
+	// The worker probed below can be replaced before dispatch. Confirm that the
+	// stream actually receiving this ENUM metadata supports its wire contract.
+	if features.EnumCollation && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion135)
+	}
 	// The Query RPC probe and the execution stream can reach different worker
 	// generations. Fence affected payloads on the bound stream as well.
 	if features.IncompleteTemporalStrings && requiredProtocol != nil {
@@ -2556,6 +2561,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.EnumCollation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion135) {
+		return moerr.NewNotSupportedNoCtx("ENUM collation metadata requires MORPC protocol version 135")
 	}
 	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 134")

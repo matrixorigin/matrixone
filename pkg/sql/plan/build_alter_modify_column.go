@@ -50,8 +50,11 @@ func updateNewColumnInTableDef(
 	ctx := cctx.GetContext()
 	primaryAffected := alterColumnIsPrimary(tableDef, oCol)
 
-	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
+	nTy, err := getColumnTypeFromAstWithEnumDefault(ctx, nColSpec, tableDef.DefaultCharset, nil, tableDef.EnumUnsupportedDefault)
 	if err != nil {
+		return false, err
+	}
+	if err = requireEnumCollationMetadataProtocol(ctx, cctx.GetProcess(), &plan.ColDef{Typ: nTy}, true); err != nil {
 		return false, err
 	}
 	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {

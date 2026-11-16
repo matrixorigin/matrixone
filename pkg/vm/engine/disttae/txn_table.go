@@ -1759,7 +1759,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Table:             tbl.tableName,
 						NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:        attr.Attr.EnumVlaues,
-						Charset:           uint32(attr.Attr.Type.Charset),
+						Charset:           attr.Attr.Type.PlanType().Charset,
+						EnumCollation:     attr.Attr.Type.GetEnumCollation(),
 						CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
 						NumericAttributes: uint32(attr.Attr.NumericAttributes),
 					},
@@ -1894,6 +1895,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.EnumUnsupportedDefault = tbl.extraInfo.EnumUnsupportedDefault
 			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
@@ -1991,6 +1993,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	oldChecks := api.CloneExtra(&api.SchemaExtra{Checks: tbl.extraInfo.Checks}).Checks
 	oldDefaultCharset := tbl.extraInfo.DefaultCharset
+	oldEnumUnsupportedDefault := tbl.extraInfo.EnumUnsupportedDefault
 	oldCollationVersion := tbl.extraInfo.CollationVersion
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
@@ -2015,6 +2018,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			case api.AlterKind_ReplaceDef:
 				tbl.extraInfo.Checks = oldChecks
 				tbl.extraInfo.DefaultCharset = oldDefaultCharset
+				tbl.extraInfo.EnumUnsupportedDefault = oldEnumUnsupportedDefault
 				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
@@ -2124,6 +2128,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		// factory in baseDefs. CHECKs already follow the ordered requests above;
 		// publishing the replacement again would discard composed renames.
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
+		tbl.extraInfo.EnumUnsupportedDefault = replacementExtra.EnumUnsupportedDefault
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 	} else {

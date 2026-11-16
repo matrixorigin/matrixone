@@ -729,6 +729,14 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 	}
 }
 
+func enumValueToIndexArgs(typ *plan.Type, value *plan.Expr) []*plan.Expr {
+	args := []*plan.Expr{makePlan2StringConstExprWithType(typ.Enumvalues), value}
+	if isEnumPlanType(typ) && typ.EnumCollation != 0 {
+		args = append(args, makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(int64(typ.EnumCollation)))
+	}
+	return args
+}
+
 // mysqlSpecialOrderTypeForExpr returns the storage type whose definition order
 // belongs to a visible string expression. Provenance is deliberately narrow:
 // an exact ENUM/SET display call originates it, and an exact ColRef may carry it
@@ -909,7 +917,7 @@ func (builder *QueryBuilder) captureEnumSetResultTypes(ctx *BindContext) {
 }
 
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
-	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
+	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues && left.EnumCollation == right.EnumCollation
 }
 
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
@@ -928,7 +936,19 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
-			key := commonutil.EqualFoldKey(value)
+			var key string
+			if typ.EnumCollation == 0 {
+				key = commonutil.EqualFoldKey(value)
+			} else {
+				if strings.HasSuffix(value, " ") {
+					return false
+				}
+				var err error
+				key, err = types.EnumMemberKey(typ.EnumCollation, value)
+				if err != nil {
+					return false
+				}
+			}
 			if _, exists := seen[key]; exists {
 				return false
 			}
@@ -1357,15 +1377,13 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
-		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
-			makePlan2StringConstExprWithType(storageType.Enumvalues),
-			safeDisplay,
-		})
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, safeDisplay))
 		if err != nil {
 			return nil, err
 		}
 		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
 		numericExpr.Typ.Enumvalues = storageType.Enumvalues
+		numericExpr.Typ.EnumCollation = storageType.EnumCollation
 
 		numericZero := &plan.Expr{
 			Typ: *DeepCopyType(storageType),
@@ -1439,15 +1457,13 @@ func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, stora
 	if err != nil {
 		return nil, err
 	}
-	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
-		makePlan2StringConstExprWithType(storageType.Enumvalues),
-		DeepCopyExpr(displayExpr),
-	})
+	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, DeepCopyExpr(displayExpr)))
 	if err != nil {
 		return nil, err
 	}
 	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
 	orderKey.Typ.Enumvalues = storageType.Enumvalues
+	orderKey.Typ.EnumCollation = storageType.EnumCollation
 	return orderKey, nil
 }
 
@@ -1472,13 +1488,15 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 		funcName = indexValueToIndex
 	}
 
+	args := []tree.Expr{tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char), astExpr}
+	if funcName == valueToIndex && isEnumPlanType(&targetType) && targetType.EnumCollation != 0 {
+		args = append(args, tree.NewNumVal(int64(0), "0", false, tree.P_int64),
+			tree.NewNumVal(int64(targetType.EnumCollation), strconv.FormatUint(uint64(targetType.EnumCollation), 10), false, tree.P_int64))
+	}
 	return &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
-		Type: tree.FUNC_TYPE_DEFAULT,
-		Exprs: []tree.Expr{
-			tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
-			astExpr,
-		},
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
+		Type:  tree.FUNC_TYPE_DEFAULT,
+		Exprs: args,
 	}, nil
 }
 

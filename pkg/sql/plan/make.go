@@ -1112,9 +1112,48 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
-	if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
-		expr.Typ = targetType
-		return expr, nil
+	if err := types.ValidateEnumCollation(targetType.EnumCollation); err != nil {
+		return nil, err
+	}
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok && isEnumPlanType(&raw.Typ) {
+		expr = raw
+	}
+	// Assignment conversion functions carry their domain in their first
+	// argument; their generic return type does not retain that metadata. Recover
+	// it before deciding whether a second conversion is actually needed.
+	if fn := expr.GetF(); isEnumPlanType(&expr.Typ) && fn != nil && fn.Func != nil && len(fn.Args) >= 2 && fn.Args[0] != nil {
+		name := fn.Func.ObjName
+		if (name == moEnumCastValueToIndexFun || name == moEnumCastIndexValueToIndexFun) && fn.Args[0].GetLit() != nil {
+			if domain, ok := fn.Args[0].GetLit().Value.(*plan.Literal_Sval); ok {
+				expr = DeepCopyExpr(expr)
+				expr.Typ.Enumvalues = domain.Sval
+				expr.Typ.EnumCollation = types.EnumCollationLegacy
+				if name == moEnumCastValueToIndexFun && len(fn.Args) == 4 && fn.Args[3] != nil && fn.Args[3].GetLit() != nil {
+					identity := fn.Args[3].GetLit().GetI64Val()
+					if identity >= 0 && identity <= int64(^uint32(0)) {
+						expr.Typ.EnumCollation = uint32(identity)
+					}
+				} else if name == moEnumCastIndexValueToIndexFun && domain.Sval == targetType.Enumvalues {
+					// Numeric assignment already selected this target's ordinal.
+					expr.Typ.EnumCollation = targetType.EnumCollation
+				}
+			}
+		}
+	}
+	var sourceEnum *Expr
+	if isEnumPlanType(&expr.Typ) {
+		if expr.Typ.Enumvalues == targetType.Enumvalues && expr.Typ.EnumCollation == targetType.EnumCollation {
+			expr.Typ = targetType
+			return expr, nil
+		}
+		// Preserve the source ordinal separately: its display cannot distinguish
+		// the error member (0) from a declared empty member.
+		sourceEnum = DeepCopyExpr(expr)
+		var err error
+		expr, err = makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, err
+		}
 	}
 	sourceExpr := expr
 
@@ -1152,12 +1191,40 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, err
 		}
 	} else {
+		if targetType.EnumCollation != 0 {
+			args = append(args, makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(int64(targetType.EnumCollation)))
+		}
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, args)
 		if err != nil {
 			return nil, err
 		}
 	}
 	expr.Typ = targetType
+	if sourceEnum != nil {
+		zero := &plan.Expr{Typ: sourceEnum.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_EnumVal{EnumVal: 0},
+		}}}
+		isErrorMember, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{sourceEnum, zero})
+		if err != nil {
+			return nil, err
+		}
+		targetZero := *zero
+		targetZero.Typ = targetType
+		converted := expr
+		expr, err = BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{isErrorMember, &targetZero, converted})
+		if err != nil {
+			return nil, err
+		}
+		// CASE's general type inference promotes ENUM values to uint16. This
+		// internal CASE returns ENUM storage, so its branches must keep the
+		// same physical type as its result instead of the inserted uint16 casts.
+		caseFn := expr.GetF()
+		if caseFn == nil || len(caseFn.Args) != 3 {
+			return nil, moerr.NewInternalErrorNoCtx("unexpected ENUM remapping CASE")
+		}
+		caseFn.Args[1], caseFn.Args[2] = &targetZero, converted
+		expr.Typ = targetType
+	}
 	return expr, nil
 }
 
@@ -1298,7 +1365,7 @@ func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id || t1.Charset != t2.Charset {
 		return false
 	}
-	if t1.Enumvalues != t2.Enumvalues {
+	if t1.Enumvalues != t2.Enumvalues || t1.EnumCollation != t2.EnumCollation {
 		return false
 	}
 	if t1.Width == t2.Width && t1.Scale == t2.Scale {

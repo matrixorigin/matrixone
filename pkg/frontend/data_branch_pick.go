@@ -32,7 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -40,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var resolveSnapshotForBetween = resolveSnapshot
@@ -533,8 +536,8 @@ func materializeValuesUnified(
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		if appendErr := appendExprToVecWithPrepareParams(
-			vec, expr, pkType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
+		if appendErr := appendPickKeyExpr(
+			vec, expr, pkType, pickEnumDefinition(tblStuff, tblStuff.def.pkColIdx), ses.GetTimeZone(), mp, ses.proc.GetPrepareParams(), ses.proc); appendErr != nil {
 			vec.Free(mp)
 			return nil, appendErr
 		}
@@ -604,8 +607,8 @@ func materializeCompositeValuesUnified(
 		}
 		for i, elem := range tup.Exprs {
 			colType := tblStuff.def.colTypes[pkColIdxes[i]]
-			if appendErr := appendExprToVecWithPrepareParams(
-				compVecs[i], elem, colType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
+			if appendErr := appendPickKeyExpr(
+				compVecs[i], elem, colType, pickEnumDefinition(tblStuff, pkColIdxes[i]), ses.GetTimeZone(), mp, ses.proc.GetPrepareParams(), ses.proc); appendErr != nil {
 				return nil, appendErr
 			}
 		}
@@ -745,6 +748,115 @@ func coercePickKeyVectorToType(
 	return dstVec, true, nil
 }
 
+// A physical ENUM type does not contain its member list. In particular, equal
+// vector types do not prove that their ordinals name the same values.
+func coercePickEnumKeyVector(ses *Session, src *vector.Vector, dst types.Type, definition string, source *pbplan.Type, mp *mpool.MPool) (*vector.Vector, bool, error) {
+	if src == nil {
+		return nil, false, moerr.NewInvalidInputNoCtx("KEYS subquery returned a nil vector")
+	}
+	if src.GetNulls() != nil && !src.GetNulls().IsEmpty() {
+		return nil, false, moerr.NewInvalidInputNoCtx("KEYS subquery returned NULL, but DATA BRANCH PICK primary keys cannot be NULL")
+	}
+	var members []string
+	if src.GetType().Oid == types.T_enum {
+		// Empty Enumvalues is ambiguous: it can describe ENUM('') or an
+		// enum-valued function with no declared domain. Require an explicit cast
+		// until the source expression carries authoritative domain provenance.
+		if source == nil || types.T(source.Id) != types.T_enum || source.Enumvalues == "" || source.EnumCollation != src.GetType().GetEnumCollation() {
+			return nil, false, moerr.NewInvalidInputNoCtx("KEYS subquery ENUM domain is unavailable; cast the key to CHAR or an ordinal explicitly")
+		}
+		if source.Enumvalues == definition && source.EnumCollation == dst.GetEnumCollation() && *src.GetType() == dst {
+			return src, false, nil
+		}
+		members = strings.Split(source.Enumvalues, ",")
+	}
+	result := vector.NewVec(dst)
+	for i := 0; i < src.Length(); i++ {
+		var value types.Enum
+		var err error
+		switch src.GetType().Oid {
+		case types.T_enum:
+			ordinal := vector.GetFixedAtNoTypeCheck[types.Enum](src, i)
+			if ordinal != 0 {
+				if int(ordinal) > len(members) {
+					result.Free(mp)
+					return nil, false, moerr.NewInvalidInputNoCtx("KEYS subquery contains an invalid ENUM ordinal")
+				}
+				value, err = types.ParseEnumCollated(definition, members[int(ordinal)-1], dst.GetEnumCollation())
+			}
+		case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+			value, err = types.ParseEnumCollated(definition, string(src.GetBytesAt(i)), dst.GetEnumCollation())
+		default:
+			var text string
+			text, err = formatPickKeyVectorValueAsString(ses, src, i)
+			if err == nil {
+				var ordinal uint64
+				ordinal, err = strconv.ParseUint(text, 10, 16)
+				value = types.Enum(ordinal)
+			}
+		}
+		if err == nil {
+			err = vector.AppendFixed(result, value, false, mp)
+		}
+		if err != nil {
+			result.Free(mp)
+			return nil, false, moerr.NewInvalidInputNoCtxf("KEYS subquery cannot be converted to ENUM primary key: %v", err)
+		}
+	}
+	return result, true, nil
+}
+
+// A bare ENUM projection is presented as text by the query executor. That
+// presentation maps both error ordinal 0 and the legal empty member to the
+// same bytes. If those bytes are a valid destination member, accepting the
+// projection could pick a different physical primary key. Require an explicit
+// conversion, which also records whether the caller wants ordinals or text.
+func validatePickEnumSubquery(query *pbplan.Query, tbl tableStuff) error {
+	if query == nil {
+		return nil
+	}
+	emptyCanIdentifyKey := false
+	for _, idx := range tbl.def.pkColIdxes {
+		if idx < 0 || idx >= len(tbl.def.colTypes) || tbl.def.colTypes[idx].Oid != types.T_enum {
+			continue
+		}
+		ordinal, truncated, err := types.ParseEnumCollatedAssignment(pickEnumDefinition(tbl, idx), "", tbl.def.colTypes[idx].GetEnumCollation())
+		if err != nil {
+			return err
+		}
+		emptyCanIdentifyKey = emptyCanIdentifyKey || (!truncated && ordinal != 0)
+	}
+	if !emptyCanIdentifyKey {
+		return nil
+	}
+	step := int(query.MainOutputStep())
+	if step >= 0 && step < len(query.Steps) {
+		node := int(query.Steps[step])
+		if node >= 0 && node < len(query.Nodes) && query.Nodes[node] != nil {
+			for _, expr := range query.Nodes[node].ProjectList {
+				if expr != nil && types.T(expr.Typ.Id) == types.T_enum {
+					return moerr.NewInvalidInputNoCtx("KEYS subquery ENUM domain is unavailable; CAST the original key AS UNSIGNED or CHAR before projecting it")
+				}
+			}
+		}
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			if expr == nil {
+				continue
+			}
+			fn := expr.GetF()
+			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 && fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
+				return moerr.NewInvalidInputNoCtx("KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it")
+			}
+		}
+	}
+	return nil
+}
+
 // materializeSubqueryUnified handles KEYS (SELECT ...):
 //
 //  1. Execute the user's subquery via runSql streaming
@@ -766,29 +878,8 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	isComposite := tblStuff.def.pkKind == compositeKind
 	nPKCols := len(tblStuff.def.pkColIdxes)
-	subqueryCols := 0
-	if subqueryPlan != nil && subqueryPlan.GetQuery() != nil {
-		subqueryCols = len(subqueryPlan.GetQuery().GetHeadings())
-	}
-	if isComposite {
-		if subqueryCols != nPKCols {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"KEYS subquery returns %d columns but composite primary key has %d columns",
-				subqueryCols, nPKCols)
-		}
-	} else if subqueryCols != 1 {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"KEYS subquery returns %d columns but table has a single-column primary key",
-			subqueryCols)
-	}
 
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
@@ -808,6 +899,52 @@ func materializeSubqueryUnified(
 		orderCols = "1"
 	}
 	orderSQL := fmt.Sprintf("SELECT * FROM (%s) AS __mo_pick_sub ORDER BY %s", subquerySQL, orderCols)
+	// The execution wrapper may insert additional ENUM-to-text projections,
+	// including around an enum-valued scalar expression. Inspect the very SQL
+	// that runSql will execute, not only the user's unwrapped subquery.
+	orderedStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, orderSQL, 1)
+	if err != nil {
+		return nil, err
+	}
+	orderedPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), orderedStmt, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tblStuff.def.pkColIdx < 0 || tblStuff.def.pkColIdx >= len(tblStuff.def.colTypes) {
+		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH PICK primary key type is unavailable")
+	}
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	orderedQuery := orderedPlan.GetQuery()
+	subqueryCols := 0
+	if orderedQuery != nil {
+		subqueryCols = len(orderedQuery.GetHeadings())
+	}
+	if isComposite {
+		if subqueryCols != nPKCols {
+			return nil, moerr.NewInvalidInputNoCtxf("KEYS subquery returns %d columns but composite primary key has %d columns", subqueryCols, nPKCols)
+		}
+	} else if subqueryCols != 1 {
+		return nil, moerr.NewInvalidInputNoCtxf("KEYS subquery returns %d columns but table has a single-column primary key", subqueryCols)
+	}
+	if err := validatePickEnumSubquery(orderedQuery, tblStuff); err != nil {
+		return nil, err
+	}
+	var projectList []*pbplan.Expr
+	if orderedQuery != nil {
+		step := int(orderedQuery.MainOutputStep())
+		if step >= 0 && step < len(orderedQuery.Steps) {
+			node := int(orderedQuery.Steps[step])
+			if node >= 0 && node < len(orderedQuery.Nodes) && orderedQuery.Nodes[node] != nil {
+				projectList = orderedQuery.Nodes[node].ProjectList
+			}
+		}
+	}
+	sourceType := func(index int) *pbplan.Type {
+		if index < 0 || index >= len(projectList) || projectList[index] == nil {
+			return nil
+		}
+		return &projectList[index].Typ
+	}
 
 	var sb *segmentBuilder
 	if canBuildSegments {
@@ -905,12 +1042,17 @@ func materializeSubqueryUnified(
 					compVecs := make([]*vector.Vector, nPKCols)
 					ownedCompVecs := make([]bool, nPKCols)
 					for i := 0; i < nPKCols; i++ {
-						compVecs[i], ownedCompVecs[i], err = coercePickKeyVectorToType(
-							ses,
-							bat.Vecs[i],
-							tblStuff.def.colTypes[tblStuff.def.pkColIdxes[i]],
-							mp,
-						)
+						idx := tblStuff.def.pkColIdxes[i]
+						colType := tblStuff.def.colTypes[idx]
+						if colType.Oid == types.T_enum {
+							compVecs[i], ownedCompVecs[i], err = coercePickEnumKeyVector(ses, bat.Vecs[i], colType, pickEnumDefinition(tblStuff, idx), sourceType(i), mp)
+						} else {
+							compVecs[i], ownedCompVecs[i], err = coercePickKeyVectorToType(ses, bat.Vecs[i], colType, mp)
+						}
+						if ownedCompVecs[i] {
+							// ORDER BY the source values need not order the converted keys.
+							sb = nil
+						}
 						if err != nil {
 							sqlRet.Close()
 							for j, owned := range ownedCompVecs {
@@ -935,7 +1077,14 @@ func materializeSubqueryUnified(
 					*pkVec.GetType() = pkType
 					ownedPK = true
 				} else {
-					pkVec, ownedPK, err = coercePickKeyVectorToType(ses, bat.Vecs[0], pkType, mp)
+					if pkType.Oid == types.T_enum {
+						pkVec, ownedPK, err = coercePickEnumKeyVector(ses, bat.Vecs[0], pkType, pickEnumDefinition(tblStuff, tblStuff.def.pkColIdx), sourceType(0), mp)
+					} else {
+						pkVec, ownedPK, err = coercePickKeyVectorToType(ses, bat.Vecs[0], pkType, mp)
+					}
+					if ownedPK {
+						sb = nil
+					}
 					if err != nil {
 						sqlRet.Close()
 						return nil, err
@@ -1288,6 +1437,60 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 		return time.UTC
 	}
 	return loc
+}
+
+func pickEnumDefinition(tbl tableStuff, index int) string {
+	if index < 0 || index >= len(tbl.def.enumValues) {
+		return ""
+	}
+	return tbl.def.enumValues[index]
+}
+
+// ENUM key strings identify members in the declared domain; numeric literals
+// identify stored ordinals. Mixing the two can silently pick a different row.
+func appendPickKeyExpr(vec *vector.Vector, expr tree.Expr, pkType types.Type, definition string, tz *time.Location, mp *mpool.MPool, params *vector.Vector, proc *process.Process) error {
+	if pkType.Oid == types.T_enum {
+		var value string
+		isString := false
+		switch e := unwrapPickKeyParens(expr).(type) {
+		case *tree.NumVal:
+			if e.ValType == tree.P_char || e.ValType == tree.P_ScoreBinary {
+				value, isString = e.String(), true
+			}
+		case *tree.StrVal:
+			value, isString = unescapeMySQLString(e.String()), true
+		case *tree.ParamExpr:
+			if params == nil || e.Offset <= 0 || e.Offset > params.Length() || params.IsNull(uint64(e.Offset-1)) {
+				return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter is missing or NULL")
+			}
+			if proc == nil {
+				return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter type is unavailable")
+			}
+			index := e.Offset - 1
+			value = params.GetStringAt(index)
+			switch proc.GetPrepareParamKind(index) {
+			case vector.PrepareParamInteger, vector.PrepareParamFloat, vector.PrepareParamDecimal, vector.PrepareParamBoolean:
+				return appendNumericStringToVec(vec, value, pkType, tz, mp)
+			case vector.PrepareParamNone:
+				typ := proc.GetPrepareParamType(index)
+				source := params.GetStringSourceAt(index)
+				if (typ != types.T_any && !typ.IsMySQLString()) || (source != types.StringSourceSQLPrepare && source != types.StringSourceCOMStmt) {
+					return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter type is unavailable or unsupported for ENUM")
+				}
+				isString = true
+			default:
+				return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter type is unsupported for ENUM")
+			}
+		}
+		if isString {
+			ordinal, err := types.ParseEnumCollated(definition, value, pkType.GetEnumCollation())
+			if err != nil {
+				return err
+			}
+			return vector.AppendFixed(vec, ordinal, false, mp)
+		}
+	}
+	return appendExprToVecWithPrepareParams(vec, expr, pkType, tz, mp, params)
 }
 
 // appendExprToVec appends a literal AST expression value to a typed vector.

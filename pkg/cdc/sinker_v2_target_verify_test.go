@@ -746,6 +746,10 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.Equal(t, "utf8mb4_bin", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetLegacy)}))
 	require.Equal(t, "utf8mb4_bin", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4Bin)}))
 	require.Equal(t, "utf8mb4_general_ci", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}))
+	require.Empty(t, expectedCDCTargetCollation(plan.Type{Id: int32(types.T_enum), EnumCollation: types.EnumCollationLegacy}))
+	require.Equal(t, "utf8mb4_bin", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_enum), EnumCollation: types.EnumCollationUTF8Bin}))
+	require.Equal(t, "utf8mb4_general_ci", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_enum), EnumCollation: types.EnumCollationGeneralCI}))
+	require.Equal(t, "utf8mb4_unicode_ci", expectedCDCTargetCollation(plan.Type{Id: int32(types.T_enum), EnumCollation: types.EnumCollationUTF8MB4UnicodeCI}))
 	for _, tc := range []struct{ source, target string }{
 		{"INT", "INT(32)"},
 		{"TINYINT UNSIGNED", "TINYINT UNSIGNED(8)"},
@@ -811,6 +815,53 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	// TestCDCTargetMOPhysicalBoolAliasVerifiesOnlyBoolSources; this line
 	// keeps the sink-type pair honest.
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+}
+
+func TestVerifyCDCTargetEnumCollation(t *testing.T) {
+	const columnsSQL = "SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
+	const indexesSQL = "SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index"
+	for _, tc := range []struct {
+		name, sink, targetType string
+		source                 uint32
+		collation              any
+		wantErr                bool
+	}{
+		{"MO matching binary", CDCSinkType_MO, "enum('2','x')", types.EnumCollationUTF8Bin, "utf8mb4_bin", false},
+		{"MySQL matching unicode", CDCSinkType_MySQL, "enum('2','x')", types.EnumCollationUTF8MB4UnicodeCI, "utf8mb4_unicode_ci", false},
+		{"collation differs", CDCSinkType_MO, "enum('2','x')", types.EnumCollationUTF8Bin, "utf8mb4_general_ci", true},
+		{"older target has no identity", CDCSinkType_MO, "enum('2','x')", types.EnumCollationUTF8Bin, nil, true},
+		{"reordered members", CDCSinkType_MO, "enum('x','2')", types.EnumCollationUTF8Bin, "utf8mb4_bin", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			conn, err := db.Conn(context.Background())
+			require.NoError(t, err)
+			defer conn.Close()
+			def := &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+					{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "2,x", EnumCollation: tc.source}}},
+				Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+			}
+			rows := sqlmock.NewRows([]string{"column_name", "column_type", "collation_name", "numeric_scale"}).
+				AddRow("id", "int", nil, nil).AddRow("e", tc.targetType, tc.collation, nil)
+			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(rows)
+			if !tc.wantErr {
+				indexes := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"}).
+					AddRow("PRIMARY", 0, 1, "id", nil)
+				mock.ExpectQuery(regexp.QuoteMeta(indexesSQL)).WithArgs("dst", "t").WillReturnRows(indexes)
+			}
+			err = verifyCDCTargetTable(context.Background(), &Executor{targetLockConn: conn},
+				&DbTableInfo{SinkDbName: "dst", SinkTblName: "t", SourceTblId: 42}, def, tc.sink)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 // Issue #31749: a current-generation MO target aliases its physical-BOOL

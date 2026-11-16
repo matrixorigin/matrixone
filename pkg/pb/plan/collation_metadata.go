@@ -19,6 +19,18 @@ import (
 )
 
 func (t Type) ValidateCollation() error {
+	// T_enum is 66 in the stable physical type encoding. Its identity is
+	// distinct from the collation carried by ordinary text expressions.
+	if t.EnumCollation != 0 {
+		if t.Id != 66 {
+			return moerr.NewInvalidInputNoCtx("ENUM collation on non-ENUM type")
+		}
+		switch t.EnumCollation {
+		case 2, 3, 10:
+		default:
+			return moerr.NewInvalidInputNoCtx("unsupported ENUM collation")
+		}
+	}
 	if t.Id < 0 || t.Id > 255 || t.Charset > 255 || t.CollationVersion > uint32(collation.RevisionV1) {
 		return moerr.NewNotSupportedNoCtx("unknown type collation metadata")
 	}
@@ -41,6 +53,7 @@ func (t Type) ValidateCollation() error {
 // when the current physical vector types happen to match.
 func (t Type) SameCollation(other Type) bool {
 	return t.Charset == other.Charset && t.CollationVersion == other.CollationVersion &&
+		t.EnumCollation == other.EnumCollation &&
 		t.CollationCoercibility == other.CollationCoercibility &&
 		t.CollationCoercibilitySet == other.CollationCoercibilitySet &&
 		t.CollationMergeConflict == other.CollationMergeConflict
@@ -48,6 +61,9 @@ func (t Type) SameCollation(other Type) bool {
 
 func (t *TableDef) ValidateCollation() error {
 	if err := collation.ValidateMetadata(t.DefaultCharset, t.CollationVersion); err != nil {
+		return err
+	}
+	if err := collation.ValidateEnumUnsupportedDefault(t.DefaultCharset, t.EnumUnsupportedDefault); err != nil {
 		return err
 	}
 	if err := collation.ValidateKeyFormat(t.KeyFormat); err != nil {

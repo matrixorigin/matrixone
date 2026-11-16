@@ -2595,10 +2595,12 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql              string
-	hashedSql        string
-	stmtName         string
-	stmt             tree.Statement
+	sql       string
+	hashedSql string
+	stmtName  string
+	stmt      tree.Statement
+	// borrowedStmt remains owned by the caller of the background executor.
+	borrowedStmt     bool
 	parserSQLMode    string
 	useParserSQLMode bool
 	rewritePolicy    *rewritePolicySnapshot

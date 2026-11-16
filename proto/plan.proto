@@ -34,17 +34,18 @@ message Type {
   int32 id = 1;
   bool notNullable = 2;
   bool auto_incr = 3;
+  // Keep these flags together so adding ENUM metadata does not enlarge Type.
+  // Internal semantic marker for VARCHAR/TEXT values that can carry
+  // representation-only CHAR padding through a transparent query boundary.
+  bool pad_space = 9;
+  bool collation_coercibility_set = 11;
   int32 width = 4;
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
   uint32 charset = 8;
-  // Internal semantic marker for VARCHAR/TEXT values that can carry
-  // representation-only CHAR padding through a transparent query boundary.
-  bool pad_space = 9;
   // Expression provenance; explicit COLLATE has coercibility zero.
   uint32 collation_coercibility = 10;
-  bool collation_coercibility_set = 11;
   bool collation_merge_conflict = 12;
   // Zero retains the historical meaning of charset. New semantics stay gated.
   uint32 collation_version = 13;
@@ -53,6 +54,8 @@ message Type {
   // Declared ZEROFILL is normalized to 3 at authoring (unsigned is implied),
   // so bit 1 never appears without bit 0 in persisted metadata.
   uint32 numeric_attributes = 14;
+  // ENUM member-lookup collation. Zero retains historical lookup semantics.
+  uint32 enum_collation = 15;
 }
 
 message msgHeader {
@@ -690,6 +693,8 @@ message TableDef {
   uint32 key_format = 41;
   // Semantic revision of default_charset, independent of physical key format.
   uint32 collation_version = 42;
+  // Original table collation when its exact ENUM semantics are unsupported.
+  string enum_unsupported_default = 43;
 }
 
 message TableFunction {

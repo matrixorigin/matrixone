@@ -1334,7 +1334,7 @@ func (builder *QueryBuilder) sharedCTEScanOutputCanPrune(scan *plan.Node, pos in
 		return false
 	}
 	typ := sink.ProjectList[pos].Typ
-	if expr.Typ.Id != typ.Id || expr.Typ.Width != typ.Width || expr.Typ.Scale != typ.Scale || expr.Typ.Enumvalues != typ.Enumvalues || expr.Typ.Charset != typ.Charset {
+	if expr.Typ.Id != typ.Id || expr.Typ.Width != typ.Width || expr.Typ.Scale != typ.Scale || expr.Typ.Enumvalues != typ.Enumvalues || expr.Typ.EnumCollation != typ.EnumCollation || expr.Typ.Charset != typ.Charset {
 		return false
 	}
 	col := expr.GetCol()
@@ -7644,7 +7644,7 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 }
 
 func sameNumericProjectionTarget(left, right Type) bool {
-	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale && left.Enumvalues == right.Enumvalues
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale && left.Enumvalues == right.Enumvalues && left.EnumCollation == right.EnumCollation
 }
 
 func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
@@ -14064,6 +14064,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// The final plan fence cannot see metadata erased by those rewrites,
 		// even when the query only projects a constant.
 		if err = plan.RequireLegacyCollations(tableDef); err != nil {
+			return 0, "", err
+		}
+		if err = requireEnumCollationMetadataProtocol(builder.GetContext(), builder.compCtx.GetProcess(), tableDef, false); err != nil {
 			return 0, "", err
 		}
 

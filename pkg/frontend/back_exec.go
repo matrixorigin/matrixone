@@ -165,7 +165,7 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
-	return back.exec(ctx, sql, "", false)
+	return back.exec(ctx, sql, "", false, nil)
 }
 
 func (back *backExec) execWithProcessHook(
@@ -181,17 +181,17 @@ func (back *backExec) execWithProcessHook(
 	defer func() {
 		back.backSes.processHook = previous
 	}()
-	return back.exec(ctx, sql, "", false)
+	return back.exec(ctx, sql, "", false, nil)
 }
 
 // ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
 // is retained so DDL which persists its source text, such as CREATE VIEW, is
 // not rewritten during execution.
 func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode string) (retErr error) {
-	return back.exec(ctx, sql, sqlMode, true)
+	return back.exec(ctx, sql, sqlMode, true, nil)
 }
 
-func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
+func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool, statement tree.Statement) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	defer func() {
@@ -219,7 +219,9 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	}
 
 	var statements []tree.Statement
-	if useSQLMode {
+	if statement != nil {
+		statements = []tree.Statement{statement}
+	} else if useSQLMode {
 		lowerCase, modeErr := plan2.RestoredViewLowerCaseTableNames(ctx, sql, v.(int64))
 		if modeErr != nil {
 			return modeErr
@@ -231,11 +233,13 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	if err != nil {
 		return err
 	}
-	defer func() {
-		for _, stmt := range statements {
-			stmt.Free()
-		}
-	}()
+	if statement == nil {
+		defer func() {
+			for _, stmt := range statements {
+				stmt.Free()
+			}
+		}()
+	}
 
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
@@ -258,6 +262,8 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	userInput := &UserInput{
 		sql:              sql,
+		stmt:             statement,
+		borrowedStmt:     statement != nil,
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
@@ -363,7 +369,14 @@ func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) er
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if statement == nil {
+		return moerr.NewInvalidInput(ctx, "statement is nil")
+	}
+	// The caller retains ownership; formatting is used only for diagnostics.
+	return back.exec(ctx, tree.String(statement, dialect.MYSQL), "", false, statement)
 }
 
 func (back *backExec) GetExecResultSet() []interface{} {
@@ -996,7 +1009,9 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 	}
 
 	for _, stmt := range stmts {
-		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
+		wrapper := InitTxnComputationWrapper(ses, stmt, proc)
+		wrapper.stmtBorrowed = input.borrowedStmt
+		cw = append(cw, wrapper)
 	}
 	return cw, nil
 }

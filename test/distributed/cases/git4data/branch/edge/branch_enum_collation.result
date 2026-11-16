@@ -1,0 +1,209 @@
+drop database if exists br_enum_collation;
+create database br_enum_collation;
+use br_enum_collation;
+set @saved_sql_mode=@@sql_mode;
+set session sql_mode='STRICT_TRANS_TABLES';
+create table base_t(
+id int primary key,
+b enum('A','a','','x') collate utf8mb4_bin,
+c enum('A','a','','x') collate utf8mb4_general_ci,
+u enum('A','a','','x') collate utf8mb4_unicode_ci
+);
+insert into base_t values (1,1,1,1),(2,2,2,2),(3,3,3,3),(4,null,null,null);
+insert ignore into base_t values (5,'bad','bad','bad');
+data branch create table src_t from base_t;
+data branch create table dst_t from base_t;
+delete from src_t where id=2;
+insert ignore into src_t values (6,'bad','bad','bad');
+data branch diff src_t against dst_t output as out_t;
+➤ TABLE CREATED[12,0,0]  𝄀
+`br_enum_collation`.`out_t`
+select id,b+0,c+0,u+0 from out_t order by id;
+➤ id[4,32,0]  ¦  b + 0[-5,64,0]  ¦  c + 0[-5,64,0]  ¦  u + 0[-5,64,0]  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+6  ¦  0  ¦  0  ¦  0
+select column_name,character_set_name,collation_name from information_schema.columns
+where table_schema='br_enum_collation' and table_name='out_t' and column_name in ('b','c','u') order by column_name;
+➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+b  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
+c  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+u  ¦  utf8mb4  ¦  utf8mb4_unicode_ci
+data branch merge src_t into dst_t;
+select id,b+0,c+0,u+0 from dst_t order by id;
+➤ id[4,32,0]  ¦  b + 0[-5,64,0]  ¦  c + 0[-5,64,0]  ¦  u + 0[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  3  ¦  3  ¦  3  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  0  ¦  0  ¦  0  𝄀
+6  ¦  0  ¦  0  ¦  0
+insert ignore into src_t values (7,'bad','bad','bad');
+data branch diff src_t against dst_t output file '/tmp/';
+not supported: DATA BRANCH SQL output cannot safely replay ENUM error ordinal 0
+select count(*) from dst_t where id=7;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table pk_base(e enum('A','a','','x') collate utf8mb4_bin primary key,v int);
+insert into pk_base values(1,10),(2,20),(3,30);
+data branch create table pk_src from pk_base;
+data branch create table pk_dst from pk_base;
+delete from pk_src where e=2;
+insert into pk_src values(4,40);
+data branch diff pk_src against pk_dst output as pk_out;
+➤ TABLE CREATED[12,0,0]  𝄀
+`br_enum_collation`.`pk_out`
+select e+0,v from pk_out order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+4  ¦  40
+data branch merge pk_src into pk_dst;
+select e+0,v from pk_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30  𝄀
+4  ¦  40
+create table u_base(id int primary key,e enum('A','a','','x') collate utf8mb4_bin unique);
+insert into u_base values(1,1),(2,3);
+data branch create table u_src from u_base;
+data branch create table u_dst from u_base;
+update u_src set e=2 where id=1;
+data branch merge u_src into u_dst;
+select id,e+0 from u_dst order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+create table ctas_t as select id,b from base_t;
+create view ctas_v as select id,b from base_t;
+create table ctas_view_t as select id,b from ctas_v;
+show create table ctas_t;
+➤ Table[12,6,0]  ¦  Create Table[12,106,0]  𝄀
+ctas_t  ¦  CREATE TABLE `ctas_t` (
+  `id` int NOT NULL,
+  `b` enum('A','a','','x') COLLATE utf8mb4_bin DEFAULT NULL
+)
+show create table ctas_view_t;
+➤ Table[12,11,0]  ¦  Create Table[12,111,0]  𝄀
+ctas_view_t  ¦  CREATE TABLE `ctas_view_t` (
+  `id` int NOT NULL,
+  `b` enum('A','a','','x') COLLATE utf8mb4_bin DEFAULT NULL
+)
+select id,b+0 from ctas_t order by id;
+➤ id[4,32,0]  ¦  b + 0[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  null  𝄀
+5  ¦  0
+select id,b+0 from ctas_view_t order by id;
+➤ id[4,32,0]  ¦  b + 0[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  null  𝄀
+5  ¦  0
+create table zero_base(e enum('','A','a') collate utf8mb4_bin primary key,v int);
+insert into zero_base values(1,10),(2,20),(3,30);
+insert ignore into zero_base values('bad',0);
+data branch create table zero_src from zero_base;
+data branch create table zero_dst from zero_base;
+delete from zero_src where e+0=0;
+data branch merge zero_src into zero_dst;
+select e+0,v from zero_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+create table pick_base(e enum('2','x') collate utf8mb4_bin primary key,v int);
+insert into pick_base values(1,10),(2,20);
+data branch create table pick_src from pick_base;
+data branch create table pick_text from pick_base;
+data branch create table pick_num from pick_base;
+data branch create table pick_query from pick_base;
+update pick_src set v=11 where e+0=1;
+update pick_src set v=22 where e+0=2;
+data branch pick pick_src into pick_text keys('2');
+data branch pick pick_src into pick_num keys(2);
+create table pick_lookup(e enum('x','2') collate utf8mb4_bin);
+insert into pick_lookup values(2);
+data branch pick pick_src into pick_query keys(select e from pick_lookup);
+select 'text',e+0,v from pick_text order by e+0;
+➤ text[12,4,0]  ¦  e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+text  ¦  1  ¦  11  𝄀
+text  ¦  2  ¦  20
+select 'number',e+0,v from pick_num order by e+0;
+➤ number[12,6,0]  ¦  e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+number  ¦  1  ¦  10  𝄀
+number  ¦  2  ¦  22
+select 'query',e+0,v from pick_query order by e+0;
+➤ query[12,5,0]  ¦  e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+query  ¦  1  ¦  11  𝄀
+query  ¦  2  ¦  20
+data branch create table pick_prepare from pick_base;
+prepare p from 'data branch pick pick_src into pick_prepare keys(?)';
+set @pick_key='2';
+execute p using @pick_key;
+select e+0,v from pick_prepare order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  20
+set @pick_key=2;
+execute p using @pick_key;
+select e+0,v from pick_prepare order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  22
+deallocate prepare p;
+create table pick_empty(e enum('') collate utf8mb4_bin primary key,v int);
+insert into pick_empty values(1,10);
+insert ignore into pick_empty values('bad',20);
+data branch create table empty_src from pick_empty;
+data branch create table empty_dst from pick_empty;
+update empty_src set v=11 where e+0=1;
+update empty_src set v=22 where e+0=0;
+create table empty_lookup(e enum('') collate utf8mb4_bin);
+insert ignore into empty_lookup values('bad');
+data branch pick empty_src into empty_dst keys(select e from empty_lookup);
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  20  𝄀
+1  ¦  10
+data branch pick empty_src into empty_dst keys(select cast_value_to_index('a,b','a'));
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  20  𝄀
+1  ¦  10
+data branch pick empty_src into empty_dst keys(select cast(e as char) from empty_lookup);
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  20  𝄀
+1  ¦  11
+data branch pick empty_src into empty_dst keys(select cast(e as unsigned) from empty_lookup);
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  11
+create table uca_empty(e enum('́','x') collate utf8mb4_unicode_ci primary key,v int);
+insert into uca_empty values(1,10),(2,30);
+insert ignore into uca_empty values('bad',20);
+data branch create table uca_empty_src from uca_empty;
+data branch create table uca_empty_dst from uca_empty;
+update uca_empty_src set v=11 where e+0=1;
+update uca_empty_src set v=22 where e+0=0;
+create table uca_empty_lookup(e enum('́','x') collate utf8mb4_unicode_ci);
+insert ignore into uca_empty_lookup values('bad');
+data branch pick uca_empty_src into uca_empty_dst keys(select e from uca_empty_lookup);
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
+select e+0,v from uca_empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  20  𝄀
+1  ¦  10  𝄀
+2  ¦  30
+data branch pick uca_empty_src into uca_empty_dst keys(select cast(e as unsigned) from uca_empty_lookup);
+select e+0,v from uca_empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  10  𝄀
+2  ¦  30
+set session sql_mode=@saved_sql_mode;
+drop database br_enum_collation;

@@ -61,6 +61,8 @@ func TestAcquireReleaseBuffer(t *testing.T) {
 func TestDataBranchSQLKeyEqual(t *testing.T) {
 	require.Equal(t, "left_key = right_key",
 		dataBranchSQLKeyEqual("left_key", "right_key", types.T_int64.ToType()))
+	require.Equal(t, "cast(left_key as unsigned) = cast(right_key as unsigned)",
+		dataBranchSQLKeyEqual("left_key", "right_key", types.T_enum.ToType()))
 
 	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
 		require.Equal(t, "serial(left_key) = serial(right_key)",

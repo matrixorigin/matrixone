@@ -103,20 +103,25 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	if typ == types.T_any {
 		return nil
 	}
-	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)))
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{
-			Id:          colType.Id,
-			Width:       colType.Width,
-			Scale:       colType.Scale,
-			Enumvalues:  colType.Enumvalues,
-			Charset:     colType.Charset,
-			NotNullable: !colType.NullAbility,
+			Id:            colType.Id,
+			Width:         colType.Width,
+			Scale:         colType.Scale,
+			Enumvalues:    colType.Enumvalues,
+			EnumCollation: colType.EnumCollation,
+			Charset:       colType.Charset,
+			NotNullable:   !colType.NullAbility,
 		},
 		Default: &plan.Default{NullAbility: colType.NullAbility},
 	}
-	err := fillConstantVector(vec, strVal, col, 1, proc, filePath)
+	native, err := types.TypeFromPlan(col.Typ)
+	if err != nil {
+		return err
+	}
+	vec := vector.NewVec(native)
+	err = fillConstantVector(vec, strVal, col, 1, proc, filePath)
 	vec.Free(proc.Mp())
 	return err
 }
@@ -335,7 +340,7 @@ func fillConstantVector(
 		return vector.SetConstFixed(vec, v, rowCount, mp)
 
 	case types.T_enum:
-		v, err := types.ParseEnum(col.Typ.Enumvalues, strVal)
+		v, err := types.ParseEnumCollated(col.Typ.Enumvalues, strVal, col.Typ.EnumCollation)
 		if err != nil {
 			return wrapErr(err)
 		}

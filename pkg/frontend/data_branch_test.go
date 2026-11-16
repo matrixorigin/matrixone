@@ -2299,6 +2299,7 @@ func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {
 		{"varchar width", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.Width = 80 }},
 		{"decimal scale", plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}, func(typ *plan.Type) { typ.Scale = 0 }},
 		{"enum definition", plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, func(typ *plan.Type) { typ.Enumvalues = "red,green" }},
+		{"enum collation", plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: types.EnumCollationUTF8Bin}, func(typ *plan.Type) { typ.EnumCollation = types.EnumCollationGeneralCI }},
 		{"type nullability", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.NotNullable = true }},
 		{"auto increment", plan.Type{Id: int32(types.T_int64)}, func(typ *plan.Type) { typ.AutoIncr = true }},
 	} {

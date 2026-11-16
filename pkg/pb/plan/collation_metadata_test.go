@@ -62,6 +62,7 @@ func TestCollationMetadataWireAndAdmission(t *testing.T) {
 
 func TestCollationMetadataUnknownValuesFailClosed(t *testing.T) {
 	for _, typ := range []Type{
+		{Id: 66, EnumCollation: 9}, {Id: 66, EnumCollation: 255}, {Id: 61, EnumCollation: 2},
 		{Id: 61, Charset: 259}, {Id: 61, Charset: 255}, {Id: 61, Charset: 4},
 		{Id: 317, Charset: 255}, {Id: -1}, {Id: 23, Charset: 254},
 		{Id: 61, Charset: 3, CollationVersion: 2}, {Id: 61, Charset: 3, CollationVersion: 257},
@@ -74,7 +75,10 @@ func TestCollationMetadataUnknownValuesFailClosed(t *testing.T) {
 		require.Error(t, restored.Unmarshal(wire))
 		require.Error(t, RequireLegacyCollations(&typ))
 	}
-	for _, table := range []*TableDef{{KeyFormat: 2}, {CollationVersion: 2}, {DefaultCharset: 260}, {DefaultCharset: 4}} {
+	for _, table := range []*TableDef{{KeyFormat: 2}, {CollationVersion: 2}, {DefaultCharset: 260}, {DefaultCharset: 4},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "utf8mb4_bin"},
+		{DefaultCharset: 2, EnumUnsupportedDefault: "utf8mb4_bin"},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "unknown"}} {
 		wire, err := table.Marshal()
 		require.NoError(t, err)
 		var restored TableDef

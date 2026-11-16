@@ -2013,6 +2013,28 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableDumpManifestPreservesLegacyEnum(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(e ENUM('A','a') COLLATE utf8mb4_bin, v VARCHAR(8))",
+		Cols: []*plan.ColDef{
+			{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"}, Default: &plan.Default{NullAbility: true}},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 8}, Default: &plan.Default{NullAbility: true}},
+		},
+	}
+	createSQL, err := tableDumpManifestCreateSQL(t.Context(), def, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "__mo_enum_legacy_main_v1")
+	require.Contains(t, createSQL, "__mo_table_legacy_main_v1")
+	require.Contains(t, createSQL, "COLLATE utf8mb4_bin") // historical text normalization
+	require.Zero(t, def.DefaultCharset)
+	require.Zero(t, def.Cols[1].Typ.Charset)
+
+	def.EnumUnsupportedDefault = "utf8mb4_unicode_ci"
+	_, err = tableDumpManifestCreateSQL(t.Context(), def, nil)
+	require.ErrorContains(t, err, "split ENUM")
+}
+
 func TestTableDumpManifestCreateSQLPreservesLegacyUnboundedBlob(t *testing.T) {
 	def := &plan.TableDef{
 		Name:      "source",
