@@ -112,10 +112,16 @@ func (t indexFillTarget) reserve(context.Context, int64) {}
 
 func (t indexFillTarget) noteWritten(int64) {}
 
+// createTemp creates the file in the index-file cache's directory, so publishing it is a
+// rename on one file system.
+func (t indexFillTarget) createTemp() (*os.File, error) {
+	return t.s.indexFileCache.disk.createCacheTempFile(t.s.indexFileCache.disk.path)
+}
+
 func (t indexFillTarget) publish(ctx context.Context, tempPath string, _ int64) error {
 	_, err := t.s.indexFileCache.PutUnlessDeleted(ctx, t.name, t.mark,
 		[]IndexCacheFile{{Name: IndexObjectFile, Path: tempPath}})
-	// The put moves the file, copies it across file systems, or does not take it.
+	// The put moves the file or does not take it.
 	if rmErr := os.Remove(tempPath); rmErr != nil && !os.IsNotExist(rmErr) {
 		return rmErr
 	}

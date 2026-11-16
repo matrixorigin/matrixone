@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -287,4 +289,43 @@ func TestIndexObjectAsyncFillPublishes(t *testing.T) {
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached)
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+}
+
+// An index-object fill writes its file in the index-file cache's directory, so publishing
+// it never copies it across file systems, and a fill leaves no temp file in either cache.
+func TestIndexObjectFillWritesInIndexFileCache(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	f, err := fs.fillTarget(IndexFileObject, "object").createTemp()
+	require.NoError(t, err)
+	require.Equal(t, fs.indexFileCache.Path(), filepath.Dir(f.Name()))
+	require.NoError(t, cleanupDiskCacheTempFile(f))
+
+	var published []string
+	objectPath := fs.diskCache.pathForFile("object")
+	fs.diskCache.beforeFilePublication = func() {
+		if o := fs.diskCache.download(objectPath); o != nil {
+			o.mu.Lock()
+			if o.file != nil {
+				published = append(published, o.file.Name())
+			}
+			o.mu.Unlock()
+		}
+	}
+	require.NoError(t, fs.PrefetchFile(WithFileServicePolicy(context.Background(), IndexFileObject), "object"))
+	require.NotEmpty(t, published)
+	for _, p := range published {
+		require.Equal(t, fs.indexFileCache.Path(), filepath.Dir(p))
+	}
+	diskPath, cached := fs.indexObjectCached("object")
+	require.True(t, cached)
+	got, err := os.ReadFile(filepath.Join(diskPath, IndexObjectFile))
+	require.NoError(t, err)
+	require.Equal(t, data, got)
+	for _, dir := range []string{fs.indexFileCache.Path(), fs.diskCache.path} {
+		require.NoError(t, filepath.WalkDir(dir, func(path string, d iofs.DirEntry, err error) error {
+			require.NoError(t, err)
+			require.False(t, strings.HasSuffix(path, cacheFileTempSuffix), "temp file left: %s", path)
+			return nil
+		}))
+	}
 }

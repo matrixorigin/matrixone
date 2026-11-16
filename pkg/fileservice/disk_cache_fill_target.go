@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"os"
+	"path/filepath"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -36,6 +37,9 @@ type fillTarget interface {
 	reserve(ctx context.Context, size int64)
 	// noteWritten tells the target the size of a whole object written.
 	noteWritten(size int64)
+	// createTemp creates the file the fill writes, on the file system publish renames it
+	// within.
+	createTemp() (*os.File, error)
 	// publish makes the file written at tempPath, of size bytes, the target's file.
 	publish(ctx context.Context, tempPath string, size int64) error
 }
@@ -78,6 +82,10 @@ func (t diskFillTarget) reserve(ctx context.Context, size int64) {
 
 func (t diskFillTarget) noteWritten(size int64) {
 	t.d.noteWholeFile(size)
+}
+
+func (t diskFillTarget) createTemp() (*os.File, error) {
+	return t.d.createCacheTempFile(filepath.Dir(t.diskPath))
 }
 
 func (t diskFillTarget) publish(ctx context.Context, tempPath string, size int64) error {

@@ -1113,7 +1113,7 @@ func (d *DiskCache) writeFileTo(
 	}
 
 	// write data
-	f, err := d.createCacheTempFile(filepath.Dir(diskPath))
+	f, err := target.createTemp()
 	if err != nil {
 		return false, err
 	}
