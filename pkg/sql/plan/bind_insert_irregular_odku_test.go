@@ -473,6 +473,8 @@ func TestBindStoredValueEqualityEvaluatesStoredIdentity(t *testing.T) {
 		newValue := makeStoredTextLiteral("alpha", false, types.T_varchar)
 		oldValue.Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
 		newValue.Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		oldValue.Typ.CollationVersion = uint32(types.CollationVersionV1)
+		newValue.Typ.CollationVersion = uint32(types.CollationVersionV1)
 		require.False(t, evalStoredValueEquality(t, oldValue, newValue))
 	})
 }
