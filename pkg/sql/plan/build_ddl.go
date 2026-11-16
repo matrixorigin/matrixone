@@ -6684,7 +6684,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	switch stmt.IndexCat {
 	case tree.INDEX_CATEGORY_UNIQUE:
 		uIdx = &tree.UniqueIndex{
-			Name:        indexName,
+			Name: indexName,
+			// Parser-consistent typed construction: ALTER's own AST
+			// records only whether an explicit USING index type was
+			// present on a unique index, not which one. Serialize the
+			// same shape so the delegable default form roundtrips.
+			Empty:       stmt.IndexOption.IType == tree.INDEX_TYPE_INVALID,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
 		}
@@ -6726,6 +6731,65 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 	default:
 		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	}
+	// Partitioned tables: the dedicated CREATE INDEX executor publishes each
+	// physical partition child only and never the logical parent, so SHOW
+	// INDEX, SHOW CREATE TABLE and index hints — all resolved from the
+	// logical table id — cannot observe the index even though the statement
+	// succeeds (issue #32211). MySQL defines CREATE INDEX ON t (...) as
+	// ALTER TABLE t ADD INDEX (...), so plan the qualified ordinary and
+	// unique forms through the ALTER route: its executor publishes the
+	// logical parent and re-runs the same ADD INDEX on every partition child
+	// child inside one transaction. Eligibility is bounded to the forms whose typed
+	// AST survives the executor's RawSQL serialize → reparse → per-child
+	// re-serialize loop losslessly: the default and explicit-BTREE ordinary and
+	// unique forms, keeping quoted identifiers and the
+	// serializable KEY_BLOCK_SIZE/comment/visibility options intact. Every
+	// other family — the vector/plugin and other explicit index algos,
+	// non-BTREE USING unique indexes, functional, fulltext and spatial forms —
+	// keeps its dedicated CREATE INDEX planning path and original errors.
+	if tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag) {
+		switch stmt.IndexCat {
+		case tree.INDEX_CATEGORY_UNIQUE:
+			if (stmt.IndexOption.IType == tree.INDEX_TYPE_INVALID ||
+				stmt.IndexOption.IType == tree.INDEX_TYPE_BTREE) &&
+				indexOptionDelegable(stmt.IndexOption) {
+				return buildAlterTable(&tree.AlterTable{
+					Table: stmt.Table,
+					Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: &tree.UniqueIndex{
+						// Build the delegable form exactly as ALTER's own
+						// parser carries it: Empty records that no USING
+						// index type was declared, and the option survives
+						// only when something renders (KEY_BLOCK_SIZE,
+						// comment, visibility) — keeping the per-partition
+						// RawSQL reparse/rewrite loop lossless and
+						// byte-idempotent.
+						KeyParts:    stmt.KeyParts,
+						Name:        indexName,
+						Empty:       true,
+						IndexOption: alterNativeIndexOption(stmt.IndexOption),
+					}}},
+				}, ctx)
+			}
+		case tree.INDEX_CATEGORY_NONE:
+			if (sIdx.KeyType == tree.INDEX_TYPE_INVALID || sIdx.KeyType == tree.INDEX_TYPE_BTREE) &&
+				indexOptionDelegable(stmt.IndexOption) {
+				return buildAlterTable(&tree.AlterTable{
+					Table: stmt.Table,
+					Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: &tree.Index{
+						// Same typed data as the parsed CREATE INDEX AST;
+						// the raw option is normalized to the shape ALTER's
+						// own parser produces (nil when nothing renders) so
+						// the per-partition RawSQL reparse/rewrite loop
+						// stays lossless and byte-idempotent.
+						Name:        indexName,
+						KeyParts:    stmt.KeyParts,
+						KeyType:     sIdx.KeyType,
+						IndexOption: alterNativeIndexOption(stmt.IndexOption),
+					}}},
+				}, ctx)
+			}
+		}
 	}
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
@@ -6775,6 +6839,70 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+// indexOptionDelegable reports whether an index's parsed options can ride
+// the partitioned CREATE INDEX → ALTER ADD INDEX delegation losslessly.
+// KEY_BLOCK_SIZE, comment and visibility serialize through the established
+// IndexOption formatter and reparse through the index_option grammar. Every
+// other field — the parser name, the engine attributes, and the vector and
+// fulltext parameters the CREATE INDEX grammar also accepts — either has no
+// serialized form or would not reparse as this ALTER option list, so indexes
+// carrying them keep the dedicated CREATE INDEX planning path.
+func indexOptionDelegable(option *tree.IndexOption) bool {
+	if option == nil {
+		return true
+	}
+	return option.ParserName == "" &&
+		option.EngineAttribute == "" &&
+		option.SecondaryEngineAttribute == "" &&
+		option.AlgoParamList == 0 &&
+		option.AlgoParamVectorOpType == "" &&
+		option.AlgoParamM == 0 &&
+		option.HnswEfConstruction == 0 &&
+		option.HnswEfSearch == 0 &&
+		option.BitsPerCode == 0 &&
+		!option.Async &&
+		!option.ForceSync &&
+		!option.Merge &&
+		!option.AutoUpdate &&
+		option.Day == 0 &&
+		option.Hour == 0 &&
+		option.Second == 0 &&
+		option.IntermediateGraphDegree == 0 &&
+		option.GraphDegree == 0 &&
+		option.Quantization == "" &&
+		option.DistributionMode == "" &&
+		option.ITopkSize == 0 &&
+		option.KmeansTrainPercent == 0 &&
+		option.KmeansMaxIteration == 0 &&
+		option.MaxIndexCapacity == 0 &&
+		option.MaxBadRecords == 0 &&
+		!option.MaxBadRecordsSet &&
+		option.MaxPostingsCapacity == 0 &&
+		!option.PositionFree &&
+		!option.PositionFreeSet &&
+		option.QuantizerTrainLimit == 0 &&
+		len(option.IncludeColumns) == 0 &&
+		len(option.TokenFilters) == 0
+}
+
+// alterNativeIndexOption returns the option exactly as ALTER's own parser
+// would carry it: the CREATE INDEX grammar always materializes a non-nil
+// option with defaults, while ALTER's grammar yields nil for an empty
+// option list. Serializing that shape keeps the delegated RawSQL
+// byte-idempotent across the per-partition reparse/rewrite loop. It is
+// called only after indexOptionDelegable bounded every other field to
+// zero, so "empty" reduces to the three whitelisted serializable slots;
+// the global formatter contract for other option families stays untouched.
+func alterNativeIndexOption(option *tree.IndexOption) *tree.IndexOption {
+	if option == nil ||
+		(option.KeyBlockSize == 0 &&
+			option.Comment == "" &&
+			option.Visible == tree.VISIBLE_TYPE_INVALID) {
+		return nil
+	}
+	return option
 }
 
 func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
