@@ -19,10 +19,12 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
@@ -98,8 +100,28 @@ func (f rebaseSQLFixture) rows(database, table string) []string {
 
 // These tests invoke the new coordinator through the real SQL protocol. The
 // expected rows/counts are handwritten, not produced by the lowering helper.
+func captureRebasePhases(t *testing.T) func(string) int {
+	t.Helper()
+	var mu sync.Mutex
+	phases := make(map[string]int)
+	restore := frontend.SetRebasePhaseHookForTest(func(event frontend.RebasePhaseObservation) {
+		mu.Lock()
+		defer mu.Unlock()
+		phases[event.Phase]++
+	})
+	t.Cleanup(restore)
+	return func(phase string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return phases[phase]
+	}
+}
+
 func TestNativeRebaseDatabase(t *testing.T) {
+	count := captureRebasePhases(t)
 	runNativeRebaseDatabaseCases(t, []string{"repeat"})
+	require.Positive(t, count("delta_keys"))
+	require.Positive(t, count("delta_probe"))
 }
 
 func TestNativeRebasePoliciesAndAdmission(t *testing.T) {
@@ -107,6 +129,7 @@ func TestNativeRebasePoliciesAndAdmission(t *testing.T) {
 }
 
 func TestNativeRebaseFloatValueIdentity(t *testing.T) {
+	count := captureRebasePhases(t)
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -126,7 +149,7 @@ func TestNativeRebaseFloatValueIdentity(t *testing.T) {
 		f.exec("create database nr_float_u")
 		f.exec("create table nr_float_u.t(id int primary key,v double)")
 		f.exec("create table nr_float_u.bag(v double)")
-		f.exec("insert into nr_float_u.t values(1,cast('0' as double)),(2,null),(3,2.5)")
+		f.exec("insert into nr_float_u.t values(1,cast('0' as double)),(2,null),(3,2.5),(4,bit_cast(unhex('010000000000f87f') as double))")
 		f.exec("insert into nr_float_u.bag values(cast('0' as double))")
 		bu := f.snapshot("nr_float_u", "bu")
 		f.exec("data branch create database nr_float_f from " + bu)
@@ -134,17 +157,20 @@ func TestNativeRebaseFloatValueIdentity(t *testing.T) {
 		f.exec("update nr_float_f.t set v=cast('-0' as double) where id=1")
 		f.exec("update nr_float_f.t set v=-1 where id=2")
 		f.exec("update nr_float_f.t set v=null where id=3")
+		f.exec("update nr_float_f.t set v=bit_cast(unhex('020000000000f87f') as double) where id=4")
 		// Prove the fixture is a physical change which ordinary SQL equality
 		// alone cannot distinguish before using it as the replay oracle.
 		require.EqualValues(t, 1, f.scalar("select v <=> cast('0' as double) from nr_float_f.t where id=1"))
 		require.EqualValues(t, 1, f.scalar("select hex(serial(v)) <> hex(serial(cast('0' as double))) from nr_float_f.t where id=1"))
+		require.EqualValues(t, 1, f.scalar("select hex(serial(v)) <> (select hex(serial(v)) from nr_float_u.t where id=4) from nr_float_f.t where id=4"))
 		fh, uh := f.snapshot("nr_float_f", "fh"), f.snapshot("nr_float_u", "uh")
 		_, counts, err := f.rebaseTables("nr_float_result", fh, uh, bf, bu, "", 2)
 		require.NoError(t, err)
-		require.EqualValues(t, 3, counts[0])
+		require.EqualValues(t, 4, counts[0])
 		require.EqualValues(t, 1, f.scalar("select hex(serial(v)) = (select hex(serial(v)) from nr_float_f.t where id=1) from nr_float_result.t where id=1"))
 		require.EqualValues(t, 1, f.scalar("select v=-1 from nr_float_result.t where id=2"))
 		require.EqualValues(t, 1, f.scalar("select v is null from nr_float_result.t where id=3"))
+		require.EqualValues(t, 1, f.scalar("select hex(serial(v)) = (select hex(serial(v)) from nr_float_f.t where id=4) from nr_float_result.t where id=4"))
 
 		f.exec("update nr_float_f.bag set v=cast('-0' as double)")
 		fhBag := f.snapshot("nr_float_f", "fh_bag")
@@ -152,6 +178,9 @@ func TestNativeRebaseFloatValueIdentity(t *testing.T) {
 		require.ErrorContains(t, err, "Rebase requires matching bases and rejects changed no-PK tables")
 		require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='nr_float_bag_result'"))
 	})
+	require.Positive(t, count("delta_keys"))
+	require.Positive(t, count("delta_probe"))
+	require.Zero(t, count("changes"), "float identity must be tested without SQL fallback")
 }
 
 func TestNativeRebaseCollatedValueIdentity(t *testing.T) {
@@ -815,6 +844,8 @@ func TestNativeRebaseCompositePrimaryKey(t *testing.T) {
 		f.exec("create database nr_composite_u")
 		f.exec("create table nr_composite_u.t(id int, tenant_id int, v varchar(20), primary key(id,tenant_id))")
 		f.exec("insert into nr_composite_u.t values(1,1,'a'),(1,2,NULL),(2,1,'x')")
+		f.exec("create table nr_composite_u.t_rev(id int, tenant_id int, v varchar(20), primary key(tenant_id,id))")
+		f.exec("insert into nr_composite_u.t_rev values(1,1,'a'),(1,2,NULL),(2,1,'x')")
 		bu := f.snapshot("nr_composite_u", "bu")
 		f.exec("data branch create database nr_composite_f from " + bu)
 		bf := f.snapshot("nr_composite_f", "bf")
@@ -822,14 +853,22 @@ func TestNativeRebaseCompositePrimaryKey(t *testing.T) {
 		f.exec("delete from nr_composite_f.t where id=2 and tenant_id=1")
 		f.exec("insert into nr_composite_f.t values(3,1,'new')")
 		f.exec("update nr_composite_u.t set v='upstream' where id=1 and tenant_id=1")
+		f.exec("update nr_composite_f.t_rev set v='branch' where id=1 and tenant_id=2")
+		f.exec("delete from nr_composite_f.t_rev where id=2 and tenant_id=1")
+		f.exec("insert into nr_composite_f.t_rev values(3,1,'new')")
+		f.exec("update nr_composite_u.t_rev set v='upstream' where id=1 and tenant_id=1")
 		fh, uh := f.snapshot("nr_composite_f", "fh"), f.snapshot("nr_composite_u", "uh")
-		_, counts, err := f.rebaseTables("nr_composite_r", fh, uh, bf, bu, "", 1)
+		_, counts, err := f.rebaseTables("nr_composite_r", fh, uh, bf, bu, "", 2)
 		require.NoError(t, err)
-		require.Equal(t, [6]uint64{3, 1, 0, 1, 1, 1}, counts)
+		require.Equal(t, [6]uint64{6, 2, 0, 2, 2, 2}, counts)
 		require.Equal(t, int64(3), f.scalar("select count(*) from nr_composite_r.t"))
 		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t where id=1 and tenant_id=1 and v='upstream'"))
 		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t where id=1 and tenant_id=2 and v='branch'"))
 		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t where id=3 and tenant_id=1 and v='new'"))
+		require.Equal(t, int64(3), f.scalar("select count(*) from nr_composite_r.t_rev"))
+		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t_rev where id=1 and tenant_id=1 and v='upstream'"))
+		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t_rev where id=1 and tenant_id=2 and v='branch'"))
+		require.Equal(t, int64(1), f.scalar("select count(*) from nr_composite_r.t_rev where id=3 and tenant_id=1 and v='new'"))
 	})
 }
 

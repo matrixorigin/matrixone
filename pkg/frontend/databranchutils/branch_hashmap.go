@@ -204,6 +204,12 @@ func withBranchHashmapStrictCapacity() BranchHashmapOption {
 	}
 }
 
+// WithBranchHashmapStrictCapacity rejects an entry that cannot be charged to
+// the allocator even after spilling. It disables the legacy heap fallback.
+func WithBranchHashmapStrictCapacity() BranchHashmapOption {
+	return withBranchHashmapStrictCapacity()
+}
+
 func withBranchHashmapRawEncodedKeys() BranchHashmapOption {
 	return func(bh *branchHashmap) {
 		bh.rawEncodedKeys = true

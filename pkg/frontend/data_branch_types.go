@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -293,9 +294,13 @@ type tableStuff struct {
 		indexedSpecialUpdateIdxes []int
 	}
 
-	worker               *ants.Pool
-	hashmapAllocator     *branchHashmapAllocator
-	maxTombstoneBatchCnt int
+	worker           *ants.Pool
+	hashmapAllocator *branchHashmapAllocator
+	// Rebase consumes candidate keys before DIFF's logical value comparison.
+	// Ordinary DIFF/MERGE/PICK leave both fields unset.
+	rebaseKeyConsumer     func([]*vector.Vector) error
+	strictHashmapCapacity bool
+	maxTombstoneBatchCnt  int
 	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
 	// request. When enabled, LCA probing skips SQL and directly uses reader
 	// fallback.

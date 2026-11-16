@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +34,142 @@ func TestRebaseTextLiteral(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, rebaseTextLiteral(tc.input))
 	}
+}
+
+func TestRebaseDeltaProbeSQL(t *testing.T) {
+	reads := [4]rebaseSQLRead{{"bf", 1}, {"f", 2}, {"bu", 3}, {"u", 4}}
+	columns := []rebaseSQLColumn{
+		{"a", types.T_int64.ToType(), true},
+		{"b", types.T_int32.ToType(), true},
+		{"v", types.T_varchar.ToType(), false},
+	}
+	query, err := buildRebaseDeltaProbeSQL(t.Context(), "t", reads, columns, [][]string{{"1", "2"}, {"3", "4"}})
+	require.NoError(t, err)
+	require.Equal(t, 3, strings.Count(query, "select * from "))
+	require.Equal(t, 3, strings.Count(query, " where "))
+	for _, alias := range []string{"bf", "f", "u"} {
+		require.Contains(t, query, "`"+alias+"`.`t`{MO_TS=")
+	}
+	require.NotContains(t, query, "`bu`.`t`") // Bases were checked before delta probing.
+	require.Contains(t, query, "serial(f.`v`)")
+	require.Contains(t, query, "coalesce(f.`a`, u.`a`)")
+	stmts, err := parsers.Parse(t.Context(), dialect.MYSQL, query, 0)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	for _, stmt := range stmts {
+		stmt.Free()
+	}
+	for _, keys := range [][][]string{nil, {{"1"}}, {{"1", ""}}} {
+		_, err = buildRebaseDeltaProbeSQL(t.Context(), "t", reads, columns, keys)
+		require.Error(t, err)
+	}
+	_, err = buildRebaseDeltaProbeSQL(t.Context(), "t", reads, columns[2:], [][]string{{"1"}})
+	require.Error(t, err)
+}
+
+func TestRebaseApplyQueries(t *testing.T) {
+	plan := rebaseTableSQL{deleteRows: "delete", insertRows: "insert"}
+	for _, tc := range []struct {
+		name                   string
+		insert, update, delete uint64
+		want                   []string
+	}{
+		{"unchanged", 0, 0, 0, []string{}},
+		{"insert", 1, 0, 0, []string{"insert"}},
+		{"delete", 0, 0, 1, []string{"delete"}},
+		{"update", 0, 1, 0, []string{"delete", "insert"}},
+		{"mixed", 1, 1, 1, []string{"delete", "insert"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			counts := []uint64{99, 99, 0, tc.insert, tc.update, tc.delete}
+			require.Equal(t, tc.want, rebaseApplyQueries(plan, counts))
+		})
+	}
+}
+
+func TestRebaseSameTableSnapshot(t *testing.T) {
+	left := rebaseSQLRead{"left", 11}
+	right := rebaseSQLRead{"right", 11}
+	require.True(t, rebaseSameTableSnapshot(1, 1, left, right))
+	require.False(t, rebaseSameTableSnapshot(1, 2, left, right))
+	require.False(t, rebaseSameTableSnapshot(0, 0, left, right))
+	right.timestamp++
+	require.False(t, rebaseSameTableSnapshot(1, 1, left, right))
+	left.timestamp, right.timestamp = 0, 0
+	require.False(t, rebaseSameTableSnapshot(1, 1, left, right))
+}
+
+func TestRebasePhaseObserverLifetime(t *testing.T) {
+	var observations []RebasePhaseObservation
+	restore := SetRebasePhaseHookForTest(func(event RebasePhaseObservation) {
+		observations = append(observations, event)
+	})
+	defer restore()
+	finish := beginRebasePhase("base_check", "t", "select 1")
+	finish(nil)
+	finish(context.Canceled)
+	require.Len(t, observations, 1)
+	require.Equal(t, "t", observations[0].Table)
+	require.False(t, observations[0].Failed)
+	beginRebasePhase("changes", "t", "select 2")(context.Canceled)
+	require.Len(t, observations, 2)
+	require.True(t, observations[1].Failed)
+	restore()
+	beginRebasePhase("disabled", "", "")(nil)
+	require.Len(t, observations, 2)
+}
+
+type rebaseStatsOnlyExec struct {
+	BackgroundExec
+	stats statistic.StatsArray
+	reads int
+}
+
+func (e *rebaseStatsOnlyExec) GetExecStatsArray() statistic.StatsArray {
+	e.reads++
+	return e.stats
+}
+
+func TestRebasePhaseStatsSnapshots(t *testing.T) {
+	var got RebasePhaseObservation
+	restore := SetRebasePhaseHookForTest(func(event RebasePhaseObservation) { got = event })
+	defer restore()
+	before := *statistic.NewStatsArray().WithMemorySize(100).WithS3ReadBytes(40)
+	after := *statistic.NewStatsArray().WithMemorySize(100).WithS3ReadBytes(65)
+	exec := &rebaseStatsOnlyExec{stats: before}
+	finish := beginRebaseStatementPhase(exec, "changes", "t", "select 1")
+	exec.stats = after
+	finish(nil)
+	finish(nil)
+	require.Equal(t, 2, exec.reads)
+	require.Equal(t, before, *got.StatsBefore)
+	require.Equal(t, after, *got.StatsAfter)
+	exec.stats = statistic.StatsArray{}
+	require.Equal(t, after, *got.StatsAfter, "observations own value snapshots")
+	restore()
+	beginRebaseStatementPhase(exec, "disabled", "", "")(nil)
+	require.Equal(t, 2, exec.reads, "disabled diagnostics must not read resource counters")
+}
+
+func TestRebaseFourBagMismatchLowering(t *testing.T) {
+	reads := []rebaseSQLRead{{"b", 11}, {"f", 22}, {"x", 33}, {"u", 44}}
+	for _, typ := range []types.T{types.T_varchar, types.T_int64, types.T_float64, types.T_decimal128} {
+		columns := []rebaseSQLColumn{{"n0", typ.ToType(), false}}
+		query, err := buildRebaseBagsMismatchSQL(t.Context(), "t`1", reads, columns)
+		require.NoError(t, err)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		stmt.Free()
+		require.Equal(t, 3, strings.Count(query, " union all "))
+		require.Equal(t, 4, strings.Count(query, "{MO_TS="))
+		require.Contains(t, query, "having sum(n0) <> 0 or sum(n1) <> 0 or sum(n2) <> 0")
+		require.NotContains(t, query, "join")
+	}
+	_, err := buildRebaseBagsMismatchSQL(t.Context(), "t", reads[:3], []rebaseSQLColumn{{"v", types.T_int64.ToType(), false}})
+	require.Error(t, err)
+	reads[3].timestamp = 0
+	_, err = buildRebaseBagsMismatchSQL(t.Context(), "t", reads, []rebaseSQLColumn{{"v", types.T_int64.ToType(), false}})
+	require.Error(t, err)
 }
 
 func TestRebaseSQLLowering(t *testing.T) {

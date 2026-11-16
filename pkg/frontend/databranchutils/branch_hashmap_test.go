@@ -72,6 +72,20 @@ func TestBranchHashmapBasic(t *testing.T) {
 	require.Empty(t, results[1].Rows)
 }
 
+func TestBranchHashmapStrictCapacityRejectsHeapFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := buildInt64Vector(t, mp, []int64{1})
+	defer vec.Free(mp)
+	store, err := NewBranchHashmap(WithBranchHashmapAllocator(newLimitedAllocator(0)),
+		WithBranchHashmapStrictCapacity(), WithBranchHashmapSpillRoot(t.TempDir()))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	err = store.PutByVectors([]*vector.Vector{vec}, []int{0})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity))
+	require.Zero(t, store.ItemCount())
+}
+
 func TestBranchHashmapPopByVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
