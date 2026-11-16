@@ -304,7 +304,7 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = newInternalStatementContext(plan.WithoutEnumIndexBackfill(parentCtx))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -368,6 +368,30 @@ func (exec *txnExecutor) Exec(
 	}()
 	if err != nil {
 		return executor.Result{}, err
+	}
+	if enumSpec := statementOption.EnumIndexBackfill(); enumSpec != nil {
+		if len(stmts) != 1 || enumSpec.SQL != sql || enumSpec.Source == nil || enumSpec.Index == nil {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid internal ENUM index statement")
+		}
+		var expected string
+		if enumSpec.DuplicateCheck {
+			if !enumSpec.Index.Unique {
+				return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid ENUM uniqueness check")
+			}
+			expected, err = buildCreateUniqueIndexDuplicateCheckSQL(enumSpec.Database, enumSpec.Source, enumSpec.Index)
+		} else {
+			expected, err = genInsertIndexTableSql(enumSpec.Source, enumSpec.Index, enumSpec.Database, enumSpec.Index.Unique)
+		}
+		if err != nil {
+			return executor.Result{}, err
+		}
+		if expected != sql {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("ENUM index statement changed")
+		}
+		exec.ctx, err = plan.WithEnumIndexBackfill(exec.ctx, stmts[0], enumSpec)
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
 	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {

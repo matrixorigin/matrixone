@@ -89,11 +89,13 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy   lock.WaitPolicy
-	accountId    uint32
-	hasAccountID bool
-	roleId       uint32
-	userId       uint32
+	// enumIndexBackfill is scoped to one generated index-build statement.
+	enumIndexBackfill *EnumIndexBackfillSpec
+	waitPolicy        lock.WaitPolicy
+	accountId         uint32
+	hasAccountID      bool
+	roleId            uint32
+	userId            uint32
 	// accountName and roleName carry the trusted session identity for
 	// synchronous child SQL.  Numeric account/role overrides above remain
 	// catalog execution scope and must not be used as SQL file authority.
@@ -110,6 +112,19 @@ type StatementOption struct {
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
 	disableLock              bool
+}
+
+// EnumIndexBackfillSpec describes one internally generated index-build statement.
+// Its pointer identities and relation IDs are checked again during planning; it
+// is never serialized or derived from user SQL.
+type EnumIndexBackfillSpec struct {
+	AccountID          uint32
+	Database           string
+	SourceID, TargetID uint64
+	Source             *plan.TableDef
+	Index              *plan.IndexDef
+	SQL                string
+	DuplicateCheck     bool
 }
 
 // Result exec sql result

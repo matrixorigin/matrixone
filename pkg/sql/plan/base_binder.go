@@ -433,11 +433,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -495,6 +497,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 		}
 		if ok {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -527,10 +530,14 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
+	physicalEnumIndexRef, indexRefErr := enumIndexPhysicalRef(b.GetContext(), astExpr, resolvedBinding, typ, depth)
+	if indexRefErr != nil {
+		return nil, indexRefErr
+	}
 	if colPos != NotFound {
 		// Display-wrapped special columns historically do not participate in
 		// this binder's bare-column accounting.
-		if b.bindRawMySQLSpecialType || !isEnumOrSetPlanType(typ) {
+		if b.bindRawMySQLSpecialType || physicalEnumIndexRef || !isEnumOrSetPlanType(typ) {
 			b.boundCols = append(b.boundCols, table+"."+col)
 		}
 
@@ -557,7 +564,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 		// Preserve the column's correlation depth inside its display wrapper.
 		// Numeric contexts use the raw storage value instead.
-		if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
+		if !b.bindRawMySQLSpecialType && !physicalEnumIndexRef && isEnumOrSetPlanType(typ) {
 			expr, err = makeEnumOrSetDisplayValue(b.GetContext(), expr)
 		}
 		if err != nil {

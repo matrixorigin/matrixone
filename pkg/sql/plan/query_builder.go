@@ -9388,6 +9388,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if tableDef == nil {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
 		}
+		if err = validateEnumIndexBackfillSource(builder.GetContext(), tbl, tableDef, obj); err != nil {
+			return 0, err
+		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)

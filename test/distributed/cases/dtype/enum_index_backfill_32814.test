@@ -1,0 +1,47 @@
+-- @suite
+-- @case
+-- @desc: ENUM index backfill uses the same physical keys as normal DML
+-- @label:bvt
+drop database if exists enum_index_backfill_32814;
+create database enum_index_backfill_32814;
+use enum_index_backfill_32814;
+create table inline_index(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int,key ix(e,n));
+create table added_index(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int);
+insert into inline_index values (1,'A',11),(2,'a',22),(3,'',33),(5,null,55);
+insert into added_index values (1,'A',11),(2,'a',22),(3,'',33),(5,null,55);
+insert ignore into inline_index values(4,'invalid',44);
+insert ignore into added_index values(4,'invalid',44);
+alter table added_index add index ix(e,n);
+insert into inline_index values(6,'a',66);
+insert into added_index values(6,'a',66);
+select id,hex(cast(e as char)),e+0,n from inline_index force index(ix) where e='a' order by id;
+select id,hex(cast(e as char)),e+0,n from added_index force index(ix) where e='a' order by id;
+select id,hex(cast(e as char)),e+0,n from added_index ignore index(ix) where e='a' order by id;
+update added_index set e='A' where id=6;
+delete from added_index where id=2;
+select id,hex(cast(e as char)),e+0,n from added_index force index(ix) where e='A' order by id;
+select id,hex(cast(e as char)),e+0,n from added_index ignore index(ix) where e='A' order by id;
+create table unique_zero(id int primary key,e enum('','A','a') collate utf8mb4_bin);
+insert into unique_zero values(1,'');
+insert ignore into unique_zero values(2,'invalid');
+alter table unique_zero add unique key uq(e);
+select id,e+0 from unique_zero order by id;
+insert into unique_zero values(3,'');
+select id,e+0 from unique_zero order by id;
+create table duplicate_existing(id int primary key,e enum('A','a') collate utf8mb4_bin);
+insert into duplicate_existing values(1,'a'),(2,'a');
+alter table duplicate_existing add unique key uq(e);
+select id,e+0 from duplicate_existing order by id;
+show index from duplicate_existing;
+create table framed(id int primary key,e enum('A,1','a,1','') collate utf8mb4_bin,n int);
+insert into framed values(1,'A,1',11),(2,'a,1',22);
+alter table framed add index ix(e,n);
+insert into framed values(3,'a,1',33);
+select id,hex(cast(e as char)),e+0,n from framed force index(ix) where e='a,1' order by id;
+select id,hex(cast(e as char)),e+0,n from framed ignore index(ix) where e='a,1' order by id;
+create table `table``name`(id int primary key,`e.x` enum('A','a') collate utf8mb4_bin);
+insert into `table``name` values(1,'A'),(2,'a');
+alter table `table``name` add index ix(`e.x`);
+select id,`e.x`+0 from `table``name` force index(ix) where `e.x`='a' order by id;
+select id,`e.x`+0 from `table``name` ignore index(ix) where `e.x`='a' order by id;
+drop database enum_index_backfill_32814;
