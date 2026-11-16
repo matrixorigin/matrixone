@@ -28,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,6 +91,29 @@ func TestColumnSummaryZoneMap(t *testing.T) {
 			}
 			before := bytes.Clone(meta)
 			originalBefore := bytes.Clone(original)
+			if !tc.legacy {
+				table := newColumnSummaryScanTable(t, ctx, fs, mp, stats)
+				infos, err := table.GetColumMetadataScanInfo(ctx, "b", false)
+				require.NoError(t, err)
+				require.Len(t, infos, 1)
+				require.Equal(t, "b", infos[0].ColName)
+				require.Equal(t, int64(data.BlockHeader().Rows()), infos[0].RowCnt)
+				require.Equal(t, int64(data.MustGetColumn(0).NullCnt()), infos[0].NullCnt)
+				require.Equal(t, tc.min, objectio.ZoneMap(infos[0].ZoneMap).GetMin())
+				require.Equal(t, tc.max, objectio.ZoneMap(infos[0].ZoneMap).GetMax())
+				// 统计快捷路径仍然不返回列边界。
+				all, err := table.GetColumMetadataScanInfo(ctx, AllColumns, false)
+				require.NoError(t, err)
+				require.Len(t, all, 1)
+				require.False(t, objectio.ZoneMap(all[0].ZoneMap).IsInited())
+				if tc.name == "false" {
+					canceled, cancel := context.WithCancel(ctx)
+					cancel()
+					infos, err := table.GetColumMetadataScanInfo(canceled, "b", false)
+					require.Error(t, err)
+					require.Nil(t, infos)
+				}
+			}
 			cols := []*plan.ColDef{{Seqnum: 0, Typ: plan.Type{Id: int32(types.T_bool)}}}
 			zms := make([]objectio.ZoneMap, 1)
 			tableTypes := make([]uint8, 1)
@@ -112,6 +137,28 @@ func TestColumnSummaryZoneMap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 复用真实对象及轻量事务，仅注入已可见对象，避免启动完整集群。
+func newColumnSummaryScanTable(t *testing.T, ctx context.Context, fs fileservice.FileService, mp *mpool.MPool,
+	stats objectio.ObjectStats,
+) *txnTable {
+	t.Helper()
+	table := newTxnTableForTest(t)
+	table.tableId = 10001
+	table.remoteWorkspace = true
+	table.createdInTxn = true
+	table.tableDef = &plan.TableDef{Cols: []*plan.ColDef{{Name: "b", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_bool)}}}}
+	eng := table.eng.(*Engine)
+	eng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	proc := process.NewTopProcess(ctx, mp, nil, table.db.op, fs, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(proc.Free)
+	table.getTxn().proc = proc
+	part := eng.GetOrCreateLatestPart(ctx, 0, table.db.databaseId, table.tableId)
+	state, done := part.MutateState()
+	require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{ObjectStats: stats}, false))
+	done()
+	return table
 }
 
 func boolPointer(v bool) *bool { return &v }

@@ -303,6 +303,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select max(b) from bool_aggregate;
 ➤ max(b)[-7,1,0]  𝄀
 0
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
+➤ min_hex[12,-1,0]  ¦  max_hex[12,-1,0]  𝄀
+00  ¦  00
 select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 ➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
 false  ¦  false
@@ -326,6 +329,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
   ]
 }
 
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
+➤ min_hex[12,-1,0]  ¦  max_hex[12,-1,0]  𝄀
+00  ¦  00
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 0  ¦  0
@@ -349,6 +355,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
   ]
 }
 
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
+➤ min_hex[12,-1,0]  ¦  max_hex[12,-1,0]  𝄀
+01  ¦  01
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 1  ¦  1
@@ -369,6 +378,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
   ]
 }
 
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
+➤ min_hex[12,-1,0]  ¦  max_hex[12,-1,0]  𝄀
+00  ¦  01
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 0  ¦  1
@@ -392,6 +404,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
   ]
 }
 
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
+➤ min_hex[12,-1,0]  ¦  max_hex[12,-1,0]  𝄀
+null  ¦  null
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 null  ¦  null
