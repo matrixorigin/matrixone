@@ -149,7 +149,7 @@ func TestMoTableColMaxMinReusesEmptyBatchResult(t *testing.T) {
 	rel.EXPECT().Ranges(gomock.Any(), engine.DefaultRangesParam).Return(colExtremaRelData{count: 0}, nil).Times(1)
 
 	const length = 4
-	var inputs []*vector.Vector
+	inputs := make([]*vector.Vector, 0, 3)
 	for _, value := range []string{"app", "table", "a"} {
 		v, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(value), length, proc.Mp())
 		require.NoError(t, err)
