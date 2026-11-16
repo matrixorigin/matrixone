@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -502,6 +503,109 @@ func TestFastExactKeySetMatchesSerialFolding(t *testing.T) {
 			count, ok := exactUniqueKeySetSize(got)
 			require.True(t, ok)
 			require.Equal(t, 8, count)
+		})
+	}
+}
+
+func TestIndexKeySetLiteralBoundVariants(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.T
+		value *pb.Literal
+	}{
+		{name: "bool", typ: types.T_bool, value: &pb.Literal{Value: &pb.Literal_Bval{Bval: true}}},
+		{name: "default", typ: types.T_bool, value: &pb.Literal{Value: &pb.Literal_Defaultval{Defaultval: true}}},
+		{name: "int8", typ: types.T_int8, value: &pb.Literal{Value: &pb.Literal_I8Val{I8Val: -8}}},
+		{name: "int16", typ: types.T_int16, value: &pb.Literal{Value: &pb.Literal_I16Val{I16Val: -16}}},
+		{name: "int32", typ: types.T_int32, value: &pb.Literal{Value: &pb.Literal_I32Val{I32Val: -32}}},
+		{name: "int64", typ: types.T_int64, value: &pb.Literal{Value: &pb.Literal_I64Val{I64Val: -64}}},
+		{name: "uint8", typ: types.T_uint8, value: &pb.Literal{Value: &pb.Literal_U8Val{U8Val: 8}}},
+		{name: "uint16", typ: types.T_uint16, value: &pb.Literal{Value: &pb.Literal_U16Val{U16Val: 16}}},
+		{name: "uint32", typ: types.T_uint32, value: &pb.Literal{Value: &pb.Literal_U32Val{U32Val: 32}}},
+		{name: "uint64", typ: types.T_uint64, value: &pb.Literal{Value: &pb.Literal_U64Val{U64Val: 64}}},
+		{name: "float32", typ: types.T_float32, value: &pb.Literal{Value: &pb.Literal_Fval{Fval: 1.25}}},
+		{name: "float64", typ: types.T_float64, value: &pb.Literal{Value: &pb.Literal_Dval{Dval: 2.5}}},
+		{name: "date", typ: types.T_date, value: &pb.Literal{Value: &pb.Literal_Dateval{Dateval: 365}}},
+		{name: "time", typ: types.T_time, value: &pb.Literal{Value: &pb.Literal_Timeval{Timeval: 123456}}},
+		{name: "datetime", typ: types.T_datetime, value: &pb.Literal{Value: &pb.Literal_Datetimeval{Datetimeval: 123456}}},
+		{name: "timestamp", typ: types.T_timestamp, value: &pb.Literal{Value: &pb.Literal_Timestampval{Timestampval: 123456}}},
+		{name: "decimal64", typ: types.T_decimal64, value: &pb.Literal{Value: &pb.Literal_Decimal64Val{Decimal64Val: &pb.Decimal64{A: 1234}}}},
+		{name: "decimal128", typ: types.T_decimal128, value: &pb.Literal{Value: &pb.Literal_Decimal128Val{Decimal128Val: &pb.Decimal128{A: 1234, B: 5}}}},
+		{name: "enum", typ: types.T_enum, value: &pb.Literal{Value: &pb.Literal_EnumVal{EnumVal: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &pb.Expr{Typ: pb.Type{Id: int32(tc.typ)}, Expr: &pb.Expr_Lit{Lit: tc.value}}
+			got, ok := indexKeySetLiteralBound(expr)
+			require.True(t, ok)
+			want, wantOK := function.SerialEncodedTypeSizeBound(tc.typ.ToType())
+			require.True(t, wantOK)
+			require.Equal(t, want, got)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.T
+		value string
+	}{
+		{name: "varchar counts bytes and NULs", typ: types.T_varchar, value: "a\x00\xc3\xa9"},
+		{name: "empty varchar", typ: types.T_varchar},
+		{name: "binary", typ: types.T_binary, value: "abc"},
+		{name: "varbinary", typ: types.T_varbinary, value: "abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &pb.Expr{Typ: pb.Type{Id: int32(tc.typ)}, Expr: &pb.Expr_Lit{Lit: &pb.Literal{
+				Value: &pb.Literal_Sval{Sval: tc.value},
+			}}}
+			got, ok := indexKeySetLiteralBound(expr)
+			require.True(t, ok)
+			require.Equal(t, 2*uint64(len(tc.value))+3, got)
+		})
+	}
+}
+
+func TestIndexKeySetLiteralBoundRejectsInvalidInputs(t *testing.T) {
+	literalExpr := func(typ types.T, value *pb.Literal) *pb.Expr {
+		return &pb.Expr{Typ: pb.Type{Id: int32(typ)}, Expr: &pb.Expr_Lit{Lit: value}}
+	}
+	for _, tc := range []struct {
+		name  string
+		typ   types.T
+		value *pb.Literal
+	}{
+		{name: "nil expression literal", typ: types.T_int32},
+		{name: "null", typ: types.T_int32, value: &pb.Literal{Isnull: true, Value: &pb.Literal_I32Val{I32Val: 1}}},
+		{name: "runtime source", typ: types.T_int32, value: &pb.Literal{Src: &pb.Expr{}, Value: &pb.Literal_I32Val{I32Val: 1}}},
+		{name: "unsupported literal variant", typ: types.T_json, value: &pb.Literal{Value: &pb.Literal_Jsonval{Jsonval: "{}"}}},
+		{name: "string with non-point type", typ: types.T_char, value: &pb.Literal{Value: &pb.Literal_Sval{Sval: "abc"}}},
+		{name: "time metadata mismatch", typ: types.T_datetime, value: &pb.Literal{Value: &pb.Literal_Timeval{Timeval: 1}}},
+		{name: "datetime metadata mismatch", typ: types.T_time, value: &pb.Literal{Value: &pb.Literal_Datetimeval{Datetimeval: 1}}},
+		{name: "decimal64 metadata mismatch", typ: types.T_decimal128, value: &pb.Literal{Value: &pb.Literal_Decimal64Val{Decimal64Val: &pb.Decimal64{A: 1}}}},
+		{name: "decimal128 metadata mismatch", typ: types.T_decimal64, value: &pb.Literal{Value: &pb.Literal_Decimal128Val{Decimal128Val: &pb.Decimal128{A: 1}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := indexKeySetLiteralBound(literalExpr(tc.typ, tc.value))
+			require.False(t, ok)
+		})
+	}
+
+	maxStringBytes := int((maxIndexKeySetPlanningWork - 3) / 2)
+	for _, tc := range []struct {
+		name string
+		size int
+		want bool
+	}{
+		{name: "largest accepted string", size: maxStringBytes, want: true},
+		{name: "string over planning budget", size: maxStringBytes + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value := strings.Repeat("x", tc.size)
+			expr := literalExpr(types.T_varchar, &pb.Literal{Value: &pb.Literal_Sval{Sval: value}})
+			got, ok := indexKeySetLiteralBound(expr)
+			require.Equal(t, tc.want, ok)
+			if tc.want {
+				require.Equal(t, maxIndexKeySetPlanningWork-1, got)
+			}
 		})
 	}
 }
