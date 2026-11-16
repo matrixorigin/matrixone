@@ -291,7 +291,7 @@ tt    0    id    1    a    A    0    NULL    NULL    YES                    YES 
 /* save_result */show node list;
 1
 select * from result_scan(last_query_id()) as u;
-invalid input: empty query result
+1
 create sequence seq_an_03  increment 10 start with 1 no cycle;
 /* save_result */show sequences;
 Names    Data Type
@@ -633,6 +633,11 @@ a    b
 x    y
 select * from result_scan(last_query_id()) as u;
 x    y
+/* save_result */select 1 as x, 's' as y where 1 > 2;
+x    y
+select count(*) from result_scan(last_query_id()) as u;
+count(*)
+0
 drop table t_30553;
 set save_query_result = off;
 set save_query_result = on;

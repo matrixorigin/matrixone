@@ -226,6 +226,8 @@ select count(*) from result_scan(last_query_id()) as u;
 select * from result_scan(last_query_id()) as u;
 /* save_result */select 1 as x, 's' as y where 1 > 2;
 select * from result_scan(last_query_id()) as u;
+/* save_result */select 1 as x, 's' as y where 1 > 2;
+select count(*) from result_scan(last_query_id()) as u;
 drop table t_30553;
 set save_query_result = off;
 
