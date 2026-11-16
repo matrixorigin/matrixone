@@ -110,31 +110,7 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 		return groupInsertPreview{}, false, nil
 	}
 	if len(vecs) == 2 && !vecs[0].IsDictionary() && !vecs[1].IsDictionary() {
-		left, _ := vector.MustVarlenaRawData(vecs[0])
-		right, _ := vector.MustVarlenaRawData(vecs[1])
-		allHit := true
-		for i := 0; i < count; i++ {
-			a, ok := compactInlineCharCode(&left[start+i])
-			if !ok {
-				return groupInsertPreview{}, false, nil
-			}
-			b, ok := compactInlineCharCode(&right[start+i])
-			if !ok {
-				return groupInsertPreview{}, false, nil
-			}
-			code := a*compactCharDomain + b
-			// Generic insertion publishes these codes after a miss. Even when
-			// an earlier ID is absent, validate and initialize the whole suffix.
-			lookup.codes[i] = code
-			id := lookup.ids[code]
-			lookup.values[i] = id
-			allHit = allHit && id != 0
-		}
-		lookup.eligible = true
-		if !allHit {
-			return groupInsertPreview{}, false, nil
-		}
-		return groupInsertPreview{values: lookup.values[:count], inserted: lookup.inserted[:count], existingOnly: true}, true, nil
+		return lookup.previewFlatTuple(vecs, start, count)
 	}
 	clear(lookup.codes[:count])
 	for col, vec := range vecs {
@@ -208,21 +184,53 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	return groupInsertPreview{values: lookup.values[:count], inserted: lookup.inserted[:count], existingOnly: true}, true, nil
 }
 
+// Keep the tuple loop out of the shared dispatcher so its extra live values
+// do not enlarge the stack/register requirements of one-column lookups.
+func (lookup *compactGroupLookup) previewFlatTuple(vecs []*vector.Vector, start, count int) (groupInsertPreview, bool, error) {
+	left, _ := vector.MustVarlenaRawData(vecs[0])
+	right, _ := vector.MustVarlenaRawData(vecs[1])
+	allHit := true
+	for i := 0; i < count; i++ {
+		a, ok := compactInlineCharCode(&left[start+i])
+		if !ok {
+			return groupInsertPreview{}, false, nil
+		}
+		b, ok := compactInlineCharCode(&right[start+i])
+		if !ok {
+			return groupInsertPreview{}, false, nil
+		}
+		code := a*compactCharDomain + b
+		// Generic insertion publishes these codes after a miss. Even when
+		// an earlier ID is absent, validate and initialize the whole suffix.
+		lookup.codes[i] = code
+		id := lookup.ids[code]
+		lookup.values[i] = id
+		allHit = allHit && id != 0
+	}
+	lookup.eligible = true
+	if !allHit {
+		return groupInsertPreview{}, false, nil
+	}
+	return groupInsertPreview{values: lookup.values[:count], inserted: lookup.inserted[:count], existingOnly: true}, true, nil
+}
+
 func compactInlineCharCode(value *types.Varlena) (uint32, bool) {
-	if !value.IsSmall() {
+	length := int(value[0])
+	if length > types.VarlenaInlineSize {
 		return 0, false
 	}
-	raw := value.ByteSlice()
-	for len(raw) > 0 && raw[len(raw)-1] == ' ' {
-		raw = raw[:len(raw)-1]
+	// Inline descriptors contain a length byte followed by at most 23 bytes.
+	// Index that bounded carrier directly rather than constructing a slice.
+	for length > 0 && value[length] == ' ' {
+		length--
 	}
-	if len(raw) > 1 {
+	if length > 1 {
 		return 0, false
 	}
-	if len(raw) == 0 {
+	if length == 0 {
 		return 0, true
 	}
-	return uint32(raw[0]) + 1, true
+	return uint32(value[1]) + 1, true
 }
 
 func (hr *ResHashRelated) publishCompactGroups(values []uint64) {
