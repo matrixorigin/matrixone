@@ -58,7 +58,7 @@ jobs:
     concurrency:
       group: cs-gomod-comparison
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-gomod-compare.yaml@c06ee89b1878535084505c74582a946e707616ee
+    uses: matrixorigin/CI/.github/workflows/coverage-gomod-compare.yaml@53b3f60bad788aa5d89337b18eeb5489650c7b55
     with:
       cache_seed: false
       cache_mode: ${{ inputs.coverage_comparison == 'gomod-cold' && 'cold' || 'warm' }}
