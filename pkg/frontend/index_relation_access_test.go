@@ -81,6 +81,34 @@ func TestIndexPrivilegeProbeReportsOnlyRealDenials(t *testing.T) {
 		require.ErrorContains(t, err, "do not have privilege")
 		require.EqualValues(t, 1, denials.Load())
 	})
+	t.Run("tenant admin index select does not report a denial", func(t *testing.T) {
+		denials.Store(0)
+		admin := &Session{}
+		admin.SetFromRealUser(true)
+		admin.SetAccountId(42)
+		admin.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "admin", DefaultRole: "accountadmin", TenantID: 42})
+		read := &ExecCtx{reqCtx: defines.AttachAccountId(ctx, 42), ses: admin, stmt: &tree.Select{}}
+		tcc := &TxnCompilerContext{execCtx: read}
+		name := catalog.IndexTableNamePrefix + "protected"
+		obj := &plan.ObjectRef{SchemaName: "db", ObjName: name}
+		def := &plan.TableDef{DbName: "db", Name: name, TableType: catalog.SystemIndexRel}
+
+		require.NoError(t, tcc.checkUserRelationIndexAccess(name, name, obj, def, nil))
+		require.Zero(t, denials.Load())
+
+		read.stmt = &tree.Delete{}
+		require.ErrorContains(t, tcc.checkUserRelationIndexAccess(name, name, obj, def, nil), "do not have privilege")
+		require.EqualValues(t, 1, denials.Load())
+
+		read.stmt = &tree.Select{}
+		admin.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "admin", DefaultRole: "reader", TenantID: 42})
+		require.ErrorContains(t, tcc.checkUserRelationIndexAccess(name, name, obj, def, nil), "do not have privilege")
+		require.EqualValues(t, 2, denials.Load())
+
+		admin.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "admin", DefaultRole: "accountadmin", TenantID: 42})
+		require.ErrorContains(t, tcc.checkUserRelationIndexAccess(name, name, obj, def, &plan.Snapshot{}), "do not have privilege")
+		require.EqualValues(t, 3, denials.Load())
+	})
 }
 
 func TestIndexRelationPrivilegePrecedence(t *testing.T) {

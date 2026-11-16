@@ -50,6 +50,7 @@ type S3FS struct {
 	memCache       *MemCache
 	diskCache      *DiskCache
 	indexFileCache *IndexFileCache
+	indexObjects   indexObjects
 	remoteCache    *RemoteCache
 	asyncUpdate    bool
 
@@ -57,6 +58,7 @@ type S3FS struct {
 
 	ioMerger     *IOMerger
 	decodedReads *decodedReadRegistry
+	prefetcher   *prefetcher
 
 	parallelMode ParallelMode
 }
@@ -188,6 +190,13 @@ func NewS3FS(
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
+		}
+		if fs.diskCache != nil {
+			if args.MaxConnsPerHost > 0 {
+				fs.diskCache.maxDownloadConns = int64(args.MaxConnsPerHost / 2)
+			}
+			workers := fs.diskCache.prefetchWorkers()
+			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(workers), fs.haveObject, fs.prefetchObject)
 		}
 	}
 
@@ -521,12 +530,14 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.setFile(
+	if err := s.diskCache.fillFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
 		s.asyncUpdate,
+		storageFill,
+		s.prefetchedSize(path.File, 0),
 	); err != nil {
 		return err
 	}
@@ -539,12 +550,52 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}
 
 	key := s.pathToKey(filePath)
-	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
-	if err != nil {
-		return nil, err
-	}
+	return &lazyObjectReader{ctx: ctx, read: func(ctx context.Context, min, max *int64) (io.ReadCloser, error) {
+		return s.storage.Read(ctx, key, min, max)
+	}}, nil
+}
 
-	return r, nil
+// joinQueued waits until the read can join the prefetcher's download of the object of
+// vector, when it is one the read would join: any for a column read, one of the whole
+// object for a read that may download it. A download still waiting moves to the live
+// queue. The reads of a download join none.
+func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) {
+	columns := vector.Policy.Any(ColumnPrefetch)
+	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
+		return
+	}
+	// A column read also joins the download of its whole object.
+	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return columns || len(req.Ranges) == 0 })
+	if !ok {
+		return
+	}
+	defer leave()
+	select {
+	case <-started:
+	case <-ctx.Done():
+	}
+}
+
+// firstNeeded returns the least offset of the entries of vector not done.
+func firstNeeded(vector *IOVector) int64 {
+	first := int64(-1)
+	for i := range vector.Entries {
+		if e := &vector.Entries[i]; !e.done && (first < 0 || e.Offset < first) {
+			first = e.Offset
+		}
+	}
+	return max(first, 0)
+}
+
+// prefetchedSize returns the layout of the object of file: the size a prefetch told of,
+// or an error when none did, and splitAt.
+func (s *S3FS) prefetchedSize(file string, splitAt int64) objectLayout {
+	return func(context.Context) (int64, int64, error) {
+		if size, ok := s.diskCache.prefetched.size(s.diskCache.pathForFile(file)); ok {
+			return size, splitAt, nil
+		}
+		return 0, 0, errObjectSizeUnknown
+	}
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
@@ -588,6 +639,20 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	return err
 }
 
+// canReplayWriteEntries only admits contiguous in-memory input. Streaming
+// readers and gaps keep the original upload-capture path.
+func canReplayWriteEntries(entries []IOEntry) bool {
+	var offset int64
+	for _, entry := range entries {
+		if entry.ReaderForWrite != nil || entry.Size < 0 || entry.Offset != offset ||
+			int64(len(entry.Data)) != entry.Size || entry.Size > math.MaxInt64-offset {
+			return false
+		}
+		offset += entry.Size
+	}
+	return true
+}
+
 func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
@@ -602,25 +667,27 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		return cmp.Compare(a.Offset, b.Offset)
 	})
 
-	// reader
-	var reader io.Reader
-	reader = newIOEntriesReader(ctx, vector.Entries)
-	var n atomic.Int64
-	reader = &countingReader{
-		R: reader,
-		C: &n,
-	}
-
-	// disk cache
+	// A validated in-memory vector can be read with a cursor for both the
+	// upload and the cache fill, without cloning or mutating its entries.
+	size := vector.size()
 	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
+	replayDiskCache := writeDiskCache && vector.Policy.Any(ReplayDataForDiskCache) && size != nil && canReplayWriteEntries(vector.Entries)
+	var reader io.Reader
+	if replayDiskCache {
+		reader = &replayDataReader{ctx: ctx, entries: vector.Entries, remaining: *size}
+	} else {
+		reader = newIOEntriesReader(ctx, vector.Entries)
+	}
+	var n atomic.Int64
+	reader = &countingReader{R: reader, C: &n}
+
 	var diskCacheBuf *bytes.Buffer
-	if writeDiskCache {
+	if writeDiskCache && !replayDiskCache {
 		diskCacheBuf = new(bytes.Buffer)
 		reader = io.TeeReader(reader, diskCacheBuf)
 	}
 
 	// some SDKs can't handle unknown reader type
-	size := vector.size()
 	if size != nil {
 		reader = io.LimitReader(reader, *size)
 	}
@@ -674,10 +741,18 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// write to disk cache
 	if writeDiskCache {
-		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.setFileContent(ctx, vector.FilePath, content, s.asyncUpdate); err != nil {
-			return 0, err
+		var cacheErr error
+		if replayDiskCache {
+			consumed := n.Load()
+			cacheErr = s.diskCache.fillFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(&replayDataReader{ctx: context.Background(), entries: vector.Entries, remaining: consumed}), nil
+			}, s.asyncUpdate, contentFill, nil)
+		} else {
+			cacheErr = s.diskCache.setFileContent(ctx, vector.FilePath, diskCacheBuf.Bytes(), s.asyncUpdate)
+		}
+		if cacheErr != nil {
+			return 0, cacheErr
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
@@ -686,6 +761,12 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if s.diskCache != nil {
+		mark := s.diskCache.readDeletes()
+		for i := range vector.Entries {
+			vector.Entries[i].readDeletes = mark
+		}
+	}
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
@@ -775,6 +856,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
 	forceMinimalRangeRead := false
 	forcePerEntryRangeRead := false
+	rereadDiskCache := false
 read_memory_cache:
 	if s.memCache != nil {
 
@@ -829,6 +911,19 @@ read_disk_cache:
 				finishFill()
 			}
 		}
+	}
+	if vector.Policy.Any(IndexFileObject) && s.cachesIndexObjects() {
+		if err := s.readIndexObject(ctx, vector); err != nil {
+			finishFill()
+			return err
+		}
+		if vector.allDone() {
+			return nil
+		}
+	}
+
+	if s.prefetcher != nil {
+		s.joinQueued(ctx, vector)
 	}
 	if s.diskCache != nil {
 
@@ -894,12 +989,29 @@ read_disk_cache:
 		}
 	}
 
+	// An exact read of bytes a flight is reading waits for them instead of reading them.
+	if s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads) {
+		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
+			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+		}
+	}
+
 	if vector.downloadDeclined && !forcePerEntryRangeRead && !forceMinimalRangeRead {
 		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
 			forcePerEntryRangeRead = true
 		} else {
 			forceMinimalRangeRead = true
 		}
+	}
+	// An exact read reads its entries apart when one range around them holds other bytes.
+	if vector.Policy.Any(ColumnPrefetch, ExactRead) && !forcePerEntryRangeRead && vector.sparse() {
+		forcePerEntryRangeRead = true
 	}
 	if forcePerEntryRangeRead || forceMinimalRangeRead {
 		goto read_s3
@@ -915,10 +1027,6 @@ read_disk_cache:
 		}
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		waitDuration := maxIOWaitDuration
-		if mergeKey.FullObject {
-			waitDuration = shortIOWaitDuration
-		}
 		done, generation := s.ioMerger.merge(mergeKey)
 		if done != nil {
 			finishMerge = done
@@ -928,12 +1036,22 @@ read_disk_cache:
 			LogEvent(ctx, str_ioMerger_Merge_end)
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
-			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, waitDuration)
+			// A full-object read does not wait for the one that holds its merge.
+			var completed bool
+			var waitErr error
+			if !mergeKey.FullObject {
+				completed, waitErr = waitForIOGeneration(ctx, mergeKey, generation, maxIOWaitDuration)
+			}
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if waitErr != nil {
 				return waitErr
+			}
+			if !completed && mergeKey.FullObject && mayReadDiskCache && !rereadDiskCache {
+				// The download of the merge's holder may be under way by now.
+				rereadDiskCache = true
+				goto read_disk_cache
 			}
 			if !completed && mergeKey.FullObject {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
@@ -941,15 +1059,12 @@ read_disk_cache:
 					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
 						logicalBytes, spanBytes)
 					waitStart := time.Now()
-					remainingWaitDuration := maxIOWaitDuration - waitDuration
-					if remainingWaitDuration > 0 {
-						completed, waitErr = waitForIOGeneration(
-							ctx,
-							mergeKey,
-							generation,
-							remainingWaitDuration,
-						)
-					}
+					completed, waitErr = waitForIOGeneration(
+						ctx,
+						mergeKey,
+						generation,
+						maxIOWaitDuration,
+					)
 					waitTime := time.Since(waitStart)
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
@@ -1175,6 +1290,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
+		if s.prefetcher != nil && s.prefetcher.isRunning(vector.FilePath) {
+			metric.FSPrefetchReadOwnRunningCounter.Inc()
+		} else {
+			metric.FSPrefetchReadOwnDownloadCounter.Inc()
+		}
 		done, err := s.readFullObjectToDiskCacheStreaming(ctx, vector, path.File, getReader)
 		if err != nil {
 			return err
@@ -1191,6 +1311,24 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		}
 		min, max = vector.readMinimalRange()
 		readFullObject = false
+	}
+
+	// A range read may take its bytes from cached prefetch ranges and reads of them
+	// under way, reading only the missing blocks around it.
+	var prefetchContent []byte
+	var prefetchReads int
+	var fetchedUncached bool
+	if !readFullObject && s.diskCache != nil && min != nil && max != nil {
+		if unit, ok := s.diskCache.prefetchUnit(vector); ok {
+			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+				return getReader(ctx, &start, &end)
+			}
+			content, reads, ok := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, open)
+			prefetchReads = reads
+			if ok {
+				prefetchContent = content
+			}
+		}
 	}
 
 	// a function to get data lazily
@@ -1232,9 +1370,30 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		return
 	}
 
+	// Any other range read takes its bytes from a prefetch object, which other reads of
+	// them join.
+	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil {
+		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+			return getReader(ctx, &start, &end)
+		}
+		// The read caches its entries unless the prefetch object caches its bytes.
+		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open)
+		if err != nil {
+			return err
+		}
+		if ok {
+			prefetchContent, prefetchReads, fetchedUncached = content, 1, !cached
+		}
+	}
+	if prefetchContent != nil {
+		contentBytes, getContentDone = prefetchContent, true
+	}
+
 	numNotDoneEntries := 0
 	defer func() {
-		metric.FSReadS3Counter.Add(float64(numNotDoneEntries))
+		if prefetchContent == nil || prefetchReads > 0 {
+			metric.FSReadS3Counter.Add(float64(numNotDoneEntries))
+		}
 	}()
 	for i, entry := range vector.Entries {
 		if entry.done {
@@ -1382,6 +1541,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			return err
 		}
 
+		entry.inPrefetchRange = prefetchContent != nil && !fetchedUncached
 		vector.Entries[i] = entry
 	}
 
@@ -1426,6 +1586,8 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
 	key := vector.ioMergeKey()
 	if key.FullObject {
+		// A full-object read and a prefetch of the object download the same bytes.
+		key.Policy = 0
 		key.CacheFill = s.willCacheFullObject(vector)
 	}
 	return key
@@ -1517,21 +1679,30 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stopOnClose = context.AfterFunc(closing, cancelFill)
 	}
 	diskPath := s.diskCache.pathForFile(file)
-	started := make(chan *objectDownload, 1)
+	type admittedDownload struct {
+		download *objectDownload
+		file     io.ReaderAt
+	}
+	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
+	// The download is a FilePrefetchObject of the whole object.
+	prefetchCtx, endPrefetch := s.diskCache.startFilePrefetch(fillCtx, diskPath, 0, math.MaxInt64)
 	go func() {
-		setDone <- s.diskCache.setFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.fillFile(prefetchCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
+			var admitted admittedDownload
 			download := s.diskCache.download(diskPath)
 			if download != nil {
-				if _, ok := download.acquire(); !ok {
-					download = nil
+				if f, ok := download.acquire(); ok {
+					admitted = admittedDownload{download: download, file: f}
 				}
 			}
-			started <- download
-			return getReader(fillCtx, ptrTo[int64](0), nil)
-		}, s.asyncUpdate)
+			started <- admitted
+			return &lazyObjectReader{ctx: ctx, read: getReader}, nil
+		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)))
+		endPrefetch(err)
+		setDone <- err
 	}()
 	var setErr error
 	setFinished := false
@@ -1544,32 +1715,47 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return setErr
 	}
 
-	var download *objectDownload
+	var admitted admittedDownload
 	select {
-	case download = <-started:
+	case admitted = <-started:
 	case setErr = <-setDone:
 		setFinished = true
 		// A download that started and already ended still has the bytes it wrote.
 		select {
-		case download = <-started:
+		case admitted = <-started:
 		default:
 		}
 	}
-	if download == nil {
+	// A delete of the object or a close of the cache stops the download, not the read,
+	// which then reads its ranges.
+	stopped := func(err error) bool { return errors.Is(err, context.Canceled) && ctx.Err() == nil }
+	if admitted.download == nil {
 		if err := waitSet(); err != nil {
+			if stopped(err) {
+				return false, nil
+			}
 			return true, err
 		}
 		// SetFile may skip an existing file or a busy publication reservation.
 		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
-	defer download.release()
+	download := admitted.download
+	defer func() {
+		defer download.release()
+		read.finish(download, done && err == nil)
+	}()
 
-	captured := read.capture(ctx, download)
+	captured, captureErr := read.capture(ctx, download, admitted.file, file)
 	if err := ctx.Err(); err != nil {
 		cancelFill()
 		_ = waitSet()
 		return true, err
+	}
+	if captureErr != nil {
+		cancelFill()
+		_ = waitSet()
+		return true, captureErr
 	}
 	if captured && s.asyncUpdate {
 		select {
@@ -1584,13 +1770,26 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		}
 	}
 	if err := waitSet(); err != nil && !(captured && s.asyncUpdate) {
+		if stopped(err) {
+			if captured {
+				return true, read.fillVector(ctx, s, file)
+			}
+			return false, nil
+		}
 		return true, err
 	}
 	if err := ctx.Err(); err != nil {
 		return true, err
 	}
 	if !captured {
-		if !read.capture(ctx, download) && !download.isComplete() {
+		captured, captureErr = read.capture(ctx, download, admitted.file, file)
+		if err := ctx.Err(); err != nil {
+			return true, err
+		}
+		if captureErr != nil {
+			return true, captureErr
+		}
+		if !captured && !download.isComplete() {
 			// SetFile did not consume the whole reader. Keep the original read path so
 			// the caller still gets data without trusting a partial download.
 			return false, nil
@@ -1606,6 +1805,7 @@ var backgroundFills = make(chan struct{}, 8)
 type fullObjectDiskCacheReader struct {
 	vector   *IOVector
 	captures []fullObjectEntryCapture
+	toServe  int64
 }
 
 type fullObjectEntryCapture struct {
@@ -1614,7 +1814,6 @@ type fullObjectEntryCapture struct {
 	size   int64
 	data   bytes.Buffer
 	read   bool
-	served bool
 }
 
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
@@ -1635,10 +1834,11 @@ func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	return ret
 }
 
-// capture reads each capture's range from download once it is written, a capture to the
-// end of the object once the whole object is. It returns whether every capture holds its
-// range; a capture that cannot complete holds what the download wrote of it.
-func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objectDownload) bool {
+// capture reads available ranges from the request's admitted file. An incomplete
+// object may leave a range partial; a file read error is returned to the caller.
+func (r *fullObjectDiskCacheReader) capture(
+	ctx context.Context, download *objectDownload, source io.ReaderAt, file string,
+) (bool, error) {
 	all := true
 	for i := range r.captures {
 		c := &r.captures[i]
@@ -1649,37 +1849,42 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 		if c.size >= 0 {
 			end = c.offset + c.size
 		}
-		written, ok := download.waitFor(ctx, end, maxIOWaitDuration)
+		written, ok := download.waitFor(ctx, c.offset, end, maxIOWaitDuration)
 		if ok || download.isComplete() {
 			want := written - c.offset
 			if c.size >= 0 {
 				want = min(want, c.size)
 			}
-			if ok && want > 0 && !c.served {
-				// The bytes count before they are read, as readFromDownload counts them.
-				download.serve(want)
-				c.served = true
-			}
-			if want > 0 && !r.readRange(download, c, want) {
-				all = false
-				continue
+			if want > 0 {
+				c.data.Reset()
+				n, err := io.Copy(&c.data, io.NewSectionReader(source, c.offset, want))
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return false, ctxErr
+				}
+				if err != nil {
+					return false, err
+				}
+				if n != want {
+					return false, moerr.NewUnexpectedEOFNoCtx(file)
+				}
+				if ok {
+					r.toServe += n
+				}
 			}
 			c.read = ok
 		}
 		all = all && c.read
 	}
-	return all
+	return all, nil
 }
 
-func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64) bool {
-	f, ok := download.acquire()
-	if !ok {
-		return false
+// finish charges captured bytes once, while the request still holds the file.
+func (r *fullObjectDiskCacheReader) finish(download *objectDownload, success bool) {
+	n := r.toServe
+	r.toServe = 0
+	if success && n > 0 {
+		download.serve(n)
 	}
-	defer download.release()
-	c.data.Reset()
-	_, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
-	return err == nil
 }
 
 func (r *fullObjectDiskCacheReader) fillVector(
@@ -1739,6 +1944,9 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			return err
 		}
 		keys = append(keys, s.pathToKey(path.File))
+		if s.prefetcher != nil {
+			s.prefetcher.remove(filePath)
+		}
 	}
 
 	return errors.Join(
@@ -1761,6 +1969,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			}
 			return s.remoteCache.DeletePaths(ctx, filePaths)
 		}(),
+		s.deleteIndexObjects(ctx, filePaths),
 	)
 }
 
@@ -1776,6 +1985,9 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 }
 
 func (s *S3FS) Close(ctx context.Context) {
+	if s.prefetcher != nil {
+		s.prefetcher.close(ctx)
+	}
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })

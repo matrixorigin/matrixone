@@ -250,6 +250,15 @@ func TestSemiJoinPushdownUsesFactKeyActiveDomain(t *testing.T) {
 	require.True(t, ok)
 	require.InDelta(t, 1-300.0/289_000.0, activeSelectivity, 1e-12,
 		"ANTI selectivity is the complement of the matching key fraction")
+	// An unfiltered but smaller build key domain cannot cover every probe
+	// key. Using min(probeNDV, buildNDV) would incorrectly estimate zero output.
+	statsCache.Set(2, &statsinfo.StatsInfo{TableCnt: 100, NdvMap: map[string]float64{"i_item_sk": 100}})
+	builder.qry.Nodes[1].Stats.Outcnt = 100
+	activeSelectivity, ok = builder.getJoinActiveDomainSelectivity(4)
+	require.True(t, ok)
+	require.InDelta(t, 1-100.0/289_000.0, activeSelectivity, 1e-12)
+	statsCache.Set(2, &statsinfo.StatsInfo{TableCnt: 300_000, NdvMap: map[string]float64{"i_item_sk": 300_000}})
+	builder.qry.Nodes[1].Stats.Outcnt = 300
 	builder.qry.Nodes[4].JoinType = plan.Node_LEFT
 	_, ok = builder.getJoinActiveDomainSelectivity(4)
 	require.False(t, ok, "unsupported join semantics must retain the existing fallback")

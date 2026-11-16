@@ -105,11 +105,11 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 	for _, grouping := range []bool{false, true} {
 		t.Run(fmt.Sprintf("grouping=%t", grouping), func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-			arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}}}
+			arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}}}
 			ctr := &arg.ctr
 			ctr.leftBat = makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
-			ctr.resBat = batch.NewWithSize(3)
-			want := batch.NewWithSize(3)
+			ctr.resBat = batch.NewWithSize(4)
+			want := batch.NewWithSize(4)
 			t.Cleanup(func() {
 				want.Clean(proc.Mp())
 				ctr.leftBat.Clean(proc.Mp())
@@ -121,17 +121,19 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			for _, bat := range []*batch.Batch{ctr.resBat, want} {
-				for col, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_decimal128.ToType()} {
+				for col, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_decimal128.ToType(), types.T_varchar.ToType()} {
 					bat.Vecs[col] = vector.NewVec(typ)
 				}
 			}
 			for source := range 2 {
-				bat := batch.NewWithSize(2)
+				bat := batch.NewWithSize(3)
 				ctr.rightBats = append(ctr.rightBats, bat)
 				bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_decimal128.ToType())
+				bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 				for row := range 4 {
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(source*10+row), row == 2, proc.Mp()))
 					require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Decimal128{B0_63: uint64(source*10 + row)}, row == 1, proc.Mp()))
+					require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(fmt.Sprintf("%d-%d", source, row)), row == 2, proc.Mp()))
 				}
 				if grouping {
 					bat.Vecs[0].GetGrouping().Add(2)
@@ -152,7 +154,7 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 				}
 				r := int64(match - 1)
 				require.NoError(t, want.Vecs[0].UnionOne(ctr.leftBat.Vecs[0], int64(row), proc.Mp()))
-				for col := range 2 {
+				for col := range 3 {
 					require.NoError(t, want.Vecs[col+1].UnionOne(ctr.rightBats[r/colexec.DefaultBatchSize].Vecs[col], r%colexec.DefaultBatchSize, proc.Mp()))
 				}
 			}
@@ -169,8 +171,10 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 					if !expected.IsNull(uint64(row)) {
 						if col < 2 {
 							require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](expected, row), vector.GetFixedAtNoTypeCheck[int32](actual, row))
-						} else {
+						} else if col == 2 {
 							require.Equal(t, vector.GetFixedAtNoTypeCheck[types.Decimal128](expected, row), vector.GetFixedAtNoTypeCheck[types.Decimal128](actual, row))
+						} else {
+							require.Equal(t, expected.GetBytesAt(row), actual.GetBytesAt(row))
 						}
 					}
 				}

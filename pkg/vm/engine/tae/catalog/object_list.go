@@ -316,9 +316,6 @@ func (l *ObjectList) SetBookmarkScheduler(schedule func(func() error) error) {
 		l.bookmarkPending = true
 		l.bookmarkPendingAt = time.Now()
 	}
-	logutil.Debugf(
-		"[ObjectListBookmark] scheduler installed tombstone=%v initial_rebuild=%v pending=%v",
-		l.isTombstone, need, l.bookmarkPending)
 	l.Unlock()
 	if need {
 		l.scheduleBookmarkRebuild(schedule)
@@ -368,7 +365,6 @@ func (l *ObjectList) rebuildCommitBookmarks() {
 	l.RLock()
 	trees := l.loadTrees()
 	version := l.bookmarkVersion
-	pendingAt := l.bookmarkPendingAt
 	states := make(map[objectio.ObjectId]objectListAppendMax, len(l.appendMaxes))
 	restartSealed := make(map[objectio.ObjectId]types.TS, len(l.restartSealed))
 	for id, state := range l.appendMaxes {
@@ -378,9 +374,6 @@ func (l *ObjectList) rebuildCommitBookmarks() {
 		restartSealed[id] = ts
 	}
 	l.RUnlock()
-	logutil.Debugf(
-		"[ObjectListBookmark] rebuild started tombstone=%v version=%d pending_age=%s state_count=%d",
-		l.isTombstone, version, rebuildStart.Sub(pendingAt), len(states))
 
 	var bookmarks [ObjectListGroupNonAppendableDrop + 1]*objectListCommitBookmark
 	// Only appendable objects can acquire new rows after creation. For the
@@ -439,10 +432,6 @@ func (l *ObjectList) rebuildCommitBookmarks() {
 				firstUnfinalized, firstUnfinalizedEntry.ID().ShortStringEx(),
 				firstUnfinalizedState.max.ToString(), firstUnfinalizedState.finalized,
 				time.Since(rebuildStart))
-		} else {
-			logutil.Debugf(
-				"[ObjectListBookmark] group evaluated tombstone=%v group=%d entries=%d valid=true elapsed=%s",
-				l.isTombstone, group, groupEntries, time.Since(rebuildStart))
 		}
 		bookmarks[group] = bookmark
 	}

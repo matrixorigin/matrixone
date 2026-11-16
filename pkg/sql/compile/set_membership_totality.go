@@ -15,10 +15,12 @@
 package compile
 
 import (
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 // setMembershipInputsAreTotal proves the remapped physical input graph. The
@@ -70,6 +72,7 @@ func setMembershipInputsAreTotal(query *plan.Query, nodeID int32) bool {
 		return false
 	}
 	clear(seen)
+	messageTags, filterTags := make(map[int32]bool), make(map[int32]bool)
 	var visit func(int32) bool
 	visit = func(id int32) bool {
 		if id < 0 || int(id) >= len(nodes) || nodes[id] == nil || owners[id] != 1 || seen[id] {
@@ -77,15 +80,19 @@ func setMembershipInputsAreTotal(query *plan.Query, nodeID int32) bool {
 		}
 		seen[id] = true
 		n := nodes[id]
-		if len(n.OrderBy) != 0 || !plan2.SetMembershipNodeEvaluationIsTotal(n) {
+		if n.NodeType == plan.Node_AGG {
+			if len(n.Children) != 1 || !visit(n.Children[0]) {
+				return false
+			}
+			return setMembershipDistinctInputIsTotal(n, nodes[n.Children[0]].ProjectList)
+		}
+		if len(n.OrderBy) != 0 || !setMembershipPhysicalInputIsTotal(n, messageTags, filterTags) {
 			return false
 		}
 		var inputs [][]*plan.Expr
 		switch n.NodeType {
 		case plan.Node_TABLE_SCAN:
-			// Block filters can contain metadata-only columns outside the compact
-			// row schema; do not guess their physical positions.
-			if len(n.Children) != 0 || n.TableDef == nil || len(n.BlockFilterList) != 0 {
+			if len(n.Children) != 0 || n.TableDef == nil {
 				return false
 			}
 			columns := make([]*plan.Expr, len(n.TableDef.Cols))
@@ -96,11 +103,11 @@ func setMembershipInputsAreTotal(query *plan.Query, nodeID int32) bool {
 				columns[i] = &plan.Expr{Typ: col.Typ}
 			}
 			inputs = [][]*plan.Expr{columns}
-		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_JOIN:
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_JOIN, plan.Node_INTERSECT, plan.Node_MINUS:
 			want := 1
-			if n.NodeType == plan.Node_JOIN {
+			if n.NodeType == plan.Node_JOIN || n.NodeType == plan.Node_INTERSECT || n.NodeType == plan.Node_MINUS {
 				want = 2
-				if n.JoinType != plan.Node_INNER {
+				if n.NodeType == plan.Node_JOIN && n.JoinType != plan.Node_INNER {
 					return false
 				}
 			}
@@ -111,6 +118,10 @@ func setMembershipInputsAreTotal(query *plan.Query, nodeID int32) bool {
 				if !visit(child) {
 					return false
 				}
+				if (n.NodeType == plan.Node_INTERSECT || n.NodeType == plan.Node_MINUS) &&
+					!setMembershipOutputTypesMatch(n.ProjectList, nodes[child].ProjectList) {
+					return false
+				}
 				inputs = append(inputs, nodes[child].ProjectList)
 			}
 		default:
@@ -118,9 +129,97 @@ func setMembershipInputsAreTotal(query *plan.Query, nodeID int32) bool {
 		}
 		return setMembershipExpressionsMatchInputs(n.ProjectList, inputs) &&
 			setMembershipExpressionsMatchInputs(n.FilterList, inputs) &&
-			setMembershipExpressionsMatchInputs(n.OnList, inputs)
+			setMembershipExpressionsMatchInputs(n.OnList, inputs) &&
+			// Some block predicates address metadata-only columns. Only accept
+			// those whose actual compact-row origin can be proven here.
+			setMembershipExpressionsMatchInputs(n.BlockFilterList, inputs)
 	}
 	return visit(node.Children[0]) && visit(node.Children[1])
+}
+
+// Inputs have already been compiled. Their private INNER-join wiring remains
+// inside those unchanged scopes; it is not a dependency on another set owner.
+// Do not generalize this exemption to receivers or executable RF attachments.
+func setMembershipPhysicalInputIsTotal(node *plan.Node, messages, filters map[int32]bool) bool {
+	proof := *node
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
+		for _, header := range node.SendMsgList {
+			if header.MsgType != int32(message.MsgJoinMap) || header.MsgTag <= 0 || messages[header.MsgTag] {
+				return false
+			}
+			messages[header.MsgTag] = true
+		}
+		if len(node.RuntimeFilterBuildList) != len(node.RuntimeFilterProbeList) {
+			return false
+		}
+		paired := make(map[int32]bool)
+		for _, spec := range node.RuntimeFilterBuildList {
+			if spec == nil || spec.Tag <= 0 || filters[spec.Tag] || paired[spec.Tag] ||
+				!proto.Equal(spec, &plan.RuntimeFilterSpec{Tag: spec.Tag}) {
+				return false
+			}
+			paired[spec.Tag], filters[spec.Tag] = true, true
+		}
+		for _, spec := range node.RuntimeFilterProbeList {
+			if spec == nil || !paired[spec.Tag] || !proto.Equal(spec, &plan.RuntimeFilterSpec{Tag: spec.Tag}) {
+				return false
+			}
+			delete(paired, spec.Tag)
+		}
+		proof.SendMsgList = nil
+		proof.RuntimeFilterBuildList, proof.RuntimeFilterProbeList = nil, nil
+	}
+	if node.NodeType == plan.Node_INTERSECT || node.NodeType == plan.Node_MINUS {
+		keys := &plan.Node{ProjectList: node.PhysicalEqualityKeyList}
+		if !plan2.SetMembershipNodeEvaluationIsTotal(keys) ||
+			!setMembershipExpressionsMatchInputs(keys.ProjectList, [][]*plan.Expr{node.ProjectList}) {
+			return false
+		}
+		proof.PhysicalEqualityKeyList = nil
+	}
+	return plan2.SetMembershipNodeEvaluationIsTotal(&proof)
+}
+
+func setMembershipDistinctInputIsTotal(node *plan.Node, input []*plan.Expr) bool {
+	if len(node.GroupBy) == 0 || len(node.AggList) != 0 || len(node.GroupByHashKey) != 0 ||
+		len(node.PhysicalEqualityKeyList) != 0 || len(node.FilterList) != 0 ||
+		len(node.BlockFilterList) != 0 || len(node.OrderBy) != 0 ||
+		(len(node.GroupingFlag) != 0 && len(node.GroupingFlag) != len(node.GroupBy)) {
+		return false
+	}
+	for _, active := range node.GroupingFlag {
+		if !active {
+			return false
+		}
+	}
+	for _, key := range node.GroupBy {
+		if key.GetCol() == nil {
+			return false
+		}
+	}
+	if !setMembershipExpressionsMatchInputs(node.GroupBy, [][]*plan.Expr{input}) {
+		return false
+	}
+	// Group outputs use -1, not the child stream's 0. Check those outputs
+	// separately instead of treating a grouped slot as an arbitrary scan field.
+	proof := *node
+	proof.GroupBy, proof.GroupingFlag, proof.GroupByHashKey = nil, nil, nil
+	proof.ProjectList = plan2.DeepCopyExprList(node.ProjectList)
+	for _, expr := range proof.ProjectList {
+		if err := plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			if col := e.GetCol(); col != nil {
+				if col.RelPos != -1 {
+					return moerr.NewInternalError(moerr.NoReportContext(), "unproved grouped output")
+				}
+				col.RelPos = 0
+			}
+			return nil
+		}); err != nil {
+			return false
+		}
+	}
+	return plan2.SetMembershipNodeEvaluationIsTotal(&proof) &&
+		setMembershipExpressionsMatchInputs(proof.ProjectList, [][]*plan.Expr{node.GroupBy})
 }
 
 func setMembershipOutputTypesMatch(output, input []*plan.Expr) bool {

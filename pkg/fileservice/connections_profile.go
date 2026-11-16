@@ -21,10 +21,14 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"runtime"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/pprof/profile"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 var connectionsProfiler = malloc.NewProfiler[connectionsProfileSample]("http-conns")
@@ -135,4 +139,53 @@ func (p *profilerRoundTripper[T]) RoundTrip(req *http.Request) (*http.Response, 
 		),
 	)
 	return p.upstream.RoundTrip(req)
+}
+
+const (
+	// connWaitWarn is the wait for a connection that counts toward the warning.
+	connWaitWarn = 100 * time.Millisecond
+	// connWaitWarnInterval is the least time between two warnings.
+	connWaitWarnInterval = 10 * time.Second
+)
+
+// connWaits counts the requests that wait long for an HTTP connection, which a full
+// connection pool makes them do, and warns about them at most once an interval.
+var connWaits connWaitReporter
+
+type connWaitReporter struct {
+	mu     sync.Mutex
+	waits  int64
+	reused int64
+	max    time.Duration
+	host   string
+	last   time.Time
+}
+
+func (r *connWaitReporter) record(host string, wait time.Duration, reused bool) {
+	if wait < connWaitWarn {
+		return
+	}
+	r.mu.Lock()
+	r.waits++
+	if reused {
+		r.reused++
+	}
+	if wait > r.max {
+		r.max, r.host = wait, host
+	}
+	now := time.Now()
+	if now.Sub(r.last) < connWaitWarnInterval {
+		r.mu.Unlock()
+		return
+	}
+	waits, reusedWaits, maxWait, maxHost := r.waits, r.reused, r.max, r.host
+	r.waits, r.reused, r.max, r.last = 0, 0, 0, now
+	r.mu.Unlock()
+	logutil.Warn("fileservice: object storage requests waited for an HTTP connection",
+		zap.Int64("waits", waits),
+		zap.Int64("got-reused-connection", reusedWaits),
+		zap.Duration("max-wait", maxWait),
+		zap.String("host", maxHost),
+		zap.Duration("min-wait", connWaitWarn),
+	)
 }

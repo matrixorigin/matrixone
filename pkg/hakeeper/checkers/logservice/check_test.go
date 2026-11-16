@@ -31,7 +31,7 @@ import (
 
 func TestMain(m *testing.M) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
+		Level:  "info",
 		Format: "console",
 	})
 

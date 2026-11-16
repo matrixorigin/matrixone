@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1768,4 +1770,133 @@ func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
 		})
 	}
+}
+
+// runtimeFilterContextTrace verifies the planner does not obtain session state
+// before the exact-filter contract actually needs it.
+type runtimeFilterContextTrace struct {
+	CompilerContext
+	calls []string
+}
+
+func (c *runtimeFilterContextTrace) GetContext() context.Context {
+	c.calls = append(c.calls, "context")
+	return c.CompilerContext.GetContext()
+}
+func (c *runtimeFilterContextTrace) GetProcess() *process.Process {
+	c.calls = append(c.calls, "process")
+	return c.CompilerContext.GetProcess()
+}
+
+func TestExactRuntimeFilterDependencyOrder(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
+	trace := &runtimeFilterContextTrace{CompilerContext: builder.compCtx}
+	rt := moruntime.ServiceRuntime(trace.CompilerContext.GetProcess().GetService())
+	old, hadOld := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOld {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+			return
+		}
+		if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	builder.compCtx = trace
+	intType := types.T_int64.ToType()
+	scaled := types.T_float32.ToType()
+	scaled.Scale = 2
+	decimal := types.T_decimal64.ToType()
+	decimal.Width = 18
+	decimal.Scale = 2
+	float := types.T_float64.ToType()
+	mismatchedDecimal := decimal
+	mismatchedDecimal.Scale++
+	intExpr := planpb.Type{Id: int32(types.T_int64)}
+	probe := GetColExpr(intExpr, 1, 0)
+	build := GetColExpr(intExpr, -1, 0)
+	tests := []struct {
+		name    string
+		version int64
+		run     func() bool
+		want    bool
+		calls   []string
+	}{
+		{"invalid pair", defines.MORPCVersion7, func() bool {
+			_, _, ok := builder.makeExactRuntimeFilterPair(1, false, 10, nil, nil, false)
+			return ok
+		}, false, nil},
+		{"unsupported scaled float", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(scaled, scaled, false)
+			return ok
+		}, false, nil},
+		{"incompatible decimal scales", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, mismatchedDecimal, false)
+			return ok
+		}, false, nil},
+		{"legacy raw encoding", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(intType, intType, false)
+			return ok
+		}, true, []string{"context"}},
+		{"legacy raw pair", defines.MORPCVersion7, func() bool {
+			_, _, ok := builder.makeExactRuntimeFilterPair(1, false, 10, probe, build, false)
+			return ok
+		}, true, []string{"context", "process"}},
+		{"decimal rejected without protocol", -1, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, false, []string{"process"}},
+		{"decimal rejected by old protocol", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, false, []string{"process"}},
+		{"decimal admitted by new protocol", defines.MORPCVersion8, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, true, []string{"process", "context"}},
+		{"float admitted by new protocol", defines.MORPCVersion8, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(float, float, false)
+			return ok
+		}, true, []string{"process", "context"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.version < 0 {
+				if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+				}
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+			}
+			trace.calls = nil
+			require.Equal(t, tc.want, tc.run())
+			require.Equal(t, tc.calls, trace.calls)
+		})
+	}
+	t.Run("nil process retains the legacy raw contract", func(t *testing.T) {
+		compiler := trace.CompilerContext.(*MockCompilerContext)
+		previousGetProcess := compiler.GetProcessFunc
+		compiler.GetProcessFunc = func() *process.Process { return nil }
+		defer func() { compiler.GetProcessFunc = previousGetProcess }()
+
+		defaultRuntime := moruntime.ServiceRuntime("")
+		previous, hadPrevious := defaultRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadPrevious {
+				defaultRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+			} else if current, ok := defaultRuntime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				defaultRuntime.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+			}
+		}()
+		defaultRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion7))
+		trace.calls = nil
+		consumer, producer, ok := builder.makeExactRuntimeFilterPair(1, false, 10, probe, build, false)
+		require.True(t, ok)
+		require.NotNil(t, consumer)
+		require.NotNil(t, producer)
+		require.NotNil(t, producer.Expr)
+		require.NotNil(t, producer.BuildExpr)
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1, producer.KeyEncoding)
+		require.Equal(t, []string{"context", "process"}, trace.calls)
+	})
 }

@@ -495,7 +495,11 @@ type HashBuild struct {
 	JoinMapRefCnt                 int32
 	ShuffleIdx                    int32
 	RuntimeFilterSpec             *plan.RuntimeFilterSpec
-	SpillThreshold                int64
+	// OptionalRuntimeFilterMaxKeyBytes bounds each variable-length key component
+	// before copying. When positive, the optional filter's UpperLimit also bounds
+	// retained key count. Zero keeps ordinary runtime-filter collection unchanged.
+	OptionalRuntimeFilterMaxKeyBytes int
+	SpillThreshold                   int64
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
@@ -508,6 +512,22 @@ type HashBuild struct {
 	DedupDeleteKeepColIdxList []int32
 
 	vm.OperatorBase
+}
+
+// AcceptsDictionary admits direct-column builds whose ingress is copied into
+// existing owned retained storage or gathered into flat spill partitions.
+// Computed-key and dedup modes retain the compatibility boundary until their
+// specialized expression and destructive-update paths are converted.
+func (hashBuild *HashBuild) AcceptsDictionary(child int) bool {
+	if child != 0 || hashBuild.IsDedup {
+		return false
+	}
+	for _, condition := range hashBuild.Conditions {
+		if condition == nil || condition.GetCol() == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
@@ -1001,4 +1021,10 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	}
 	ctr.memoryGrowthParticipant.Release()
 	ctr.memoryGrowthParticipant = nil
+}
+
+// Admitted build ingress is copied into owned retained batches or flat spill
+// partitions. Prefer owned scan columns without disabling selected filtering.
+func (hashBuild *HashBuild) PrefersOwnedDictionaryInput(child int) bool {
+	return hashBuild.AcceptsDictionary(child)
 }
