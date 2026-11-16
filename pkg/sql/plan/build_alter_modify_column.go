@@ -41,6 +41,12 @@ func updateNewColumnInTableDef(
 	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
 		return false, err
 	}
+	if err = applyEnumColumnCollation(ctx, &nTy, nColSpec.Attributes, tableDef.DefaultCharset, tableDef.EnumUnsupportedDefault); err != nil {
+		return false, err
+	}
+	if err = RequireEnumCollationProtocol(cctx.GetProcess(), &nTy); err != nil {
+		return false, err
+	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err

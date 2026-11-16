@@ -43,9 +43,10 @@ func (b *DefaultBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*
 // A VALUES column reuses one DefaultBinder. Validate a source domain once,
 // without retaining row values or introducing a cache outside this binder.
 type storedEnumDomain struct {
-	values   string
-	encoding uint32
-	count    int
+	values    string
+	encoding  uint32
+	collation uint32
+	count     int
 }
 
 func (b *DefaultBinder) bindStoredEnumValue(value *tree.StoredEnumValue) (*plan.Expr, error) {
@@ -53,7 +54,10 @@ func (b *DefaultBinder) bindStoredEnumValue(value *tree.StoredEnumValue) (*plan.
 		return nil, moerr.NewInvalidInput(b.GetContext(), "stored ENUM value requires an ENUM destination")
 	}
 	domain := b.storedEnumDomain
-	if domain == nil || domain.values != value.EnumValues || domain.encoding != value.EnumEncoding {
+	if domain == nil || domain.values != value.EnumValues || domain.encoding != value.EnumEncoding || domain.collation != value.EnumCollation {
+		if value.EnumCollation != b.typ.EnumCollation {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "stored ENUM source and destination collations differ")
+		}
 		members, err := types.DecodeEnumMembers(value.EnumValues, value.EnumEncoding)
 		if err != nil {
 			return nil, err
@@ -65,7 +69,7 @@ func (b *DefaultBinder) bindStoredEnumValue(value *tree.StoredEnumValue) (*plan.
 		if !equal {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "stored ENUM source and destination domains differ")
 		}
-		domain = &storedEnumDomain{values: value.EnumValues, encoding: value.EnumEncoding, count: len(members)}
+		domain = &storedEnumDomain{values: value.EnumValues, encoding: value.EnumEncoding, collation: value.EnumCollation, count: len(members)}
 		b.storedEnumDomain = domain
 	}
 	if int(value.Ordinal) > domain.count {

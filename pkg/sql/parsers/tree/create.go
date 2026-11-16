@@ -125,6 +125,12 @@ func init() {
 		reuse.DefaultOptions[AttributeCollate](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeCharset](
+		func() *AttributeCharset { return &AttributeCharset{} },
+		func(a *AttributeCharset) { a.reset() },
+		reuse.DefaultOptions[AttributeCharset](),
+	)
+
 	reuse.CreatePool[AttributeColumnFormat](
 		func() *AttributeColumnFormat { return &AttributeColumnFormat{} },
 		func(a *AttributeColumnFormat) { a.reset() },
@@ -1254,6 +1260,8 @@ type ColumnTableDef struct {
 	Name       *UnresolvedName
 	Type       ResolvableTypeReference
 	Attributes []ColumnAttribute
+	// ReplayEnumCollation is set only by internal schema reconstruction.
+	ReplayEnumCollation *uint32
 }
 
 func (node *ColumnTableDef) Format(ctx *FmtCtx) {
@@ -1299,6 +1307,8 @@ func (node *ColumnTableDef) reset() {
 			case *AttributeComment:
 				opt.Free()
 			case *AttributeCollate:
+				opt.Free()
+			case *AttributeCharset:
 				opt.Free()
 			case *AttributeColumnFormat:
 				opt.Free()
@@ -1575,6 +1585,28 @@ func NewAttributeCollate(c string) *AttributeCollate {
 	ac := reuse.Alloc[AttributeCollate](nil)
 	ac.Collate = c
 	return ac
+}
+
+type AttributeCharset struct {
+	columnAttributeImpl
+	Charset string
+}
+
+func (node *AttributeCharset) Format(ctx *FmtCtx) {
+	ctx.WriteString("character set ")
+	ctx.WriteString(node.Charset)
+}
+
+func (node AttributeCharset) TypeName() string { return "tree.AttributeCharset" }
+
+func (node *AttributeCharset) reset() { *node = AttributeCharset{} }
+
+func (node *AttributeCharset) Free() { reuse.Free[AttributeCharset](node, nil) }
+
+func NewAttributeCharset(charset string) *AttributeCharset {
+	attr := reuse.Alloc[AttributeCharset](nil)
+	attr.Charset = charset
+	return attr
 }
 
 type AttributeColumnFormat struct {

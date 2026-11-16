@@ -179,6 +179,9 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 		if err := ValidateEnumEncoding(t.GetEnumEncoding()); err != nil {
 			return 0, err
 		}
+		if err := ValidateEnumCollation(t.GetEnumCollation()); err != nil {
+			return 0, err
+		}
 	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
 	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
@@ -213,6 +216,9 @@ func (t *Type) Unmarshal(data []byte) error {
 	}
 	if T(binary.BigEndian.Uint16(data[0:])) == T_enum {
 		if err := ValidateEnumEncoding(uint32(binary.BigEndian.Uint16(data[6:]))); err != nil {
+			return err
+		}
+		if err := ValidateEnumCollation(uint32(binary.BigEndian.Uint16(data[2:]))); err != nil {
 			return err
 		}
 	}

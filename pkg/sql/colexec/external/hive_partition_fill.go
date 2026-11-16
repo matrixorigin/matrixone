@@ -107,12 +107,13 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{
-			Id:           colType.Id,
-			Width:        colType.Width,
-			Scale:        colType.Scale,
-			Enumvalues:   colType.Enumvalues,
-			EnumEncoding: colType.EnumEncoding,
-			NotNullable:  !colType.NullAbility,
+			Id:            colType.Id,
+			Width:         colType.Width,
+			Scale:         colType.Scale,
+			Enumvalues:    colType.Enumvalues,
+			EnumEncoding:  colType.EnumEncoding,
+			EnumCollation: colType.EnumCollation,
+			NotNullable:   !colType.NullAbility,
 		},
 		Default: &plan.Default{NullAbility: colType.NullAbility},
 	}
@@ -339,7 +340,7 @@ func fillConstantVector(
 		if err != nil {
 			return err
 		}
-		v, err := members.Parse(strVal)
+		v, err := members.ParseCollated(strVal, col.Typ.EnumCollation)
 		if err != nil {
 			return wrapErr(err)
 		}

@@ -231,6 +231,13 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCollate:
+			if !isEnumPlanType(&colType) {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
+			}
+		case *tree.AttributeCharset:
+			// The existing 4.2 text path ignores the charset; ENUM validates it
+			// when the new column type is constructed.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}

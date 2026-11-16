@@ -567,6 +567,9 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 			if source == nil {
 				return "", moerr.NewInternalErrorNoCtxf("DATA BRANCH source column %q is unavailable", name)
 			}
+			if source.Typ.EnumCollation != colDef.Typ.EnumCollation {
+				return "", moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM collation differs from its source")
+			}
 			if equal, err := types.EqualEnumMembers(source.Typ.Enumvalues, source.Typ.EnumEncoding, colDef.Typ.Enumvalues, colDef.Typ.EnumEncoding); err != nil {
 				return "", err
 			} else if !equal {
@@ -583,6 +586,17 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 			return "", err
 		}
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), typeSQL)
+		if colDef.Typ.Id == int32(types.T_enum) {
+			switch colDef.Typ.EnumCollation {
+			case types.EnumCollationLegacy:
+			case types.EnumCollationUTF8Bin:
+				columnDef += " CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+			case types.EnumCollationGeneralCI:
+				columnDef += " CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+			default:
+				return "", moerr.NewInvalidInputNoCtx("unsupported DATA BRANCH ENUM collation")
+			}
+		}
 		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
@@ -743,7 +757,7 @@ func (output *diffOutputTable) insert(ctx context.Context, ses *Session, bh Back
 				return moerr.NewInvalidInputNoCtx("DATA BRANCH output ENUM ordinal is out of range")
 			}
 			row[position] = &tree.StoredEnumValue{
-				Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumEncoding: domain.EnumEncoding,
+				Ordinal: uint16(ordinal), EnumValues: domain.Enumvalues, EnumEncoding: domain.EnumEncoding, EnumCollation: domain.EnumCollation,
 			}
 		}
 	}
@@ -1272,7 +1286,7 @@ func satisfyDiffOutputOpt(
 			fullFilePath string
 			writeFile    func([]byte) error
 			release      func() error
-			cleanup      func()
+			cleanup      func() error
 			succeeded    bool
 		)
 
@@ -1281,7 +1295,7 @@ func satisfyDiffOutputOpt(
 				err = errors.Join(err, release())
 			}
 			if !succeeded && cleanup != nil {
-				cleanup()
+				err = errors.Join(err, cleanup())
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
 			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
@@ -1355,6 +1369,9 @@ func satisfyDiffOutputOpt(
 		if err = appender.flushAll(); err != nil {
 			first = err
 			cancel()
+		}
+		if first != nil {
+			return first
 		}
 		if first == nil {
 			if err = dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
@@ -2036,6 +2053,11 @@ func appendOrExecuteDataBranchApplyRow(
 	exactFloatKeyUpdate bool,
 	restoreMissing bool,
 ) error {
+	if appender.writeFile != nil {
+		if err := validatePortableDataBranchEnumValues(tblStuff.def.colTypes, row); err != nil {
+			return err
+		}
+	}
 	if !exactFloatKeyUpdate {
 		return appendDataBranchApplyRowAsSQLValues(
 			ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender,
@@ -2049,6 +2071,28 @@ func appendOrExecuteDataBranchApplyRow(
 		return err
 	}
 	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, statements)
+}
+
+// A SQL file cannot carry OUTPUT AS's typed stored-ordinal expression. Under
+// strict SQL mode a numeric zero cannot be assigned back to an ENUM, so reject
+// the file rather than report an output whose replay depends on SQL mode.
+func validatePortableDataBranchEnumValues(colTypes []types.Type, row []any) error {
+	if len(colTypes) != len(row) {
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH SQL output row shape mismatch")
+	}
+	for i, typ := range colTypes {
+		if typ.Oid != types.T_enum || row[i] == nil {
+			continue
+		}
+		value, ok := row[i].(types.Enum)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("DATA BRANCH SQL output expected a stored ENUM ordinal")
+		}
+		if value == 0 {
+			return moerr.NewNotSupportedNoCtx("DATA BRANCH SQL output cannot safely replay ENUM error ordinal 0")
+		}
+	}
+	return nil
 }
 
 // exactFloatKeyUpdateSQL applies a source update without passing FLOAT/DOUBLE
@@ -2150,7 +2194,7 @@ func prepareFSForDiffAsFile(
 	sqlRetPath, sqlRetHint string,
 	writeFile func([]byte) error,
 	release func() error,
-	cleanup func(),
+	cleanup func() error,
 	err error,
 ) {
 	ctx = process.SQLFileAccessContext(ctx, ses.proc)
@@ -2198,6 +2242,9 @@ func prepareFSForDiffAsFile(
 		return
 	}
 
+	// The shared service belongs to the process; only ETL services created
+	// here are owned by this operation.
+	ownsTargetFS := false
 	if fsPath.Service == defines.SharedFileServiceName {
 		targetFS = getPu(ses.GetService()).FileService
 		targetPath = fullFilePath
@@ -2215,18 +2262,41 @@ func prepareFSForDiffAsFile(
 			return
 		}
 		targetFS = etlFS
+		ownsTargetFS = true
 	}
 
-	cleanup = func() {
-		_ = targetFS.Delete(context.Background(), targetPath)
+	cleanup = func() error {
+		// Release waits for the writer and closes an owned ETL service, so
+		// reopen that service for cleanup using a bounded authorized context.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diffOutputCleanupTimeout)
+		defer cancel()
+		cleanupFS, cleanupPath := targetFS, targetPath
+		if ownsTargetFS {
+			var etlFS fileservice.ETLFileService
+			var openErr error
+			etlFS, cleanupPath, openErr = fileservice.GetForETL(cleanupCtx, nil, fullFilePath)
+			if openErr != nil {
+				return fmt.Errorf("open file service for incomplete DATA BRANCH SQL output cleanup: %w", openErr)
+			}
+			defer etlFS.Close(cleanupCtx)
+			cleanupFS = etlFS
+		}
+		if deleteErr := cleanupFS.Delete(cleanupCtx, cleanupPath); deleteErr != nil &&
+			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
+			return fmt.Errorf("remove incomplete DATA BRANCH SQL output: %w", deleteErr)
+		}
+		return nil
 	}
 
 	defer func() {
 		if err != nil {
 			if cleanup != nil {
-				cleanup()
+				err = errors.Join(err, cleanup())
+				cleanup = nil
 			}
-			targetFS.Close(ctx)
+			if ownsTargetFS {
+				targetFS.Close(ctx)
+			}
 		}
 	}()
 
@@ -2257,20 +2327,28 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() error {
-			closeErr := mut.Close()
-			targetFS.Close(ctx)
-			return closeErr
-		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, mut.Close)
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
 			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, release)
 	}
 
 	return
+}
+
+func releaseDiffTargetFS(ctx context.Context, targetFS fileservice.FileService, ownsTargetFS bool, releaseOwned func() error) func() error {
+	if !ownsTargetFS {
+		return releaseOwned
+	}
+	return func() error {
+		err := releaseOwned()
+		targetFS.Close(ctx)
+		return err
+	}
 }
 
 func newSingleWriteAppender(
@@ -2321,7 +2399,6 @@ func newSingleWriteAppender(
 	release = func() error {
 		closeErr := pw.Close()
 		writeErr := <-done
-		targetFS.Close(ctx)
 		return errors.Join(closeErr, writeErr)
 	}
 

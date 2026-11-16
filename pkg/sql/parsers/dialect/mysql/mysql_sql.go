@@ -28588,7 +28588,7 @@ yydefault:
 		var yyLOCAL tree.ColumnAttribute
 //line mysql_sql.y:11668
 		{
-			yyLOCAL = nil
+			yyLOCAL = tree.NewAttributeCharset(yyDollar[5].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 1755:

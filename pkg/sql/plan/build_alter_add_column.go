@@ -64,6 +64,12 @@ func AddColumn(
 	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
+	if err = applyEnumColumnCollation(ctx.GetContext(), &colType, specNewColumn.Attributes, tableDef.DefaultCharset, tableDef.EnumUnsupportedDefault); err != nil {
+		return false, err
+	}
+	if err = RequireEnumCollationProtocol(ctx.GetProcess(), &colType); err != nil {
+		return false, err
+	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}

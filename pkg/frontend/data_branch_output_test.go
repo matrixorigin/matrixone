@@ -1961,6 +1961,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
 
 	etlFS, targetPath, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -2054,6 +2055,7 @@ func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testin
 	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -2149,6 +2151,7 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -2173,6 +2176,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)

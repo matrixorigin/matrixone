@@ -1,0 +1,105 @@
+-- @suite
+-- @case
+-- @desc: ENUM assignment respects the target collation and domain (#32814)
+-- @label:bvt
+drop database if exists enum_collation_assignment;
+create database enum_collation_assignment;
+use enum_collation_assignment;
+set @saved_mode=@@sql_mode;
+set sql_mode='STRICT_TRANS_TABLES';
+
+create table src(id int, e enum('A','a','x') collate utf8mb4_bin);
+create table dst(id int, e enum('x','a','A') collate utf8mb4_bin);
+insert into src values (1,1),(2,2),(3,3);
+insert into dst select id,e from src;
+select id,hex(cast(e as char)),e+0 from dst order by id;
+create table distinct_dst(e enum('x','a','A') collate utf8mb4_bin);
+insert into distinct_dst select distinct e from src;
+select hex(cast(e as char)),e+0 from distinct_dst order by e+0;
+-- The same ordered labels are not the same logical domain across collations.
+create table same_src(e enum('A','a') collate utf8mb4_bin);
+create table same_dst(e enum('A','a') collate utf8mb4_general_ci);
+insert into same_src values ('a');
+insert into same_dst select e from same_src;
+select hex(cast(e as char)),e+0 from same_dst;
+
+create table assignment(id int primary key,e enum('a','A') collate utf8mb4_bin);
+prepare p from 'insert into assignment values (?,?)';
+set @id=1,@value='A';
+execute p using @id,@value;
+deallocate prepare p;
+update assignment set e='a' where id=1;
+select hex(cast(e as char)),e+0 from assignment;
+update assignment set e='Z' where id=1;
+select hex(cast(e as char)),e+0 from assignment;
+create table ci(e enum('a','b') collate utf8mb4_general_ci);
+insert into ci values ('A'),('á');
+select hex(cast(e as char)),e+0 from ci;
+-- Large numeric text must fail before narrowing, including padded inputs.
+create table overflow_bin(e enum('a','b') collate utf8mb4_bin);
+create table overflow_ci(e enum('a','b') collate utf8mb4_general_ci);
+insert into overflow_bin values('b');
+insert into overflow_ci values('b');
+insert into overflow_bin values('a'),('65537 ');
+insert into overflow_ci values('a'),('65537 ');
+insert into overflow_bin values('65536');
+insert into overflow_ci values('65535 ');
+select hex(cast(e as char)),e+0 from overflow_bin;
+select hex(cast(e as char)),e+0 from overflow_ci;
+-- MODIFY and CHANGE resolve a newly written definition against the table.
+create table alter_inherit(e enum('A','a') collate utf8mb4_bin) collate utf8mb4_general_ci;
+insert into alter_inherit values (2);
+alter table alter_inherit modify e enum('A','a');
+select hex(cast(e as char)),e+0 from alter_inherit;
+alter table alter_inherit change e e enum('A','a') collate utf8mb4_bin;
+alter table alter_inherit change e e enum('A','a');
+select hex(cast(e as char)),e+0 from alter_inherit;
+create table alter_reject(e enum('a') collate utf8mb4_bin) collate utf8mb4_unicode_ci;
+insert into alter_reject values ('a');
+alter table alter_reject modify e enum('a');
+alter table alter_reject change e e enum('a');
+select hex(cast(e as char)),e+0 from alter_reject;
+-- CTAS and LIKE preserve the identity of a legacy ENUM.
+create table legacy_src(e enum('A','a'));
+insert into legacy_src values (2);
+create table legacy_ctas as select e from legacy_src;
+show create table legacy_ctas;
+create table legacy_like like legacy_ctas;
+insert into legacy_like values ('a');
+select hex(cast(e as char)),e+0 from legacy_like;
+alter table legacy_like add another enum('x');
+-- 4.2 cannot represent a three-byte ENUM repertoire as utf8mb4.
+create table invalid_column(e enum('a') character set latin1 collate utf8mb4_bin);
+create table invalid_table(e int) character set latin1 collate utf8mb4_bin;
+create table empty_table_default(i int) collate '';
+create table empty_column(e enum('a') collate '') collate utf8mb4_bin;
+alter table alter_reject modify e enum('a') collate '';
+create table mb3_column(e enum('😀') character set utf8mb3 collate utf8mb3_bin);
+create table mb4_column(e enum('😀') character set utf8mb4 collate utf8mb4_bin);
+insert into mb4_column values ('😀');
+select hex(cast(e as char)),e+0 from mb4_column;
+
+create table empty_src(id int,e enum('','x') collate utf8mb4_bin);
+create table empty_dst(id int,e enum('x','') collate utf8mb4_bin);
+insert into empty_src values (1,1),(3,null);
+insert ignore into empty_src values (2,'invalid');
+insert into empty_dst select id,e from empty_src;
+select id,e+0,e is null from empty_dst order by id;
+create table no_empty(id int,e enum('x') collate utf8mb4_bin);
+insert into no_empty select id,e from empty_src where id=2;
+insert into no_empty select id,e from empty_src where id=1;
+select id,e+0 from no_empty;
+
+-- Retain an unsupported table default even when the table has no ENUM yet.
+create table unsupported_default(id int) collate=utf8mb4_unicode_ci;
+alter table unsupported_default add e enum('a','A');
+alter table unsupported_default add e enum('a','A') collate utf8mb4_bin;
+insert into unsupported_default values(1,'A');
+create table unsupported_copy like unsupported_default;
+insert into unsupported_copy values(2,'A');
+select id,hex(cast(e as char)),e+0 from unsupported_copy;
+alter table unsupported_default add x int;
+alter table unsupported_default add missing enum('x','X');
+show create table unsupported_default;
+set sql_mode=@saved_mode;
+drop database enum_collation_assignment;

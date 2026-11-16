@@ -21,9 +21,10 @@ import "strconv"
 // ordinary SQL numeric literals retain strict ENUM assignment semantics.
 // EnumValues must describe the source column, not just the destination.
 type StoredEnumValue struct {
-	Ordinal      uint16
-	EnumValues   string
-	EnumEncoding uint32
+	Ordinal       uint16
+	EnumValues    string
+	EnumEncoding  uint32
+	EnumCollation uint32
 }
 
 func (node *StoredEnumValue) String() string {

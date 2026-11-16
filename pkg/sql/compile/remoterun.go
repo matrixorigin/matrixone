@@ -150,6 +150,11 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
+	if isRemote {
+		if err := plan2.RequireEnumCollationProtocol(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	ctx := &scopeContext{
 		parent: nil,
 		id:     p.PipelineId,

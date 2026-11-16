@@ -326,6 +326,35 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	return nil
 }
 
+// Historical CREATE SQL may name a collation that 4.2 ignored. Reconstruct
+// ENUM-bearing schemas from their typed metadata so a new reader does not
+// reinterpret the original spelling as a newly authored ENUM identity.
+func tableDumpManifestCreateSQL(def *plan.TableDef) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	needsRebuild := def.DefaultCharset != 0 || def.EnumUnsupportedDefault != ""
+	for _, col := range def.Cols {
+		if col != nil && !col.Hidden && types.T(col.Typ.Id) == types.T_enum {
+			needsRebuild = true
+		}
+	}
+	if !needsRebuild {
+		return def.Createsql, nil
+	}
+	if def.TableType == catalog.SystemClusterRel || def.TableType == catalog.SystemExternalRel ||
+		def.Partition != nil || len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return "", moerr.NewNotSupportedNoCtx("DUMP TABLE cannot faithfully reconstruct ENUM metadata")
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return "", moerr.NewNotSupportedNoCtx("DUMP TABLE cannot faithfully reconstruct ENUM metadata")
+		}
+	}
+	returnSQL, _, err := sqlplan.ConstructCreateTableSQL(nil, def, nil, false, nil)
+	return returnSQL, err
+}
+
 func validateTableDumpRelations(ctx context.Context, refs []tableDumpRelationRef) error {
 	for _, ref := range refs {
 		if err := validateTableDumpSchema(ref.relation.GetTableDef(ctx)); err != nil {
@@ -844,10 +873,14 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err = validateTableDumpRelations(ctx, refs); err != nil {
 		return err
 	}
+	manifestCreateSQL, err := tableDumpManifestCreateSQL(def)
+	if err != nil {
+		return err
+	}
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: manifestCreateSQL, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)

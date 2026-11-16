@@ -1015,7 +1015,7 @@ func (p *enumDomainParameter) init(ivecs []*vector.Vector, length int) error {
 		payload:  vector.GenerateFunctionStrParameter(ivecs[0]),
 		constant: ivecs[0].IsConst(),
 	}
-	if len(ivecs) == 3 {
+	if len(ivecs) >= 3 {
 		p.encoding = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 		p.constant = p.constant && ivecs[2].IsConst()
 	}
@@ -1101,24 +1101,58 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		return err
 	}
 	values := vector.GenerateFunctionStrParameter(ivecs[1])
+	var identities vector.FunctionParameterWrapper[int64]
+	if len(ivecs) == 4 {
+		identities = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3])
+	}
 	var valueIndex *enumValueIndex
-	if domain.constant && !domain.null {
+	if domain.constant && !domain.null && identities == nil {
 		valueIndex = buildEnumValueIndexForBatch(domain.members, length)
 	}
+	var collatedIndex *types.EnumCollatedIndex
+	var indexedIdentity uint32
 	for i := uint64(0); i < uint64(length); i++ {
 		members, domainNull, err := domain.get(i)
 		if err != nil {
 			return err
 		} // A malformed definition is never IGNORE-coercible.
 		value, valueNull := values.GetStrValue(i)
-		if domainNull || valueNull {
+		identity := uint32(0)
+		identityNull := false
+		if identities != nil {
+			raw, null := identities.GetValue(i)
+			identityNull = null
+			if !null {
+				if raw < 0 || raw > int64(^uint32(0)) {
+					return moerr.NewInvalidInputNoCtxf("unsupported ENUM collation %d", raw)
+				}
+				identity = uint32(raw)
+				if err := types.ValidateEnumCollation(identity); err != nil {
+					return err
+				}
+			}
+		}
+		if domainNull || valueNull || identityNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
 		var index types.Enum
-		if valueIndex != nil {
+		if identities != nil && identity != types.EnumCollationLegacy {
+			if collatedIndex == nil && domain.constant && ivecs[3].IsConst() && length >= enumValueIndexMinRows && len(members) >= enumValueIndexMinLabels {
+				collatedIndex, err = types.NewEnumCollatedIndex(members, identity)
+				if err != nil {
+					return err
+				}
+				indexedIdentity = identity
+			}
+			if collatedIndex != nil && indexedIdentity == identity {
+				index, err = collatedIndex.Parse(functionUtil.QuickBytesToStr(value))
+			} else {
+				index, err = members.ParseCollated(functionUtil.QuickBytesToStr(value), identity)
+			}
+		} else if valueIndex != nil {
 			index, err = valueIndex.parse(functionUtil.QuickBytesToStr(value))
 		} else {
 			index, err = members.Parse(functionUtil.QuickBytesToStr(value))

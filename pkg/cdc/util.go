@@ -393,9 +393,12 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
+		if value == 0 {
+			return nil, moerr.NewNotSupported(ctx, "CDC cannot safely replicate ENUM error ordinal 0 through a SQL sink")
+		}
+		// A label may equal the decimal spelling of another ordinal. Numeric
+		// literals preserve ordinal writes when target member order matches.
+		sqlBuff = appendUint64(sqlBuff, uint64(value))
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",

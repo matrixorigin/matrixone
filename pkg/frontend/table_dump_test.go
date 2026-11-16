@@ -851,6 +851,29 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestTableDumpManifestPreservesEnumIdentity(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(e ENUM('A','a') COLLATE utf8mb4_bin)",
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	legacySQL, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, legacySQL, "enum('A','a')")
+	require.NotContains(t, legacySQL, "utf8mb4_bin")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	binarySQL, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, binarySQL, "COLLATE utf8mb4_bin")
+	def.EnumUnsupportedDefault = "utf8mb4_unicode_ci"
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationLegacy
+	_, err = tableDumpManifestCreateSQL(def)
+	require.ErrorContains(t, err, "cannot replay a legacy ENUM")
+}
+
 func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalETLFS("fixture", t.TempDir())

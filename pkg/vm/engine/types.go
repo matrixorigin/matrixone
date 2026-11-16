@@ -206,10 +206,12 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:    tableDef.FeatureFlag,
-		AutoIncrOffset: tableDef.AutoIncrOffset,
-		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
-		Checks:         tableDef.Checks,
+		FeatureFlag:            tableDef.FeatureFlag,
+		AutoIncrOffset:         tableDef.AutoIncrOffset,
+		AutoIncrEpoch:          tableDef.AutoIncrEpoch,
+		DefaultCharset:         tableDef.DefaultCharset,
+		EnumUnsupportedDefault: tableDef.EnumUnsupportedDefault,
+		Checks:                 tableDef.Checks,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -265,6 +267,7 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 		colTyp := col.GetTyp()
 		attrType := types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale())
 		attrType.SetEnumEncoding(colTyp.GetEnumEncoding())
+		attrType.SetEnumCollation(colTyp.GetEnumCollation())
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),

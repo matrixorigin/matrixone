@@ -443,6 +443,15 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	if err := RequireEnumCollationProtocol(ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
+	for _, option := range stmt.Options {
+		switch option.(type) {
+		case *tree.TableOptionCharset, *tree.TableOptionCollate:
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "ALTER TABLE charset/collation defaults and conversion")
+		}
+	}
 	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 	if err != nil {
 		return nil, err

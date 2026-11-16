@@ -11666,7 +11666,7 @@ column_attribute_elem:
     }
 |   default_opt CHARACTER SET equal_opt ident
     {
-        $$ = nil
+        $$ = tree.NewAttributeCharset($5.Compare())
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {
