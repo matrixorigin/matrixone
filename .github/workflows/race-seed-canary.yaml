@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -34,7 +34,7 @@ on:
         type: boolean
         default: false
       matrixone_sha:
-        description: Full MatrixOne main SHA; use the same SHA for every arm
+        description: Full MatrixOne SHA; for gomod-warm, the completed cold run ID
         required: true
         type: string
         default: '3ac87c30625fc082391e5384a4c94e50a2916cf6'
@@ -53,6 +53,22 @@ permissions:
   contents: read
 
 jobs:
+  cs-gomod-compare:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && contains(fromJSON('["gomod-cold","gomod-warm"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-gomod-comparison
+      cancel-in-progress: false
+    uses: matrixorigin/CI/.github/workflows/coverage-gomod-compare.yaml@c06ee89b1878535084505c74582a946e707616ee
+    with:
+      cache_seed: false
+      cache_mode: ${{ inputs.coverage_comparison == 'gomod-cold' && 'cold' || 'warm' }}
+      seed_run_id: ${{ inputs.coverage_comparison == 'gomod-warm' && inputs.matrixone_sha || '' }}
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   cs-go-mod-cache-readonly:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'go-mod-cache-readonly'
     runs-on: cs-mnl2-medium-2c8g
