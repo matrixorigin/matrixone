@@ -351,8 +351,22 @@ func (builder *QueryBuilder) finishGroupingStage(
 			}
 		}
 		selected := ctx.projects[:stage.resultLen]
+		keys := append([]*plan.Expr(nil), selected...)
+		for i, expr := range keys {
+			if expr.GetCol() == nil || expr.Typ.NotNullable {
+				continue
+			}
+			// Materialize SQL values without the transported subtotal bitmap.
+			// VALUES copies bytes and NULLs without changing shared input; even
+			// a same-type CAST can round or revalidate already-stored values.
+			keys[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "values", []*plan.Expr{expr})
+			if err != nil {
+				return 0, err
+			}
+			keys[i].Typ = expr.Typ
+		}
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PROJECT, ProjectList: selected,
+			NodeType: plan.Node_PROJECT, ProjectList: keys,
 			Children: []int32{nodeID}, BindingTags: []int32{distinctTag},
 		}, ctx)
 		nodeID = builder.appendDistinctNode(ctx, nodeID)

@@ -523,4 +523,62 @@ select * from selected_sample_composite;
 select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g);
 select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by chosen+1,g;
 
+-- 全局 DISTINCT 合并真实 NULL 和小计 NULL；显式选出的 GROUPING 标记仍是不同结果。
+create table enum_distinct_src(k enum('b','a','c'));
+insert into enum_distinct_src values('a'),('b'),('a'),(null);
+select distinct k from enum_distinct_src group by k with rollup order by k;
+-- @sortkey:0
+select distinct k from enum_distinct_src group by k with rollup;
+select distinct k from enum_distinct_src group by grouping sets ((k),()) order by k;
+select distinct k from enum_distinct_src group by k order by k;
+select k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+select distinct k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+create table enum_distinct_result as select distinct k from enum_distinct_src group by k with rollup order by k;
+select * from enum_distinct_result order by k;
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from enum_distinct_result;
+
+create table set_distinct_src(k set('b','a','c'));
+insert into set_distinct_src values('a'),('b'),('a,b'),(null);
+select distinct k from set_distinct_src group by k with rollup order by k;
+-- @sortkey:0
+select distinct k from set_distinct_src group by k with rollup;
+select distinct k from set_distinct_src group by grouping sets ((k),()) order by k;
+select distinct k,grouping(k) flag from set_distinct_src group by k with rollup order by k,flag;
+create table set_distinct_result as select distinct k from set_distinct_src group by k with rollup;
+select * from set_distinct_result order by k;
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from set_distinct_result;
+
+-- 键宽改变哈希实现时，NULL 去重语义也不能改变；二进制键仍保留原类型。
+create table wide_distinct_src(k bigint,b varbinary(16));
+insert into wide_distinct_src values(1,'a'),(1,'a'),(1,'b'),(null,null);
+select distinct k from wide_distinct_src group by k with rollup order by k;
+select distinct b from wide_distinct_src group by b with rollup order by b;
+select distinct k,b from wide_distinct_src group by grouping sets ((k,b),()) order by k,b;
+create table wide_distinct_result as select distinct b from wide_distinct_src group by b with rollup;
+select hex(b) from wide_distinct_result order by b;
+select table_name,column_name,data_type,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name in ('enum_distinct_result','set_distinct_result','wide_distinct_result')
+and column_name in ('k','b') order by table_name,ordinal_position;
+
+-- DISTINCT 只物化存储值，不能通过同类型转换重复执行写入位宽或几何约束校验。
+create table stored_float(x float(8,2));
+insert into stored_float values(999999.99),(null);
+select x from stored_float order by x;
+select distinct x from stored_float group by x with rollup order by x;
+create table stored_float_result as select distinct x from stored_float group by x with rollup;
+select * from stored_float_result order by x;
+select count(*) total_rows,count(x) non_null_rows from stored_float_result;
+
+create table stored_geometry(g geometry);
+insert into stored_geometry values(st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)')),(null);
+set @saved_grouping_max_points = @@session.max_points_in_geometry;
+set session max_points_in_geometry = 3;
+select st_astext(g) wkt from stored_geometry order by wkt;
+select st_astext(g) wkt from (select distinct g from stored_geometry group by g with rollup) t order by wkt;
+create table stored_geometry_result as select distinct g from stored_geometry group by g with rollup;
+select st_astext(g) wkt from stored_geometry_result order by wkt;
+select count(*) total_rows,count(g) non_null_rows from stored_geometry_result;
+set session max_points_in_geometry = @saved_grouping_max_points;
+select @@session.max_points_in_geometry = @saved_grouping_max_points as restored_geometry_limit;
+
 drop database grouping_ctas_test;
