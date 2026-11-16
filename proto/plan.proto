@@ -1393,6 +1393,9 @@ message Node {
 
   // TABLE_SCAN only: the scan reads a small share of each object it touches.
   bool narrow_scan = 97;
+
+  // TABLE_SCAN only: the fileservice.Policy bits the scan adds to its reads.
+  uint64 read_policy = 98;
 }
 
 message SnapshotExtraInfo {

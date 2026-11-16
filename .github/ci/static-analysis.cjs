@@ -19,7 +19,7 @@ const { category, immutableChanges } = require('./change-scope.cjs');
 
 // Emit one bounded record per main-module package/variant. Go owns import and
 // build-tag resolution, including test-only importers; no source import parser.
-const inventoryFields = 'Name,ImportPath,Dir,Module,Imports,TestImports,XTestImports,' +
+const inventoryFields = 'Name,ImportPath,Dir,Module,Imports,' +
   'GoFiles,CgoFiles,TestGoFiles,XTestGoFiles';
 
 // go list emits adjacent JSON objects rather than an array. Frame the objects;
@@ -49,7 +49,6 @@ function inventory(text) {
           const generatedMain = p.Name === 'main' && p.ImportPath.endsWith('.test') &&
             p.GoFiles?.length && p.GoFiles.every(file => path.isAbsolute(file));
           records.push({ id: p.ImportPath, dir: p.Dir, imports: p.Imports || [],
-            testImports: p.TestImports || [], xTestImports: p.XTestImports || [],
             sources: [...(generatedMain ? [] : p.GoFiles || []), ...(p.CgoFiles || []),
               ...(p.TestGoFiles || []), ...(p.XTestGoFiles || [])] });
         }
@@ -95,36 +94,41 @@ function selectPackages(files, records, root, report = () => {}) {
     owners.set(relative, owner);
     variants.set(record.id, owner);
   }
+  // Imports already resolves production, internal-test and external-test
+  // variants. Keep those identities until traversal ends: a test importer does
+  // not make its owner's unchanged production consumers affected.
   for (const record of records) {
-    const owner = variants.get(record.id);
-    for (const imported of [...(record.imports || []), ...(record.testImports || []),
-      ...(record.xTestImports || [])]) {
-      const dependency = variants.get(imported);
-      if (!dependency) {
+    for (const imported of record.imports || []) {
+      if (!variants.has(imported)) {
         // A main-module test variant missing from discovery is not a known
         // external dependency. Do not guess how its package ID maps.
         if (imported.includes(' [')) return full('test variant is missing from the verified graph');
         continue;
       }
-      if (!reverse.has(dependency)) reverse.set(dependency, new Set());
-      reverse.get(dependency).add(owner);
+      if (!reverse.has(imported)) reverse.set(imported, new Set());
+      reverse.get(imported).add(record.id);
     }
   }
   const selected = new Set();
-  const production = [];
+  const production = new Set();
   for (const file of changed) {
     const owner = owners.get(path.posix.dirname(file));
     if (!owner) return full('changed package is missing from the verified graph');
     selected.add(owner);
-    if (!file.endsWith('_test.go')) production.push(owner);
+    if (!file.endsWith('_test.go')) production.add(owner);
   }
-  const seen = new Set(production);
-  for (let i = 0; i < production.length; i++) {
-    for (const consumer of reverse.get(production[i]) || []) {
-      selected.add(consumer);
+  // A changed production source belongs to every active variant of its owner.
+  const pending = [];
+  for (const [id, owner] of variants) {
+    if (production.has(owner)) pending.push(id);
+  }
+  const seen = new Set(pending);
+  for (let i = 0; i < pending.length; i++) {
+    for (const consumer of reverse.get(pending[i]) || []) {
+      selected.add(variants.get(consumer));
       if (!seen.has(consumer)) {
         seen.add(consumer);
-        production.push(consumer);
+        pending.push(consumer);
       }
     }
   }
