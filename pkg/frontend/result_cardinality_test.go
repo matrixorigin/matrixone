@@ -521,8 +521,8 @@ func TestSaveBatchPersistsBatchLogicalCardinalityForResultScan(t *testing.T) {
 			param := &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs: []plan.ExternAttr{
-						{ColName: "c0", ColIndex: 0},
-						{ColName: "c1", ColIndex: 1},
+						{ColName: "c0", ColIndex: 0, ColFieldIndex: 0},
+						{ColName: "c1", ColIndex: 1, ColFieldIndex: 1},
 					},
 					Cols: []*plan.ColDef{
 						{Typ: plan.Type{Id: int32(types.T_int64)}},
