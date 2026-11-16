@@ -40,3 +40,9 @@ with wall/instructions/allocations/copies; no spill/swap or script verification.
 R2: relational bag identity/error evaluation and planner dependency construction.
 No historical group-count ratio is a speedup forecast. Confirmed regressions
 require diagnosis and a reviewed solution before further production changes.
+
+## Approved regression revision — 2026-11-16
+
+The requester approved the four proposed fixes with “then fix”.
+
+Fix the new repeated LIKE-fold allocations within this PR. For a plain ASCII literal prefix plus one trailing %, compare the existing general-ci character weights directly, with an ASCII byte fast path and GeneralCIWeightRune for Unicode. Preserve malformed-byte/NULL/cancellation/result behavior; existing binary, Unicode-ci, ESCAPE, dynamic and other-pattern paths remain authoritative. Use existing function wrappers/select-list routing; no per-row folded string or new cache/public API. Require allocation/instruction controls and all22 acceptance, without accepting the allocation-count tradeoff.
