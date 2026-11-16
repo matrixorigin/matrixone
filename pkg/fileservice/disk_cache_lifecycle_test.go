@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,10 +85,11 @@ type blockingDiskCacheWriter struct {
 // file.Sync implementation.
 func installBlockedDiskCacheFileSync(cache *DiskCache) (<-chan struct{}, func()) {
 	started := make(chan struct{})
+	markStarted := sync.OnceFunc(func() { close(started) })
 	release := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	cache.fileSync = func(*os.File) error {
-		close(started)
+		markStarted()
 		<-release
 		return nil
 	}
@@ -761,8 +763,10 @@ func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 		record("same update after panic")
 		panic(panickingDiskCacheCallbackPanicValue{})
 	})
+	firstUpdateDone := make(chan struct{})
 	firstCtx = OnDiskCacheWritten(firstCtx, func(string, IOEntry) {
 		record("same update after unformattable panic")
+		close(firstUpdateDone)
 	})
 	nextUpdateDone := make(chan struct{})
 	secondCtx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
@@ -778,17 +782,22 @@ func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 		FilePath: "second",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
 	}, true))
-	select {
-	case <-nextUpdateDone:
-	case <-time.After(diskCacheLifecycleTestTimeout):
-		t.Fatal("callback panic stopped the ordered callback chain")
+	for _, done := range []chan struct{}{firstUpdateDone, nextUpdateDone} {
+		select {
+		case <-done:
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("callback panic stopped the callback chain")
+		}
 	}
+	// The callbacks of an update run in order; updates of different paths may be written,
+	// and their callbacks run, in any order.
+	first := slices.DeleteFunc(slices.Clone(callbackOrder), func(v string) bool { return v == "next update after panic" })
 	require.Equal(t, []string{
 		"panicking callback",
 		"same update after panic",
 		"same update after unformattable panic",
-		"next update after panic",
-	}, callbackOrder)
+	}, first)
+	require.Contains(t, callbackOrder, "next update after panic")
 	require.Equal(t, panicCountBefore+2,
 		promtestutil.ToFloat64(metric.FSDiskCacheAsyncCallbackPanicCounter))
 	require.Eventually(t, func() bool {
@@ -800,7 +809,7 @@ func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 }
 
-func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
+func TestDiskCacheAsyncCallbacksRunOnceAndBounded(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	cache.fileSync = func(*os.File) error { return nil }
 	releaseCallbacks := make(chan struct{})
@@ -837,26 +846,77 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	// applying a lifecycle-test deadline to this contract.
 	cache.Flush(context.Background())
 
-	require.NoError(t, cache.Update(ctx, &IOVector{
-		FilePath: "overflow",
-		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
-	}, true))
+	// With every slot held by a callback, an update waits for one instead of being dropped.
+	overflowDone := make(chan error, 1)
+	go func() {
+		overflowDone <- cache.Update(ctx, &IOVector{
+			FilePath: "overflow",
+			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+		}, true)
+	}()
+	require.Eventually(t, func() bool {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		return cache.async.mu.freed != nil
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	cache.async.mu.Lock()
 	require.Empty(t, cache.async.mu.pending)
 	require.Len(t, cache.async.slots, cap(cache.async.slots))
 	require.Equal(t, int64(cap(cache.async.slots)), cache.async.mu.pendingBytes)
-	require.Equal(t, int64(1), cache.async.mu.dropped)
+	require.Zero(t, cache.async.mu.dropped)
 	cache.async.mu.Unlock()
 
 	unblock()
+	select {
+	case err := <-overflowDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the waiting update did not get a slot")
+	}
+	cache.Flush(context.Background())
+	expectedPaths = append(expectedPaths, "overflow")
+	cache.async.mu.Lock()
+	require.Zero(t, cache.async.mu.dropped)
+	cache.async.mu.Unlock()
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
 		return len(cache.async.slots) == 0 && cache.async.mu.pendingBytes == 0
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	callbackMu.Lock()
-	require.Equal(t, expectedPaths, callbackPaths)
+	require.ElementsMatch(t, expectedPaths, callbackPaths)
 	callbackMu.Unlock()
+}
+
+// The asynchronous updates of different paths are written by several workers at once.
+func TestDiskCacheAsyncUpdatesWriteConcurrently(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	var inSync atomic.Int32
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	cache.fileSync = func(*os.File) error {
+		inSync.Add(1)
+		<-release
+		return nil
+	}
+	ctx := context.Background()
+	for i := 0; i < diskCacheAsyncWorkers; i++ {
+		require.NoError(t, cache.Update(ctx, &IOVector{
+			FilePath: fmt.Sprintf("file-%02d", i),
+			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+		}, true))
+	}
+	require.Eventually(t, func() bool { return inSync.Load() == diskCacheAsyncWorkers },
+		diskCacheLifecycleTestTimeout, time.Millisecond)
+	unblock()
+	cache.Flush(ctx)
+	for i := 0; i < diskCacheAsyncWorkers; i++ {
+		vec := &IOVector{FilePath: fmt.Sprintf("file-%02d", i), Entries: []IOEntry{{Offset: 0, Size: 1}}}
+		require.NoError(t, cache.Read(ctx, vec))
+		require.True(t, vec.Entries[0].done)
+		vec.Release()
+	}
 }
 
 func TestDiskCacheAsyncSetFileReturnsBeforeFinalize(t *testing.T) {
@@ -987,21 +1047,30 @@ func TestDiskCacheAsyncSetFileFinalizeErrorIsFailOpenAndObservable(t *testing.T)
 
 func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
-	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
+	var inSync atomic.Int32
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
+	cache.fileSync = func(*os.File) error {
+		inSync.Add(1)
+		<-release
+		return nil
+	}
 
 	open := func(value string) func(context.Context) (io.ReadCloser, error) {
 		return func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader(value)), nil
 		}
 	}
-	require.NoError(t, cache.setFile(context.Background(), "first", open("first"), true))
-	firstPath := cache.pathForFile("first")
-	select {
-	case <-syncStarted:
-	case <-time.After(diskCacheLifecycleTestTimeout):
-		t.Fatal("first full-file finalizer did not start")
+	// Every worker is blocked finalizing a file, so the next finalizer stays queued.
+	var firstPaths []string
+	for i := 0; i < diskCacheAsyncWorkers; i++ {
+		name := fmt.Sprintf("first-%d", i)
+		require.NoError(t, cache.setFile(context.Background(), name, open(name), true))
+		firstPaths = append(firstPaths, cache.pathForFile(name))
 	}
+	require.Eventually(t, func() bool { return inSync.Load() == diskCacheAsyncWorkers },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "the first full-file finalizers did not start")
 	require.NoError(t, cache.setFile(context.Background(), "queued", open("queued"), true))
 	queuedPath := cache.pathForFile("queued")
 	require.True(t, cache.isUpdating(queuedPath))
@@ -1016,9 +1085,21 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
 	// A timed-out Close starts the background drain but does not join it. Wait
 	// for the queued finalizer to release its path explicitly before inspecting
-	// the cleanup result; the first finalizer is still blocked in file.Sync, so
+	// the cleanup result; the first finalizers are still blocked in file.Sync, so
 	// this unlock can only come from the queued finalizer's doneUpdate path.
 	requireDiskCacheUnlock(t, locker)
+	// The unlocks after this one are not waited for: drain them so the locker never blocks.
+	stopDrain := make(chan struct{})
+	t.Cleanup(func() { close(stopDrain) })
+	go func() {
+		for {
+			select {
+			case <-locker.unlocked:
+			case <-stopDrain:
+				return
+			}
+		}
+	}()
 	require.False(t, cache.isUpdating(queuedPath))
 	require.True(t, cache.writeFailures.failed.Load())
 	_, err := os.Stat(queuedPath)
@@ -1029,7 +1110,9 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	defer finishCancel()
 	cache.Close(finishCtx)
 	require.NoError(t, finishCtx.Err())
-	require.False(t, cache.isUpdating(firstPath))
+	for _, firstPath := range firstPaths {
+		require.False(t, cache.isUpdating(firstPath))
+	}
 	require.False(t, cache.isUpdating(queuedPath))
 	cache.async.mu.Lock()
 	require.Empty(t, cache.async.mu.pending)
@@ -1040,7 +1123,7 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	default:
 		t.Fatal("successful Close did not join the async finalizer generation")
 	}
-	for _, diskPath := range []string{firstPath, queuedPath} {
+	for _, diskPath := range append(firstPaths, queuedPath) {
 		_, err := os.Stat(diskPath)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
@@ -1569,10 +1652,27 @@ func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
 	}, true))
-	require.NoError(t, cache.Update(context.Background(), &IOVector{
-		FilePath: "bar",
-		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
-	}, true))
+	// An update past the pending bytes waits for room, and is dropped when its caller
+	// stops waiting.
+	barCtx, cancelBar := context.WithCancel(context.Background())
+	barDone := make(chan error, 1)
+	go func() {
+		barDone <- cache.Update(barCtx, &IOVector{
+			FilePath: "bar",
+			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+		}, true)
+	}()
+	require.Eventually(t, func() bool {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		return cache.async.mu.freed != nil
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	cancelBar()
+	select {
+	case <-barDone:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the waiting update did not stop with its caller")
+	}
 
 	func() {
 		cache.async.mu.Lock()

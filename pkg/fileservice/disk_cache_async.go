@@ -33,7 +33,10 @@ import (
 )
 
 const (
-	diskCacheAsyncQueueSize       = 64
+	// diskCacheAsyncQueueSize is the most asynchronous updates pending at once.
+	diskCacheAsyncQueueSize = 1024
+	// diskCacheAsyncWorkers is the number of asynchronous updates written at once.
+	diskCacheAsyncWorkers         = 8
 	diskCacheAsyncMaxPendingBytes = int64(64 << 20)
 	diskCacheWriteErrorLogKey     = "disk-cache-write-error"
 	diskCacheWriteRecoveryLogKey  = "disk-cache-write-recovery"
@@ -83,6 +86,8 @@ type diskCacheAsyncState struct {
 		maxPendingBytes int64
 		dropped         int64
 		idle            chan struct{}
+		// freed, when set, is closed once a slot or pending bytes are released.
+		freed chan struct{}
 	}
 }
 
@@ -212,7 +217,11 @@ func cleanupDiskCacheTempFile(file *os.File) error {
 	return errors.Join(closeErr, removeErr)
 }
 
+// scheduleAsyncUpdate queues the write of entry, waiting for a slot and for room in the
+// pending bytes. It drops the write when the cache closes, when ctx ends first, or when
+// the entry is larger than all the pending bytes allowed.
 func (d *DiskCache) scheduleAsyncUpdate(
+	ctx context.Context,
 	filePath string,
 	diskPath string,
 	entry IOEntry,
@@ -221,29 +230,38 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	dataBytes := int64(len(entry.Data))
 	a := &d.async
 	a.mu.Lock()
-	if a.mu.closed {
-		a.dropAsyncUpdateLocked()
+	for {
+		if a.mu.closed || dataBytes > a.mu.maxPendingBytes {
+			a.dropAsyncUpdateLocked()
+			a.mu.Unlock()
+			return
+		}
+		if _, ok := a.mu.pending[diskPath]; ok {
+			// FileService objects are immutable. One pending write for the same
+			// canonical range is sufficient and avoids copying duplicate data.
+			a.mu.Unlock()
+			return
+		}
+		if len(a.slots) < cap(a.slots) && dataBytes <= a.mu.maxPendingBytes-a.mu.pendingBytes {
+			a.slots <- struct{}{}
+			break
+		}
+		if a.mu.freed == nil {
+			a.mu.freed = make(chan struct{})
+		}
+		freed := a.mu.freed
 		a.mu.Unlock()
-		return
-	}
-	if _, ok := a.mu.pending[diskPath]; ok {
-		// FileService objects are immutable. One pending write for the same
-		// canonical range is sufficient and avoids copying duplicate data.
-		a.mu.Unlock()
-		return
-	}
-	select {
-	case a.slots <- struct{}{}:
-	default:
-		a.dropAsyncUpdateLocked()
-		a.mu.Unlock()
-		return
-	}
-	if dataBytes > a.mu.maxPendingBytes-a.mu.pendingBytes {
-		<-a.slots
-		a.dropAsyncUpdateLocked()
-		a.mu.Unlock()
-		return
+		select {
+		case <-freed:
+		case <-ctx.Done():
+		case <-a.ctx.Done():
+		}
+		a.mu.Lock()
+		if ctx.Err() != nil {
+			a.dropAsyncUpdateLocked()
+			a.mu.Unlock()
+			return
+		}
 	}
 	if len(a.mu.pending) == 0 {
 		a.mu.idle = make(chan struct{})
@@ -254,7 +272,7 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	a.mu.Unlock()
 
 	a.startOnce.Do(func() {
-		go d.runAsyncUpdates()
+		d.startAsyncWorkers()
 	})
 
 	job := &diskCacheAsyncUpdate{
@@ -309,6 +327,7 @@ func (d *DiskCache) releaseAsyncFileFinalizeReservation(diskPath string) {
 	a.mu.Lock()
 	delete(a.mu.pending, diskPath)
 	<-a.slots
+	a.wakeFreedLocked()
 	if len(a.mu.pending) == 0 {
 		close(a.mu.idle)
 	}
@@ -323,7 +342,7 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 ) {
 	a := &d.async
 	a.startOnce.Do(func() {
-		go d.runAsyncUpdates()
+		d.startAsyncWorkers()
 	})
 
 	job := &diskCacheAsyncUpdate{
@@ -355,13 +374,37 @@ func (d *DiskCache) claimAsyncPublication() bool {
 	return !a.mu.closed
 }
 
+// wakeFreedLocked wakes the updates waiting for a slot or pending bytes.
+func (a *diskCacheAsyncState) wakeFreedLocked() {
+	if a.mu.freed != nil {
+		close(a.mu.freed)
+		a.mu.freed = nil
+	}
+}
+
 func (a *diskCacheAsyncState) dropAsyncUpdateLocked() {
 	a.mu.dropped++
 	metric.FSDiskCacheAsyncUpdateDroppedCounter.Inc()
 }
 
+// startAsyncWorkers starts the workers that write asynchronous updates; done is closed
+// once all of them exit.
+func (d *DiskCache) startAsyncWorkers() {
+	var workers sync.WaitGroup
+	for range diskCacheAsyncWorkers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			d.runAsyncUpdates()
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(d.async.done)
+	}()
+}
+
 func (d *DiskCache) runAsyncUpdates() {
-	defer close(d.async.done)
 	for {
 		select {
 		case <-d.async.ctx.Done():
@@ -497,6 +540,7 @@ func (d *DiskCache) releaseAsyncUpdateResourcesLocked(job *diskCacheAsyncUpdate)
 	job.resourceOnce.Do(func() {
 		d.async.mu.pendingBytes -= int64(len(job.entry.Data))
 		<-d.async.slots
+		d.async.wakeFreedLocked()
 		job.entry.Data = nil
 		job.callbacks = nil
 	})

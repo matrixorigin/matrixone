@@ -859,7 +859,7 @@ func (d *DiskCache) Update(
 
 		diskPath := d.pathForIOEntry(path.File, entry)
 		if async {
-			d.scheduleAsyncUpdate(vector.FilePath, diskPath, entry, onWritten)
+			d.scheduleAsyncUpdate(ctx, vector.FilePath, diskPath, entry, onWritten)
 			continue
 		}
 		if err := d.updateEntry(ctx, vector.FilePath, diskPath, entry, onWritten); err != nil {
