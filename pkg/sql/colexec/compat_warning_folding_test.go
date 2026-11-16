@@ -70,6 +70,9 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 		{"str_to_date trailing datetime warns per row", "str_to_date", []*plan.Expr{sval("2024-01-02 10:30:45xyz"), sval("%Y-%m-%d %H:%i:%s"), target(types.T_datetime)}, 3, false},
 		{"str_to_date invalid time warns per row", "str_to_date", []*plan.Expr{sval("bad"), sval("%H:%i:%s"), target(types.T_time)}, 3, false},
 		{"str_to_date valid date folds", "str_to_date", []*plan.Expr{sval("2024-01-02"), sval("%Y-%m-%d"), target(types.T_date)}, 0, true},
+		{"json_value null on error warns per row", "json_value", []*plan.Expr{sval(`"bad"`), sval("$"), target(types.T_int64), i64(1), i64(0), i64(1), i64(7)}, 3, false},
+		{"json_value default on error warns per row", "json_value", []*plan.Expr{sval(`"bad"`), sval("$"), target(types.T_int64), i64(1), i64(0), i64(3), i64(7)}, 3, false},
+		{"json_value valid constant folds", "json_value", []*plan.Expr{sval(`"7"`), sval("$"), target(types.T_int64), i64(1), i64(0), i64(1), i64(7)}, 0, true},
 		{"format string number warns per row", "format", []*plan.Expr{sval("1234.5"), i64(2), sval("bad_locale")}, 3, false},
 		{"format known locale folds", "format", []*plan.Expr{i64(1234567), i64(2), sval("de_DE")}, 0, true},
 	} {
@@ -95,6 +98,45 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 			require.Equal(t, tc.wantWarnings, sink.warningCount)
 			require.Equal(t, tc.wantFold, executor.(*FunctionExpressionExecutor).folded.canFold)
 		})
+	}
+}
+
+func TestJSONValueWarningsFollowSelectedRows(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	text := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	number := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+	}
+	target := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	expr := bindTestFunction(t, proc, "json_value", text(`"bad"`), text("$"), target, number(1), number(0), number(1), number(0))
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(3)
+	for _, tc := range []struct {
+		selected []bool
+		warnings int
+	}{
+		{[]bool{false, false, false}, 0},
+		{[]bool{true, false, true}, 2},
+		{nil, 5},
+	} {
+		result, err := executor.Eval(proc, []*batch.Batch{input}, tc.selected)
+		require.NoError(t, err)
+		require.Equal(t, 3, result.Length())
+		for row := range 3 {
+			require.True(t, result.IsNull(uint64(row)))
+		}
+		require.Equal(t, tc.warnings, sink.warningCount)
 	}
 }
 

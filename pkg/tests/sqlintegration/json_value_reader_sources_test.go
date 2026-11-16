@@ -140,3 +140,58 @@ func TestJSONValuePublishedInputSources(t *testing.T) {
 		require.Equal(t, int64(5), actual)
 	})
 }
+
+func TestJSONValueWarningCardinalitySQL(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		exec := func(query string) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, query)
+			require.NoError(t, err)
+		}
+		exec("create database json_value_warning_cardinality")
+		defer cleanupSQLIntegration(t, cn, "drop database if exists json_value_warning_cardinality")
+		exec("use json_value_warning_cardinality")
+		exec("create table rows_for_warning (id int primary key)")
+		exec("insert into rows_for_warning values (1), (2), (3)")
+		valid := func(value int64) sql.NullInt64 { return sql.NullInt64{Int64: value, Valid: true} }
+		for _, tc := range []struct {
+			name     string
+			query    string
+			want     []sql.NullInt64
+			warnings int
+		}{
+			{"null on error", `select json_value('"bad"', '$' returning signed null on error) as v from rows_for_warning order by id`, []sql.NullInt64{{}, {}, {}}, 3},
+			{"default on error", `select json_value('"bad"', '$' returning signed default 7 on error) as v from rows_for_warning order by id`, []sql.NullInt64{valid(7), valid(7), valid(7)}, 3},
+			{"valid constant", `select json_value('"7"', '$' returning signed null on error) as v from rows_for_warning order by id`, []sql.NullInt64{valid(7), valid(7), valid(7)}, 0},
+			{"selected row", `select case when id=2 then json_value('"bad"', '$' returning signed null on error) else 5 end as v from rows_for_warning order by id`, []sql.NullInt64{valid(5), {}, valid(5)}, 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := conn.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				defer rows.Close()
+				var got []sql.NullInt64
+				for rows.Next() {
+					var value sql.NullInt64
+					require.NoError(t, rows.Scan(&value))
+					got = append(got, value)
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				require.Equal(t, tc.want, got)
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx, "show count(*) warnings").Scan(&count))
+				require.Equal(t, tc.warnings, count)
+			})
+		}
+	})
+}

@@ -2182,8 +2182,9 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
-				args:       []types.T{types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any},
+				overloadId:           2,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any},
 				retType: func(parameters []types.Type) types.Type {
 					if len(parameters) > 2 && parameters[2].Oid != types.T_any {
 						return parameters[2]

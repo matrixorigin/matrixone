@@ -540,7 +540,7 @@ func appendJSONValueWarning(proc *process.Process, err error, conversion bool) {
 	if proc == nil || err == nil {
 		return
 	}
-	appender, ok := proc.GetSession().(warningDiagnosticAppender)
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
 	if ok {
 		code := moerr.ER_INVALID_JSON_TEXT
 		if conversion {

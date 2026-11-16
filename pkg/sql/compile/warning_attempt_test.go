@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJSONValueWarningAttemptOwnership(t *testing.T) {
+	for _, success := range []bool{false, true} {
+		t.Run(fmt.Sprintf("commit=%t", success), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			session := &remoteWarningSession{}
+			proc.Session = session
+			mp := proc.Mp()
+			const rows = 3
+			text := func(value string) *vector.Vector {
+				v, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(value), rows, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			number := func(value int64) *vector.Vector {
+				v, err := vector.NewConstFixed(types.T_int64.ToType(), value, rows, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			null := func() *vector.Vector {
+				v := vector.NewConstNull(types.T_int64.ToType(), rows, mp)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			args := []*vector.Vector{text(`"bad"`), text("$"), null(), number(1), null(), number(1), null()}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+			t.Cleanup(result.Free)
+			require.NoError(t, result.PreExtendAndReset(rows))
+			attempt := newWarningAttempt(proc, false)
+			defer func() {
+				if attempt != nil {
+					attempt.finish(false, session)
+				}
+			}()
+			require.NoError(t, planfunction.JsonValue(args, result, proc, rows, nil))
+			for row := range rows {
+				require.True(t, result.GetResultVector().IsNull(uint64(row)))
+			}
+			require.Zero(t, session.totalWarnings, "an in-flight attempt must not publish to the session")
+			attempt.finish(success, session)
+			attempt = nil
+			if success {
+				require.Equal(t, uint64(rows), session.totalWarnings)
+			} else {
+				require.Zero(t, session.totalWarnings)
+			}
+			require.Nil(t, proc.WarningSink)
+		})
+	}
+}
 
 func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 	for _, outcome := range []string{"success", "parent failure", "child failure", "retry"} {

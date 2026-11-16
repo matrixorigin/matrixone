@@ -349,3 +349,39 @@ select w, d, v from json_value_calendar_view;
 w	d	v
 1	366	1
 drop view json_value_calendar_view;
+drop table if exists json_value_warning_rows;
+create table json_value_warning_rows (id int primary key);
+insert into json_value_warning_rows values (1), (2), (3);
+select json_value('"bad"', '$' returning signed null on error) as v from json_value_warning_rows order by id;
+v
+null
+null
+null
+show count(*) warnings;
+@@session.warning_count
+3
+select json_value('"bad"', '$' returning signed default 7 on error) as v from json_value_warning_rows order by id;
+v
+7
+7
+7
+show count(*) warnings;
+@@session.warning_count
+3
+select json_value('"7"', '$' returning signed null on error) as v from json_value_warning_rows order by id;
+v
+7
+7
+7
+show count(*) warnings;
+@@session.warning_count
+0
+select case when id=2 then json_value('"bad"', '$' returning signed null on error) else 5 end as v from json_value_warning_rows order by id;
+v
+5
+null
+5
+show count(*) warnings;
+@@session.warning_count
+1
+drop table json_value_warning_rows;

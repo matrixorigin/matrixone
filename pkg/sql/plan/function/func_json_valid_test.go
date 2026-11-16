@@ -2571,6 +2571,102 @@ func TestJsonValueWarningDiagnostics(t *testing.T) {
 	require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
 }
 
+func TestJsonValueWarningSinkOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response int64
+		want     int64
+		isNull   bool
+	}{
+		{"null on error", jsonValueNullResponse, 0, true},
+		{"default on error", jsonValueDefaultResponse, 7, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			session := &jsonValueWarningRecorder{}
+			probe := &process.WarningProbe{}
+			proc.Session = session
+			proc.WarningSink = probe
+			target := types.T_int64.ToType()
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`"bad"`}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$"}, nil),
+				NewFunctionTestConstInput(target, []int64{0}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+				NewFunctionTestConstInput(target, []int64{0}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.response}, nil),
+				NewFunctionTestConstInput(target, []int64{7}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(target, false, []int64{tc.want}, []bool{tc.isNull}), JsonValue)
+			defer fc.Free()
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+			require.True(t, probe.Warned(), "the active attempt must own the warning")
+			require.Empty(t, session.warnings, "a speculative warning must not escape to the session")
+
+			proc.WarningSink = nil
+			ok, info = fc.Run()
+			require.True(t, ok, info)
+			require.Len(t, session.warnings, 1, "without an attempt, the session owns the warning")
+		})
+	}
+}
+
+func TestJsonValueDirectWarningCardinality(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		document string
+		response int64
+		want     int64
+		isNull   bool
+		warnings int
+	}{
+		{"null on error", `"bad"`, jsonValueNullResponse, 0, true, 3},
+		{"default on error", `"bad"`, jsonValueDefaultResponse, 7, false, 3},
+		{"valid constant", `"7"`, jsonValueNullResponse, 7, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			session := &jsonValueWarningRecorder{}
+			proc.Session = session
+			mp := proc.Mp()
+			const rows = 3
+			text := func(value string) *vector.Vector {
+				v, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(value), rows, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			number := func(value int64) *vector.Vector {
+				v, err := vector.NewConstFixed(types.T_int64.ToType(), value, rows, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			null := func() *vector.Vector {
+				v := vector.NewConstNull(types.T_int64.ToType(), rows, mp)
+				t.Cleanup(func() { v.Free(mp) })
+				return v
+			}
+			args := []*vector.Vector{text(tc.document), text("$"), null(), number(jsonValueNullResponse), null(), number(tc.response), number(7)}
+			result, err := RunFunctionDirectly(proc, EncodeOverloadID(JSON_VALUE, 2), args, rows)
+			require.NoError(t, err)
+			t.Cleanup(func() { result.Free(mp) })
+			require.Equal(t, rows, result.Length())
+			for row := range rows {
+				require.Equal(t, tc.isNull, result.IsNull(uint64(row)))
+				if !tc.isNull {
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](result, row))
+				}
+			}
+			require.Len(t, session.warnings, tc.warnings)
+		})
+	}
+}
+
 func TestJsonValueContractBoundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

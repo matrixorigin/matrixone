@@ -201,3 +201,17 @@ drop view if exists json_value_calendar_view;
 create view json_value_calendar_view as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v;
 select w, d, v from json_value_calendar_view;
 drop view json_value_calendar_view;
+
+-- Constant conversion warnings belong to each evaluated row, including masked branches.
+drop table if exists json_value_warning_rows;
+create table json_value_warning_rows (id int primary key);
+insert into json_value_warning_rows values (1), (2), (3);
+select json_value('"bad"', '$' returning signed null on error) as v from json_value_warning_rows order by id;
+show count(*) warnings;
+select json_value('"bad"', '$' returning signed default 7 on error) as v from json_value_warning_rows order by id;
+show count(*) warnings;
+select json_value('"7"', '$' returning signed null on error) as v from json_value_warning_rows order by id;
+show count(*) warnings;
+select case when id=2 then json_value('"bad"', '$' returning signed null on error) else 5 end as v from json_value_warning_rows order by id;
+show count(*) warnings;
+drop table json_value_warning_rows;
