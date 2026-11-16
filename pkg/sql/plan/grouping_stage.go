@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -357,18 +356,10 @@ func (builder *QueryBuilder) finishGroupingStage(
 			if expr.GetCol() == nil || expr.Typ.NotNullable {
 				continue
 			}
-			// A transported column can still carry the subtotal bitmap. DISTINCT
-			// compares SQL values, so materialize ordinary NULLs without mutating
-			// that shared input. Bind CAST directly: the usual cast helpers elide
-			// same-type casts, leaving provenance in the rewritten AGG keys.
-			name := "cast"
-			args := []*plan.Expr{expr, {Typ: expr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}}
-			if !function.IfTypeCastSupported(types.T(expr.Typ.Id), types.T(expr.Typ.Id)) {
-				// UUID has no identity CAST; one-argument COALESCE also
-				// materializes the value without carrying its grouping bitmap.
-				name, args = "coalesce", args[:1]
-			}
-			keys[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+			// Materialize SQL values without the transported subtotal bitmap.
+			// VALUES copies bytes and NULLs without changing shared input; even
+			// a same-type CAST can round or revalidate already-stored values.
+			keys[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "values", []*plan.Expr{expr})
 			if err != nil {
 				return 0, err
 			}

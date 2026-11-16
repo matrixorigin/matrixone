@@ -1427,4 +1427,46 @@ and column_name in ('k','b') order by table_name,ordinal_position;
 enum_distinct_result  ¦  k  ¦  VARCHAR  ¦  YES  𝄀
 set_distinct_result  ¦  k  ¦  VARCHAR  ¦  YES  𝄀
 wide_distinct_result  ¦  b  ¦  VARBINARY  ¦  YES
+create table stored_float(x float(8,2));
+insert into stored_float values(999999.99),(null);
+select x from stored_float order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+select distinct x from stored_float group by x with rollup order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+create table stored_float_result as select distinct x from stored_float group by x with rollup;
+select * from stored_float_result order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+select count(*) total_rows,count(x) non_null_rows from stored_float_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  𝄀
+2  ¦  1
+create table stored_geometry(g geometry);
+insert into stored_geometry values(st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)')),(null);
+set @saved_grouping_max_points = @@session.max_points_in_geometry;
+set session max_points_in_geometry = 3;
+select st_astext(g) wkt from stored_geometry order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+select st_astext(g) wkt from (select distinct g from stored_geometry group by g with rollup) t order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+create table stored_geometry_result as select distinct g from stored_geometry group by g with rollup;
+select st_astext(g) wkt from stored_geometry_result order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+select count(*) total_rows,count(g) non_null_rows from stored_geometry_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  𝄀
+2  ¦  1
+set session max_points_in_geometry = @saved_grouping_max_points;
+select @@session.max_points_in_geometry = @saved_grouping_max_points as restored_geometry_limit;
+➤ restored_geometry_limit[-7,1,0]  𝄀
+1
 drop database grouping_ctas_test;

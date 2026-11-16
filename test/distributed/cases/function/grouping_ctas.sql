@@ -560,4 +560,25 @@ select table_name,column_name,data_type,is_nullable from information_schema.colu
 where table_schema='grouping_ctas_test' and table_name in ('enum_distinct_result','set_distinct_result','wide_distinct_result')
 and column_name in ('k','b') order by table_name,ordinal_position;
 
+-- DISTINCT 只物化存储值，不能通过同类型转换重复执行写入位宽或几何约束校验。
+create table stored_float(x float(8,2));
+insert into stored_float values(999999.99),(null);
+select x from stored_float order by x;
+select distinct x from stored_float group by x with rollup order by x;
+create table stored_float_result as select distinct x from stored_float group by x with rollup;
+select * from stored_float_result order by x;
+select count(*) total_rows,count(x) non_null_rows from stored_float_result;
+
+create table stored_geometry(g geometry);
+insert into stored_geometry values(st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)')),(null);
+set @saved_grouping_max_points = @@session.max_points_in_geometry;
+set session max_points_in_geometry = 3;
+select st_astext(g) wkt from stored_geometry order by wkt;
+select st_astext(g) wkt from (select distinct g from stored_geometry group by g with rollup) t order by wkt;
+create table stored_geometry_result as select distinct g from stored_geometry group by g with rollup;
+select st_astext(g) wkt from stored_geometry_result order by wkt;
+select count(*) total_rows,count(g) non_null_rows from stored_geometry_result;
+set session max_points_in_geometry = @saved_grouping_max_points;
+select @@session.max_points_in_geometry = @saved_grouping_max_points as restored_geometry_limit;
+
 drop database grouping_ctas_test;

@@ -4510,13 +4510,13 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	toVec := result.GetResultVector()
 	toVec.Reset(*toVec.GetType())
 
-	sels := make([]int64, fromVec.Length())
-	for j := 0; j < len(sels); j++ {
-		sels[j] = int64(j)
+	if err := toVec.UnionBatch(fromVec, 0, fromVec.Length(), nil, proc.GetMPool()); err != nil {
+		return err
 	}
-
-	err := toVec.Union(fromVec, sels, proc.GetMPool())
-	return err
+	// VALUES materializes SQL values, not the internal subtotal provenance.
+	// Keep the copied bytes and NULLs intact and leave the input untouched.
+	toVec.GetGrouping().Clear()
+	return nil
 }
 
 func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
