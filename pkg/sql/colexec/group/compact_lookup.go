@@ -196,30 +196,28 @@ func (lookup *compactGroupLookup) previewFlatTuple(vecs []*vector.Vector, start,
 
 func compactInlineCharCode(value *types.Varlena) (uint32, bool) {
 	length := int(value[0])
-	// Ordinary CHAR(1) needs no trim loop or general length dispatch.
-	if length == 1 {
-		b := value[1]
-		code := uint32(b) + 1
-		if b == ' ' {
-			code = 0
-		}
-		return code, true
-	}
 	if length > types.VarlenaInlineSize {
 		return 0, false
 	}
-	// Inline descriptors contain a length byte followed by at most 23 bytes.
-	// Index that bounded carrier directly rather than constructing a slice.
-	for length > 0 && value[length] == ' ' {
-		length--
-	}
+	// A one-byte value needs no trim loop. Share the successful return so
+	// this decoder stays within the compiler's inlining budget.
 	if length > 1 {
-		return 0, false
+		for length > 0 && value[length] == ' ' {
+			length--
+		}
+		if length > 1 {
+			return 0, false
+		}
 	}
-	if length == 0 {
-		return 0, true
+	var code uint32
+	if length > 0 {
+		b := value[1]
+		code = uint32(b) + 1
+		if b == ' ' {
+			code = 0
+		}
 	}
-	return uint32(value[1]) + 1, true
+	return code, true
 }
 
 func (hr *ResHashRelated) publishCompactGroups(values []uint64) {
