@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path"
@@ -25,7 +24,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"go.uber.org/zap"
 )
 
 const (
@@ -69,7 +70,8 @@ func IndexObjectCache(fs FileService) (*IndexFileCache, FileService) {
 }
 
 func (s *S3FS) cachesIndexObjects() bool {
-	return s.indexFileCache != nil
+	// Index objects enter the index-file cache through the disk cache's download.
+	return s.indexFileCache != nil && s.diskCache != nil
 }
 
 // fillTarget returns where a whole-object fill of the object at filePath for a read
@@ -115,7 +117,13 @@ func (t indexFillTarget) publish(ctx context.Context, tempPath string, _ int64) 
 		[]IndexCacheFile{{Name: IndexObjectFile, Path: tempPath}})
 	// The put moves the file, copies it across file systems, or does not take it.
 	if rmErr := os.Remove(tempPath); rmErr != nil && !os.IsNotExist(rmErr) {
-		return errors.Join(err, rmErr)
+		return rmErr
+	}
+	// A failed put is the index-file cache's, not a failed write of the disk cache.
+	if err != nil && ctx.Err() == nil {
+		logutil.Warn("fileservice: put index object into the index-file cache",
+			zap.String("path", t.filePath), zap.Error(err))
+		return nil
 	}
 	return err
 }

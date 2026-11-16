@@ -1342,7 +1342,10 @@ func openIndexObjects(ctx context.Context, fs fileservice.FileService, objects [
 	for _, object := range objects {
 		f, err := indexfile.OpenCachedObject(ctx, cache, object)
 		if err != nil {
-			break
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		if f != nil {
 			files = append(files, f)

@@ -373,10 +373,10 @@ type WholeObjectPreloads interface {
 // for ctx's group, skips the whole-object preload.
 func FullFilePreloadSkipped(ctx context.Context, fs FileService, policy Policy, filePath string) bool {
 	// An object the index-file cache keeps is preloaded into it unless it holds it,
-	// whatever the disk cache's eviction of whole objects.
+	// whatever the read's policy or the disk cache's eviction of whole objects.
 	if s, ok := fs.(*S3FS); ok && policy.Any(IndexFileObject) && s.cachesIndexObjects() {
 		_, cached := s.indexObjectCached(filePath)
-		return cached || policy.Any(SkipFullFilePreloads)
+		return cached
 	}
 	if policy.Any(SkipFullFilePreloads) {
 		return true

@@ -1783,7 +1783,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetch.Scan(),
 			})
 		} else {
-			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+			err = ioutil.PrefetchWithPolicy(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), policy&fileservice.IndexFileObject)
 		}
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",

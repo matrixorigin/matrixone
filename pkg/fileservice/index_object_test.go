@@ -133,6 +133,8 @@ func TestPrefetchOfCachedIndexObjectIsSkipped(t *testing.T) {
 	ctx := WithFileServicePolicy(context.Background(), IndexFileObject)
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.False(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject, "object"))
+	require.False(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject|SkipFullFilePreloads|NarrowRead, "object"),
+		"a filtered search still preloads an object the index-file cache keeps")
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
 	require.True(t, fs.prefetcher.isQueued("object"))
 	fs.prefetcher.remove("object")

@@ -161,8 +161,8 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 	}
 
 	if !ioutil.PrefetchSkipped(ctx, rs.fs, policy, blks[0]) {
-		err := ioutil.Prefetch(
-			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
+		err := ioutil.PrefetchWithPolicy(
+			rs.proc.GetService(), rs.fs, blks[0].MetaLocation(), policy&fileservice.IndexFileObject)
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s", err.Error())
 		}
