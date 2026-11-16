@@ -727,8 +727,6 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults         []*vector.Vector
 	parameterExecutor        []ExpressionExecutor
-	flowControlKind          vector.PrepareParamKind
-	flowControlKindSeen      bool
 	jsonProjectionProbe      bool // preparation-local traversal mark; cleared before return
 	dictionaryState          *functionDictionaryState
 	flowControlKinds         []vector.PrepareParamKind
