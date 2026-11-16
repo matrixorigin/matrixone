@@ -31,6 +31,12 @@ select s, s + 0, count(*) from grouped_values group by s order by s + 0;
 select e, e in (1, 2), e not in (1, 2)
 from grouped_values group by e order by e + 0;
 
+-- Scalar numeric comparisons use the same ordinal and bitmap as arithmetic.
+select e + 0, e = 1, e <> 1, e < 2
+from grouped_values group by e order by e + 0;
+select s + 0, s = 1, s <> 1, s < 2
+from grouped_values group by s order by s + 0;
+
 -- NULL does not change a numeric list's comparison type. Check matching and
 -- nonmatching values as well as string-list and row-level controls.
 select id, e in (1, null), e not in (1, null), s in (1, null), s not in (1, null)

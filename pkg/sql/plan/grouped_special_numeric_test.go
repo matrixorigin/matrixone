@@ -59,6 +59,8 @@ func TestGroupedMySQLSpecialNumericContexts(t *testing.T) {
 		{"derived", "select d.e + 0 from (select e from enum_order_t group by e) d", moEnumCastValueToIndexFun, true},
 		{"cte", "with c as (select e from enum_order_t group by e) select e + 0 from c", moEnumCastValueToIndexFun, true},
 		{"having", "select e from enum_order_t group by e having e + 0 > 1", moEnumCastValueToIndexFun, true},
+		{"enum numeric comparison", "select e = 1 from enum_order_t group by e", moEnumCastValueToIndexFun, true},
+		{"set numeric comparison", "select s < 2 from enum_order_t group by s", moSetCastValueToIndexFun, true},
 		{"numeric in", "select e in (1,2) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
 		{"numeric in null", "select e in (1,null) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
 		{"numeric not in null", "select s not in (1,null) from enum_order_t group by s", moSetCastValueToIndexFun, true},

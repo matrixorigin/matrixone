@@ -43,6 +43,22 @@ null  ¦  null  ¦  null  𝄀
 red  ¦  1  ¦  0  𝄀
 green  ¦  1  ¦  0  𝄀
 blue  ¦  0  ¦  1
+select e + 0, e = 1, e <> 1, e < 2
+from grouped_values group by e order by e + 0;
+➤ e + 0[-5,64,0]  ¦  e = 1[-7,1,0]  ¦  e != 1[-7,1,0]  ¦  e < 2[-7,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+0  ¦  0  ¦  1  ¦  1  𝄀
+1  ¦  1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  0  ¦  1  ¦  0
+select s + 0, s = 1, s <> 1, s < 2
+from grouped_values group by s order by s + 0;
+➤ s + 0[3,38,0]  ¦  s = 1[-7,1,0]  ¦  s != 1[-7,1,0]  ¦  s < 2[-7,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1  ¦  0  𝄀
+4  ¦  0  ¦  1  ¦  0  𝄀
+7  ¦  0  ¦  1  ¦  0
 select id, e in (1, null), e not in (1, null), s in (1, null), s not in (1, null)
 from grouped_values order by id;
 ➤ id[4,32,0]  ¦  e in (1, null)[-7,1,0]  ¦  e not in (1, null)[-7,1,0]  ¦  s in (1, null)[-7,1,0]  ¦  s not in (1, null)[-7,1,0]  𝄀
