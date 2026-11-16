@@ -252,6 +252,9 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 		},
 	}
 	filterExpr := func(column int32, op string, lower, upper int32) *plan.Expr {
+		if op == "in" {
+			return MakeInExprForTest(MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name), []int32{lower, upper}, types.T_int32, mp)
+		}
 		args := []*plan.Expr{MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name)}
 		bounds := []int32{lower}
 		if op == "between" || op == "in_range" {
@@ -340,6 +343,8 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 				upper  int32
 				want   []uint16
 			}{
+				{name: "in", op: "in", column: 1, lower: 100, upper: 150, want: layout.want},
+				{name: "outside_object_in", op: "in", column: 1, lower: 300, upper: 400},
 				{name: "between", op: "between", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "in_range", op: "in_range", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "equal", op: "=", column: 1, lower: 100, want: layout.comparisons[0]},
@@ -394,6 +399,39 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 					}
 				})
 			}
+			if layout.name == "clustered" {
+				t.Run("sorted_in_unknown_summary_consumer", func(t *testing.T) {
+					table, col := *tableDef, *tableDef.Cols[1]
+					col.ClusterBy = true
+					table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
+					table.Cols[1] = &col
+					for unknown, want := range [][]uint16{{0, 1}, {1}, {1, 2}} {
+						t.Run(fmt.Sprintf("unknown=%d", unknown), func(t *testing.T) {
+							modified := append(objectio.ObjectMeta(nil), meta...)
+							modified.MustDataMeta().GetBlockMeta(uint32(unknown)).MustGetColumn(1).SetZoneMap(index.NewZM(types.T_int32, 0))
+							fast, _, object, block, seek, ok, hint := CompileFilterExprs(
+								[]*plan.Expr{filterExpr(1, "in", 100, 150)}, &table, fs,
+							)
+							require.True(t, ok)
+							load := func(context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+								return modified, nil, nil
+							}
+							sortedStats := stats
+							require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&sortedStats, objectZM))
+							var selected objectio.BlockInfoSlice
+							_, _, _, _, _, _, _, _, err := FilterObjects(
+								ctx, engine.RangesParam{}, fast, load, object, block, seek,
+								nil, nil, []objectio.ObjectStats{sortedStats}, &selected, hint, nil, fs,
+							)
+							require.NoError(t, err)
+							require.Equal(t, len(want), selected.Len())
+							for i, id := range want {
+								require.Equal(t, stats.ConstructBlockId(id), selected.Get(i).BlockID)
+							}
+						})
+					}
+				})
+			}
 		})
 	}
 
@@ -403,7 +441,7 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 			col.ClusterBy = sorted
 			table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
 			table.Cols[1] = &col
-			for _, op := range []string{"between", "in_range"} {
+			for _, op := range []string{"between", "in_range", "in"} {
 				hints := []uint8{0}
 				if op == "in_range" {
 					hints = []uint8{0, 1, 2, 3}
