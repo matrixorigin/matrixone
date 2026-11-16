@@ -227,8 +227,6 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 		}
 	}
 	if !usePreFilter {
-		// The join reads only the candidate rows of the base table.
-		readColumnRanges(scanNode)
 		joinNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{scanNode.NodeId, searchNodeID},
