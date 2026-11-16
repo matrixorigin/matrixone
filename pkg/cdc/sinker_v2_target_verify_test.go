@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	mysql "github.com/matrixorigin/mysql"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,6 +172,32 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				} else {
 					require.ErrorContains(t, got, tc.want)
 				}
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
+	t.Run("capability rejects missing InnoDB metadata as unsupported", func(t *testing.T) {
+		for _, willCreate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("willCreate=%t", willCreate), func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				if willCreate {
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT @@default_storage_engine")).WillReturnRows(
+						sqlmock.NewRows([]string{"engine"}).AddRow("InnoDB"))
+				}
+				metadataErr := &mysql.MySQLError{Number: moerr.ER_NO_SUCH_TABLE, Message: `table "innodb_tables" does not exist`}
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+					WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnError(metadataErr)
+				got := checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", willCreate)
+				require.True(t, moerr.IsMoErrCode(got, moerr.ErrNotSupported), "got %T: %v", got, got)
+				require.ErrorContains(t, got, "INNODB_TABLES")
+				require.ErrorContains(t, got, "1146")
+				require.False(t, (&TableChangeStream{}).determineRetryable(got))
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
@@ -329,6 +356,28 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
+	})
+
+	t.Run("MySQL guard rejects missing InnoDB metadata as unsupported", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0")).
+			WillReturnRows(sqlmock.NewRows([]string{"one"}))
+		metadataErr := &gomysql.MySQLError{Number: moerr.ER_NO_SUCH_TABLE, Message: `table "innodb_tables" does not exist`}
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+			WithArgs("db/t").WillReturnError(metadataErr)
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, got := guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrNotSupported), "got %T: %v", got, got)
+		require.ErrorContains(t, got, "INNODB_TABLES")
+		require.ErrorContains(t, got, "1146")
+		require.False(t, (&TableChangeStream{}).determineRetryable(got))
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("MySQL guard reports identity row scan and iteration errors", func(t *testing.T) {
@@ -496,6 +545,100 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 	})
 }
 
+func TestResolveTargetSinkType(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		sinkType    string
+		beginErr    error
+		probeErr    error
+		rollbackErr error
+		want        string
+		wantErr     string
+		retryable   bool
+	}{
+		{name: "MatrixOne guard capability", sinkType: CDCSinkType_MySQL, want: CDCSinkType_MO},
+		{name: "MySQL missing guard procedure", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST}, want: CDCSinkType_MySQL},
+		{name: "production driver missing guard procedure", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST}, want: CDCSinkType_MySQL},
+		{name: "MySQL no default database", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: moerr.ER_NO_DB_ERROR}, want: CDCSinkType_MySQL},
+		{name: "production driver no default database", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: moerr.ER_NO_DB_ERROR}, want: CDCSinkType_MySQL},
+		{name: "unexpected probe failure", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: 1142, Message: "denied"}, wantErr: "1142"},
+		{name: "transient probe failure", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: 2013, Message: "lost connection"}, wantErr: "2013", retryable: true},
+		{name: "begin failure", sinkType: CDCSinkType_MySQL, beginErr: errors.New("begin failed"), wantErr: "begin failed"},
+		{name: "rollback failure", sinkType: CDCSinkType_MySQL, rollbackErr: errors.New("rollback failed"), wantErr: "rollback failed"},
+		{name: "explicit MatrixOne bypasses negotiation", sinkType: CDCSinkType_MO, want: CDCSinkType_MO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			if tc.sinkType == CDCSinkType_MySQL {
+				begin := mock.ExpectBegin()
+				if tc.beginErr != nil {
+					begin.WillReturnError(tc.beginErr)
+				} else {
+					probe := mock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()"))
+					if tc.probeErr != nil {
+						probe.WillReturnError(tc.probeErr)
+					} else {
+						probe.WillReturnResult(sqlmock.NewResult(0, 0))
+					}
+					rollback := mock.ExpectRollback()
+					if tc.rollbackErr != nil {
+						rollback.WillReturnError(tc.rollbackErr)
+					}
+				}
+			}
+			got, err := resolveTargetSinkType(ctx, conn, tc.sinkType)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Empty(t, got)
+				require.Equal(t, tc.retryable, IsRetryableConnectionError(err))
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestResolveTargetSinkTypeThroughOpenDbConn(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectPing()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()")).
+		WillReturnError(&gomysql.MySQLError{Number: moerr.ER_NO_DB_ERROR, Message: "No database selected"})
+	mock.ExpectRollback()
+	mock.ExpectClose()
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
+	})
+	defer stub.Reset()
+
+	got, err := ResolveTargetSinkType(ctx, UriInfo{
+		SinkTyp:  CDCSinkType_MySQL,
+		User:     "root",
+		Password: "password",
+		Ip:       "127.0.0.1",
+		Port:     3306,
+	}, "10s")
+	require.NoError(t, err)
+	require.Equal(t, CDCSinkType_MySQL, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestVerifyCDCTargetTableStructure(t *testing.T) {
 	const columnsSQL = "SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
 	const indexesSQL = "SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index"
@@ -525,6 +668,8 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 		{"valid year display width", []column{{"id", "int"}, {"v", "year(4)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
 		{"valid MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
 		{"different MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, nil, false, "column 2"},
+		{"valid MO bool alias", []column{{"id", "int"}, {"b", "tinyint(1)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
+		{"MO bool alias rejects plain tinyint source", []column{{"id", "int"}, {"b", "tinyint(1)"}}, nil, false, "column 2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -547,6 +692,12 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				def.Cols[1].Typ = plan.Type{Id: int32(types.T_year), Width: 4}
 			case "valid MO float scale", "different MO float scale":
 				def.Cols[1].Typ = plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}
+			case "valid MO bool alias":
+				def.Cols[1].Name = "b"
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_bool)}
+			case "MO bool alias rejects plain tinyint source":
+				def.Cols[1].Name = "b"
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_int8)}
 			}
 			if tc.unique {
 				def.Indexes = []*plan.IndexDef{{IndexName: "uk_v", Parts: []string{"v"}, Unique: true}}
@@ -571,7 +722,8 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(columnRows)
 			if len(tc.columns) == 2 && tc.columns[0].name == "id" &&
 				(tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" ||
-					tc.name == "valid year display width" || tc.name == "valid MO float scale") {
+					tc.name == "valid year display width" || tc.name == "valid MO float scale" ||
+					tc.name == "valid MO bool alias") {
 				indexRows := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"})
 				for _, idx := range tc.indexes {
 					indexRows.AddRow(idx.name, idx.nonUnique, idx.sequence, idx.column, idx.prefix)
@@ -652,7 +804,72 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	}
 
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
-	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+	// Issue #31749 flips the MO target contract: a current-generation MO
+	// target renders its physical-BOOL COLUMN_TYPE as the raw alias
+	// tinyint(1), so a native BOOL source verifies against it instead of
+	// raising a column-mismatch error. The alias boundary lives in
+	// TestCDCTargetMOPhysicalBoolAliasVerifiesOnlyBoolSources; this line
+	// keeps the sink-type pair honest.
+	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+}
+
+// Issue #31749: a current-generation MO target aliases its physical-BOOL
+// COLUMN_TYPE to the raw token tinyint(1), while a native MO integer target
+// never renders a display width (types.FormatSQLColumnType ignores integer
+// widths), so the exact raw token identifies a physical BOOL target alone.
+// It must be gated before the normalized want==got comparison, which strips
+// the display width and would otherwise admit every tinyint source as a
+// false positive; only a native BOOL source may sink into the alias. Legacy
+// MO 'boolean'/'bool' spellings keep the normalized path and MySQL keeps its
+// display-width-tolerant contract.
+func TestCDCTargetMOPhysicalBoolAliasVerifiesOnlyBoolSources(t *testing.T) {
+	for _, target := range []string{"tinyint(1)", "TinyInt(1)", " tinyint(1) "} {
+		require.True(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}), target)
+	}
+	// The T_int8 pair is the false positive this regression must close: the
+	// normalized forms of tinyint(1) and a T_int8 source collapse onto the
+	// same token, so the raw alias alone restores the BOOL-target distinction.
+	for _, wrong := range []plan.Type{
+		{Id: int32(types.T_int8)},
+		{Id: int32(types.T_int8), Width: 1},
+		{Id: int32(types.T_uint8)},
+		{Id: int32(types.T_int16)},
+		{Id: int32(types.T_uint64)},
+		{Id: int32(types.T_varchar)},
+		{Id: int32(types.T_decimal64)},
+	} {
+		require.False(t, cdcTargetColumnTypeMatches(
+			wrong, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}), "id %d width %d", wrong.Id, wrong.Width)
+	}
+	// The alias is fail-closed on non-alias spellings: a current-generation MO
+	// target never renders them, so mismatches keep the generic comparison
+	// instead of being folded into the BOOL alias.
+	for _, notAlias := range []string{"tinyint", "tinyint(2)", "tinyint ( 1 )"} {
+		require.False(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, notAlias, CDCSinkType_MO, sql.NullInt64{}), notAlias)
+	}
+	// Legacy MO spellings keep their normalized-path contract: a BOOL source
+	// binds them, an integer source does not.
+	for _, legacy := range []string{"BOOLEAN", "boolean", "BOOL", "BOOL(0)"} {
+		require.True(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, legacy, CDCSinkType_MO, sql.NullInt64{}), legacy)
+		require.False(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_int8)}, legacy, CDCSinkType_MO, sql.NullInt64{}), legacy)
+	}
+	// MySQL keeps its integer display-width tolerance: BOOL renders tinyint(1)
+	// and plain tinyint targets keep binding every integer source.
+	require.True(t, cdcTargetColumnTypeMatches(
+		plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
+	require.True(t, cdcTargetColumnTypeMatches(
+		plan.Type{Id: int32(types.T_int8)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
+	// Producer premise: the native MO integer formatter ignores declared
+	// display widths and the global BOOLEAN spelling is unchanged, so the raw
+	// alias can never collide with a native integer target's COLUMN_TYPE and
+	// the CDC source rendering still normalizes to bool.
+	require.Equal(t, "TINYINT", plan2.FormatColType(plan.Type{Id: int32(types.T_int8), Width: 1}))
+	require.Equal(t, "BOOLEAN", plan2.FormatColType(plan.Type{Id: int32(types.T_bool)}))
+	require.Equal(t, "bool", normalizeCDCTargetColumnType("BOOLEAN"))
 }
 
 func TestCDCTargetIdentityRetryContract(t *testing.T) {

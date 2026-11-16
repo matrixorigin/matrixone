@@ -471,8 +471,16 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
@@ -1372,8 +1380,16 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}

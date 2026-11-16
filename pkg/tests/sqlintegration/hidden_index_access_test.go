@@ -712,8 +712,8 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 				show("show index " + mode + " from hidden_access_db.hnsw_base where exists(select 1 from hidden_access_db.show_private)")
 			}
 		}()
-		// Tenant accountadmin is not a physical-index diagnostic capability,
-		// including frontend DUMP/LOAD owners that bypass the SQL planner.
+		// Tenant accountadmin may read its own physical index but must not
+		// acquire the privileged DUMP/LOAD capability.
 		func() {
 			exec(admin, "create account hidden_access_tenant admin_name 'admin' identified by '111'")
 			defer exec(admin, "drop account hidden_access_tenant")
@@ -730,7 +730,7 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			var child string
 			require.NoError(t, tenant.QueryRowContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='tenant_data' and relname='base') and index_table_name is not null and index_table_name<>'' limit 1").Scan(&child))
 			target := "tenant_data.`" + child + "`"
-			deny(tenant, "select count(*) from "+target)
+			require.Equal(t, 1, count(tenant, target))
 			deny(tenant, "dump table "+target+" to 'stage://hidden_access_unavailable/' metadata only")
 			deny(tenant, "load table "+target+" from 'stage://hidden_access_unavailable/'")
 			func() {

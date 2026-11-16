@@ -233,6 +233,28 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 		_, _ = gate.ExecContext(cleanupCtx, "select release_lock('task_race_gate')")
 	}()
 	execSQLRequire(t, ctx, db, "create task concurrent_task as begin insert into sink select get_lock('task_race_gate', 30); end")
+	// Fence the exact named+account definition read each racing EXECUTE resolves
+	// through on its CN (frontend getSQLTaskByName -> CN task storage). Only a
+	// missing definition may keep waiting inside the bounded window; any read
+	// error, duplicate row count, wrong name/account, non-positive ID, or
+	// cross-CN identity mismatch fails immediately with its preserved cause,
+	// so the racing pair never starts on an unobserved assumption.
+	racingStorages := make([]taskservice.TaskStorage, 0, 2)
+	for cnIndex := 0; cnIndex < 2; cnIndex++ {
+		cnService, err := cluster.GetCNService(cnIndex)
+		require.NoError(t, err)
+		cnTaskService, ok := cnService.RawService().(testutil.TaskServiceGetter).GetTaskService()
+		require.True(t, ok)
+		racingStorages = append(racingStorages, cnTaskService.GetStorage())
+	}
+	readyTaskID, err := waitForSQLTaskDefinitions(ctx, func(readCtx context.Context, cnIndex int) ([]taskservice.SQLTask, error) {
+		return racingStorages[cnIndex].QuerySQLTask(readCtx,
+			taskservice.WithTaskName(taskservice.EQ, "concurrent_task"),
+			taskservice.WithAccountID(taskservice.EQ, 0))
+	}, "concurrent_task", 0, 20*time.Second)
+	require.NoError(t, err)
+	require.Positive(t, readyTaskID)
+	t.Logf("concurrent_task readiness fence converged before the race: task_id=%d", readyTaskID)
 	startRace := make(chan struct{})
 	raceResults := make(chan error, 2)
 	for _, client := range []*sql.DB{db, peerDB} {
@@ -547,4 +569,210 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.Equal(t, 2, counter)
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from scheduled_sink where v=2").Scan(&rows))
 	require.Equal(t, 1, rows)
+}
+
+// waitForSQLTaskDefinitions synchronously bounds one real named+account
+// readiness condition across the two racing CN storages. Only a missing
+// (zero-row) observation keeps waiting until the scoped child deadline; a
+// read error, duplicate row count, wrong expected name/account, non-positive
+// task ID, or cross-CN identity mismatch is terminal immediately with the
+// original cause preserved and the first/last observations attached. All
+// reads run on the child context so cancellation always reaches them; the
+// ticker, child timer, and the call itself never outlive the caller, and no
+// callback or worker goroutine is ever detached.
+func waitForSQLTaskDefinitions(ctx context.Context,
+	read func(context.Context, int) ([]taskservice.SQLTask, error),
+	expectName string, expectAccount uint32, window time.Duration) (uint64, error) {
+	if window <= 0 || window > 20*time.Second {
+		return 0, fmt.Errorf("readiness window %s outside the allowed bounded range", window)
+	}
+	childCtx, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var first, last string
+	for iteration := 0; ; iteration++ {
+		observed := make([]taskservice.SQLTask, 0, 2)
+		views := make([]string, 0, 2)
+		var terminal error
+		for cnIndex := 0; cnIndex < 2 && terminal == nil; cnIndex++ {
+			definitions, err := read(childCtx, cnIndex)
+			switch {
+			case err != nil:
+				terminal = fmt.Errorf("cn%d definition read failed: %w", cnIndex, err)
+				views = append(views, fmt.Sprintf("cn%d: read error %v", cnIndex, err))
+			case len(definitions) > 1:
+				terminal = fmt.Errorf("cn%d saw %d definitions, want exactly 1", cnIndex, len(definitions))
+				views = append(views, fmt.Sprintf("cn%d: definitions=%d", cnIndex, len(definitions)))
+			case len(definitions) == 1:
+				definition := definitions[0]
+				views = append(views, fmt.Sprintf("cn%d: task_id=%d account=%d name=%s",
+					cnIndex, definition.TaskID, definition.AccountID, definition.TaskName))
+				switch {
+				case definition.TaskName != expectName:
+					terminal = fmt.Errorf("cn%d definition name=%q, want %q", cnIndex, definition.TaskName, expectName)
+				case definition.AccountID != expectAccount:
+					terminal = fmt.Errorf("cn%d definition account=%d, want %d", cnIndex, definition.AccountID, expectAccount)
+				case definition.TaskID == 0:
+					terminal = fmt.Errorf("cn%d definition task_id must be positive", cnIndex)
+				default:
+					observed = append(observed, definition)
+				}
+			default:
+				views = append(views, fmt.Sprintf("cn%d: definitions=0", cnIndex))
+			}
+		}
+		record := fmt.Sprintf("%v", views)
+		if iteration == 0 {
+			first = record
+		}
+		last = record
+		if terminal != nil {
+			return 0, fmt.Errorf("concurrent_task definition readiness ended terminally: %w (first=%s, last=%s)", terminal, first, last)
+		}
+		if len(observed) == 2 {
+			if observed[0].TaskID != observed[1].TaskID {
+				return 0, fmt.Errorf("concurrent_task definition readiness ended terminally: cn0/cn1 task_id mismatch %d vs %d (first=%s, last=%s)",
+					observed[0].TaskID, observed[1].TaskID, first, last)
+			}
+			// Convergence itself carries the terminal identity; no redundant
+			// re-read happens after this valid terminal state.
+			return observed[0].TaskID, nil
+		}
+		select {
+		case <-childCtx.Done():
+			if cause := ctx.Err(); cause != nil {
+				return 0, fmt.Errorf("concurrent_task definition readiness ended terminally: parent context: %w (first=%s, last=%s)", cause, first, last)
+			}
+			return 0, fmt.Errorf("concurrent_task definition readiness ended terminally: window %s exceeded: %w (first=%s, last=%s)",
+				window, childCtx.Err(), first, last)
+		case <-ticker.C:
+		}
+	}
+}
+
+var errReadinessInjected = errors.New("injected definition read failure")
+
+// readinessScript provides the minimum deterministic dependency control for
+// the helper-contract tests: per-CN read counters plus one injectable
+// response function, so transitions are driven by the script rather than by
+// wall-clock timing.
+type readinessScript struct {
+	reads   [2]int
+	respond func(ctx context.Context, cnIndex, call int) ([]taskservice.SQLTask, error)
+}
+
+func (s *readinessScript) read(ctx context.Context, cnIndex int) ([]taskservice.SQLTask, error) {
+	s.reads[cnIndex]++
+	return s.respond(ctx, cnIndex, s.reads[cnIndex])
+}
+
+func readinessDefinition(taskID uint64, name string, account uint32) []taskservice.SQLTask {
+	return []taskservice.SQLTask{{TaskID: taskID, TaskName: name, AccountID: account}}
+}
+
+func TestWaitForSQLTaskDefinitionsMissingThenReady(t *testing.T) {
+	script := &readinessScript{respond: func(_ context.Context, _, call int) ([]taskservice.SQLTask, error) {
+		if call < 3 {
+			return nil, nil
+		}
+		return readinessDefinition(7, "concurrent_task", 0), nil
+	}}
+	taskID, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), taskID)
+	require.Equal(t, [2]int{3, 3}, script.reads, "convergence carries the identity; no redundant re-reads follow")
+}
+
+func TestWaitForSQLTaskDefinitionsFirstErrorTerminal(t *testing.T) {
+	script := &readinessScript{respond: func(_ context.Context, cnIndex, _ int) ([]taskservice.SQLTask, error) {
+		if cnIndex == 0 {
+			return nil, errReadinessInjected
+		}
+		return readinessDefinition(7, "concurrent_task", 0), nil
+	}}
+	_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errReadinessInjected)
+	require.Contains(t, err.Error(), "first=")
+	require.Equal(t, [2]int{1, 0}, script.reads, "a later hypothetical success must never be reached after the first read error")
+}
+
+func TestWaitForSQLTaskDefinitionsFieldAndIdentityFailures(t *testing.T) {
+	t.Run("duplicate rows fail immediately", func(t *testing.T) {
+		script := &readinessScript{respond: func(_ context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			return []taskservice.SQLTask{
+				{TaskID: 7, TaskName: "concurrent_task"},
+				{TaskID: 8, TaskName: "concurrent_task"},
+			}, nil
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "want exactly 1")
+		require.Equal(t, [2]int{1, 0}, script.reads)
+	})
+	t.Run("wrong expected name fails immediately", func(t *testing.T) {
+		script := &readinessScript{respond: func(_ context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			return readinessDefinition(7, "other_task", 0), nil
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `definition name="other_task", want "concurrent_task"`)
+		require.Equal(t, [2]int{1, 0}, script.reads)
+	})
+	t.Run("wrong expected account fails immediately", func(t *testing.T) {
+		script := &readinessScript{respond: func(_ context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			return readinessDefinition(7, "concurrent_task", 5), nil
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "definition account=5, want 0")
+		require.Equal(t, [2]int{1, 0}, script.reads)
+	})
+	t.Run("zero task id fails immediately", func(t *testing.T) {
+		script := &readinessScript{respond: func(_ context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			return readinessDefinition(0, "concurrent_task", 0), nil
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "task_id must be positive")
+		require.Equal(t, [2]int{1, 0}, script.reads)
+	})
+	t.Run("cross-CN identity mismatch fails immediately", func(t *testing.T) {
+		script := &readinessScript{respond: func(_ context.Context, cnIndex, _ int) ([]taskservice.SQLTask, error) {
+			return readinessDefinition(7+uint64(cnIndex), "concurrent_task", 0), nil
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 5*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "task_id mismatch 7 vs 8")
+		require.Equal(t, [2]int{1, 1}, script.reads)
+	})
+}
+
+func TestWaitForSQLTaskDefinitionsCancellationAndTimeout(t *testing.T) {
+	t.Run("cancelled parent stops at the first observation", func(t *testing.T) {
+		dead, cancel := context.WithCancel(context.Background())
+		cancel()
+		script := &readinessScript{respond: func(ctx context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return readinessDefinition(7, "concurrent_task", 0), nil
+		}}
+		_, err := waitForSQLTaskDefinitions(dead, script.read, "concurrent_task", 0, 5*time.Second)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, [2]int{1, 0}, script.reads, "no extra observation and no unjoined worker after cancellation")
+	})
+	t.Run("window expiry ends terminally from the blocked read itself", func(t *testing.T) {
+		var blockedReadReturned bool
+		script := &readinessScript{respond: func(ctx context.Context, _, _ int) ([]taskservice.SQLTask, error) {
+			<-ctx.Done()
+			blockedReadReturned = true
+			return nil, ctx.Err()
+		}}
+		_, err := waitForSQLTaskDefinitions(context.Background(), script.read, "concurrent_task", 0, 100*time.Millisecond)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.True(t, blockedReadReturned, "the synchronous read blocked on the child context must have returned before the helper did")
+		require.Equal(t, [2]int{1, 0}, script.reads, "the deadline observed by the first blocked read ends the wait; no second-CN observation is made")
+	})
 }
