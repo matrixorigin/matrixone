@@ -1435,6 +1435,104 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 
 }
 
+func TestPersistedCRC32JSONRetainsExistingAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		old, exists := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if exists {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	jsonCol := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	legacy := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, 0), ObjName: "crc32"},
+		Args: []*planpb.Expr{jsonCol},
+	}}}
+	text := mustBindPersistedFollowupExpr(t, proc.Ctx, "crc32", []*planpb.Expr{jsonCol})
+	for _, tc := range []struct {
+		expr *planpb.Expr
+		want int64
+	}{{legacy, defines.MORPCVersion80}, {text, defines.MORPCVersion129}} {
+		required, err := RequiredPersistedExpressionProtocolVersion(tc.expr)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, required)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.want)
+		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr))
+		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want-1)
+		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.want))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.want-1)
+		require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.want))
+	}
+}
+
+func TestPersistedCRC32MixedOwnerKeepsExistingHighestFloor(t *testing.T) {
+	crc := mustBindPersistedFollowupExpr(t, context.Background(), "crc32", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+	})
+	concat := mustBindPersistedFollowupExpr(t, context.Background(), "concat", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		MakePlan2StringConstExprWithType("suffix"),
+	})
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: crc}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: concat}},
+	}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONInputContracts)
+	require.True(t, features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion129), required)
+}
+
+func TestPersistedJSONValueAndCRC32JSONCompose(t *testing.T) {
+	jsonCol := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	legacyCRC := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, 0), ObjName: "crc32"},
+		Args: []*planpb.Expr{jsonCol},
+	}}}
+	textCRC := mustBindPersistedFollowupExpr(t, context.Background(), "crc32", []*planpb.Expr{jsonCol})
+
+	jsonValue := func(input types.T) *planpb.Expr {
+		args := make([]*planpb.Expr, 7)
+		args[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(input)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"},
+			Args: args,
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		crc  *planpb.Expr
+		json *planpb.Expr
+		want int64
+	}{
+		{"legacy_crc_text_input", legacyCRC, jsonValue(types.T_varchar), defines.MORPCVersion80},
+		{"legacy_crc_json_input", legacyCRC, jsonValue(types.T_json), defines.MORPCVersion129},
+		{"text_crc_text_input", textCRC, jsonValue(types.T_varchar), defines.MORPCVersion129},
+		{"text_crc_json_input", textCRC, jsonValue(types.T_json), defines.MORPCVersion129},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, expressions := range [][]*planpb.Expr{{tc.crc, tc.json}, {tc.json, tc.crc}} {
+				required, err := RequiredPersistedExpressionProtocolVersion(expressions)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, required)
+			}
+		})
+	}
+}
+
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {
 	t.Helper()
 	if version < required {
