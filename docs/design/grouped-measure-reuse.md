@@ -45,3 +45,27 @@ authoritative. Confirmed regressions require diagnosis and a reviewed revision.
 The requester approved the four proposed fixes with “then fix”.
 
 Preserve the original dimension-join tree and predicate placement. Prune the unique repeated fact leaf only when its sole ordinary key connector is implied by the retained qualifying join and no other region predicate references the retired fact. Convert the existing SEMI edge to INNER, expose the SUM, and retain the original sibling subtree. Generate no self-equalities or Cartesian dimension reconstruction. Verify unchanged surviving scan predicates and normal qualifier parallelism before timing.
+
+## Approved qualification-order revision — 2026-11-16
+
+The requester approved this revision with “Implement the plan”. Keep qualification
+as SEMI through normal join ordering and pushdown. Run measure reuse immediately
+after `pushdownSemiAntiJoins` and `removeImpliedSemiJoins`, then recalculate
+statistics only when it changes the plan. Require the qualifying edge's probe to
+be a direct surviving dimension scan owning the probe key; reject a probe spanning
+joins, a probe on the retired fact, or disabled SEMI pushdown. Retain all existing
+semantic, ownership, totality, uniqueness and cost checks before mutation.
+
+Carry the existing SUM at that lowered edge, prune the sole redundant fact
+connector, and preserve the other dimension joins and predicates. Remaining
+normal operand orientation, distribution and runtime-filter passes stay in use.
+No new planner pass, executor mechanism, public interface, cache or producer.
+
+The observed regression materialized unqualified dimension-join rows before
+applying the grouped qualification. Loaded-schema operator diagnostics must show
+early qualification, bounded dimension materialization, one fact scan and normal
+qualifier parallelism. A runtime-filter tag or estimated cardinality is not proof
+that filtering occurred. Main's repeated scan is already runtime-filtered: do not
+credit the entire base-table size or forecast a proportional speedup. Add focused
+lowered-probe/fallback and full-planner ordering assertions, retain independent
+SQL oracles, then run the existing local cold-excluded/five-warm all22 protocol.
