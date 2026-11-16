@@ -961,12 +961,44 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
-		// A FORCE hint that cannot provide the requested ordering/grouping still
-		// excludes other secondary indexes from replacing the base scan.
-		builder.protectedScans[scanNode.NodeId]++
+		// This index cannot provide the requested ordering/grouping. Only an
+		// eligible full-value bounded unique key set may use the filter phase;
+		// exposing other point lookups can probe truncated prefix keys.
+		filterIndexes := builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes)
+		if !builder.scanHintsForceIndexes(scanNode) || !regularIndexesHaveFullValueParts(filterIndexes) ||
+			!hasCompositeUniqueKeySetCandidate(filterIndexes, scanNode) {
+			builder.protectedScans[scanNode.NodeId]++
+		}
 		return scanNode.NodeId, nil
 	}
 	return scanNode.NodeId, nil
+}
+
+func hasCompositeUniqueKeySetCandidate(indexes []*IndexDef, node *plan.Node) bool {
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		if _, ok := completeUniqueKeySetFilters(idxDef, node, newIndexKeySetWorkBudget()); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter selection can choose any hinted regular index, including through the
+// complete-equality fallback. Do not expose that phase to truncated keys.
+func regularIndexesHaveFullValueParts(indexes []*IndexDef) bool {
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || len(prefixLengths) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
@@ -3082,7 +3114,7 @@ func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, nod
 	currentIdx := -1
 	knownCardinality := hasKnownScanCardinality(node.Stats)
 	forced := builder.scanHintsForceIndexes(node)
-	selectedCompleteUnique := false
+	selectedUnknownStatsRank := 0
 	savedFilterIdx := make([]int32, 0)
 	savedKeySetSize := 0
 
@@ -3188,13 +3220,21 @@ func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, nod
 
 		completeUnique := idxDef.Unique && len(filterIdx) == len(idxDef.Parts)
 		if !knownCardinality {
-			// Unset/neutral estimates cannot compare unknown candidates. Within
-			// the existing cost bypass, prefer a schema-bounded unique point;
-			// preserve catalog order within each class and a nonunique fallback.
+			// Unset/neutral estimates cannot compare unknown candidates. Prefer a
+			// schema-proven singleton over a bounded unique key set, and either over
+			// a nonunique/partial fallback. Equal ranks retain catalog order.
+			candidateRank := 0
+			if completeUnique {
+				candidateRank = 1
+				if candidateKeySetSize == 0 {
+					candidateRank = 2
+				}
+			}
 			if !ignoreStats || maxSelectivity != 1 ||
-				(currentIdx != -1 && (selectedCompleteUnique || !completeUnique)) {
+				(currentIdx != -1 && candidateRank <= selectedUnknownStatsRank) {
 				continue
 			}
+			selectedUnknownStatsRank = candidateRank
 		} else {
 			compositeFilterSel := 1.0
 			for k := range filterIdx {
@@ -3217,7 +3257,6 @@ func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, nod
 			currentSel = compositeFilterSel
 		}
 		currentIdx = i
-		selectedCompleteUnique = completeUnique
 		savedFilterIdx = savedFilterIdx[:0]
 		savedFilterIdx = append(savedFilterIdx, filterIdx...)
 		savedKeySetSize = candidateKeySetSize
