@@ -1978,13 +1978,17 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("collector rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
+		conflict := &mysqlDriver.MySQLError{Number: moerr.ErrTxnWWConflict, Message: "collector failed"}
+		rollbackErr := errors.New("rollback failed")
 		mock.ExpectBegin()
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectRollback().WillReturnError(rollbackErr)
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
-			return 0, errors.New("collector failed")
+			return 0, conflict
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "collector failed")
+		require.ErrorIs(t, err, conflict)
+		require.ErrorIs(t, err, rollbackErr)
+		_, direct := err.(*mysqlDriver.MySQLError)
+		require.False(t, direct, "rollback failure must not be exposed as a bare conflict")
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})
@@ -2127,12 +2131,15 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("commit failure is returned", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
+		commitErr := &mysqlDriver.MySQLError{Number: moerr.ErrTxnWWConflict, Message: "commit failed"}
 		mock.ExpectBegin()
-		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		mock.ExpectCommit().WillReturnError(commitErr)
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
 			return 0, nil
 		})
-		require.ErrorContains(t, err, "commit failed")
+		require.ErrorIs(t, err, commitErr)
+		_, direct := err.(*mysqlDriver.MySQLError)
+		require.False(t, direct, "commit failure must retain its transaction boundary")
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})

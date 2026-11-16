@@ -330,16 +330,57 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "select err_msg from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&diagnostic))
 	require.Equal(t, failure, diagnostic)
 
+	prepareRestart := func(c context.Context, _ task.TaskStatus, keys map[taskservice.CDCTaskKey]struct{}, tx taskservice.SqlExecutor) (int, error) {
+		keys[owner.Key] = struct{}{}
+		result, e := tx.ExecContext(c, "update mo_catalog.mo_cdc_task set state='restarting' where account_id=0 and task_id=?", taskID)
+		if e != nil {
+			return 0, e
+		}
+		count, e := result.RowsAffected()
+		return int(count), e
+	}
+
+	// A heartbeat captured by the old owner can update the daemon after a
+	// control transaction has taken its snapshot. The request must fail
+	// atomically, leaving a fresh request to the caller.
+	staleHeartbeat := rows[0]
+	staleHeartbeat.TaskStatus = task.TaskStatus_Running
+	heartbeatApplied, calls := false, 0
+	var catalogAffected int
 	_, err = ts.UpdateCDCTask(ctx, task.TaskStatus_RestartRequested,
-		func(c context.Context, _ task.TaskStatus, keys map[taskservice.CDCTaskKey]struct{}, tx taskservice.SqlExecutor) (int, error) {
-			keys[owner.Key] = struct{}{}
-			result, e := tx.ExecContext(c, "update mo_catalog.mo_cdc_task set state='restarting' where account_id=0 and task_id=?", taskID)
+		func(c context.Context, status task.TaskStatus, keys map[taskservice.CDCTaskKey]struct{}, tx taskservice.SqlExecutor) (int, error) {
+			calls++
+			count, e := prepareRestart(c, status, keys, tx)
 			if e != nil {
 				return 0, e
 			}
-			count, e := result.RowsAffected()
-			return int(count), e
+			catalogAffected = count
+			if e = ts.HeartbeatDaemonTask(c, staleHeartbeat); e != nil {
+				return 0, e
+			}
+			heartbeatApplied = true
+			return count, nil
 		}, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
+	require.True(t, heartbeatApplied)
+	require.Equal(t, 1, calls)
+	require.EqualValues(t, 1, catalogAffected)
+	var heartbeatConflict *mysqlDriver.MySQLError
+	require.ErrorAs(t, err, &heartbeatConflict)
+	require.EqualValues(t, moerr.ErrTxnWWConflict, heartbeatConflict.Number)
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		require.Len(t, joined.Unwrap(), 1, "unexpected additional transaction failure")
+	}
+	require.Equal(t, "failed", readState())
+	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, task.TaskStatus_Error, rows[0].TaskStatus)
+	require.Equal(t, owner.Runner, rows[0].TaskRunner)
+	require.NoError(t, db.QueryRowContext(ctx, "select err_msg from mo_catalog.mo_cdc_task where account_id=0 and task_id=?", taskID).Scan(&diagnostic))
+	require.Equal(t, failure, diagnostic)
+
+	_, err = ts.UpdateCDCTask(ctx, task.TaskStatus_RestartRequested,
+		prepareRestart, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
 	require.NoError(t, err)
 	rows, err = ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, owner.DaemonID))
 	require.NoError(t, err)

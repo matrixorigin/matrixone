@@ -67,9 +67,10 @@ func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
 	const recoverID = "00000000-0000-0000-0000-000000000781"
 	const failedID = "00000000-0000-0000-0000-000000000782"
 	const invalidID = "00000000-0000-0000-0000-000000000783"
+	const manualID = "00000000-0000-0000-0000-000000000784"
 	tables, err := cdc.JsonEncode(cdc.PatternTuples{Pts: []*cdc.PatternTuple{}})
 	require.NoError(t, err)
-	seed := func(id, name, state, encodedTables string) {
+	seed := func(id, name, state, encodedTables string, status task.TaskStatus) {
 		statement := fmt.Sprintf(`insert into mo_catalog.mo_cdc_task(account_id,task_id,task_name,source_uri,sink_uri,sink_type,sink_password,tables,filters,start_ts,end_ts,no_full,additional_config,state,err_msg) values(0,'%s','%s','','{}','console','','%s', '', '', '', true, '{}', '%s', 'original failure')`, id, name, encodedTables, state)
 		result, e := svc.GetSQLExecutor().Exec(ctx, statement, executor.Options{}.WithAccountID(0))
 		require.NoError(t, e)
@@ -83,15 +84,16 @@ func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
 		now := time.Now()
 		n, e := ts.GetStorage().AddDaemonTask(ctx, task.DaemonTask{
 			Metadata: task.TaskMetadata{ID: id, Executor: task.TaskCode_InitCdc},
-			TaskType: task.TaskType_CreateCdc, TaskStatus: task.TaskStatus_Running,
+			TaskType: task.TaskType_CreateCdc, TaskStatus: status,
 			Details: details, CreateAt: now, UpdateAt: now,
 		})
 		require.NoError(t, e)
 		require.Equal(t, 1, n)
 	}
-	seed(recoverID, "cdc_recovery", cdc.CDCState_Restarting, tables)
-	seed(failedID, "cdc_failed", cdc.CDCState_Failed, tables)
-	seed(invalidID, "cdc_invalid", cdc.CDCState_Restarting, "invalid-hex")
+	seed(recoverID, "cdc_recovery", cdc.CDCState_Restarting, tables, task.TaskStatus_Running)
+	seed(failedID, "cdc_failed", cdc.CDCState_Failed, tables, task.TaskStatus_Running)
+	seed(invalidID, "cdc_invalid", cdc.CDCState_Restarting, "invalid-hex", task.TaskStatus_Running)
+	seed(manualID, "cdc_manual", cdc.CDCState_Failed, tables, task.TaskStatus_Error)
 	find := func(id string) (task.DaemonTask, string, string, error) {
 		tasks, e := ts.QueryDaemonTask(ctx, taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()))
 		if e != nil {
@@ -120,10 +122,23 @@ func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
 		row, state, diag, e := find(invalidID)
 		return e == nil && row.TaskStatus == task.TaskStatus_Error && state == "failed" && strings.Contains(diag, "invalid byte")
 	}, 40*time.Second, 100*time.Millisecond, "permanent startup errors must stop automatic retry")
-	_, err = db.ExecContext(ctx, "resume cdc task cdc_failed 'restart'")
+	// Restart a separately seeded unowned failed task. A live owner can
+	// concurrently heartbeat; that conflict is covered by the lease test.
+	row, state, diag, err := find(manualID)
+	require.NoError(t, err)
+	require.Equal(t, task.TaskStatus_Error, row.TaskStatus)
+	require.Empty(t, row.TaskRunner)
+	require.Equal(t, "failed", state)
+	require.Equal(t, "original failure", diag)
+	_, err = db.ExecContext(ctx, "resume cdc task cdc_manual 'restart'")
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		row, state, diag, e := find(failedID)
+		row, state, diag, e := find(manualID)
 		return e == nil && row.TaskStatus == task.TaskStatus_Running && row.TaskRunner != "" && state == "running" && diag == ""
 	}, 40*time.Second, 100*time.Millisecond, "explicit restart must recover failed task")
+	row, state, diag, err = find(failedID)
+	require.NoError(t, err)
+	require.Equal(t, task.TaskStatus_Error, row.TaskStatus)
+	require.Equal(t, "failed", state)
+	require.Equal(t, "original failure", diag)
 }
