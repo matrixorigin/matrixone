@@ -131,10 +131,7 @@ func TestIssue31824SelfJoinMultiTargetUpdateUnique(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				createIssue31824Table(t, ctx, conn, tt.uniqueDef)
 				_, err := conn.ExecContext(ctx, tt.update)
-				require.Error(t, err)
-				var mysqlErr *mysql.MySQLError
-				require.ErrorAs(t, err, &mysqlErr)
-				require.Equal(t, uint16(1062), mysqlErr.Number)
+				requireIssue31824Duplicate(t, err)
 
 				require.Equal(t, originalRows, queryIssue31824Rows(t, ctx, conn,
 					fmt.Sprintf("select id,g,k,v from t ignore index(%s) order by id", tt.indexName)))
@@ -199,6 +196,116 @@ func TestIssue31824SelfJoinMultiTargetUpdateUnique(t *testing.T) {
 					queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
 			})
 		}
+
+		t.Run("same physical row self exemption", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=y.id and x.id=1
+				set x.k=30, y.v=201`)
+			require.Equal(t, []string{"1,1,30,201", "2,1,20,200"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=y.id and x.id=1
+				set x.k=x.k, y.v=202`)
+			require.Equal(t, []string{"1,1,30,202", "2,1,20,200"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=y.id and x.id=1
+				set x.k=40, y.k=40`)
+			require.Equal(t, []string{"1,1,40,202", "2,1,20,200"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		t.Run("key swap preserves uniqueness", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=1 and y.id=2
+				set x.k=20, y.k=10`)
+			require.Equal(t, []string{"1,1,20,100", "2,1,10,200"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			requireIssue31824UniqueRowCount(t, ctx, conn, 2)
+		})
+
+		t.Run("three aliases non conflicting and conflicting", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, "insert into t values (3,1,30,300)")
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=1 and y.id=2
+				join t as z on z.id=3 set x.k=40, y.k=50, z.k=60`)
+			require.Equal(t, []string{"1,1,40,100", "2,1,50,200", "3,1,60,300"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, "insert into t values (3,1,30,300)")
+			_, err := conn.ExecContext(ctx, `update t as x join t as y on x.id=1 and y.id=2
+				join t as z on z.id=3 set x.k=40, y.k=40, z.v=301`)
+			requireIssue31824Duplicate(t, err)
+			require.Equal(t, []string{"1,1,10,100", "2,1,20,200", "3,1,30,300"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		for _, tt := range []struct {
+			name   string
+			update string
+			want   []string
+		}{
+			{
+				name: "first of two unique indexes",
+				update: `update t as x join t as y on x.id=1 and y.id=2
+					set x.k=30, y.k=30, x.v=300, y.v=400`,
+			},
+			{
+				name: "second of two unique indexes same new key",
+				update: `update t as x join t as y on x.id=1 and y.id=2
+					set x.k=30, y.k=40, x.v=300, y.v=300`,
+			},
+			{
+				name: "second of two unique indexes moves an existing key",
+				update: `update t as x join t as y on x.id=1 and y.id=2
+					set x.k=30, y.k=40, x.v=200, y.v=300`,
+				want: []string{"1,1,30,200", "2,1,40,300"},
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				createIssue31824Table(t, ctx, conn, "unique key uk_k(k), unique key uk_v(v)")
+				if tt.want != nil {
+					mustExec(t, ctx, conn, tt.update)
+					require.Equal(t, tt.want,
+						queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+					return
+				}
+				_, err := conn.ExecContext(ctx, tt.update)
+				requireIssue31824Duplicate(t, err)
+				require.Equal(t, originalRows,
+					queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			})
+		}
+		t.Run("two unique indexes non conflicting", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k), unique key uk_v(v)")
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=1 and y.id=2
+				set x.k=30, y.k=40, x.v=300, y.v=400`)
+			require.Equal(t, []string{"1,1,30,300", "2,1,40,400"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		t.Run("prefix unique rejects same new prefix", func(t *testing.T) {
+			createIssue31824VarcharTable(t, ctx, conn, "", "unique key uk_k(k(2))")
+			_, err := conn.ExecContext(ctx, `update t as x join t as y on x.id=1 and y.id=2
+				set x.k='cc1', y.k='cc2'`)
+			requireIssue31824Duplicate(t, err)
+			require.Equal(t, []string{"1,1,aa1,100", "2,1,bb1,200"},
+				queryIssue31824VarcharRows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		t.Run("prefix unique allows different prefixes", func(t *testing.T) {
+			createIssue31824VarcharTable(t, ctx, conn, "", "unique key uk_k(k(2))")
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=1 and y.id=2
+				set x.k='cc1', y.k='dd1'`)
+			require.Equal(t, []string{"1,1,cc1,100", "2,1,dd1,200"},
+				queryIssue31824VarcharRows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		t.Run("update ignore existing conflict preserves uniqueness", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, `update ignore t as x join t as y on x.id=1 and y.id=2
+				set x.v=x.v+1, y.k=10`)
+			requireIssue31824UniqueRowCount(t, ctx, conn, 2)
+		})
 	})
 }
 
@@ -208,6 +315,57 @@ func createIssue31824Table(t *testing.T, ctx context.Context, conn *sql.Conn, un
 	mustExec(t, ctx, conn, fmt.Sprintf(`create table t (
 		id int primary key, g int not null, k int, v int not null, %s)`, uniqueDef))
 	mustExec(t, ctx, conn, "insert into t values (1,1,10,100),(2,1,20,200)")
+}
+
+func createIssue31824VarcharTable(
+	t *testing.T, ctx context.Context, conn *sql.Conn, collation, uniqueDef string,
+) {
+	t.Helper()
+	mustExec(t, ctx, conn, "drop table if exists t")
+	mustExec(t, ctx, conn, fmt.Sprintf(`create table t (
+		id int primary key, g int not null, k varchar(20) %s, v int not null, %s)`,
+		collation, uniqueDef))
+	mustExec(t, ctx, conn, "insert into t values (1,1,'aa1',100),(2,1,'bb1',200)")
+}
+
+func queryIssue31824VarcharRows(
+	t *testing.T, ctx context.Context, conn *sql.Conn, query string,
+) []string {
+	t.Helper()
+	rows, err := conn.QueryContext(ctx, query)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var result []string
+	for rows.Next() {
+		var id, g, v int
+		var k sql.NullString
+		require.NoError(t, rows.Scan(&id, &g, &k, &v))
+		key := "NULL"
+		if k.Valid {
+			key = k.String
+		}
+		result = append(result, fmt.Sprintf("%d,%d,%s,%d", id, g, key, v))
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+func requireIssue31824Duplicate(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &mysqlErr)
+	require.Equal(t, uint16(1062), mysqlErr.Number)
+}
+
+func requireIssue31824UniqueRowCount(t *testing.T, ctx context.Context, conn *sql.Conn, want int) {
+	t.Helper()
+	var total, distinctKeys int
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"select count(*), count(distinct k) from t").Scan(&total, &distinctKeys))
+	require.Equal(t, want, total)
+	require.Equal(t, total, distinctKeys)
 }
 
 func queryIssue31824Rows(t *testing.T, ctx context.Context, conn *sql.Conn, query string) []string {
