@@ -1136,6 +1136,60 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// EnumDisplayToIndex recovers an ordinal from a value rendered by the same
+// ENUM domain. Exact bytes matter here: case-folded lookup can select another
+// member and change the displayed result. An empty display without an empty
+// member represents the error ordinal zero.
+func EnumDisplayToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Enum](result)
+	var domain enumDomainParameter
+	if err := domain.init(ivecs, length); err != nil {
+		return err
+	}
+	values := vector.GenerateFunctionStrParameter(ivecs[1])
+	var exact map[string]types.Enum
+	if domain.constant && !domain.null && length >= enumValueIndexMinRows && len(domain.members) >= enumValueIndexMinLabels {
+		exact = make(map[string]types.Enum, len(domain.members))
+		for i, member := range domain.members {
+			if _, exists := exact[member]; !exists {
+				exact[member] = types.Enum(i + 1)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		members, domainNull, err := domain.get(i)
+		if err != nil {
+			return err
+		}
+		value, valueNull := values.GetStrValue(i)
+		if domainNull || valueNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		name := functionUtil.QuickBytesToStr(value)
+		var index types.Enum
+		if exact != nil {
+			index = exact[name]
+		} else {
+			for j, member := range members {
+				if member == name {
+					index = types.Enum(j + 1)
+					break
+				}
+			}
+		}
+		if index == 0 && name != "" {
+			return moerr.NewInternalErrorNoCtxf("ENUM display value %q is not in its source domain", name)
+		}
+		if err := rs.Append(index, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 const (
 	enumValueIndexMinRows   = 64
 	enumValueIndexMinLabels = 8

@@ -13696,6 +13696,26 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// Internal conversion of an ENUM display value to its canonical ordinal.
+	{
+		functionId: ENUM_DISPLAY_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId:      0,
+			args:            []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+			volatile:        true,
+			realTimeRelated: true,
+			retType: func(parameters []types.Type) types.Type {
+				return types.T_enum.ToType()
+			},
+			newOp: func() executeLogicOfOverload {
+				return EnumDisplayToIndex
+			},
+		}},
+	},
+
 	// function `cast_index_value_to_index`
 	{
 		functionId: CAST_INDEX_VALUE_TO_INDEX,

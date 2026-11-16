@@ -83,6 +83,65 @@ select count(*) from (select e from setop_src minus select e from setop_src wher
 insert into setop_dst select e from (select e from setop_src minus select e from setop_src where e+0=1) q;
 select count(*) from setop_dst;
 
+-- DISTINCT compares visible values, while UNION ALL retains source ordinals.
+insert into setop_dst select distinct e from setop_src;
+select e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+insert into setop_dst select e from (select distinct e from setop_src) q;
+select e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+insert into setop_dst select e from (select e from setop_src union select e from setop_src) q;
+select e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+insert into setop_dst select e from (select distinct e from setop_src union all select e from setop_src) q;
+select e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+insert into setop_src values(null);
+insert into setop_dst select distinct e from setop_src;
+select e+0 from setop_dst order by e+0;
+
+-- Framed domains must recover exact bytes, including case-distinct members.
+create table distinct_src(e enum('a,b','a','A',''));
+create table distinct_dst like distinct_src;
+insert ignore into distinct_src values(0),(4),(3),(1),(null);
+select hex(e) from (select distinct e from distinct_src) q order by hex(e);
+insert into distinct_dst select distinct e from distinct_src;
+select hex(e),e+0 from distinct_dst order by e+0;
+truncate table distinct_dst;
+insert into distinct_dst with q as (select distinct e from distinct_src) select e from q;
+select hex(e),e+0 from distinct_dst order by e+0;
+create table distinct_remap(e enum('','a,b','c'));
+insert into distinct_remap select distinct e from domain_src;
+select hex(e),e+0 from distinct_remap order by e+0;
+
+-- Without an empty member, zero has an unambiguous display and is retained.
+create table distinct_noempty_src(e enum('x','y'));
+create table distinct_noempty_dst like distinct_noempty_src;
+insert ignore into distinct_noempty_src values('invalid'),('y');
+insert into distinct_noempty_dst select distinct e from distinct_noempty_src;
+select e+0 from distinct_noempty_dst order by e+0;
+
+-- A hidden SET bitmap must not split the same visible DISTINCT tuple either.
+create table distinct_mixed_src(id int,e enum('a,b',''),s set('','x'));
+create table distinct_mixed_dst(e enum('a,b',''),s bigint);
+insert ignore into distinct_mixed_src values(1,'',0),(1,'',1),(2,'invalid',0),(2,'',0);
+select count(*) from (select distinct e,s from distinct_mixed_src) q;
+select cast(s as unsigned) from (select distinct s from distinct_mixed_src) q;
+insert into distinct_mixed_dst select distinct e,s from distinct_mixed_src;
+select e+0,s from distinct_mixed_dst;
+truncate table distinct_mixed_dst;
+insert into distinct_mixed_dst select e,s from (select distinct e,s from distinct_mixed_src union all select e,s from distinct_mixed_src) q;
+select e+0,s from distinct_mixed_dst order by e+0,s;
+
+-- With incompatible SET domains, use the visible value after DISTINCT.
+create table distinct_set_a(s set('1','2'));
+create table distinct_set_b(s set('2','1'));
+create table distinct_set_int(s bigint);
+insert into distinct_set_a values('1');
+insert into distinct_set_b values('1');
+insert into distinct_set_int select s from (select distinct s from (select s from distinct_set_a union all select s from distinct_set_b) u) q;
+select s from distinct_set_int;
+
 -- Materialization consumes frozen typed values, including the error ordinal.
 data branch create table domain_branch from domain_src;
 insert ignore into domain_branch values(10,'invalid');
