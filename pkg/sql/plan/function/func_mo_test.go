@@ -413,6 +413,53 @@ func TestEnumEncodedConversion(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestEnumChangingDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// The same payload has different members under the two encoding tags.
+	domains := []string{"b,a", "a,b,c", ",x,", "2#3:a,b1:c", "2#3:a,b1:c", "1#0:", "a,b", "1#9:broken"}
+	tags := []int64{0, 0, 0, 0, 1, 1, 0, 1}
+	domainNulls := []bool{false, false, false, false, false, false, true, false}
+	tagNulls := []bool{false, false, false, false, false, false, false, true}
+	resultNulls := []bool{false, false, false, false, false, false, true, true}
+	for _, encoded := range []bool{false, true} {
+		rows := 4
+		if encoded {
+			rows = len(domains)
+		}
+		for _, tc := range []struct {
+			value FunctionTestInput
+			want  FunctionTestResult
+			fn    fEvalFn
+		}{
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a", "", "b1:c", "a,b", "", "x", "x"}[:rows], nil),
+				NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{2, 1, 1, 2, 1, 1, 0, 0}[:rows], resultNulls[:rows]),
+				CastValueToIndex,
+			},
+			{
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{2, 3, 3, 2, 1, 1, 1, 1}[:rows], nil),
+				NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{2, 3, 3, 2, 1, 1, 0, 0}[:rows], resultNulls[:rows]),
+				CastIndexValueToIndex,
+			},
+			{
+				NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{2, 3, 3, 2, 1, 0, 1, 1}[:rows], nil),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "c", "", "b1:c", "a,b", "", "", ""}[:rows], resultNulls[:rows]),
+				CastIndexToValue,
+			},
+		} {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), domains[:rows], domainNulls[:rows]), tc.value,
+			}
+			if encoded {
+				inputs = append(inputs, NewFunctionTestInput(types.T_int64.ToType(), tags[:rows], tagNulls[:rows]))
+			}
+			check := NewFunctionTestCase(proc, inputs, tc.want, tc.fn)
+			ok, info := check.Run()
+			require.True(t, ok, info)
+		}
+	}
+}
+
 func TestEnumEncodingIgnoreAndNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})
@@ -422,6 +469,7 @@ func TestEnumEncodingIgnoreAndNull(t *testing.T) {
 		tag    int64
 	}{
 		{"2#1:a", 1}, {"a,b", 257}, {"1#0:", -1},
+		{strings.Repeat(",", types.MaxEnumLen), 0},
 	} {
 		for _, op := range []struct {
 			fn     fEvalFn

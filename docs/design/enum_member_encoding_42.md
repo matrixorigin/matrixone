@@ -44,6 +44,8 @@ Put encoding constants, EncodeEnumMembers, DecodeEnumMembers and decoded-label c
 
 Before allocating the label slice, validate N and N <= remainingBytes/2. Every parsed length is checked against remaining input before slicing; checked arithmetic prevents decimal/size overflow. The label slice is at most 65,535 string headers; strings borrow the already-owned payload. Encoder total length must fit both host int and the existing uint32 storage length. Do not invent a 64-KiB cap; retain existing request/memory budgets.
 
+Legacy decoding keeps its member-count/size check before allocation. That count fixes exactly count-1 comma-byte boundaries, read with strings.IndexByte into the existing bounded string-header slice. Leading, interior and trailing empty labels and arbitrary non-delimiter bytes are retained. The old strings.Split already counted delimiters internally; this optimization removes general split dispatch/check overhead, not a supposed additional Count scan. It adds no lookup path, threshold, cache or representation change.
+
 Decode 0 plus empty text as [''] only for complete-domain metadata comparison/formatting. Existing legacy empty-domain DML/coercion behavior is not silently reclassified: a generic temporary T_enum with empty metadata is not evidence of a defined domain. New [''] uses nonempty encoding-1 payload and works through normal logical-type recognition. Old empty declarations retain correct metadata; explicit new creation/reload can repair their old value-input limitation.
 
 ## 4. Type and persistence representation

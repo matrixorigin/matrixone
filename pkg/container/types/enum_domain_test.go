@@ -72,6 +72,27 @@ func TestEnumMemberEncoding(t *testing.T) {
 	require.Equal(t, Enum(MaxEnumLen), ordinal)
 }
 
+func TestLegacyEnumMemberBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    EnumMembers
+	}{
+		{"", EnumMembers{""}},
+		{",", EnumMembers{"", ""}},
+		{",,", EnumMembers{"", "", ""}},
+		{"a,", EnumMembers{"a", ""}},
+		{",a", EnumMembers{"", "a"}},
+		{"a,,b,", EnumMembers{"a", "", "b", ""}},
+		{"a\x00,\xff", EnumMembers{"a\x00", "\xff"}},
+	} {
+		got, err := DecodeEnumMembers(tc.payload, EnumEncodingLegacy)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
+	_, err := DecodeEnumMembers(strings.Repeat(",", MaxEnumLen), EnumEncodingLegacy)
+	require.Error(t, err, "capacity must be checked before allocating member headers")
+}
+
 func TestEnumMemberEncodingRejectsMalformed(t *testing.T) {
 	for _, payload := range []string{
 		"", "0#", "01#1:a", "-1#1:a", "1 #1:a", "65536#",
@@ -137,5 +158,15 @@ func FuzzEnumMemberEncoding(f *testing.F) {
 		members, err := DecodeEnumMembers(payload, encoding)
 		require.NoError(t, err)
 		require.Equal(t, EnumMembers{a, b}, members)
+
+		// Compare the legacy byte reader with the independent standard split.
+		legacy := a + "," + b
+		got, err := DecodeEnumMembers(legacy, EnumEncodingLegacy)
+		if strings.Count(legacy, ",") >= MaxEnumLen {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, EnumMembers(strings.Split(legacy, ",")), got)
+		}
 	})
 }

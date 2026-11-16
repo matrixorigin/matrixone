@@ -98,7 +98,16 @@ func DecodeEnumMembers(payload string, encoding uint32) (EnumMembers, error) {
 		if err != nil {
 			return nil, err
 		}
-		return EnumMembers(strings.SplitN(payload, ",", count)), nil
+		// The checked count gives the exact number of comma boundaries.
+		// Read those byte boundaries directly, preserving empty members.
+		members := make(EnumMembers, count)
+		for i := 0; i < count-1; i++ {
+			end := strings.IndexByte(payload, ',')
+			members[i] = payload[:end]
+			payload = payload[end+1:]
+		}
+		members[count-1] = payload
+		return members, nil
 	}
 	count, rest, err := readEnumDomainSize(payload, '#', MaxEnumLen)
 	if err != nil || count == 0 {

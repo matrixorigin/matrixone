@@ -331,30 +331,46 @@ oracles assert their own expected values, rather than learning them from output.
 
 ### Focused conversion performance
 
-The same maintained benchmark source was compiled for clean base 58a6fc5a034e
-and the candidate. Five interleaved 150-ms rounds cover 54 combinations of
-3/8/64 members, 1/64/1,024 rows, constant/dynamic domains and display/name/numeric
-conversion, pinned to one CPU with GOMAXPROCS=1. Values below are medians per
-vector-function call, not end-to-end SQL latency or throughput.
+Current comparison: clean 4.2-dev base 25305b61371e, original PR head c5623e47313e and the legacy byte-boundary reader. The same maintained benchmark source (SHA256 6752303a4f9485ccb5cfe31c9624e531d12aeb305e8e3e735af250fddcab7ea5) is used throughout. Measurements run on 57/Linux/amd64, Ryzen 9 7900X, CPU 23, GOMAXPROCS=1, source-matched native libraries and both Go 1.26.4 and 1.27.1. Medians are per vector-function call, not SQL throughput.
 
-| Legacy domain operation | Base | Candidate | Allocations |
-| --- | --- | --- | --- |
-| 3 members, 1,024 rows, constant display | 51.453 us | 14.115 us | 1,026 -> 3 |
-| 64 members, 1,024 rows, constant display | 636.784 us | 15.828 us | 1,026 -> 3 |
-| 64 members, 1,024 rows, constant numeric | 635.807 us | 5.059 us | 1,026 -> 3 |
-| 64 members, 1,024 rows, constant name lookup | 18.404 us | 18.360 us | 76 -> 76 |
+The original PR reproduced dynamic legacy overhead on this machine and a 127.7 -> 146.6 ns (+14.80%) scalar display regression on Go 1.27.1. The [Darwin/arm64 QA report](https://github.com/matrixorigin/matrixone/pull/32723#issuecomment-6904265723) independently found larger dynamic name-lookup regressions. strings.Split already performs a count internally, so an additional Count scan is not the explanation. The capacity-checked reader now traverses its known comma-byte boundaries directly with strings.IndexByte; all tag, size and member-count validation remains.
 
-Not every operation gets faster. Three short-run ratios exceeded 10% (maximum
-13.53%); the raw runs remain recorded. Seven additional interleaved 500-ms
-rounds measured those exact cases at 122.3 -> 127.8 ns (+4.50%) for single-row
-numeric conversion, 50.363 -> 51.728 us (+2.71%) for dynamic 1,024-row display,
-and 151.0 -> 155.7 ns (+3.11%) for dynamic single-row name lookup. Allocations
-were unchanged. These small costs are not reported as speedups or zero regression.
+Seven interleaved 500-ms rounds per revision/toolchain remeasure the six dynamic controls and the scalar display case. The production sources are identical to those used by the final expanded behavioral tests; no compiler directive or measurement-only production path is used. Positive ratios below mean slower than base.
 
-Another 54 tagged-domain cases pass three benchmark rounds. For 64 members and
-1,024 rows, constant tagged display/numeric conversion take 15.661/5.164 us
-and four allocations; tag-argument wrapping adds one allocation per batch.
-The decoded domain belongs to the batch, with no global or cross-query cache.
+| Legacy operation | Go 1.26.4 base -> candidate | Change | Go 1.27.1 base -> candidate | Change |
+| --- | ---: | ---: | ---: | ---: |
+| 3 members, 64 rows, dynamic display | 3.267 -> 3.262 us | -0.15% | 3.054 -> 3.083 us | +0.95% |
+| 3 members, 64 rows, dynamic name | 3.163 -> 3.201 us | +1.20% | 2.971 -> 3.011 us | +1.35% |
+| 3 members, 64 rows, dynamic numeric | 2.776 -> 2.774 us | -0.07% | 2.641 -> 2.648 us | +0.27% |
+| 3 members, 1024 rows, dynamic display | 51.956 -> 51.878 us | -0.15% | 47.927 -> 47.784 us | -0.30% |
+| 3 members, 1024 rows, dynamic name | 50.855 -> 51.312 us | +0.90% | 46.949 -> 47.002 us | +0.11% |
+| 3 members, 1024 rows, dynamic numeric | 42.850 -> 42.679 us | -0.40% | 41.143 -> 40.746 us | -0.96% |
+| 3 members, 1 row, constant display | 138.000 -> 142.500 ns | +3.26% | 126.800 -> 129.600 ns | +2.21% |
+
+Bytes and allocations are unchanged for these controls (66 allocations at 64 dynamic rows, 1,026 at 1,024 rows and three for scalar constant display). The six dynamic ratios are -0.40%..+1.20% on Go 1.26.4 and -0.96%..+1.35% on Go 1.27.1. Small residual costs remain; this is not a claim that every operation is faster.
+
+The complete 54-case legacy matrix and 54-case tagged matrix run three interleaved 100-ms rounds on both toolchains. No legacy short-run median exceeds 10% versus base (maxima +7.70% and +5.72%). One tagged short-run point, 64 members/1,024 rows/dynamic name lookup on Go 1.26.4, is +10.80% versus the original PR; seven fixed longer rounds measure 655.833 -> 649.588 us (-0.95%), with the same 1,027 allocations. All short and long samples are retained. The tagged reader itself is unchanged.
+
+Constant-batch benefits remain in the complete-matrix measurements:
+
+| Constant domain, 1,024 rows | Go 1.26.4 base -> candidate | Go 1.27.1 base -> candidate | Allocations |
+| --- | ---: | ---: | ---: |
+| 3 members, display | 51.751 -> 14.116 us | 49.517 -> 13.979 us | 1,026 -> 3 |
+| 64 members, display | 593.894 -> 15.692 us | 648.679 -> 15.525 us | 1,026 -> 3 |
+| 64 members, numeric | 570.225 -> 5.134 us | 641.309 -> 5.151 us | 1,026 -> 3 |
+| 64 members, indexed name lookup | 18.018 -> 18.443 us | 18.257 -> 18.250 us | 76 -> 76 |
+
+Dynamic domains are not cached by payload equality. Literal vector tests change the domain on every row, mix encoding tags (including identical payload bytes with distinct meanings), and check independent label/ordinal/NULL expectations under both overloads. Codec boundary and stdlib-differential fuzz tests cover leading/interior/trailing empties, arbitrary bytes and the member limit. Invalid domains remain fatal under IGNORE.
+
+The candidate has not been timed on Darwin/arm64, and these microbenchmarks do not establish end-to-end SQL performance. The decoded domain remains batch-owned; no global or cross-query cache is introduced.
+
+### Runtime follow-up qualification
+
+The byte-boundary reader passes fresh owner tests with -short and -tags=matrixone_test on both Go 1.26.4 and 1.27.1: 176 types roots and 1,297 function roots per toolchain; only the existing TestDecimal128Float skip remains. Exact boundary, changing-domain and IGNORE tests also run separately. A 30-second differential fuzz budget on Go 1.26.4 completes 330,370 executions without failure. Owning go list/build/vet and molint also run on Go 1.26.4 and exit zero; configured incremental golangci reports zero issues.
+
+A new source-matched native service passes the maintained 121-statement BVT twice with checked-in expected results unchanged (no generation, failure, ignored or abnormal statements), and nine independent public SQL groups execute 185 SQL operations with literal result/error assertions across metadata replay, empty/zero ordinals, ALTER, views, FK and imports. Both service instances stop normally. All task data and temporary files remain under home directories outside /tmp. The test harness uses isolated ports and a task-local Python dependency, preserving the existing instance.
+
+The wider implementation's prior review is reused only for byte-identical artifacts: 138 of the 143 current PR paths match f9c839add0; this follow-up changes the common legacy reader, its boundary/fuzz tests, the real-vector behavior tests and two design/evidence documents. No lifecycle or shared-state code changes, and no new storage/plan encoding is introduced. Prior broader race, upgrade and multi-CN evidence retains its recorded revision and scope.
 
 ### Scope and remaining limitations
 
