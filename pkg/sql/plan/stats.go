@@ -1357,10 +1357,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 					builder.tag2Table[node.BindingTags[0]] = node.TableDef
 				}
 				newStats := calcScanStats(node, builder)
-				if needResetHashMapStats {
+				if needResetHashMapStats || node.Stats == nil {
 					resetHashMapStats(newStats)
+					node.Stats = newStats
+				} else {
+					updateStatsEstimates(node.Stats, newStats)
 				}
-				node.Stats = newStats
 			}
 		}
 
@@ -1779,7 +1781,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	}
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
-	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(indexScanSelectivityFilters(node)), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
@@ -2201,7 +2203,8 @@ const (
 	dopBlocksPrepareUnit int32 = 64 // prepare: more conservative
 )
 
-func calcDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
+// CalcScanDOP applies the scan scheduling grain to a block count and row width.
+func CalcScanDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
 	if ncpu <= 0 {
 		return 1
 	}
@@ -2288,7 +2291,7 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 			setNodeDOP(p, rootID, dop)
 		}
 	} else {
-		node.Stats.Dop = calcDOP(ncpu, node.Stats, p.IsPrepare)
+		node.Stats.Dop = CalcScanDOP(ncpu, node.Stats, p.IsPrepare)
 	}
 }
 
@@ -2590,6 +2593,17 @@ func (builder *QueryBuilder) canSkipStats() bool {
 	return false
 }
 
+// updateStatsEstimates keeps physical placement and hash/shuffle decisions
+// separate from cardinality and cost estimates.
+func updateStatsEstimates(stats, estimates *plan.Stats) {
+	stats.BlockNum = estimates.BlockNum
+	stats.Cost = estimates.Cost
+	stats.Outcnt = estimates.Outcnt
+	stats.Rowsize = estimates.Rowsize
+	stats.TableCnt = estimates.TableCnt
+	stats.Selectivity = estimates.Selectivity
+}
+
 func (builder *QueryBuilder) hintQueryType() {
 	if builder.optimizerHints == nil || builder.optimizerHints.execType == 0 {
 		return
@@ -2610,11 +2624,6 @@ func (builder *QueryBuilder) hintQueryType() {
 		// Replace cost estimates only: clearing ForceOneCN can strand a scan
 		// waiting for a current-CN-only filter on a remote CN. HashmapStats
 		// likewise contains already-selected hash/shuffle execution contracts.
-		node.Stats.BlockNum = estimates.BlockNum
-		node.Stats.Cost = estimates.Cost
-		node.Stats.Outcnt = estimates.Outcnt
-		node.Stats.Rowsize = estimates.Rowsize
-		node.Stats.TableCnt = estimates.TableCnt
-		node.Stats.Selectivity = estimates.Selectivity
+		updateStatsEstimates(node.Stats, estimates)
 	}
 }

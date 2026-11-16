@@ -496,13 +496,7 @@ func NewReader(
 		return nil, err
 	}
 
-	memFilter, err := NewMemPKFilter(
-		tableDef,
-		ts,
-		packerPool,
-		baseFilter,
-		filterHint,
-	)
+	memFilter, err := newMemPKFilter(tableDef, ts, packerPool, baseFilter, filterHint, true)
 	if err != nil {
 		baseFilter.Cleanup()
 		return nil, err

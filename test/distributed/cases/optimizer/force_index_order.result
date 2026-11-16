@@ -1,0 +1,815 @@
+drop database if exists force_index_order;
+create database force_index_order;
+use force_index_order;
+create table t (id int primary key, a int, b int, payload int, key ix_ab(a,b));
+insert into t values (1,1,1,30),(2,1,1,10),(3,1,2,20),(4,2,2,40);
+explain select id,payload from t force index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("prefix_in", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from t force index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+select id,payload from t ignore index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+explain select id,a,b from t force index(ix_ab) order by a,b,id limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Index Reader Param", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,a,b from t force index(ix_ab) order by a,b,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+select id,a,b from t ignore index(ix_ab) order by a,b,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+explain select id,a,b from t force index(ix_ab) order by a desc,b asc,id limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,a,b from t force index(ix_ab) order by a desc,b asc,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+4  ¦  2  ¦  2  𝄀
+1  ¦  1  ¦  1
+select id,a,b from t ignore index(ix_ab) order by a desc,b asc,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+4  ¦  2  ¦  2  𝄀
+1  ¦  1  ¦  1
+explain select id,payload from t force index(primary,ix_ab) ignore index(primary)
+where a=1 and b in (1,2) order by payload,id;
+-- @regex("Index Table Scan.*ix_ab", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+explain select id,payload from t force index for order by(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from t force index for order by(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20  𝄀
+2  ¦  10
+select id,payload from t ignore index(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20  𝄀
+2  ¦  10
+create table u (id int primary key, v int);
+insert into u values (1,10),(3,30),(4,40);
+select t.id,t.a,t.b from t force index(ix_ab) join u on t.id=u.id
+where t.a=1 and t.b in (1,2) order by t.b,t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  2
+select t.id,t.a,t.b from t ignore index(ix_ab) join u on t.id=u.id
+where t.a=1 and t.b in (1,2) order by t.b,t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  2
+create table scope_t (id int primary key, a int, b int, key ix_ab(a,b), key ix_ba(b,a));
+insert into scope_t values (1,1,1),(2,1,2),(3,2,3);
+select s.id,s.a,s.b from scope_t s force index for join(ix_ab) force index for order by(ix_ab)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from scope_t s force index for join(ix_ba) force index for order by(ix_ab)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from u join scope_t s force index for join(ix_ba) force index for order by(ix_ab)
+on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from scope_t s ignore index(ix_ab,ix_ba)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+create table limit_j (id int primary key, a int, key ix_limit_a(a));
+create table limit_u (id int primary key);
+insert into limit_j values (1,1),(2,2),(3,3),(4,4);
+insert into limit_u values (3),(4);
+select mo_ctl('dn','flush','force_index_order.limit_j');
+➤ mo_ctl(dn, flush, force_index_order.limit_j)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_limit_a');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select j.id,j.a from limit_j j force index for order by(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+-- @regex("Index Table Scan.*ix_limit_a", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select j.id,j.a from limit_j j force index for order by(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  3
+select j.id,j.a from limit_j j ignore index(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  3
+create table uq (id int primary key, a int, b int, unique key ux_ab(a,b));
+insert into uq values (1,1,null),(2,1,2),(3,null,2),(4,2,2);
+explain select id from uq force index for order by(ux_ab) where a=1 order by a;
+-- @regex("Index Table Scan.*ux_ab", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id from uq force index for order by(ux_ab) where a=1 order by a,id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from uq ignore index(ux_ab) where a=1 order by a,id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select a,b,count(*) from uq force index for group by(ux_ab) group by a,b order by a,b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  2  ¦  1  𝄀
+1  ¦  null  ¦  1  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  2  ¦  1
+explain select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order by uq.id;
+-- @regex("Index Table Scan.*ux_ab", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order by uq.id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select uq.id,uq.b from u join uq ignore index(ux_ab) on uq.a=u.id order by uq.id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+create table prefix_j (id int primary key, a varchar(20), b int, payload int, key ix_join_pref(a(4),b));
+create table prefix_u (a varchar(20) primary key);
+insert into prefix_j values (1,'abcdef',1,10),(2,'abcdxy',2,20),(3,'wxyz12',3,30);
+insert into prefix_u values ('abcdef'),('abcdxy');
+insert into prefix_j select result+100,concat('z',lpad(cast(result as varchar(20)),10,'0')),result,result from generate_series(1,10000) g;
+select mo_ctl('dn','flush','force_index_order.prefix_j');
+➤ mo_ctl(dn, flush, force_index_order.prefix_j)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_join_pref');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select j.id,j.a,j.payload from prefix_j j force index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+-- @regex("Index Table Scan.*ix_join_pref", false)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select j.id,j.a,j.payload from prefix_j j force index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  abcdef  ¦  10  𝄀
+2  ¦  abcdxy  ¦  20
+select j.id,j.a,j.payload from prefix_j j ignore index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  abcdef  ¦  10  𝄀
+2  ¦  abcdxy  ¦  20
+create table suffix_j (id int primary key, a int, b varchar(20), payload int, key ix_suffix(a,b(4)));
+create table suffix_u (a int, b varchar(20));
+insert into suffix_j values (1,7,'abcdef',10),(2,7,'abcdxy',20),(3,8,'abcdef',30);
+insert into suffix_u values (7,'abcdef');
+explain select j.id,j.b from suffix_j j force index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+-- @regex("Index Table Scan.*ix_suffix", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select j.id,j.b from suffix_j j force index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+➤ id[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  abcdef
+select j.id,j.b from suffix_j j ignore index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+➤ id[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  abcdef
+prepare force_order_param from 'select id,payload from t force index(ix_ab) where a=? and b in (1,2) order by payload,id';
+set @v=1;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+set @v=2;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+4  ¦  40
+set @v=null;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @v=1;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+deallocate prepare force_order_param;
+create table top_probe (id int primary key, a int, payload int not null, key ix_top(a));
+insert into top_probe values (1,1,30),(2,1,10),(3,2,20),(4,2,40);
+explain select id,payload from top_probe force index(ix_top) where a>=1 order by payload,id limit 2;
+-- @regex("Index Table Scan.*ix_top", true)
+-- @regex("MsgTopValue", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from top_probe force index(ix_top) where a>=1 order by payload,id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from top_probe ignore index(ix_top) where a>=1 order by payload,id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+create table nullable_top (id int primary key, a int not null, payload int, key ix_null_top(a));
+set @@max_dop=1;
+insert into nullable_top values (1,1,-10),(5,5,-20);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullable_top values (2,2,100),(3,3,null);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullable_top values (4,4,-10);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload limit 1;
+-- @regex("Index Table Scan.*ix_null_top", true)
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+explain select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+select id,payload from nullable_top where payload is null;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+begin;
+insert into nullable_top values (6,6,-30);
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+rollback;
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
+-- @regex("Index Table Scan.*ix_null_top", true)
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  100  𝄀
+4  ¦  -10
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  100  𝄀
+4  ¦  -10
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_top force index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  -10
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  -10
+create table nullable_evo (id int primary key);
+insert into nullable_evo values (1);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+➤ mo_ctl(dn, flush, force_index_order.nullable_evo)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+alter table nullable_evo add column payload int;
+insert into nullable_evo values (2,-10),(3,100);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+➤ mo_ctl(dn, flush, force_index_order.nullable_evo)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id,payload from nullable_evo order by payload desc limit 3;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_evo order by payload desc limit 3;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  100  𝄀
+2  ¦  -10  𝄀
+1  ¦  null
+explain select id,payload from nullable_evo order by payload limit 1;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from nullable_evo order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  null
+set @@max_dop=0;
+explain select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+-- @regex("Block Filter Cond:.*prefix_between", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from t ignore index(ix_ab) where a=1 and b between 1 and 2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from t force index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20
+select id,payload from t ignore index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20
+prepare force_index_range from 'select id,payload from t force index(ix_ab) where a=? and b between ? and ? order by id';
+set @a=1, @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+set @lo=null;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @lo=2, @hi=1;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+deallocate prepare force_index_range;
+explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+-- @regex("Index Table Scan.*ix_ab", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  30  𝄀
+2  ¦  1  ¦  1  ¦  10  𝄀
+3  ¦  1  ¦  2  ¦  20
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t ignore index(ix_ab) on t.a=k.a order by t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  30  𝄀
+2  ¦  1  ¦  1  ¦  10  𝄀
+3  ¦  1  ¦  2  ¦  20
+create table issue32665 (pk1 int, pk2 int, a int, b varchar(20), payload int,
+primary key (pk1,pk2), key ix_issue32665_ab(a,b));
+insert into issue32665 values
+(1,1,1,'alpha',10),(2,2,1,'alpha',20),(3,3,1,'beta',30),(4,4,2,'alpha',40);
+select mo_ctl('dn','flush','force_index_order.issue32665');
+➤ mo_ctl(dn, flush, force_index_order.issue32665)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_issue32665_ab');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+-- @regex("Index Table Scan.*ix_issue32665_ab", true)
+-- @regex("prefix_in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+create table issue32665_other (id int primary key);
+begin;
+insert into issue32665_other values (1);
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+insert into issue32665 values (5,5,1,'alpha',5);
+insert into issue32665 values (6,6,1,'beta',6);
+update issue32665 set b='beta',payload=1 where pk1=2 and pk2=2;
+delete from issue32665 where pk1=1 and pk2=1;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  2  ¦  1  𝄀
+5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  2  ¦  1  𝄀
+5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  𝄀
+3  ¦  3  ¦  30
+rollback;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+create table bounded_top (id int primary key, a int not null, b int, payload int, key ix_bounded(a,b));
+insert into bounded_top values (3,1,1,70),(4,1,1,60),(5,1,2,50),(6,1,2,40),(7,1,3,30),(8,1,3,20),(9,1,4,10),(10,1,4,0),(11,1,5,-10),(12,1,5,-20);
+select mo_ctl('dn','flush','force_index_order.bounded_top');
+➤ mo_ctl(dn, flush, force_index_order.bounded_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_bounded');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into bounded_top values (1,1,null,90),(2,1,null,80);
+select mo_ctl('dn','flush','force_index_order.bounded_top');
+➤ mo_ctl(dn, flush, force_index_order.bounded_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_bounded');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table bounded_top;
+-- @regex("approx_count_distinct", true)
+➤ approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(a)[-5,64,0]  ¦  approx_count_distinct(b)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+-- @regex("Index Table Scan.*ix_bounded", true)
+-- @regex("Limit: 3(?![0-9])", true)
+-- @regex("Index Reader Param", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10  𝄀
+10  ¦  0
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10  𝄀
+10  ¦  0
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  90  𝄀
+4  ¦  60
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  90  𝄀
+4  ¦  60
+select id,payload from bounded_top force index(ix_bounded) order by a,b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+select id,payload from bounded_top ignore index(ix_bounded) order by a,b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+select id,payload from bounded_top force index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+-- @regex("Index Table Scan.*ix_bounded", true)
+-- @regex("Limit: 3(?![0-9])", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+7  ¦  30
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+7  ¦  30
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+-- @regex("Index Table Scan.*ix_bounded", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from bounded_top force index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+9  ¦  10
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+9  ¦  10
+begin;
+insert into bounded_top values (0,1,null,999);
+insert into bounded_top values (100,1,100,10000);
+update bounded_top set b=9,payload=42 where id=2;
+delete from bounded_top where id=1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  70  𝄀
+4  ¦  60
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  70  𝄀
+4  ¦  60
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  42  𝄀
+12  ¦  -20
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  42  𝄀
+12  ¦  -20
+rollback;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+prepare bounded_param from 'select id,payload+? as v from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1';
+set @p=0;
+execute bounded_param using @p;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+set @p=null;
+execute bounded_param using @p;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+set @p=1;
+execute bounded_param using @p;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  81  𝄀
+3  ¦  71
+deallocate prepare bounded_param;
+begin;
+update bounded_top set a=2 where id in (4,6,9);
+update bounded_top set a=3 where id in (10,11,12);
+prepare bounded_key from 'select id,payload from bounded_top force index(ix_bounded) where a=? order by b,id limit 2 offset 1';
+set @k=1;
+execute bounded_key using @k;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+set @k=2;
+execute bounded_key using @k;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+9  ¦  10
+select id,payload from bounded_top ignore index(ix_bounded) where a=2 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  40  𝄀
+9  ¦  10
+set @k=3;
+execute bounded_key using @k;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10  𝄀
+12  ¦  -20
+select id,payload from bounded_top ignore index(ix_bounded) where a=3 order by b,id limit 2 offset 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  -10  𝄀
+12  ¦  -20
+set @k=null;
+execute bounded_key using @k;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+set @k=1;
+execute bounded_key using @k;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  80  𝄀
+3  ¦  70
+deallocate prepare bounded_key;
+rollback;
+
+create table decimal_top (id int primary key,p decimal(10,2),q decimal(10,2),payload int,key ix_decimal_top(p,q));
+insert into decimal_top values (1,1.25,1.00,101),(2,1.25,2.00,102),(3,1.25,2.01,103),(4,1.25,2.02,104),(5,1.25,3.00,105),(6,1.25,null,106);
+insert into decimal_top select result+100,1.25,cast(mod(result,400)/100 as decimal(10,2)),result from generate_series(1,512) g;
+select mo_ctl('dn','flush','force_index_order.decimal_top');
+➤ mo_ctl(dn, flush, force_index_order.decimal_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_decimal_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table decimal_top;
+-- @regex("approx_count_distinct", true)
+➤ approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(p)[-5,64,0]  ¦  approx_count_distinct(q)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+explain select id,payload from decimal_top force index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+-- @regex("Index Table Scan.*ix_decimal_top", true)
+-- @regex("serial_extract.*>= 2.001", true)
+-- @regex("(?s)Limit: 2.*Limit: 2", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select id,payload from decimal_top force index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  103  𝄀
+4  ¦  104
+select id,payload from decimal_top ignore index(ix_decimal_top) where p=1.250000 and q>=2.001 order by id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  103  𝄀
+4  ¦  104
+drop database force_index_order;

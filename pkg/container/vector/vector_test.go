@@ -2481,6 +2481,45 @@ func TestSetFunction(t *testing.T) {
 	}
 }
 
+func TestInplaceVarlenByteOrdering(t *testing.T) {
+	inputs := [][]string{
+		nil,
+		{"one"},
+		{"z", "", "\xff", "a\x00b", "a", "\x00", "a", strings.Repeat("x", 24), strings.Repeat("x", 23), strings.Repeat("x", 80) + "b", strings.Repeat("x", 80) + "a"},
+	}
+	for _, oid := range []types.T{types.T_varchar, types.T_varbinary} {
+		for i, input := range inputs {
+			for _, compact := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/compact=%v", oid, i, compact), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					vec := NewVec(oid.ToType())
+					t.Cleanup(func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					})
+					for _, value := range input {
+						require.NoError(t, AppendBytes(vec, []byte(value), false, mp))
+					}
+					area := slices.Clone(vec.GetArea())
+					want := slices.Clone(input)
+					slices.Sort(want)
+					if compact {
+						want = slices.Compact(want)
+						vec.InplaceSortAndCompact()
+					} else {
+						vec.InplaceSort()
+					}
+					require.Equal(t, len(want), vec.Length())
+					for pos, value := range want {
+						require.Equal(t, value, string(vec.GetBytesAt(pos)))
+					}
+					require.Equal(t, area, vec.GetArea())
+				})
+			}
+		}
+	}
+}
+
 func TestSortAndCompact(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.New(types.T_array_float32, 4, 0))
