@@ -1417,19 +1417,18 @@ func buildCreateTable(
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	var tableCharset, tableCollation string
+	var tableCharsetSpecified bool
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.TableOptionCharset:
 			tableCharset = opt.Charset
+			tableCharsetSpecified = true
 		case *tree.TableOptionCollate:
 			if opt.Collate == "" {
 				return moerr.NewInvalidInput(ctx.GetContext(), "empty table COLLATE")
 			}
 			tableCollation = opt.Collate
 		}
-	}
-	if tableCharset != "" && tableCollation != "" && !enumCharsetCollationCompatible(tableCharset, tableCollation) {
-		return moerr.NewInvalidInputf(ctx.GetContext(), "COLLATION '%s' is not valid for CHARACTER SET '%s'", tableCollation, tableCharset)
 	}
 	// 4.2 historically did not retain table collations. Record supported
 	// explicit defaults so subsequent ENUM columns use the same identity.
@@ -1905,6 +1904,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s) as __mo_ctas_source", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+	// 4.2 historically ignored table CHARACTER SET on ordinary tables. Keep
+	// that compatibility, but never author an ENUM under a contradictory table
+	// charset/collation pair. Check final columns after CTAS name overrides.
+	if tableCharsetSpecified && (tableCharset == "" || tableCollation != "" && !enumCharsetCollationCompatible(tableCharset, tableCollation)) {
+		for _, col := range createTable.TableDef.Cols {
+			if isEnumPlanType(&col.Typ) {
+				if tableCharset == "" {
+					return moerr.NewInvalidInput(ctx.GetContext(), "empty table CHARACTER SET for ENUM")
+				}
+				return moerr.NewInvalidInputf(ctx.GetContext(), "COLLATION '%s' is not valid for CHARACTER SET '%s'", tableCollation, tableCharset)
+			}
+		}
 	}
 
 	for _, check := range pendingChecks {

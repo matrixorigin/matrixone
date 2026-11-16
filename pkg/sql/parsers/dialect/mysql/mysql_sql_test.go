@@ -4269,19 +4269,19 @@ var (
 			output: "alter table t1 charset = a",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
-			output: "alter table t1 charset = DISABLE",
+			output: "alter table t1 DISABLE keys",
 		}, {
 			input:  "alter table t1 ENABLE KEYS",
-			output: "alter table t1 charset = ENABLE",
+			output: "alter table t1 ENABLE keys",
 		}, {
 			input:  "alter table t1 DISCARD TABLESPACE",
-			output: "alter table t1 charset = DISCARD",
+			output: "alter table t1 DISCARD tablespace",
 		}, {
 			input:  "alter table t1 IMPORT TABLESPACE",
-			output: "alter table t1 charset = IMPORT",
+			output: "alter table t1 IMPORT tablespace",
 		}, {
 			input:  "alter table t1 FORCE",
-			output: "alter table t1 charset = FORCE",
+			output: "alter table t1 force",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
 			output: "alter table t1 lock = DEFAULT",
@@ -4296,10 +4296,10 @@ var (
 			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
-			output: "alter table t1 charset = WITHOUT",
+			output: "alter table t1 WITHOUT validation",
 		}, {
 			input:  "alter table t1 WITH VALIDATION",
-			output: "alter table t1 charset = WITH",
+			output: "alter table t1 WITH validation",
 		}, {
 			input:  "alter table t1 alter CHECK a ENFORCED",
 			output: "alter table t1 alter CHECK enforce",

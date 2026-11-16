@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -2276,14 +2277,14 @@ func prepareFSForDiffAsFile(
 			var openErr error
 			etlFS, cleanupPath, openErr = fileservice.GetForETL(cleanupCtx, nil, fullFilePath)
 			if openErr != nil {
-				return fmt.Errorf("open file service for incomplete DATA BRANCH SQL output cleanup: %w", openErr)
+				return errutil.Wrap(openErr, "open file service for incomplete DATA BRANCH SQL output cleanup")
 			}
 			defer etlFS.Close(cleanupCtx)
 			cleanupFS = etlFS
 		}
 		if deleteErr := cleanupFS.Delete(cleanupCtx, cleanupPath); deleteErr != nil &&
 			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
-			return fmt.Errorf("remove incomplete DATA BRANCH SQL output: %w", deleteErr)
+			return errutil.Wrap(deleteErr, "remove incomplete DATA BRANCH SQL output")
 		}
 		return nil
 	}

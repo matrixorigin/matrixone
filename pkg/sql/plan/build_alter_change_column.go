@@ -236,8 +236,11 @@ func buildColumnAndConstraint(
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 			}
 		case *tree.AttributeCharset:
-			// The existing 4.2 text path ignores the charset; ENUM validates it
-			// when the new column type is constructed.
+			// Before ENUM charset attributes were retained, the ordinary
+			// MODIFY/CHANGE path rejected the parser's nil placeholder.
+			if !isEnumPlanType(&colType) {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", nil)
+			}
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}

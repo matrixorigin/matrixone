@@ -447,9 +447,13 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 	for _, option := range stmt.Options {
-		switch option.(type) {
-		case *tree.TableOptionCharset, *tree.TableOptionCollate:
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "ALTER TABLE charset/collation defaults and conversion")
+		if charset, ok := option.(*tree.TableOptionCharset); ok {
+			switch charset.LegacyAlterKind {
+			case tree.LegacyAlterKeys, tree.LegacyAlterTablespace, tree.LegacyAlterForce, tree.LegacyAlterValidation:
+				// Preserve the original INPLACE/COPY dispatch for these no-ops.
+			default:
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "ALTER TABLE charset/collation defaults and conversion")
+			}
 		}
 	}
 	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)

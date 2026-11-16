@@ -4166,15 +4166,15 @@ alter_option:
     }
 |   able_type KEYS
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterKeys)
     }
 |   space_type TABLESPACE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterTablespace)
     }
 |   FORCE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterForce)
     }
 |   LOCK equal_opt lock_type
     {
@@ -4182,7 +4182,7 @@ alter_option:
     }
 |   with_type VALIDATION
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterValidation)
     }
 
 rename_type:

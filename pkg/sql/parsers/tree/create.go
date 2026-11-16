@@ -2847,12 +2847,42 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 	return reuse.Alloc[TableOptionSecondaryEngineNull](nil)
 }
 
+type LegacyAlterNoopKind uint8
+
+const (
+	LegacyAlterNotNoop LegacyAlterNoopKind = iota
+	LegacyAlterKeys
+	LegacyAlterTablespace
+	LegacyAlterForce
+	LegacyAlterValidation
+)
+
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	// LegacyAlterKind preserves unrelated historical ALTER placeholders when
+	// the statement is formatted and reparsed for partition execution.
+	LegacyAlterKind LegacyAlterNoopKind
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
+	switch node.LegacyAlterKind {
+	case LegacyAlterKeys:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" keys")
+		return
+	case LegacyAlterTablespace:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" tablespace")
+		return
+	case LegacyAlterForce:
+		ctx.WriteString("force")
+		return
+	case LegacyAlterValidation:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" validation")
+		return
+	}
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
 }
@@ -2870,6 +2900,12 @@ func (node *TableOptionCharset) Free() {
 func NewTableOptionCharset(s string) *TableOptionCharset {
 	t := reuse.Alloc[TableOptionCharset](nil)
 	t.Charset = s
+	return t
+}
+
+func NewLegacyAlterNoopOption(s string, kind LegacyAlterNoopKind) *TableOptionCharset {
+	t := NewTableOptionCharset(s)
+	t.LegacyAlterKind = kind
 	return t
 }
 

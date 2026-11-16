@@ -70,7 +70,21 @@ select hex(cast(e as char)),e+0 from legacy_like;
 alter table legacy_like add another enum('x');
 -- 4.2 cannot represent a three-byte ENUM repertoire as utf8mb4.
 create table invalid_column(e enum('a') character set latin1 collate utf8mb4_bin);
+-- Ordinary tables keep 4.2's ignored table charset behavior; the explicit
+-- supported COLLATE remains the ENUM default for later ALTER and LIKE.
 create table invalid_table(e int) character set latin1 collate utf8mb4_bin;
+show create table invalid_table;
+alter table invalid_table add choice enum('a','A');
+insert into invalid_table values (1,'a'),(2,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table order by e;
+create table invalid_table_copy like invalid_table;
+insert into invalid_table_copy values (3,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table_copy;
+create table invalid_table_with_enum(e enum('a')) character set latin1 collate utf8mb4_bin;
+create table empty_charset_ordinary(i int) character set '' collate utf8mb4_bin;
+show create table empty_charset_ordinary;
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '';
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '' collate utf8mb4_bin;
 create table empty_table_default(i int) collate '';
 create table empty_column(e enum('a') collate '') collate utf8mb4_bin;
 alter table alter_reject modify e enum('a') collate '';

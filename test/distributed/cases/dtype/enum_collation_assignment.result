@@ -101,7 +101,34 @@ alter table legacy_like add another enum('x');
 create table invalid_column(e enum('a') character set latin1 collate utf8mb4_bin);
 invalid input: COLLATION 'utf8mb4_bin' is not valid for CHARACTER SET 'latin1'
 create table invalid_table(e int) character set latin1 collate utf8mb4_bin;
+show create table invalid_table;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+invalid_table  ¦  CREATE TABLE `invalid_table` (
+  `e` int DEFAULT NULL
+) COLLATE=utf8mb4_bin
+alter table invalid_table add choice enum('a','A');
+insert into invalid_table values (1,'a'),(2,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table order by e;
+➤ e[4,32,0]  ¦  hex(cast(choice as varchar))[12,-1,0]  ¦  choice + 0[-5,64,0]  𝄀
+1  ¦  61  ¦  1  𝄀
+2  ¦  41  ¦  2
+create table invalid_table_copy like invalid_table;
+insert into invalid_table_copy values (3,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table_copy;
+➤ e[4,32,0]  ¦  hex(cast(choice as varchar))[12,-1,0]  ¦  choice + 0[-5,64,0]  𝄀
+3  ¦  41  ¦  2
+create table invalid_table_with_enum(e enum('a')) character set latin1 collate utf8mb4_bin;
 invalid input: COLLATION 'utf8mb4_bin' is not valid for CHARACTER SET 'latin1'
+create table empty_charset_ordinary(i int) character set '' collate utf8mb4_bin;
+show create table empty_charset_ordinary;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+empty_charset_ordinary  ¦  CREATE TABLE `empty_charset_ordinary` (
+  `i` int DEFAULT NULL
+) COLLATE=utf8mb4_bin
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '';
+invalid input: empty table CHARACTER SET for ENUM
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '' collate utf8mb4_bin;
+invalid input: empty table CHARACTER SET for ENUM
 create table empty_table_default(i int) collate '';
 invalid input: empty table COLLATE
 create table empty_column(e enum('a') collate '') collate utf8mb4_bin;

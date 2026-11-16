@@ -117,21 +117,21 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_utf8mb4_bin;
 Table    Create Table
-t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=utf8mb4_bin
 CREATE TABLE t_utf8mb4_general_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 SHOW CREATE TABLE t_utf8mb4_general_ci;
 Table    Create Table
-t_utf8mb4_general_ci    CREATE TABLE `t_utf8mb4_general_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_utf8mb4_general_ci    CREATE TABLE `t_utf8mb4_general_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=utf8mb4_general_ci
 CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SHOW CREATE TABLE t_utf8mb4_unicode_ci;
 Table    Create Table
-t_utf8mb4_unicode_ci    CREATE TABLE `t_utf8mb4_unicode_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_utf8mb4_unicode_ci    CREATE TABLE `t_utf8mb4_unicode_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=`utf8mb4_unicode_ci`
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),
@@ -504,6 +504,7 @@ id INT PRIMARY KEY,
 name VARCHAR(100)
 );
 ALTER TABLE t_alter CHARACTER SET utf8mb4;
+not supported: ALTER TABLE charset/collation defaults and conversion
 SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
