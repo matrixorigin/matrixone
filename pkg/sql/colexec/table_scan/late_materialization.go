@@ -225,6 +225,10 @@ func (tableScan *TableScan) readBatch(
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
 	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
+	if tableScan.ctr.readerFilter != nil {
+		tableScan.prepareColumnUses()
+		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
+	}
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(

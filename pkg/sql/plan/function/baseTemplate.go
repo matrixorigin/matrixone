@@ -186,6 +186,31 @@ func opBinaryFixedFixedToFixed[
 			return nil
 		}
 	}
+	if parameters[0].IsDictionary() || parameters[1].IsDictionary() {
+		left, okLeft := vector.TryResolveFixedReadView[T1](parameters[0])
+		right, okRight := vector.TryResolveFixedReadView[T2](parameters[1])
+		if okLeft && okRight {
+			if left.AllNull || right.AllNull {
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			hasNull := left.Nulls.Any() || right.Nulls.Any() || rsAnyNull
+			if !hasNull {
+				for row := 0; row < length; row++ {
+					rss[row] = resultFn(left.Values[fixedReadIndex(left, row)], right.Values[fixedReadIndex(right, row)])
+				}
+			} else {
+				for row := 0; row < length; row++ {
+					if rsNull.Contains(uint64(row)) || left.Nulls.Contains(uint64(row)) || right.Nulls.Contains(uint64(row)) {
+						rsNull.Add(uint64(row))
+						continue
+					}
+					rss[row] = resultFn(left.Values[fixedReadIndex(left, row)], right.Values[fixedReadIndex(right, row)])
+				}
+			}
+			return nil
+		}
+	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -3526,4 +3551,14 @@ func opNoneParamToBytes(
 		}
 	}
 	return nil
+}
+
+func fixedReadIndex[T any](view vector.FixedReadView[T], row int) int {
+	if view.Constant {
+		return 0
+	}
+	if view.Selection != nil {
+		return int(view.Selection[row])
+	}
+	return row
 }
