@@ -73,6 +73,7 @@ protocols. A service-backed case is required in addition to unit tests.
   approval. The implementation already existed when this review was recorded;
   this record does not claim that design approval preceded the initial
   implementation. It gates subsequent implementation review and delivery.
-- Implementation follow-up: exercise the actual binary `COM_STMT_PREPARE`
-  request path and validate the rebased exact head before implementation
-  acceptance.
+- Binary-protocol regression: `TestMOServerRejectsFlushPrivilegesBinaryPrepare`
+  drives the Go MySQL client through the server's real `COM_STMT_PREPARE` wire
+  handler, checks rejection, then proves the protocol connection remains usable.
+  The executor-level regression separately covers request dispatch.

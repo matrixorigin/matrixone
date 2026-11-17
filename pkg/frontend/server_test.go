@@ -297,6 +297,57 @@ func Test_handshake(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestMOServerRejectsFlushPrivilegesBinaryPrepare exercises the Go MySQL
+// driver's binary prepared-statement protocol against the server connection
+// loop, beyond the request-level executor test.
+func TestMOServerRejectsFlushPrivilegesBinaryPrepare(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	t.Cleanup(func() { _ = serverConn.Close() })
+	registerConn(clientConn)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	setAicm("", &defines.AutoIncrCacheManager{})
+	rm, err := NewRoutineManager(ctx, "")
+	require.NoError(t, err)
+	rm.setSessionMgr(queryservice.NewSessionManager())
+	setRtMgr("", rm)
+
+	serverFinished := make(chan struct{})
+	mo := createInnerServer()
+	go func() {
+		defer close(serverFinished)
+		mo.handleConn(ctx, serverConn)
+	}()
+
+	dsn := "dump:111@custom(127.0.0.1:6001)/?readTimeout=30s&timeout=30s&writeTimeout=30s"
+	db, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.Ping(), "handshake and command roundtrip must succeed")
+
+	_, err = db.Prepare("flush privileges")
+	require.Error(t, err, "the binary COM_STMT_PREPARE request must be rejected")
+	require.NoError(t, db.Ping(), "the same protocol connection must remain usable after the error")
+	require.NoError(t, db.Close())
+
+	select {
+	case <-serverFinished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handleConn did not return after the client closed")
+	}
+}
+
 // TestMOServerTerminatesConnectionOnClientQuit proves the COM_QUIT contract
 // at the connection owner: the MySQL wire protocol makes the client send
 // COM_QUIT and wait for the server (not the client) to close the connection.
