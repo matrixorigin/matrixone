@@ -338,3 +338,28 @@ func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 200<<10, 20)
 	require.True(t, cached)
 }
+
+// A column read the disk cache holds returns from it while a download of other columns of
+// its object stays queued, without waiting to join that download.
+func TestS3FSCachedColumnReadDoesNotWaitForQueuedColumns(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	ctx := context.Background()
+	fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}})
+	reads := storage.reads.Load()
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
+		FilePath: "object", Size: 20, Due: 1 << 62, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}},
+	}))
+	require.True(t, fs.prefetcher.isQueued("object"))
+
+	got := make(chan []byte, 1)
+	go func() { got <- readRangeOf(t, fs, ColumnPrefetch, 102, 5) }()
+	select {
+	case b := <-got:
+		require.Equal(t, data[102:107], b)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the cached read waited for the queued download")
+	}
+	require.Equal(t, reads, storage.reads.Load(), "served from the disk cache")
+	require.True(t, fs.prefetcher.isQueued("object"), "the other columns stay queued")
+}

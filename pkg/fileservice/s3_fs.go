@@ -558,23 +558,24 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 
 // joinQueued waits until the read can join the prefetcher's download of the object of
 // vector, when it is one the read would join: any for a column read, one of the whole
-// object for a read that may download it. A download still waiting moves to the live
-// queue. The reads of a download join none.
-func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) {
+// object for a read that may download it, and reports whether there was one. A download
+// still waiting moves to the live queue. The reads of a download join none.
+func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 	columns := vector.Policy.Any(ColumnPrefetch)
 	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
-		return
+		return false
 	}
 	// A column read also joins the download of its whole object.
 	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return columns || len(req.Ranges) == 0 })
 	if !ok {
-		return
+		return false
 	}
 	defer leave()
 	select {
 	case <-started:
 	case <-ctx.Done():
 	}
+	return true
 }
 
 // firstNeeded returns the least offset of the entries of vector not done.
@@ -926,9 +927,6 @@ read_disk_cache:
 		}
 	}
 
-	if s.prefetcher != nil {
-		s.joinQueued(ctx, vector)
-	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -986,6 +984,17 @@ read_disk_cache:
 		LogEvent(ctx, str_read_remote_cache_Caches_end)
 		metric.FSReadDurationReadRemoteCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
+			return err
+		}
+		if vector.allDone() {
+			return nil
+		}
+	}
+
+	// A read the caches do not hold waits to join a queued download of its object, then
+	// reads what that download put in the disk cache.
+	if s.prefetcher != nil && s.joinQueued(ctx, vector) && s.diskCache != nil {
+		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}
 		if vector.allDone() {
