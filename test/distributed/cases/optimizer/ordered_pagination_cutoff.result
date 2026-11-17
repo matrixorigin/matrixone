@@ -39,7 +39,7 @@ set session query_max_workers = 1;
 set max_dop = 1;
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=[1-3][0-9]{4}\b", true)
-➤ tp query plan[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
@@ -131,11 +131,11 @@ set session query_max_workers = 1;
 set max_dop = 1;
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=40000\b", true)
-➤ tp query plan[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=40000 outputRows=5 (min=5, max=5) InputSize=156.25 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=156.27 KiB (min=20 bytes, max=156.25 KiB)  𝄀
+        Analyze: timeConsumed=1ms waitTime=0ms inputRows=40000 outputRows=5 (min=5, max=5) InputSize=156.25 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=156.27 KiB (min=20 bytes, max=156.25 KiB)  𝄀
         Sort Key: pages.id INTERNAL  𝄀
         Limit: 5, Offset: 17000  𝄀
         ->  Table Scan on ordered_pagination_cutoff.pages  𝄀
@@ -264,16 +264,16 @@ set max_dop = 1;
 delete from pages where id <= 1000;
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=(?:[12][0-9]{4}|3[0-8][0-9]{3})\b", true)
-➤ ap query plan on multicn(4 core)[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=1ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=0 bytes, max=20 bytes)  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=19000 outputRows=5 (min=5, max=5) InputSize=74.22 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=74.24 KiB (min=20 bytes, max=74.22 KiB)  𝄀
         Sort Key: pages.id INTERNAL  𝄀
         Limit: 5, Offset: 17000  𝄀
         Send Message: [tag 1 , type MsgTopValue]  𝄀
         ->  Table Scan on ordered_pagination_cutoff.pages  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=19000 outputRows=19000 (min=19000, max=19000) InputSize=74.22 KiB OutputSize=74.22 KiB ReadSize=78.54 KiB|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+              Analyze: timeConsumed=0ms waitTime=1ms inputBlocks=3 inputRows=19000 outputRows=19000 (min=19000, max=19000) InputSize=74.22 KiB OutputSize=74.22 KiB ReadSize=78.54 KiB|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
               Sort Key: pages.id INTERNAL  𝄀
               Recv Message: [tag 1 , type MsgTopValue]
 select id from pages order by id limit 5 offset 17000;
@@ -287,7 +287,7 @@ begin;
 delete from pages where id between 1001 and 2000;
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=(?:[12][0-9]{4}|3[0-7][0-9]{3})\b", true)
-➤ ap query plan on multicn(4 core)[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
@@ -309,11 +309,11 @@ select id from pages order by id limit 5 offset 17000;
 set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=38000\b", true)
-➤ ap query plan on multicn(4 core)[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=38000 outputRows=5 (min=5, max=5) InputSize=148.44 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=148.46 KiB (min=20 bytes, max=148.44 KiB)  𝄀
+        Analyze: timeConsumed=1ms waitTime=0ms inputRows=38000 outputRows=5 (min=5, max=5) InputSize=148.44 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=148.46 KiB (min=20 bytes, max=148.44 KiB)  𝄀
         Sort Key: pages.id INTERNAL  𝄀
         Limit: 5, Offset: 17000  𝄀
         ->  Table Scan on ordered_pagination_cutoff.pages  𝄀
@@ -328,11 +328,11 @@ select id from pages order by id limit 5 offset 17000;
 rollback;
 explain analyze select id from pages order by id limit 5 offset 17000;
 -- @regex("Sort[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=39000\b", true)
-➤ ap query plan on multicn(4 core)[12,-1,0]  𝄀
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
   ->  Sort  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=39000 outputRows=5 (min=5, max=5) InputSize=152.34 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=152.36 KiB (min=20 bytes, max=152.34 KiB)  𝄀
+        Analyze: timeConsumed=1ms waitTime=0ms inputRows=39000 outputRows=5 (min=5, max=5) InputSize=152.34 KiB OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=152.36 KiB (min=20 bytes, max=152.34 KiB)  𝄀
         Sort Key: pages.id INTERNAL  𝄀
         Limit: 5, Offset: 17000  𝄀
         ->  Table Scan on ordered_pagination_cutoff.pages  𝄀
@@ -344,6 +344,296 @@ select id from pages order by id limit 5 offset 17000;
 18003  𝄀
 18004  𝄀
 18005
+set max_dop = @saved_max_dop;
+set session query_max_workers = @saved_query_max_workers;
+set session optimizer_hints = 'execType=2';
+set session query_max_workers = 1;
+set max_dop = 1;
+create table nullpages (id int primary key, k2 int);
+insert into nullpages select result, if(result <= 100, null, result) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.nullpages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullpages select result, result + 10000 from generate_series(8193, 16384) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.nullpages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullpages select result, result + 20000 from generate_series(16385, 24576) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.nullpages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullpages select result, result + 30000 from generate_series(24577, 32768) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.nullpages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, k2 from nullpages order by k2 limit 5 offset 16404;
+➤ id[4,32,0]  ¦  k2[4,32,0]  𝄀
+16405  ¦  36405  𝄀
+16406  ¦  36406  𝄀
+16407  ¦  36407  𝄀
+16408  ¦  36408  𝄀
+16409  ¦  36409
+select id, k2 from nullpages order by k2 desc limit 5 offset 16404;
+➤ id[4,32,0]  ¦  k2[4,32,0]  𝄀
+16364  ¦  26364  𝄀
+16363  ¦  26363  𝄀
+16362  ¦  26362  𝄀
+16361  ¦  26361  𝄀
+16360  ¦  26360
+select id, k2 from nullpages order by k2 limit 5 offset 40000;
+➤ id[4,32,0]  ¦  k2[4,32,0]
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id, k2 from nullpages order by k2 limit 5 offset 16404;
+➤ id[4,32,0]  ¦  k2[4,32,0]  𝄀
+16405  ¦  36405  𝄀
+16406  ¦  36406  𝄀
+16407  ¦  36407  𝄀
+16408  ¦  36408  𝄀
+16409  ¦  36409
+select id, k2 from nullpages order by k2 desc limit 5 offset 16404;
+➤ id[4,32,0]  ¦  k2[4,32,0]  𝄀
+16364  ¦  26364  𝄀
+16363  ¦  26363  𝄀
+16362  ¦  26362  𝄀
+16361  ¦  26361  𝄀
+16360  ¦  26360
+select id, k2 from nullpages order by k2 limit 5 offset 40000;
+➤ id[4,32,0]  ¦  k2[4,32,0]
+set session optimizer_hints = 'execType=2';
+create table hza (id int primary key, k3 int);
+insert into hza select result, if(result <= 2, null, result) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hza');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.hza)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into hza select result + 9000000, if(result <= 5, null, result + 9000000) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hza');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.hza)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain analyze select k3 from hza order by k3 limit 10;
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b", true)
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=40 bytes OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=1ms waitTime=0ms inputRows=16384 outputRows=10 (min=10, max=10) InputSize=64.00 KiB OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+        Sort Key: hza.k3 INTERNAL  𝄀
+        Limit: 10  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on ordered_pagination_cutoff.hza  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=16384 outputRows=16384 (min=16384, max=16384) InputSize=64.00 KiB OutputSize=64.00 KiB ReadSize=64.35 KiB|0 bytes|64.35 KiB MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+              Sort Key: hza.k3 INTERNAL  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
+select k3 from hza order by k3 limit 10;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+3  𝄀
+4  𝄀
+5
+select k3 from hza order by k3 limit 3;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null
+select k3 from hza order by k3 desc limit 10;
+➤ k3[4,32,0]  𝄀
+9008192  𝄀
+9008191  𝄀
+9008190  𝄀
+9008189  𝄀
+9008188  𝄀
+9008187  𝄀
+9008186  𝄀
+9008185  𝄀
+9008184  𝄀
+9008183
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select k3 from hza order by k3 limit 10;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+3  𝄀
+4  𝄀
+5
+select k3 from hza order by k3 limit 3;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null
+select k3 from hza order by k3 desc limit 10;
+➤ k3[4,32,0]  𝄀
+9008192  𝄀
+9008191  𝄀
+9008190  𝄀
+9008189  𝄀
+9008188  𝄀
+9008187  𝄀
+9008186  𝄀
+9008185  𝄀
+9008184  𝄀
+9008183
+set session optimizer_hints = 'execType=2';
+create table hzb (id int primary key, k3 int);
+insert into hzb select result, null from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hzb');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.hzb)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into hzb select result, result + 100 from generate_series(8193, 16384) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hzb');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.hzb)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain analyze select k3 from hzb order by k3 limit 10;
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b", true)
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=40 bytes OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=16384 outputRows=10 (min=10, max=10) InputSize=64.00 KiB OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+        Sort Key: hzb.k3 INTERNAL  𝄀
+        Limit: 10  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on ordered_pagination_cutoff.hzb  𝄀
+              Analyze: timeConsumed=0ms waitTime=1ms inputBlocks=2 inputRows=16384 outputRows=16384 (min=16384, max=16384) InputSize=64.00 KiB OutputSize=64.00 KiB ReadSize=32.36 KiB|0 bytes|32.36 KiB MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+              Sort Key: hzb.k3 INTERNAL  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
+select k3 from hzb order by k3 limit 10;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+explain analyze select k3 from hzb order by k3 desc limit 10;
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b", true)
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=40 bytes OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=1ms waitTime=0ms inputRows=16384 outputRows=10 (min=10, max=10) InputSize=64.00 KiB OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+        Sort Key: hzb.k3 DESC  𝄀
+        Limit: 10  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on ordered_pagination_cutoff.hzb  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=16384 outputRows=16384 (min=16384, max=16384) InputSize=64.00 KiB OutputSize=64.00 KiB ReadSize=32.36 KiB|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+              Sort Key: hzb.k3 DESC  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
+select k3 from hzb order by k3 desc limit 10;
+➤ k3[4,32,0]  𝄀
+16484  𝄀
+16483  𝄀
+16482  𝄀
+16481  𝄀
+16480  𝄀
+16479  𝄀
+16478  𝄀
+16477  𝄀
+16476  𝄀
+16475
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select k3 from hzb order by k3 limit 10;
+➤ k3[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select k3 from hzb order by k3 desc limit 10;
+➤ k3[4,32,0]  𝄀
+16484  𝄀
+16483  𝄀
+16482  𝄀
+16481  𝄀
+16480  𝄀
+16479  𝄀
+16478  𝄀
+16477  𝄀
+16476  𝄀
+16475
+set session optimizer_hints = 'execType=2';
 set max_dop = @saved_max_dop;
 set session query_max_workers = @saved_query_max_workers;
 set session optimizer_hints = @saved_optimizer_hints;
