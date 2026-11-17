@@ -7721,19 +7721,19 @@ var supportedMathBuiltIns = []FuncNew{
 				// values the pre-widening UINT64 tie produced
 				// (CEIL(CAST('9007199254740993' AS TEXT)) and the FLOOR
 				// spelling stay exact instead of silently rounding through
-				// float64), while every other numeric token keeps the
-				// accepted domain and shortest-digit display of the VARCHAR
-				// route's string parser (mo-bot review: the DECIMAL128(38,0)
-				// intermediate rejected CEIL(CAST('1e40' AS CHAR)) and
-				// FLOOR(CONVERT('18446744073709551616', CHAR))). Scale-0
-				// DECIMAL256 — the widest integral numeric — carries the
-				// exact integer domains and every wide float fallback the
-				// widened omitted-length CAST/CONVERT-to-CHAR results need
-				// (#32336, #32374).
+				// float64), while every decimal or exponent token keeps the
+				// complete FLOAT64 domain the pre-widening VARCHAR route
+				// accepted — including finite magnitudes above 76 integral
+				// digits (1e90, 1e308) that the previous scale-0
+				// DECIMAL256(76,0) return rejected as a PR-induced domain
+				// regression: no numeric type holds both domains, so the
+				// TEXT overload returns VARCHAR and renders the FLOAT64
+				// route's digits for byte-identical displays upstream
+				// (func_binary.dualDomainUnaryMathText).
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal256.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CeilTextUnary
@@ -7992,18 +7992,19 @@ var supportedMathBuiltIns = []FuncNew{
 				// One-argument FLOOR binds TEXT directly with a dual-domain
 				// executor: integer strings keep the exact INT64 and UINT64
 				// values the pre-widening UINT64 tie produced, while every
-				// other numeric token keeps the accepted domain and
-				// shortest-digit display of the VARCHAR route's string
-				// parser (mo-bot review: the DECIMAL128(38,0) intermediate
-				// rejected the wide compositions), and NULL rows keep NULL
-				// results. Scale-0 DECIMAL256 — the widest integral numeric —
-				// carries both integer domains and every wide float fallback
-				// the widened omitted-length CAST/CONVERT-to-CHAR results
-				// need (#32336, #32374).
+				// decimal or exponent token keeps the complete FLOAT64
+				// domain of the pre-widening VARCHAR route — including
+				// finite magnitudes above 76 integral digits that the
+				// previous scale-0 DECIMAL256(76,0) return rejected — and
+				// NULL rows keep NULL results. No numeric type holds both
+				// domains, so the TEXT overload returns VARCHAR and renders
+				// the FLOAT64 route's digits for byte-identical displays
+				// upstream (func_binary.dualDomainUnaryMathText)
+				// (#32336, #32374).
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal256.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return FloorTextUnary

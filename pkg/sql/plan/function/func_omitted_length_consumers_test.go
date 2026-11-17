@@ -47,33 +47,24 @@ import (
 // rows keep NULL results instead of failing the whole query (review round:
 // FLOOR over a mixed nullable TEXT batch appended the NULL result and still
 // parsed the NULL row's empty value through strconv.ParseFloat). The exact
-// integer domains and every wide float fallback pack into the scale-0
-// DECIMAL256(76,0) return — the widest integral numeric the type system
-// provides — whose rendering equals the prior FLOAT64 displays digit for
-// digit for every token within 76 digits.
+// integer domains and every finite FLOAT64 fallback keep the prior FLOAT64
+// displays byte for byte — including the magnitudes above the decimal
+// ceiling (1e76, 1e90, 1e300) that the former scale-0 DECIMAL256(76,0)
+// return rejected as a PR-induced domain regression — via the VARCHAR
+// return's digit rendering of the FLOAT64 result-set format.
 func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	parseDecs := func(vals []string) []types.Decimal256 {
-		out := make([]types.Decimal256, len(vals))
-		for i, v := range vals {
-			d, err := types.ParseDecimal256(v, 76, 0)
-			require.NoError(t, err, "test fixture %q must parse", v)
-			out[i] = d
-		}
-		return out
-	}
-
 	// The one-argument TEXT overload must bind directly: a by-cast match
 	// would restore the UINT64 (or other first-overload) selection, whose
-	// parser rejects decimal and negative strings. The return type must be
-	// the widest scale-0 numeric so the pre-widening composition domain
-	// survives alongside exact integer handling.
+	// parser rejects decimal and negative strings. The return type is the
+	// digit-rendering VARCHAR that carries the exact integers and the
+	// complete FLOAT64 domain in one column.
 	for _, name := range []string{"ceil", "floor"} {
 		get, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_text.ToType()})
 		require.NoError(t, err)
-		require.Equal(t, types.T_decimal256, get.GetReturnType().Oid,
-			"%s(text) must keep the wide-domain exact return", name)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid,
+			"%s(text) must keep the digit-rendering return", name)
 		_, shouldCast := get.ShouldDoImplicitTypeCast()
 		require.False(t, shouldCast,
 			"%s(text) must bind the direct TEXT overload, not by a narrowing cast", name)
@@ -103,10 +94,12 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 				"-9223372036854775808", " 42 ", "0x10", "1e2", "",
 				"1e40", "99999999999999999999999", "18446744073709551617",
 				"-1e40", "1.5e40", "1e75",
+				"1e76", "1e90", "1e308", "-0.5",
 			},
 			nullIn: []bool{false, false, false, false, false, false, false, false,
 				false, false, false, false, true,
-				false, false, false, false, false, false},
+				false, false, false, false, false, false,
+				false, false, false, false},
 			expects: []string{
 				"2", "-1", "3", "2", "9007199254740993",
 				"9223372036854775807", "9223372036854775808", "18446744073709551615",
@@ -117,6 +110,15 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 				"-10000000000000000000000000000000000000000",
 				"15000000000000000000000000000000000000000",
 				"1000000000000000000000000000000000000000000000000000000000000000000000000000",
+				// The finite FLOAT64 magnitudes above the DECIMAL256 ceiling
+				// keep succeeding with the prior binary's measured displays.
+				"10000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				// The negative-fraction control keeps the FLOAT64 route's
+				// signed-zero display; the scale-0 decimal return had
+				// silently rendered it as "0".
+				"-0",
 			},
 		},
 		{
@@ -128,10 +130,12 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 				"-9223372036854775808", " 42 ", "0x10", "1e2", "",
 				"1e40", "99999999999999999999999", "18446744073709551616",
 				"-1e40", "12345678901234567890123456789012345678901", "1e75", "-1e76",
+				"1e90", "-1.5e76", "1e300", "-0.5",
 			},
 			nullIn: []bool{false, false, false, false, false, false, false, false,
 				false, false, false, false, true,
-				false, false, false, false, false, false, false},
+				false, false, false, false, false, false, false,
+				false, false, false, false},
 			expects: []string{
 				"1", "-2", "2", "2", "9007199254740993",
 				"9223372036854775807", "9223372036854775808", "18446744073709551615",
@@ -142,20 +146,23 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 				"-10000000000000000000000000000000000000000",
 				"12345678901234568000000000000000000000000",
 				"1000000000000000000000000000000000000000000000000000000000000000000000000000",
-				// The DECIMAL256FromFloat64 route formats the shortest float
-				// digits ('g'), so -1e76 reaches the executor result through
-				// the same '-1e+76' notation this fixture must use: the
-				// types layer accepts the -10^76 boundary in this form while
-				// the same magnitude as a digit literal does not parse.
-				"-1e+76",
+				"-10000000000000000000000000000000000000000000000000000000000000000000000000000",
+				// The finite FLOAT64 magnitudes at and below the negative
+				// decimal boundary and far beyond the ceiling keep the prior
+				// binary's measured displays.
+				"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"-15000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				// The negative-fraction control keeps the FLOAT64 route's
+				// exact -1 alongside the signed-zero ceil display.
+				"-1",
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), tc.inputs, tc.nullIn)},
-				NewFunctionTestResult(types.T_decimal256.ToType(), false,
-					parseDecs(tc.expects), tc.nullIn),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expects, tc.nullIn),
 				tc.op)
 			s, info := fcTC.Run()
 			require.True(t, s, fmt.Sprintf("case is '%s text rows', err info is '%s'", tc.name, info))
@@ -207,8 +214,7 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(),
 					tc.inputs, tc.nullIn)},
-				NewFunctionTestResult(types.T_decimal256.ToType(), false,
-					parseDecs(tc.expects), tc.nullIn),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expects, tc.nullIn),
 				tc.op)
 			s, info := fcTC.Run()
 			require.True(t, s, fmt.Sprintf("case is '%s mixed nullable', err info is '%s'", tc.name, info))
@@ -216,13 +222,9 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 	}
 
 	// Rows the numeric domain rejects keep the contract's errors: non-numeric
-	// strings keep the string parser's strconv error, and float fallbacks
-	// beyond the DECIMAL256(76,0) range keep the decimal conversion error.
-	// The scale-0 width domain the types layer accepts is sign-asymmetric —
-	// [-10^76, +10^76): positive 1e76 needs the 77th integral digit and
-	// rejects, and so does every larger magnitude (1e300); -1.5e76 sits below
-	// the negative bound while the IN-domain -1e76 is a success row in the
-	// floor table above.
+	// strings keep the string parser's strconv error, and magnitudes beyond
+	// the FLOAT64 domain keep the strconv range error, the same failure the
+	// pre-widening VARCHAR route raised for them.
 	for _, tc := range []struct {
 		name   string
 		op     fEvalFn
@@ -230,17 +232,15 @@ func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 	}{
 		{"ceil-not-numeric", CeilTextUnary, []string{"中文"}},
 		{"floor-not-numeric", FloorTextUnary, []string{"ab"}},
-		{"ceil-beyond-decimal256", CeilTextUnary, []string{"1e300"}},
-		{"floor-beyond-decimal256", FloorTextUnary, []string{"-1e300"}},
-		{"ceil-float-needs-77-digits", CeilTextUnary, []string{"1e76"}},
-		{"floor-float-needs-77-digits", FloorTextUnary, []string{"-1.5e76"}},
+		{"ceil-beyond-float64", CeilTextUnary, []string{"1e400"}},
+		{"floor-beyond-float64", FloorTextUnary, []string{"-1e400"}},
 	} {
 		t.Run("reject-"+tc.name, func(t *testing.T) {
 			nulls := make([]bool, len(tc.inputs))
 			fcTC := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), tc.inputs, nulls)},
-				NewFunctionTestResult(types.T_decimal256.ToType(), true,
-					parseDecs([]string{"0"}), nulls),
+				NewFunctionTestResult(types.T_varchar.ToType(), true,
+					[]string{"0"}, nulls),
 				tc.op)
 			s, info := fcTC.Run()
 			require.True(t, s, fmt.Sprintf("case is 'reject %s', err info is '%s'", tc.name, info))

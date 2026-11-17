@@ -142,9 +142,9 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 	t.Run("ceil_floor_keep_numeric_string_parsing", func(t *testing.T) {
 		// The decimal-string compositions keep binding the direct TEXT
 		// overload, whose one-argument exact-integer executor returns the
-		// wide scale-0 DECIMAL256 the pre-widening composition domain
-		// needs; the large-integer spellings bind the same overload and
-		// keep their exact values.
+		// digit-rendering VARCHAR that carries the exact integers and the
+		// complete pre-widening FLOAT64 domain; the large-integer spellings
+		// bind the same overload and keep their exact values.
 		for _, sql := range []string{
 			"select ceil(cast('1.2' as char))",
 			"select ceil(convert('1.2', char))",
@@ -153,7 +153,7 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 			bound := bindFirstSelectExpr(t, sql)
 			fn := boundExprFn(t, bound)
 			require.Equal(t, "ceil", fn.Func.GetObjName(), sql)
-			require.Equal(t, int32(types.T_decimal256), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id, sql)
 			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
 				"the TEXT cast result must reach ceil directly, without a narrowing implicit cast")
 		}
@@ -165,9 +165,48 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 			bound := bindFirstSelectExpr(t, sql)
 			fn := boundExprFn(t, bound)
 			require.Equal(t, "floor", fn.Func.GetObjName(), sql)
-			require.Equal(t, int32(types.T_decimal256), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id, sql)
 			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql)
 		}
+	})
+
+	t.Run("ceil_floor_compositions_stay_numeric", func(t *testing.T) {
+		// The composed one-argument CEIL/FLOOR results keep the base's
+		// FLOAT64 binding for arithmetic, comparisons and IN-lists: without
+		// the provenance retype, the digit-rendering VARCHAR return flows
+		// through the string-to-int64 implicit cast, whose range rejection
+		// broke base-successful compositions such as
+		// CEIL(CAST('1e40' AS CHAR)) + 1 (#32336, #32374).
+		for _, tc := range []struct {
+			sql string
+			typ types.T
+		}{
+			{"select ceil(cast('1e40' as char)) + 1", types.T_float64},
+			{"select floor(convert('1e40', char)) - 1", types.T_float64},
+			{"select ceil(cast('1e40' as char)) * 10", types.T_float64},
+			{"select floor(convert('1e40', char)) / 2", types.T_float64},
+			{"select -ceil(cast('1e40' as char))", types.T_float64},
+			{"select mod(ceil(cast('20.5' as char)), 2)", types.T_float64},
+			{"select ceil(cast('1e40' as char)) > 0", types.T_bool},
+			{"select floor(convert('18446744073709552000', char)) <= 1", types.T_bool},
+			{"select ceil(cast('1e40' as char)) in (21)", types.T_bool},
+			{"select ceil(cast('1e40' as char)) between 1 and 2", types.T_bool},
+		} {
+			bound := bindFirstSelectExpr(t, tc.sql)
+			require.Equal(t, int32(tc.typ), bound.Typ.Id, tc.sql)
+		}
+
+		// The retype only follows the CEIL/FLOOR provenance: a plain widened
+		// string keeps the string-to-int64 composition the base also used,
+		// and an INTERVAL operand keeps this change's string temporaal
+		// operator rewrite.
+		plain := bindFirstSelectExpr(t, "select cast('999' as char) + 1")
+		require.Equal(t, int32(types.T_int64), plain.Typ.Id)
+
+		interval := bindFirstSelectExpr(t,
+			"select ceil(cast('2024-01-01' as char)) + interval 1 day")
+		intervalFn := boundExprFn(t, interval)
+		require.Equal(t, "date_add", intervalFn.Func.GetObjName())
 	})
 
 	t.Run("timestampadd_keeps_string_temporal_path", func(t *testing.T) {
@@ -372,4 +411,53 @@ func TestOmittedLengthTextKeepsDateExtractionStringPaths(t *testing.T) {
 		require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, tc.sql,
 			"the TEXT cast result must reach the string overload directly, not cast to DATE or DATETIME")
 	}
+}
+
+// TestOmittedLengthCeilFloorTextRenderOrderByKeepsNumericKey pins the ORDER BY
+// semantics of the digit-rendering VARCHAR result of the one-argument TEXT
+// CEIL/FLOOR: the sort key is the FLOAT64 value the base route ordered by,
+// while the projected display keeps its digit rendering (#32336, #32374).
+// Plain widened strings keep their lexical descriptor, and the ENUM/SET
+// special-order provenance is unchanged.
+func TestOmittedLengthCeilFloorTextRenderOrderByKeepsNumericKey(t *testing.T) {
+	for _, sql := range []string{
+		"select ceil(cast(v as char)) as c from enum_order_t order by c",
+		"select ceil(convert(v, char)) as c from enum_order_t order by c",
+		"select v from enum_order_t order by ceil(cast(v as char))",
+		"select floor(cast(v as char)) as c from enum_order_t order by c desc",
+	} {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+		require.NoError(t, err, sql)
+		requireSingleSortKeyType(t, logicPlan, types.T_float64, sql)
+
+		// The displayed projection keeps the digit-rendering VARCHAR type.
+		keptRender := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if fn := expr.GetF(); fn != nil &&
+					(expr.Typ.Id == int32(types.T_varchar) || expr.Typ.Id == int32(types.T_text)) {
+					switch fn.Func.GetObjName() {
+					case "ceil", "ceiling", "floor":
+						if len(fn.Args) == 1 && fn.Args[0].Typ.Id == int32(types.T_text) {
+							keptRender = true
+						}
+					}
+				}
+			}
+		}
+		require.True(t, keptRender, sql,
+			"the visible projection must keep the digit-rendering result")
+	}
+
+	// Controls: a plain widened string keeps its lexical sort key, and the
+	// ENUM special-order provenance is untouched.
+	plainPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select cast(v as char) as c from enum_order_t order by c")
+	require.NoError(t, err)
+	requireSingleSortKeyType(t, plainPlan, types.T_text)
+
+	enumPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select id, e from enum_order_t order by e")
+	require.NoError(t, err)
+	requireSingleSortKeyType(t, enumPlan, types.T_enum)
 }

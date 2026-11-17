@@ -3428,6 +3428,69 @@ func isVarcharOrTextExprType(id int32) bool {
 	return id == int32(types.T_varchar) || id == int32(types.T_text)
 }
 
+// isCeilFloorTextRenderExpr reports whether the bound expression is the
+// one-argument CEIL/FLOOR over a TEXT input, whose direct overload renders
+// the exact INT64/UINT64 integers and the restored finite FLOAT64 domain as
+// digit strings in a VARCHAR result (#32336, #32374).
+func isCeilFloorTextRenderExpr(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if expr.Typ.Id != int32(types.T_varchar) || fn.Args[0].Typ.Id != int32(types.T_text) {
+		return false
+	}
+	switch strings.ToLower(fn.Func.ObjName) {
+	case "ceil", "ceiling", "floor":
+		return true
+	}
+	return false
+}
+
+// retypeCeilFloorTextRenderArgs restores the arithmetic and comparison
+// semantics the composed one-argument CEIL/FLOOR results keep on the base
+// (#32336, #32374): their values left the functions as FLOAT64 there, so
+// compositions like CEIL(CAST('1e40' AS CHAR)) + 1 bound through the
+// float64 operator overloads. The digit-rendering VARCHAR return inherits
+// the string-vs-number implicit casts instead, whose int64 conversion
+// rejects every digit string beyond INT64 range although the base
+// evaluated the same compositions. Wrapping only these provenance
+// expressions in an explicit FLOAT64 cast restores the base binding: the
+// rendered digits parse back to the FLOAT64 value the pre-change route
+// produced, including the magnitudes this PR restores above the decimal
+// ceiling. Plain strings, temporal operands and INTERVAL compositions keep
+// their existing rules unchanged.
+func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "mod",
+		"unary_minus", "unary_plus",
+		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between":
+	default:
+		return nil
+	}
+	for i := range args {
+		if !isCeilFloorTextRenderExpr(args[i]) {
+			continue
+		}
+		for j := range args {
+			if j == i || isCeilFloorTextRenderExpr(args[j]) {
+				continue
+			}
+			other := makeTypeByPlan2Expr(args[j])
+			if !other.IsNumeric() && !other.Oid.IsMySQLString() && other.Oid != types.T_bool {
+				return nil
+			}
+		}
+		floatType := types.T_float64.ToType()
+		numericArg, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&floatType))
+		if err != nil {
+			return err
+		}
+		args[i] = numericArg
+	}
+	return nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
@@ -3447,6 +3510,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		return listExpr, err
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
+	if err := retypeCeilFloorTextRenderArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
 

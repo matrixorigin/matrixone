@@ -806,61 +806,62 @@ func FloorText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 // dualDomainUnaryMathText evaluates one TEXT row of the single-argument CEIL
-// and FLOOR spellings. The two spellings have no digits argument, so an
-// integer's ceiling and floor are the integer itself: integer strings keep
-// the exact INT64 and UINT64 values the pre-widening UINT64 tie produced
+// and FLOOR spellings and renders it the way the client received it before
+// the omitted-length CAST/CONVERT-to-CHAR widening (#32336, #32374, PR
+// #32438). The two spellings have no digits argument, so an integer's
+// ceiling and floor are the integer itself: integer strings keep the exact
+// INT64 and UINT64 values the earlier review rounds restored
 // (CEIL(CAST('9007199254740993' AS TEXT)) stays 9007199254740993, whose
 // float64 rounding used to return 9007199254740992; magnitudes up to
 // 18446744073709551615 stay exact too). Everything else — tokens the
 // integer parsers reject at syntax, integer tokens beyond the uint64 domain
 // and every decimal or exponent string — falls back to the pre-widening
-// string parser (strconv.ParseFloat), keeping the numeric domain the prior
-// CHAR composition accepted through the VARCHAR overload's FLOAT64 route
-// (mo-bot review: the scale-0 DECIMAL128(38,0) intermediate raised a
-// decimal conversion error for CEIL(CAST('1e40' AS CHAR)) and a UINT64
-// range error for FLOOR(CONVERT('18446744073709551616', CHAR)), both
-// previously successful). Both integer domains and every float fallback
-// result pack into the scale-0 DECIMAL256(76,0) the one-argument TEXT
-// overloads return — the widest integral numeric the type system provides:
-// integer rows render exactly and float rows keep the FLOAT64 route's
-// shortest-digit display digit for digit for every magnitude within 76
-// integral digits; wider magnitudes exceed any numeric type and keep the
-// decimal conversion error.
+// string parser (strconv.ParseFloat). No numeric return type holds the
+// union of those exact integers with the complete FLOAT64 domain the prior
+// CHAR composition accepted through the VARCHAR overload: the scale-0
+// DECIMAL256(76,0) return rendered every magnitude within 76 integral
+// digits but rejected the remaining finite domain with a decimal conversion
+// error (CEIL(CAST('1e90' AS CHAR)) and FLOOR(CONVERT('1e90', CHAR)) failed
+// while the base returned their values, so a review round rejected it as a
+// PR-induced domain regression). The one-argument TEXT overloads therefore
+// return VARCHAR and format the digits themselves: FormatFloat('f', -1) is
+// the rendering the result set uses for FLOAT64 values (frontend
+// resultset.go), so every float row — including magnitudes far beyond the
+// decimal ceiling such as 1e76, 1e90 and 1e308 — keeps the base display byte
+// for byte while integer rows render their exact digits, and strconv errors
+// keep rejecting non-numeric and beyond-FLOAT64 tokens.
 func dualDomainUnaryMathText(
 	v string,
 	fractionalCore func(float64) float64,
-) (types.Decimal256, error) {
+) (string, error) {
 	s := strings.TrimSpace(v)
 	if iv, err := parseSignedCastString(s, 64); err == nil {
-		return types.Decimal256FromInt64(iv), nil
+		return strconv.FormatInt(iv, 10), nil
 	}
 	un, uerr := parseUnsignedCastString(s, 64)
 	if uerr == nil {
-		return types.Decimal256{B0_63: un, B64_127: 0, B128_191: 0, B192_255: 0}, nil
+		return strconv.FormatUint(un, 10), nil
 	}
-	// Integer tokens out of the uint64 domain and every decimal or exponent
-	// string reach the float fallback with the pre-widening accepted
-	// domain: DECIMAL256FromFloat64 parses the shortest round-trip float
-	// digits, so every magnitude that fits the 76-integral-digit width
-	// renders exactly like the VARCHAR route did.
 	f, ferr := strconv.ParseFloat(v, 64)
 	if ferr != nil {
-		return types.Decimal256{}, ferr
+		return "", ferr
 	}
-	return types.Decimal256FromFloat64(fractionalCore(f), 76, 0)
+	return strconv.FormatFloat(fractionalCore(f), 'f', -1, 64), nil
 }
 
 // CeilTextUnary executes CEIL's one-argument direct TEXT overload.
 func CeilTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryStrToFixedWithErrorCheck[types.Decimal256](ivecs, result, proc, length, func(v string) (types.Decimal256, error) {
-		return dualDomainUnaryMathText(v, math.Ceil)
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, func(v string) ([]byte, error) {
+		out, err := dualDomainUnaryMathText(v, math.Ceil)
+		return []byte(out), err
 	}, selectList)
 }
 
 // FloorTextUnary executes FLOOR's one-argument direct TEXT overload.
 func FloorTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryStrToFixedWithErrorCheck[types.Decimal256](ivecs, result, proc, length, func(v string) (types.Decimal256, error) {
-		return dualDomainUnaryMathText(v, math.Floor)
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, func(v string) ([]byte, error) {
+		out, err := dualDomainUnaryMathText(v, math.Floor)
+		return []byte(out), err
 	}, selectList)
 }
 

@@ -85,9 +85,9 @@ func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	return found[0]
 }
 
-func requireSingleSortKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
+func requireSingleSortKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T, msgAndArgs ...interface{}) {
 	t.Helper()
-	require.Equal(t, int32(typ), singleSortSpec(t, logicPlan).Expr.Typ.Id)
+	require.Equal(t, int32(typ), singleSortSpec(t, logicPlan).Expr.Typ.Id, msgAndArgs...)
 }
 
 func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {

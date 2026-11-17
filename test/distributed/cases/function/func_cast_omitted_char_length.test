@@ -401,11 +401,10 @@ select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
 -- FLOAT64 route displayed (CEIL(CAST('1e40' AS CHAR)) raised a decimal
 -- conversion error) and every integer token beyond uint64 (FLOOR(CONVERT(
 -- '18446744073709551616', CHAR)) raised a UINT64 range error), both
--- previously successful on the base. The one-argument executors now carry
--- scale-0 DECIMAL256, the widest integral numeric: integer tokens keep the
--- exact dual-domain values and every other numeric token keeps the VARCHAR
--- route's accepted domain and shortest-digit display for magnitudes within
--- 76 integral digits.
+-- previously successful on the base. The one-argument executors render the
+-- prior FLOAT64 route's digits: integer tokens keep the exact dual-domain
+-- values and every other numeric token keeps the VARCHAR route's accepted
+-- domain and display, see the remaining-domain rows below.
 select ceil(cast('1e40' as char)) as ceil_comp_1e40,
        floor(convert('18446744073709551616', char)) as floor_comp_u64p1,
        ceil(cast('99999999999999999999999' as text)) as ceil_comp_23nines,
@@ -422,10 +421,39 @@ create table func_cast_omit_char_unary_wide (v text);
 insert into func_cast_omit_char_unary_wide values ('1e40'), (null), ('18446744073709551616');
 select ceil(v), floor(v) from func_cast_omit_char_unary_wide;
 drop table if exists func_cast_omit_char_unary_wide;
--- magnitudes whose display needs more than 76 integral digits exceed
--- DECIMAL256, the widest scale-0 numeric, and keep the decimal conversion
--- error; non-numeric strings keep the string parser's error.
-select ceil(cast('1e76' as text));
-select ceil(cast('1e300' as text));
+-- [review round] Preserve the remaining FLOAT64 domain of the composed
+-- one-argument CEIL/FLOOR: the scale-0 DECIMAL256(76,0) return rejected
+-- every finite magnitude above 76 integral digits, a PR-induced regression
+-- of the pre-widening FLOAT64 route (SELECT CEIL(CAST('1e90' AS CHAR)) and
+-- SELECT FLOOR(CONVERT('1e90', CHAR)) previously returned their values).
+-- No numeric type holds the exact integer domains together with that
+-- remaining FLOAT64 domain, so the one-argument TEXT overloads return
+-- VARCHAR and render the FLOAT64 route's own result-set digits: every
+-- finite magnitude succeeds again with the pre-widening displays,
+-- byte-identical to the base binary's measured values up to the 1e308
+-- boundary; non-numeric strings keep the string parser's error.
+select ceil(cast('1e90' as char)) as ceil_comp_1e90,
+       floor(convert('1e90', char)) as floor_comp_1e90,
+       ceil(cast('1e76' as char)) as ceil_comp_1e76,
+       floor(cast('-1.5e76' as char)) as floor_comp_neg_1p5e76,
+       ceil(cast('1e308' as char)) as ceil_comp_1e308;
+select ceil(cast('1e300' as text)) as ceil_text_1e300,
+       floor(cast('1e90' as text)) as floor_text_1e90;
+-- [review round] The digit-rendering results keep the base FLOAT64
+-- composition semantics: arithmetic, comparisons and IN-lists bind through
+-- FLOAT64 again instead of the string-to-int64 implicit cast, whose range
+-- rejection broke base-successful rows like CEIL(CAST('1e40' AS CHAR)) + 1;
+-- magnitudes above the restored decimal ceiling compose the same way, and
+-- ORDER BY over the composed expression sorts numerically while the
+-- projected column keeps its digit rendering.
+select ceil(cast('20.5' as char)) + 1 as compose_add;
+select ceil(cast('1e40' as char)) + 1 as compose_add_1e40;
+select floor(convert('1e90', char)) * 10 as compose_mul_1e90;
+select ceil(cast('1e40' as char)) > 0 as compose_gt_1e40;
+select ceil(cast('20.5' as char)) in (21) as compose_in;
+create table func_cast_omit_char_order (v varchar(32));
+insert into func_cast_omit_char_order values ('2'), ('10'), ('9'), ('-1.5');
+select v, ceil(cast(v as char)) as c from func_cast_omit_char_order order by c;
+drop table if exists func_cast_omit_char_order;
 select ceil(cast('中文' as text));
 drop table if exists func_cast_omit_char_unary;
