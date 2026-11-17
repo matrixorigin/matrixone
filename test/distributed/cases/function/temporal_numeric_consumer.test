@@ -1,0 +1,140 @@
+--- @metacmp(true)
+-- @suite
+
+-- @case
+-- @desc: DATE/DATETIME/TIME use packed numeric values in bitwise operators, BIT_COUNT, and SEC_TO_TIME
+-- @label:bvt
+
+drop database if exists temporal_numeric_consumer;
+create database temporal_numeric_consumer;
+use temporal_numeric_consumer;
+set time_zone = '+00:00';
+
+create table temporal_values (
+    id int primary key,
+    d date,
+    dt datetime(6),
+    tm time(6),
+    ts timestamp(6)
+);
+insert into temporal_values values
+    (1, '2024-01-01', '2024-01-01 10:00:00.000000', '01:02:03.000000', '2024-01-01 10:00:00.000000'),
+    (2, '2024-02-29', '2024-02-29 23:59:59.499999', '-00:00:00.500000', '2024-02-29 23:59:59.499999'),
+    (3, '2024-02-29', '2024-02-29 23:59:59.500000', '-12:00:00.500000', '2024-02-29 23:59:59.500000'),
+    (4, null, null, null, null);
+
+-- Issue #31904: native temporal values become numbers before bitwise execution.
+select d & 3 as date_and,
+       length(d & 3) as date_and_length,
+       hex(d & 3) as date_and_hex,
+       dt | 1 as datetime_or,
+       length(dt | 1) as datetime_or_length,
+       tm ^ 1 as time_xor,
+       length(tm ^ 1) as time_xor_length,
+       d << 1 as date_left,
+       tm >> 1 as time_right
+from temporal_values where id = 1;
+select hex(date'2024-01-01' & 3) as literal_date_and,
+       time'01:02:03' | 0 as literal_time_or,
+       cast('2024-01-01 10:00:00' as datetime) | 1 as literal_datetime_or,
+       date'2024-01-01' << 1 as literal_date_left;
+
+select id, d & 3 as date_and, 3 & d as date_and_reversed,
+       dt | 1 as datetime_or, 1 | dt as datetime_or_reversed,
+       tm ^ 0 as time_xor, d << 1 as date_left, tm >> 1 as time_right
+from temporal_values order by id;
+
+-- Fractional values round before integer conversion, including negative TIME.
+select id, bit_count(d) as date_bits,
+       bit_count(dt) as datetime_bits,
+       bit_count(tm) as time_bits,
+       bit_count(ts) as timestamp_bits
+from temporal_values order by id;
+show warnings;
+select bit_count(date'2024-01-01') as literal_date_bits,
+       bit_count(cast('2024-01-01 10:00:00' as datetime)) as literal_datetime_bits,
+       bit_count(time'01:02:03') as literal_time_bits,
+       bit_count(20240101) as numeric_control;
+
+-- TIMESTAMP conversion follows the session zone at execution time.
+select ts | 0 as timestamp_utc from temporal_values where id = 1;
+set time_zone = '+08:00';
+select ts | 0 as timestamp_utc_plus_eight, bit_count(ts) as timestamp_bits_utc_plus_eight
+from temporal_values where id = 1;
+set time_zone = '+00:00';
+
+-- Issue #31906: SEC_TO_TIME consumes seconds and retains temporal scale.
+select id, sec_to_time(d) as date_seconds,
+       sec_to_time(dt) as datetime_seconds,
+       sec_to_time(tm) as time_seconds,
+       sec_to_time(ts) as timestamp_seconds,
+       cast(sec_to_time(tm) as char) as time_seconds_text
+from temporal_values order by id;
+show warnings;
+select sec_to_time(time'01:02:03') as literal_time_seconds,
+       sec_to_time(10203) as numeric_control;
+select sec_to_time(date'2024-01-01') as saturated_date_seconds;
+show warnings;
+select sec_to_time(cast('2024-01-01 10:00:00' as datetime)) as saturated_datetime_seconds;
+show warnings;
+
+-- Zero temporal sentinels are numeric zero under the session zero-date policy.
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = '';
+create table temporal_zero (
+    id int primary key,
+    d date default 0,
+    dt datetime(6) default 0,
+    tm time(6) default 0
+);
+insert into temporal_zero (id) values (1);
+select d & 3 as date_and, dt | 0 as datetime_or, tm ^ 0 as time_xor,
+       bit_count(d) as date_bits, bit_count(dt) as datetime_bits, bit_count(tm) as time_bits,
+       sec_to_time(d) as date_seconds, sec_to_time(dt) as datetime_seconds, sec_to_time(tm) as time_seconds
+from temporal_zero;
+drop table temporal_zero;
+set sql_mode = @saved_sql_mode;
+
+-- Cached SQL execution keeps temporal columns native across parameter changes.
+prepare temporal_prepared from 'select d & ?, dt | ?, tm ^ ?, d << ?, bit_count(d), sec_to_time(tm) from temporal_values where id = 1';
+set @and_value = 3, @or_value = 1, @xor_value = 1, @shift_value = 1;
+execute temporal_prepared using @and_value, @or_value, @xor_value, @shift_value;
+set @and_value = 1, @or_value = 0, @xor_value = 0, @shift_value = 2;
+execute temporal_prepared using @and_value, @or_value, @xor_value, @shift_value;
+deallocate prepare temporal_prepared;
+
+-- A numeric BIT_COUNT parameter latch converts later temporal text by its
+-- numeric prefix, including explicit binary text, instead of raising CAST errors.
+prepare temporal_bit_count_prepared from 'select bit_count(?)';
+set @temporal_bit_count_value = '64';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+set @temporal_bit_count_value = 64;
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+set @temporal_bit_count_value = '2024-01-01';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+show warnings;
+set @temporal_bit_count_value = _binary '2024-01-01';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+show warnings;
+set @temporal_bit_count_value = null;
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+show warnings;
+deallocate prepare temporal_bit_count_prepared;
+
+-- Text and binary inputs retain their existing domains.
+select '2024-01-01' & 3 as text_and,
+       bit_count('2024-01-01') as text_bits,
+       sec_to_time('01:02:03') as text_seconds;
+show warnings;
+select hex(_binary X'0102' & _binary X'0003') as binary_and,
+       hex(_binary X'0102' | _binary X'0003') as binary_or,
+       hex(_binary X'0102' ^ _binary X'0003') as binary_xor,
+       bit_count(_binary X'0102') as binary_bits;
+-- Plain hexadecimal literals use numeric bit operations; _binary literals remain bytewise.
+select hex(X'0102' & X'0003') as plain_hex_and,
+       hex(X'0102' | X'0003') as plain_hex_or,
+       hex(X'0102' ^ X'0003') as plain_hex_xor,
+       bit_count(X'0102') as plain_hex_bits;
+
+drop table temporal_values;
+drop database temporal_numeric_consumer;
