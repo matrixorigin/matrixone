@@ -146,13 +146,17 @@ func (l *store) catalogStartReplica(p pb.CatalogMetadataStartPermit) error {
 	return l.startHAKeeperReplicaRaw(p.ReplicaID, nil, join)
 }
 func (l *store) catalogStopReplica(p pb.CatalogMetadataStartPermit) error {
+	l.markReplicaRetiring(hakeeper.DefaultHAKeeperShardID, p.ReplicaID)
 	if l.catalogReplicaPresent(p, false) {
 		if err := l.stopReplicaRaw(hakeeper.DefaultHAKeeperShardID, p.ReplicaID); err != nil {
 			return err
 		}
 	}
-	// REVOKING is already durable. Remove stale local recovery metadata even
-	// after a crash between StopReplica and this cleanup; retain the tombstone.
+	// REVOKING is durable. Keep metadata until exported snapshots have been
+	// removed; a failed removal is retried by the supervisor after restart.
+	if err := l.snapshotMgr.RemoveReplica(hakeeper.DefaultHAKeeperShardID, p.ReplicaID); err != nil {
+		return err
+	}
 	l.removeMetadata(hakeeper.DefaultHAKeeperShardID, p.ReplicaID)
 	return nil
 }
@@ -518,9 +522,6 @@ func (l *store) executeCatalogCommand(cmd pb.ScheduleCommand) error {
 		}
 		if err := l.executeCatalogStart(*p); err != nil {
 			return err
-		}
-		if cfg.ChangeType == pb.KillZombie {
-			l.removeMetadata(hakeeper.DefaultHAKeeperShardID, p.ReplicaID)
 		}
 		return nil
 	default:

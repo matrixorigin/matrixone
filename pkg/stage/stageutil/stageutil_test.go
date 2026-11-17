@@ -74,6 +74,38 @@ func TestStageCache(t *testing.T) {
 	require.Equal(t, ss.Url.String(), "stage://rsstage/substage")
 }
 
+func TestStageLoadCatalogUninitializedProcess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		proc *process.Process
+	}{
+		{name: "nil process"},
+		{name: "nil base", proc: &process.Process{}},
+		{name: "nil stage cache", proc: &process.Process{Base: &process.BaseProcess{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := StageLoadCatalog(tc.proc, "example")
+			require.ErrorContains(t, err, "stage catalog lookup requires an initialized process")
+			require.Equal(t, stage.StageDef{}, got)
+		})
+	}
+}
+
+func TestStageResolversRequireProcess(t *testing.T) {
+	t.Run("export", func(t *testing.T) {
+		got, err := UrlToStageDefForExport("stage:///example/part-%05d.csv", nil)
+		require.ErrorContains(t, err, "stage catalog lookup requires an initialized process")
+		require.Equal(t, stage.StageDef{}, got)
+	})
+	t.Run("nested", func(t *testing.T) {
+		u, err := url.Parse("stage://example/child")
+		require.NoError(t, err)
+		got, err := ExpandSubStage(stage.StageDef{Name: "outer", Url: u}, nil)
+		require.ErrorContains(t, err, "stage catalog lookup requires an initialized process")
+		require.Equal(t, stage.StageDef{}, got)
+	})
+}
+
 func TestStageFail(t *testing.T) {
 
 	proc := testutil.NewProcess(t)

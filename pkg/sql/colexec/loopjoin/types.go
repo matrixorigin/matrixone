@@ -114,12 +114,18 @@ type container struct {
 	// not fit a non-empty result batch, keep it here rather than losing it.
 	rightPendingRow bool
 	rightPending    uint64
-	inBat           *batch.Batch
-	resBat          *batch.Batch
-	joinBat         *batch.Batch
-	expr            colexec.ExpressionExecutor
-	cfs             []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp              *message.JoinMap
+	// Copiers hold stateless functions, not input/lease ownership. The probe
+	// binding refreshes on every input assignment; build batches are immutable
+	// for the join-map lifetime and are rebound when that batch changes.
+	probeCopy      vector.UnionMultiFunc
+	buildCopy      vector.UnionBatchFunc
+	buildCopyBatch *batch.Batch
+	inBat          *batch.Batch
+	resBat         *batch.Batch
+	joinBat        *batch.Batch
+	expr           colexec.ExpressionExecutor
+	cfs            []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp             *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -260,6 +266,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanBatch(proc.Mp())
 	ctr.state = Build
 	ctr.inBat = nil
+	ctr.clearBulkCopy()
 	ctr.probeIdx = 0
 	ctr.batIdx = 0
 	ctr.batRowIdx = 0
@@ -289,6 +296,21 @@ func (ctr *container) cleanRightMatchState(proc *process.Process) {
 	ctr.rightMatchedBat = 0
 	ctr.rightPendingRow = false
 	ctr.rightPending = 0
+}
+
+func (ctr *container) setProbeBatch(input *batch.Batch) {
+	ctr.inBat = input
+	ctr.probeCopy = vector.GetUnionMultiFunction(input.Vecs)
+	ctr.clearBulkCopyBuild()
+}
+
+func (ctr *container) clearBulkCopyBuild() {
+	ctr.buildCopy, ctr.buildCopyBatch = nil, nil
+}
+
+func (ctr *container) clearBulkCopy() {
+	ctr.probeCopy = nil
+	ctr.clearBulkCopyBuild()
 }
 
 func (ctr *container) clearConditionResult() {
@@ -321,6 +343,7 @@ func (ctr *container) clearProbeResume() {
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	ctr.clearProbeResume()
+	ctr.clearBulkCopy()
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(mp)
 		ctr.resBat = nil

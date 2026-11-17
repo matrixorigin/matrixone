@@ -664,6 +664,8 @@ message CreateTaskService {
 // DeleteCNStore deletes CN store from CNState to save hakeeper's memory.
 message DeleteCNStore {
   string StoreID = 1;
+  // Unix nanoseconds chosen before the Raft proposal. Zero denotes a legacy command.
+  int64 DownTime = 2;
 }
 
 // DeleteProxyStore deletes Proxy store from ProxyState to save hakeeper's memory.

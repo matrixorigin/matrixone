@@ -510,6 +510,12 @@ func (txn *Transaction) checkWorkspaceAccountingLocked() error {
 }
 
 func (txn *Transaction) assertWorkspaceAccountingLocked() {
+	if txn.engine != nil && txn.engine.config.checkWorkspaceAccounting {
+		if err := txn.checkWorkspaceAccountingLocked(); err != nil {
+			panic(err)
+		}
+		return
+	}
 	common.DoIfDebugEnabled(func() {
 		if err := txn.checkWorkspaceAccountingLocked(); err != nil {
 			panic(err)
@@ -2215,7 +2221,7 @@ func (e *Engine) scheduleUnpublishedPendingDrain() {
 	closed := e.dynamicCtx.closed.Load()
 	e.gcMu.Unlock()
 	if pool == nil || closed || e.fs == nil || drainCtx == nil {
-		e.clearUnpublishedPendingSchedule()
+		e.clearUnpublishedPendingSchedule(false)
 		logutil.Debug("WORKSPACE-UNPUBLISHED-PENDING-NOPOOL")
 		return
 	}
@@ -2224,7 +2230,7 @@ func (e *Engine) scheduleUnpublishedPendingDrain() {
 			// The submission was refused: the names stay owned by the
 			// queue, and the GC-scheduler tick or a later handoff
 			// schedules the retry of the whole backlog.
-			e.clearUnpublishedPendingSchedule()
+			e.clearUnpublishedPendingSchedule(false)
 			logutil.Warn(
 				"WORKSPACE-UNPUBLISHED-CLEANUP-SCHED",
 				zap.Error(err),
@@ -2233,17 +2239,21 @@ func (e *Engine) scheduleUnpublishedPendingDrain() {
 	}()
 }
 
-// clearUnpublishedPendingSchedule releases the coalescing slot so the next
-// GC-scheduler tick or enqueue can schedule a fresh drain of the backlog,
-// and closes the pipeline's join handle.
-func (e *Engine) clearUnpublishedPendingSchedule() {
+// clearUnpublishedPendingSchedule releases the coalescing slot and closes
+// the pipeline's join handle. After a successful drain, it also checks for
+// arrivals that coalesced behind that pipeline while holding the same mutex
+// used by enqueue, so the caller can schedule another drain without losing
+// the wakeup between its final queue snapshot and clearing the slot.
+func (e *Engine) clearUnpublishedPendingSchedule(successfulDrain bool) bool {
 	e.unpublishedPending.mu.Lock()
 	e.unpublishedPending.drainScheduled = false
 	if e.unpublishedPending.drainIdle != nil {
 		close(e.unpublishedPending.drainIdle)
 		e.unpublishedPending.drainIdle = nil
 	}
+	reschedule := successfulDrain && len(e.unpublishedPending.names) > 0
 	e.unpublishedPending.mu.Unlock()
+	return reschedule
 }
 
 // cancelUnpublishedPendingDrains cancels the engine-owned context under
@@ -2430,10 +2440,9 @@ func (e *Engine) drainUnpublishedPending() {
 	// survived the ladder stays queued for the GC-scheduler tick; a
 	// success reschedules immediately for the names a concurrent enqueue
 	// parked behind this drain's coalescing slot.
-	resched := false
+	drainSucceeded := false
 	defer func() {
-		e.clearUnpublishedPendingSchedule()
-		if resched {
+		if e.clearUnpublishedPendingSchedule(drainSucceeded) {
 			e.scheduleUnpublishedPendingDrain()
 		}
 	}()
@@ -2463,10 +2472,7 @@ func (e *Engine) drainUnpublishedPending() {
 			}
 			continue
 		}
-		e.unpublishedPending.mu.Lock()
-		remaining := len(e.unpublishedPending.names) > 0
-		e.unpublishedPending.mu.Unlock()
-		resched = remaining
+		drainSucceeded = true
 		return
 	}
 	// The ladder ran out on a still-failing file service: the names stay

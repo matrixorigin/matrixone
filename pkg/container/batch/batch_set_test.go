@@ -27,6 +27,31 @@ const (
 	TestBatchMaxRow = 8192
 )
 
+func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	queue := NewBatchSet(3)
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		input.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
+	input.SetRowCount(7)
+	_, err := queue.UnionRange(mp, input, 1, 2, nil)
+	require.NoError(t, err)
+	_, err = queue.UnionRange(mp, input, 3, 4, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, []int64{11, 12, 13}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+	require.Equal(t, []int64{14, 15, 16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(1).Vecs[0]))
+	queue.Clean(mp)
+	_, err = queue.UnionRange(mp, input, 0, input.RowCount(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, queue.Length(), "a whole input must still respect the output row limit")
+	require.Equal(t, []int64{16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(2).Vecs[0]))
+}
+
 func TestBatchSetOwnedDestinationAcrossInputProvenance(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
