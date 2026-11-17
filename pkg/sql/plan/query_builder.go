@@ -7824,15 +7824,20 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		if err != nil {
 			return nil, err
 		}
-	} else if isCeilFloorTextRenderExpr(projectExpr) {
+	} else if numericTarget, matched := ceilFloorTextRenderNumericTarget(projectExpr); matched {
 		// The digit-rendering VARCHAR result of the one-argument TEXT
 		// CEIL/FLOOR keeps the base numeric ordering (#32336, #32374):
-		// the rendered digits parse back to the FLOAT64 value the
-		// pre-change route sorted on, so the visible column keeps its
-		// exact digits while this hidden key restores the numeric order.
-		floatType := types.T_float64.ToType()
+		// the visible column keeps its exact digits while this hidden
+		// key re-parses them into the base route's numeric domain —
+		// FLOAT64 for the omitted-length CAST/CONVERT-to-CHAR widths,
+		// and the exact-integer DECIMAL128 for TEXT columns and
+		// explicit TEXT casts, whose int64/uint64 rows keep the order
+		// the base UINT64 route produced instead of collapsing to the
+		// FLOAT64 rounding (PR #32438 review).
 		var err error
-		orderKeyExpr, err = appendCastBeforeExpr(builder.GetContext(), DeepCopyExpr(projectExpr), makePlan2Type(&floatType))
+		orderKeyExpr, err = appendCastBeforeExpr(
+			builder.GetContext(), DeepCopyExpr(projectExpr), makePlan2Type(&numericTarget),
+		)
 		if err != nil {
 			return nil, err
 		}

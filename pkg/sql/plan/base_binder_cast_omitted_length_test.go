@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -460,4 +461,364 @@ func TestOmittedLengthCeilFloorTextRenderOrderByKeepsNumericKey(t *testing.T) {
 		"select id, e from enum_order_t order by e")
 	require.NoError(t, err)
 	requireSingleSortKeyType(t, enumPlan, types.T_enum)
+}
+
+// collectBoundFuncs appends every plan function expression named in names
+// found anywhere inside one bound expression tree.
+func collectBoundFuncs(expr *plan.Expr, names map[string]bool, into *[]*plan.Function) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn != nil && fn.Func != nil && names[fn.Func.GetObjName()] {
+			*into = append(*into, fn)
+		}
+		for _, arg := range fn.GetArgs() {
+			collectBoundFuncs(arg, names, into)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.GetList() {
+			collectBoundFuncs(item, names, into)
+		}
+	}
+}
+
+// collectPlanFuncs walks every expression list of every node of the logic
+// plan (projections, aggregates, filters, joins, order-by specs) looking
+// for the requested function names.
+func collectPlanFuncs(
+	t *testing.T, logicPlan *plan.Plan, names map[string]bool,
+) []*plan.Function {
+	t.Helper()
+	var found []*plan.Function
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			collectBoundFuncs(expr, names, &found)
+		}
+		for _, expr := range node.AggList {
+			collectBoundFuncs(expr, names, &found)
+		}
+		for _, expr := range node.FilterList {
+			collectBoundFuncs(expr, names, &found)
+		}
+		for _, expr := range node.OnList {
+			collectBoundFuncs(expr, names, &found)
+		}
+		for _, spec := range node.OrderBy {
+			collectBoundFuncs(spec.Expr, names, &found)
+		}
+		_ = node
+	}
+	return found
+}
+
+func ceilFloorRenderNames() map[string]bool {
+	return map[string]bool{"ceil": true, "ceiling": true, "floor": true}
+}
+
+// requireRenderOverload asserts the decoded overload id of a plan render
+// function expression against the expected value.
+func requireRenderOverload(t *testing.T, fn *plan.Function, want int32, sql string) {
+	t.Helper()
+	_, boundOverload := function.DecodeOverloadID(fn.Func.GetObj())
+	require.Equal(t, want, boundOverload, sql)
+}
+
+// collectBoundExprs walks a bound plan expression tree collecting every
+// function expression whose name is requested. Unlike collectBoundFuncs it
+// keeps the surrounding *plan.Expr, so the expression's own result type
+// stays available to assertions.
+func collectBoundExprs(expr *plan.Expr, names map[string]bool, into *[]*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn != nil && fn.Func != nil && names[fn.Func.GetObjName()] {
+			*into = append(*into, expr)
+		}
+		for _, arg := range fn.GetArgs() {
+			collectBoundExprs(arg, names, into)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.GetList() {
+			collectBoundExprs(item, names, into)
+		}
+	}
+}
+
+// requireRetypedRenders asserts that the bound expression retypes every
+// embedded one-argument CEIL/FLOOR digit render to the given numeric
+// target before its consumer sees the display string (at least one such
+// cast must exist).
+func requireRetypedRenders(t *testing.T, expr *plan.Expr, want types.T, sql string) {
+	t.Helper()
+	var casts []*plan.Expr
+	collectBoundExprs(expr, map[string]bool{"cast": true}, &casts)
+	found := false
+	for _, cast := range casts {
+		fn := cast.GetF()
+		// casts carry the target type as a trailing TargetType argument, so
+		// only the first argument position is the retyped operand.
+		if fn == nil || len(fn.Args) == 0 || !isCeilFloorTextRenderExpr(fn.Args[0]) {
+			continue
+		}
+		require.Equal(t, int32(want), cast.Typ.Id, sql)
+		found = true
+	}
+	require.True(t, found, "the render must be explicitly retyped: "+sql+
+		"\nbound expr: "+expr.String())
+}
+
+// requirePlanFnResultType binds sql through the full query build, collects
+// every function expression named fnName across the plan's projections,
+// aggregate lists, filters and order keys, and asserts each one's result
+// type. Table-scan projections expose the raw column references, so the
+// composed consumer must be pinned by name rather than by node position.
+func requirePlanFnResultType(t *testing.T, sql, fnName string, want types.T) {
+	t.Helper()
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+	require.NoError(t, err, sql)
+	var found []*plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			collectBoundExprs(expr, map[string]bool{fnName: true}, &found)
+		}
+		for _, expr := range node.AggList {
+			collectBoundExprs(expr, map[string]bool{fnName: true}, &found)
+		}
+		for _, expr := range node.FilterList {
+			collectBoundExprs(expr, map[string]bool{fnName: true}, &found)
+		}
+		for _, spec := range node.OrderBy {
+			collectBoundExprs(spec.Expr, map[string]bool{fnName: true}, &found)
+		}
+	}
+	require.NotEmpty(t, found, sql)
+	for _, expr := range found {
+		require.Equal(t, int32(want), expr.Typ.Id, sql)
+	}
+}
+
+// TestCeilFloorOmittedCharRenderBindsProvenanceMarker pins the provenance
+// split of the one-argument CEIL/FLOOR TEXT render (#32336, #32374, PR
+// #32438 review): every omitted-length CAST/CONVERT-to-CHAR spelling binds
+// the planner-only marker overload 15 — identical executor and result to
+// overload 13 — while explicit TEXT casts and TEXT columns keep the
+// ordinary overload 13, so the numeric retype of each provenance can keep
+// its own base domain (FLOAT64 for the widened CHAR casts, exact-integer
+// DECIMAL128 for TEXT).
+func TestCeilFloorOmittedCharRenderBindsProvenanceMarker(t *testing.T) {
+	for _, tc := range []struct {
+		sql        string
+		fnName     string
+		markerWant int32
+	}{
+		{"select ceil(cast('1.2' as char))", "ceil", function.CeilTextOmittedCharRenderOverload},
+		{"select ceiling(cast('1.2' as char))", "ceiling", function.CeilTextOmittedCharRenderOverload},
+		{"select ceil(convert('1.2', char))", "ceil", function.CeilTextOmittedCharRenderOverload},
+		{"select floor(cast('1.2' as char))", "floor", function.FloorTextOmittedCharRenderOverload},
+		{"select floor(convert('1.2', char))", "floor", function.FloorTextOmittedCharRenderOverload},
+		{"select ceil(cast('1' as text))", "ceil", int32(13)},
+		{"select ceiling(cast('1' as text))", "ceiling", int32(13)},
+		// CONVERT's MySQL type list has no TEXT spelling (CONVERT(x, text)
+		// is a syntax error), so explicit TEXT provenance is CAST-only.
+		{"select floor(cast('1' as text))", "floor", int32(13)},
+	} {
+		expr := bindFirstSelectExpr(t, tc.sql)
+		fn := boundExprFn(t, expr)
+		require.Equal(t, tc.fnName, fn.Func.GetObjName(), tc.sql)
+		requireRenderOverload(t, fn, tc.markerWant, tc.sql)
+		// Both provenances keep the same display: the digit-rendering
+		// VARCHAR result whose single argument is the unbounded TEXT.
+		require.Equal(t, int32(types.T_varchar), expr.Typ.Id, tc.sql)
+		require.Len(t, fn.Args, 1, tc.sql)
+		require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, tc.sql)
+	}
+
+	// The same provenance split holds for correlated column inputs through
+	// the full plan build: a VARCHAR column widened by the omitted-length
+	// CAST keeps the marker; a TEXT column keeps the ordinary overload.
+	widenedPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select ceil(cast(vrt as char)) as c from text_render_t")
+	require.NoError(t, err)
+	fns := collectPlanFuncs(t, widenedPlan, ceilFloorRenderNames())
+	require.NotEmpty(t, fns)
+	requireRenderOverload(t, fns[0], function.CeilTextOmittedCharRenderOverload,
+		"select ceil(cast(vrt as char)) as c from text_render_t")
+
+	textColPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select ceil(vt) as c from text_render_t")
+	require.NoError(t, err)
+	fns = collectPlanFuncs(t, textColPlan, ceilFloorRenderNames())
+	require.NotEmpty(t, fns)
+	requireRenderOverload(t, fns[0], 13, "select ceil(vt) as c from text_render_t")
+}
+
+// TestCeilFloorTextRenderCompositionsKeepBaseNumericDomains pins the two
+// domains the PR #32438 review restored for composed consumers of the
+// one-argument CEIL/FLOOR digit render (#32336, #32374):
+//
+//   - omitted-length CAST/CONVERT-to-CHAR inputs retype to FLOAT64, so the
+//     base VARCHAR CeilStr/FloorStr route's compositions bind again,
+//     including MAX/MIN/SUM/AVG aggregates and ROUND/POWER/ABS scalars and
+//     every finite magnitude above the decimal ceiling;
+//
+//   - explicit TEXT inputs (TEXT columns, CAST/CONVERT AS TEXT) retype to
+//     the exact-integer DECIMAL128: CEIL(CAST('9007199254740993' AS TEXT))
+//     = 9007199254740992 keeps comparing through DECIMAL128 and stays
+//     false instead of every row collapsing to the same FLOAT64 value.
+func TestCeilFloorTextRenderCompositionsKeepBaseNumericDomains(t *testing.T) {
+	t.Run("omitted_char_compositions_keep_float64_domain", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql    string
+			fnName string // locate the composed consumer in the full plan
+			typ    types.T
+		}{
+			{"select ceil(cast('1e40' as char)) + 1", "", types.T_float64},
+			{"select floor(convert('1e90', char)) * 10", "", types.T_float64},
+			{"select round(ceil(cast('1e40' as char)))", "", types.T_float64},
+			{"select round(ceil(convert('20.5', char)), 1)", "", types.T_float64},
+			{"select truncate(floor(cast('30.7' as char)), 1)", "", types.T_float64},
+			{"select abs(ceil(convert('-30.7', char)))", "", types.T_float64},
+			{"select power(ceil(cast('20.7' as char)), 2)", "", types.T_float64},
+			{"select max(ceil(cast(vrt as char))) from text_render_t", "max", types.T_float64},
+			{"select min(floor(convert(vrt, char))) from text_render_t", "min", types.T_float64},
+			{"select sum(ceil(cast(vrt as char))) from text_render_t", "sum", types.T_float64},
+			{"select avg(floor(convert(vrt, char))) from text_render_t", "avg", types.T_float64},
+			{"select ceil(cast(vrt as char)) between 1 and 2 from text_render_t", "between", types.T_bool},
+			{"select ceil(cast('1e40' as char)) in (2)", "", types.T_bool},
+			{"select floor(convert('2.5', char)) in (3, 4)", "", types.T_bool},
+			{"select json_object('v', ceil(convert('2.5', char)))", "", types.T_json},
+			{"select json_array(floor(cast('1e40' as char)))", "", types.T_json},
+		} {
+			if tc.fnName != "" {
+				requirePlanFnResultType(t, tc.sql, tc.fnName, tc.typ)
+			} else {
+				bound := bindFirstSelectExpr(t, tc.sql)
+				require.Equal(t, int32(tc.typ), bound.Typ.Id, tc.sql)
+			}
+		}
+	})
+
+	t.Run("explicit_text_compositions_keep_exact_decimal_domain", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql    string
+			fnName string // locate the composed consumer in the full plan
+			typ    types.T
+		}{
+			{"select ceil(cast('9007199254740993' as text)) = 9007199254740992", "", types.T_bool},
+			{"select floor(cast('9007199254740993' as text)) = 9007199254740992", "", types.T_bool},
+			{"select ceil(cast('9007199254740993' as text)) > 9007199254740992", "", types.T_bool},
+			{"select ceil(cast('9007199254740993' as text)) + 1", "", types.T_decimal128},
+			{"select floor(cast('9007199254740993' as text)) - 1", "", types.T_decimal128},
+			{"select round(ceil(cast('9007199254740993' as text)))", "", types.T_decimal128},
+			{"select max(ceil(vt)) from text_render_t", "max", types.T_decimal128},
+			{"select min(floor(vt)) from text_render_t", "min", types.T_decimal128},
+			{"select sum(ceil(vt)) from text_render_t", "sum", types.T_decimal128},
+			{"select abs(floor(vt)) from text_render_t", "abs", types.T_decimal128},
+			{"select json_object('v', ceil(vt)) from text_render_t", "json_object", types.T_json},
+			{"select ceil(cast('9007199254740993' as text)) in (9007199254740992)", "", types.T_bool},
+		} {
+			if tc.fnName != "" {
+				requirePlanFnResultType(t, tc.sql, tc.fnName, tc.typ)
+			} else {
+				bound := bindFirstSelectExpr(t, tc.sql)
+				require.Equal(t, int32(tc.typ), bound.Typ.Id, tc.sql)
+			}
+		}
+
+		// The comparison's left operand must carry the DECIMAL128 retype of
+		// the render (not FLOAT64): the operator bound re-parses the exact
+		// digits, keeping the different integer sides unequal.
+		bound := bindFirstSelectExpr(t,
+			"select ceil(cast('9007199254740993' as text)) = 9007199254740992")
+		cmp := boundExprFn(t, bound)
+		require.Equal(t, "=", cmp.Func.GetObjName())
+		retype := cmp.Args[0].GetF()
+		require.NotNil(t, retype, "the render must be explicitly retyped for the comparison")
+		require.Equal(t, "cast", retype.Func.GetObjName())
+		require.Equal(t, int32(types.T_decimal128), cmp.Args[0].Typ.Id)
+
+		// The omitted-CHAR comparison retype stays FLOAT64 (base behavior).
+		widened := bindFirstSelectExpr(t,
+			"select ceil(cast('1e40' as char)) > 0")
+		cmp2 := boundExprFn(t, widened)
+		require.Equal(t, int32(types.T_float64), cmp2.Args[0].Typ.Id)
+
+		// The base's SUM failure over the VARCHAR render is gone for both
+		// provenances and the aggregates see numeric arguments.
+		aggPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select sum(ceil(cast(vrt as char))) as s, sum(ceil(vt)) as st from text_render_t")
+		require.NoError(t, err, "SUM must keep binding over the digit render")
+		aggs := collectPlanFuncs(t, aggPlan, map[string]bool{"sum": true})
+		require.Len(t, aggs, 2)
+		for _, agg := range aggs {
+			cast := agg.Args[0].GetF()
+			require.NotNil(t, cast, "each aggregate argument must be retyped")
+			require.Equal(t, "cast", cast.Func.GetObjName())
+		}
+		require.Equal(t, int32(types.T_float64), aggs[0].Args[0].Typ.Id,
+			"omitted-CHAR renders retype SUM to FLOAT64")
+		require.Equal(t, int32(types.T_decimal128), aggs[1].Args[0].Typ.Id,
+			"TEXT-column renders retype SUM to the exact DECIMAL128 domain")
+
+		// IN lists keep the same domain split: the explicit-TEXT render
+		// retypes to the exact DECIMAL128 before the member comparison
+		// binds, while the omitted-CHAR widening keeps the base FLOAT64
+		// IN comparison of the VARCHAR CeilStr/FloorStr route.
+		inText := bindFirstSelectExpr(t,
+			"select ceil(cast('9007199254740993' as text)) in (9007199254740992)")
+		require.Equal(t, int32(types.T_bool), inText.Typ.Id)
+		requireRetypedRenders(t, inText, types.T_decimal128,
+			"select ceil(cast('9007199254740993' as text)) in (9007199254740992)")
+
+		inWidened := bindFirstSelectExpr(t,
+			"select ceil(cast('1e40' as char)) in (2)")
+		require.Equal(t, int32(types.T_bool), inWidened.Typ.Id)
+		requireRetypedRenders(t, inWidened, types.T_float64,
+			"select ceil(cast('1e40' as char)) in (2)")
+
+		// JSON builders embed the retyped numeric domain exactly like the
+		// base result they replaced: the value positions keep the numeric
+		// typing, so neither provenance embeds the digit render as a JSON
+		// string, while json_object's key positions keep their string typing.
+		jsonText := bindFirstSelectExpr(t,
+			"select json_object('v', ceil(cast('9007199254740993' as text)))")
+		require.Equal(t, int32(types.T_json), jsonText.Typ.Id)
+		requireRetypedRenders(t, jsonText, types.T_decimal128,
+			"select json_object('v', ceil(cast('9007199254740993' as text)))")
+
+		jsonWidened := bindFirstSelectExpr(t,
+			"select json_array(ceil(cast('1e40' as char)))")
+		require.Equal(t, int32(types.T_json), jsonWidened.Typ.Id)
+		requireRetypedRenders(t, jsonWidened, types.T_float64,
+			"select json_array(ceil(cast('1e40' as char)))")
+	})
+
+	t.Run("order_by_keeps_exact_integer_domain_for_text_renders", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select ceil(vt) as c from text_render_t order by c")
+		require.NoError(t, err)
+		requireSingleSortKeyType(t, logicPlan, types.T_decimal128,
+			"TEXT renders must sort on the exact DECIMAL128 key")
+
+		keptRender := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if fn := expr.GetF(); fn != nil && expr.Typ.Id == int32(types.T_varchar) {
+					switch fn.Func.GetObjName() {
+					case "ceil", "ceiling", "floor":
+						if len(fn.Args) == 1 && fn.Args[0].Typ.Id == int32(types.T_text) {
+							keptRender = true
+						}
+					}
+				}
+			}
+		}
+		require.True(t, keptRender, "the visible projection must keep the digit render")
+	})
 }

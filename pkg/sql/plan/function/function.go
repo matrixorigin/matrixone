@@ -150,6 +150,18 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	return allSupportedFunctions[fid].Overloads[oIndex], true
 }
 
+// Overload indexes of the planner-only provenance twins of the one-argument
+// TEXT CEIL and FLOOR overloads (see list_builtIn.go): they are selected
+// exclusively through GetFunctionByNameWithOverload by the plan builder for
+// arguments that ARE the omitted-length CAST/CONVERT-to-CHAR widening
+// (#32336, #32374), and only the overload id differs from the ordinary TEXT
+// overload (13), so retype rules can restore each provenance's base numeric
+// compositions. Ordinary binding keeps the first direct match.
+const (
+	CeilTextOmittedCharRenderOverload  int32 = 15
+	FloorTextOmittedCharRenderOverload int32 = 15
+)
+
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {

@@ -457,3 +457,59 @@ select v, ceil(cast(v as char)) as c from func_cast_omit_char_order order by c;
 drop table if exists func_cast_omit_char_order;
 select ceil(cast('中文' as text));
 drop table if exists func_cast_omit_char_unary;
+
+-- [review round #32438] Numeric consumers of the digit render keep the
+-- exact-base numeric contract on both provenances. The omitted-length
+-- CAST/CONVERT-to-CHAR widths retype to FLOAT64 — the base VARCHAR
+-- CeilStr/FloorStr route — so MAX/MIN compare numerically, SUM/AVG bind
+-- again and ROUND keeps the FLOAT64 domain (the render itself stays the
+-- display string; INT64 range rejections of the composed rows are gone),
+-- and JSON builders embed the retyped number exactly like the base result
+-- instead of quoting the digit render as a JSON string.
+create table func_cast_omit_char_agg (v varchar(8));
+insert into func_cast_omit_char_agg values ('2'), ('10');
+select max(ceil(cast(v as char))) as max_ceil,
+       min(ceil(cast(v as char))) as min_ceil,
+       sum(ceil(cast(v as char))) as sum_ceil,
+       max(floor(convert(v, char))) as max_floor,
+       min(floor(convert(v, char))) as min_floor,
+       sum(floor(cast(v as char))) as sum_floor
+from func_cast_omit_char_agg;
+select round(ceil(cast('1e40' as char))) as round_1e40,
+       round(ceil(convert('20.5', char)), 1) as round_1d,
+       floor(ceil(cast('30.7' as char))) as floor_ceil,
+       ceil(floor(convert('-5.5', char))) as ceil_floor,
+       abs(ceil(convert('-30.7', char))) as abs_ceil,
+       power(floor(cast('5.9' as char)), 2) as pow_floor,
+       truncate(ceil(convert('19.87', char)), 1) as trunc_ceil,
+       ceil(convert('2.5', char)) in (3, 4) as in_true,
+       ceil(cast('1e40' as char)) in (2) as in_big_false,
+       json_object('v', ceil(convert('20.5', char))) as jobj_ceil,
+       json_array(floor(cast('5.9' as char))) as jarr_floor;
+drop table if exists func_cast_omit_char_agg;
+
+-- [review round #32438] Explicit-TEXT compositions keep the existing
+-- integer domain: the pre-widening UINT64 route made
+-- CEIL(CAST('9007199254740993' AS TEXT)) = 9007199254740992 compare
+-- through DECIMAL128 and stay false; the composed retype keeps that
+-- exactness instead of forcing every row through the FLOAT64 rounding,
+-- and composed TEXT-column aggregates/ORDER BY sort numerically.
+select ceil(cast('9007199254740993' as text)) = 9007199254740992 as eq_false,
+       ceil(cast('9007199254740993' as text)) = 9007199254740993 as eq_true,
+       floor(cast('9007199254740993' as text)) = 9007199254740992 as floor_eq_false,
+       ceil(cast('9007199254740993' as text)) > 9007199254740992 as gt_true,
+       ceil(cast('9007199254740993' as text)) + 1 as add_exact,
+       floor(cast('9223372036854775807' as text)) - 1 as sub_exact,
+       round(ceil(cast('9007199254740993' as text))) as round_exact,
+       ceil(cast('9007199254740993' as text)) in (9007199254740992) as in_eq_false,
+       ceil(cast('9007199254740993' as text)) in (9007199254740993) as in_eq_true,
+       json_object('v', ceil(cast('9007199254740993' as text))) as jobj_exact;
+create table func_cast_omit_char_textcol (vt text);
+insert into func_cast_omit_char_textcol values ('2'), ('10'), ('9007199254740993'),
+       ('9007199254740992'), ('2.5');
+select max(ceil(vt)) as max_exact, min(ceil(vt)) as min_exact
+from func_cast_omit_char_textcol;
+select vt from func_cast_omit_char_textcol where ceil(vt) = 9007199254740993;
+select vt, ceil(vt) as c from func_cast_omit_char_textcol order by c;
+select vt, floor(vt) as f from func_cast_omit_char_textcol where floor(vt) <> ceil(vt);
+drop table if exists func_cast_omit_char_textcol;

@@ -69,6 +69,20 @@ func newMySQLSpecialOrderMock() *MockOptimizer {
 			{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
 		},
 	}
+	// TEXT-column table for the one-argument CEIL/FLOOR render provenance
+	// tests (#32336, #32374): vrt holds the VARCHAR source of the
+	// omitted-length CAST-to-CHAR compositions and vt is a TEXT column,
+	// whose explicit-TEXT provenance keeps the exact integer domain.
+	mock.ctxt.objects["text_render_t"] = &planpb.ObjectRef{Obj: 9006, ObjName: "text_render_t"}
+	mock.ctxt.tables["text_render_t"] = &planpb.TableDef{
+		TblId: 9006,
+		Name:  "text_render_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "vrt", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "vt", Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+	}
 	return mock
 }
 

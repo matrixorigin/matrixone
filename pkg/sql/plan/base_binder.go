@@ -2814,6 +2814,19 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 		}
 	}
 
+	// #32336, #32374: a one-argument CEIL/CEILING/FLOOR whose TEXT argument
+	// is the omitted-length CAST/CONVERT-to-CHAR widening binds the
+	// provenance-marker overload of the digit-rendering TEXT executor
+	// (bindUnaryMathOmittedCharTextExpr). Only here the widening is still
+	// recognizable in the AST; the bound plan works downstream from the
+	// marker's overload id, keeping every composition on its base route.
+	if (name == "ceil" || name == "ceiling" || name == "floor") &&
+		len(astArgs) == 1 && len(args) == 1 &&
+		args[0].Typ.Id == int32(types.T_text) &&
+		isOmittedLengthCharCastTree(astArgs[0]) {
+		return b.bindUnaryMathOmittedCharTextExpr(name, args[0])
+	}
+
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
@@ -3404,6 +3417,18 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 	rightType := makeTypeByPlan2Expr(right)
 	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
 		targetType := types.T_float64.ToType()
+		// The one-argument CEIL/FLOOR TEXT render keeps its provenance's
+		// base domain inside IN-lists as well (#32336, #32374, PR #32438
+		// review): omitted-length CAST/CONVERT-to-CHAR results keep the
+		// plain string comparison, while explicit TEXT inputs keep the
+		// exact integer DECIMAL128 domain, so
+		// CEIL(CAST('9007199254740993' AS TEXT)) IN (9007199254740992)
+		// stays false instead of the FLOAT64 rounding mapping the sides
+		// onto one value.
+		if renderTarget, matched := ceilFloorTextRenderNumericTarget(left); matched &&
+			renderTarget.Oid == types.T_decimal128 {
+			targetType = renderTarget
+		}
 		operands := []*Expr{left, right}
 		for i := range operands {
 			var err error
@@ -3447,42 +3472,189 @@ func isCeilFloorTextRenderExpr(expr *Expr) bool {
 	return false
 }
 
-// retypeCeilFloorTextRenderArgs restores the arithmetic and comparison
-// semantics the composed one-argument CEIL/FLOOR results keep on the base
-// (#32336, #32374): their values left the functions as FLOAT64 there, so
-// compositions like CEIL(CAST('1e40' AS CHAR)) + 1 bound through the
-// float64 operator overloads. The digit-rendering VARCHAR return inherits
-// the string-vs-number implicit casts instead, whose int64 conversion
-// rejects every digit string beyond INT64 range although the base
-// evaluated the same compositions. Wrapping only these provenance
-// expressions in an explicit FLOAT64 cast restores the base binding: the
-// rendered digits parse back to the FLOAT64 value the pre-change route
-// produced, including the magnitudes this PR restores above the decimal
-// ceiling. Plain strings, temporal operands and INTERVAL compositions keep
-// their existing rules unchanged.
-func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Expr) error {
-	switch name {
-	case "+", "-", "*", "/", "%", "div", "mod",
-		"unary_minus", "unary_plus",
-		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between":
+// ceilFloorTextRenderNumericTarget matches the one-argument CEIL/FLOOR TEXT
+// render like isCeilFloorTextRenderExpr and returns the numeric domain that
+// expression's values had on the exact base for their provenance
+// (#32336, #32374, PR #32438 review):
+//
+//   - The omitted-length CAST/CONVERT-to-CHAR widening binds the
+//     planner-only provenance overload 15 (bindUnaryMathOmittedCharTextExpr
+//     below). The base evaluated every composed CEIL/FLOOR of these casts
+//     through the VARCHAR CeilStr/FloorStr FLOAT64 route, so numeric
+//     consumers retype to FLOAT64 and keep accepting every finite magnitude
+//     above the decimal ceiling (CEIL(CAST('1e40' AS CHAR)) + 1).
+//
+//   - Every other TEXT provenance (TEXT columns, CAST/CONVERT AS TEXT)
+//     keeps overload 13 and retype targets DECIMAL128(38,0): the base's
+//     UINT64 tie kept int64/uint64 integers exact and compared them through
+//     the DECIMAL128 domain, so CEIL(CAST('9007199254740993' AS TEXT)) =
+//     9007199254740992 stays false instead of collapsing through FLOAT64
+//     rounding that maps both sides to the same value.
+func ceilFloorTextRenderNumericTarget(expr *Expr) (types.Type, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return types.Type{}, false
+	}
+	if expr.Typ.Id != int32(types.T_varchar) || fn.Args[0].Typ.Id != int32(types.T_text) {
+		return types.Type{}, false
+	}
+	var markerOverload int32
+	switch strings.ToLower(fn.Func.ObjName) {
+	case "ceil", "ceiling":
+		markerOverload = function.CeilTextOmittedCharRenderOverload
+	case "floor":
+		markerOverload = function.FloorTextOmittedCharRenderOverload
 	default:
-		return nil
+		return types.Type{}, false
+	}
+	_, boundOverload := function.DecodeOverloadID(fn.Func.Obj)
+	if boundOverload == markerOverload {
+		return types.T_float64.ToType(), true
+	}
+	return types.T_decimal128.ToType(), true
+}
+
+// isOmittedLengthCharCastTree reports whether the AST expression is a
+// CAST/CONVERT/:: cast whose target is CHAR with the length omitted — the
+// unbounded TEXT widening of #32336 and #32374, which mysql_sql.y rewrites
+// to the TEXT oid before binding starts. The widened target is
+// distinguishable only at this level: every explicit TEXT-family grammar
+// rule (TEXT/TINYTEXT/...) carries tree.BlobFamily, while the rewritten
+// omitted CHAR keeps tree.StringFamily together with the TEXT oid.
+func isOmittedLengthCharCastTree(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	cast, ok := expr.(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	t, ok := cast.Type.(*tree.T)
+	if !ok {
+		return false
+	}
+	return t.InternalType.Family == tree.StringFamily &&
+		defines.MysqlType(t.InternalType.Oid) == defines.MYSQL_TYPE_TEXT
+}
+
+// bindUnaryMathOmittedCharTextExpr binds the one-argument CEIL/FLOOR over
+// the omitted-length CAST/CONVERT-to-CHAR widening to its provenance-marker
+// overload (#32336, #32374). See the overload 15 entries of CEIL and FLOOR
+// in list_builtIn.go: inputs, executor and result are identical to the
+// ordinary TEXT overload, and only the overload id differs, binding the
+// base VARCHAR-route provenance into the plan where
+// ceilFloorTextRenderNumericTarget reads it back as FLOAT64.
+func (b *baseBinder) bindUnaryMathOmittedCharTextExpr(name string, arg *Expr) (*Expr, error) {
+	ctx := b.GetContext()
+	overloadID := function.CeilTextOmittedCharRenderOverload
+	if name == "floor" {
+		overloadID = function.FloorTextOmittedCharRenderOverload
+	}
+	fGet, err := function.GetFunctionByNameWithOverload(
+		ctx, name, []types.Type{types.T_text.ToType()}, overloadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	returnType := fGet.GetReturnType()
+	funcID := fGet.GetEncodedOverloadID()
+	Typ := makePlan2Type(&returnType)
+	Typ.NotNullable = function.DeduceNotNullable(funcID, []*Expr{arg})
+	return &Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(funcID, name),
+				Args: []*Expr{arg},
+			},
+		},
+		Typ: Typ,
+	}, nil
+}
+
+// retypeCeilFloorTextRenderArgs restores the numeric semantics the composed the composed
+// one-argument CEIL/FLOOR results keep on the base (#32336, #32374): their
+// values left the functions as FLOAT64 there for the omitted-length
+// CAST/CONVERT-to-CHAR widths, and as the UINT64 route's exact integers for
+// TEXT columns and explicit TEXT casts, so compositions like
+// CEIL(CAST('1e40' AS CHAR)) + 1 bound through the float64 operator
+// overloads while CEIL(CAST('9007199254740993' AS TEXT)) = 9007199254740992
+// compared exactly and stayed false. The digit-rendering VARCHAR return
+// inherits the string-vs-number implicit casts instead, whose int64
+// conversion rejects every digit string beyond INT64 range, and numeric
+// aggregates over VARCHAR regress as well: MAX/MIN compare the rendered
+// bytes (returning 2 for {'2', '10'}) and SUM/AVG reject the VARCHAR
+// argument during binding. Wrapping only these provenance expressions in
+// the base-domain cast of ceilFloorTextRenderNumericTarget restores the
+// base binding and results for every operator composition plus the numeric
+// aggregates and nested numeric scalar functions the same regression
+// reaches through their VARCHAR coercions. Plain strings, temporal
+// operands and INTERVAL compositions keep their existing rules unchanged.
+func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Expr) error {
+	// JSON builders embed the base's numeric result as a JSON number: the
+	// base's FLOAT64 (omitted-CHAR compositions) and UINT64 (TEXT inputs)
+	// results entered json_object/json_array values as numbers, while the
+	// digit render would embed them as JSON strings. Only the value
+	// positions retypes; json_object's key positions (even indices) must
+	// keep their string typing.
+	jsonBuilder := name == "json_object" || name == "json_array"
+	if !jsonBuilder {
+		switch name {
+		case "+", "-", "*", "/", "%", "div", "mod",
+			"unary_minus", "unary_plus",
+			"=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between",
+			"in", "not_in", "partition_in",
+			// Numeric aggregates consumed the base's FLOAT64/UINT64 results
+			// directly; the digit render's VARCHAR would pick the string
+			// min/max executors and reject SUM/AVG binding entirely.
+			"max", "min", "sum", "avg",
+			// Nested numeric scalar functions retype the same way so their
+			// implicit INT64 string coercions stop rejecting FLOAT64-domain
+			// renders (ROUND(CEIL(CAST('1e40' AS CHAR))) reaches an INT64
+			// range error without this) and keep exact integer rows exact.
+			"round", "truncate", "power", "pow", "abs":
+		default:
+			return nil
+		}
 	}
 	for i := range args {
-		if !isCeilFloorTextRenderExpr(args[i]) {
+		if jsonBuilder && name == "json_object" && i%2 == 0 {
+			// json_object keys stay strings even when a render sits in a
+			// key position; MySQL requires string keys.
 			continue
 		}
-		for j := range args {
-			if j == i || isCeilFloorTextRenderExpr(args[j]) {
-				continue
-			}
-			other := makeTypeByPlan2Expr(args[j])
-			if !other.IsNumeric() && !other.Oid.IsMySQLString() && other.Oid != types.T_bool {
-				return nil
+		target, matched := ceilFloorTextRenderNumericTarget(args[i])
+		if !matched {
+			continue
+		}
+		if !jsonBuilder {
+			for j := range args {
+				if j == i {
+					continue
+				}
+				if _, otherRender := ceilFloorTextRenderNumericTarget(args[j]); otherRender {
+					continue
+				}
+				other := makeTypeByPlan2Expr(args[j])
+				if args[j].GetList() != nil && other.Oid != types.T_interval {
+					// IN list values travel in an ExprList wrapper whose tuple type
+					// is not a value operand; the comparison itself binds after the
+					// render is retyped, so the wrapper cannot veto the retype.
+					continue
+				}
+				// An INTERVAL operand is also wrapped in an ExprList, but there
+				// the render must keep its VARCHAR type so the composed
+				// "+" and "-" keep the string temporal date_add/date_sub
+				// rewrite instead of an invalid numeric-plus-interval bind.
+				if !other.IsNumeric() && !other.Oid.IsMySQLString() && other.Oid != types.T_bool {
+					return nil
+				}
 			}
 		}
-		floatType := types.T_float64.ToType()
-		numericArg, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&floatType))
+		numericArg, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&target))
 		if err != nil {
 			return err
 		}

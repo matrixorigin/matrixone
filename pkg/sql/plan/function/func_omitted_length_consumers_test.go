@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -1268,4 +1269,59 @@ func TestHexTextKeepsStringEncoding(t *testing.T) {
 		HexString)
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is 'hex keeps the string encoding for TEXT', err info is '%s'", info))
+}
+
+// TestCeilFloorOmittedCharMarkerOverloadWiring pins the planner-only
+// provenance overload of the one-argument TEXT CEIL/FLOOR (#32336, #32374,
+// PR #32438 review): the marker overload ids resolve to the same
+// dual-domain render executor as the ordinary TEXT overload 13, ordinary
+// binding keeps selecting overload 13, and only GetFunctionByNameWith-
+// Overload — the planner's provenance path — returns the marker id.
+func TestCeilFloorOmittedCharMarkerOverloadWiring(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	textArg := []types.Type{types.T_text.ToType()}
+
+	// Ordinary binding always picks the first direct TEXT match.
+	for _, name := range []string{"ceil", "ceiling", "floor"} {
+		get, err := GetFunctionByName(proc.Ctx, name, textArg)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid, name)
+		_, boundOverload := DecodeOverloadID(get.GetEncodedOverloadID())
+		require.Equal(t, int32(13), boundOverload, name,
+			"ordinary binding keeps the ordinary TEXT overload")
+	}
+
+	// The marker ids keep the same return type and executor: running rows
+	// through the encoded marker id renders equal digits for both domains.
+	for _, tc := range []struct {
+		name     string
+		overload int32
+	}{
+		{"ceil", CeilTextOmittedCharRenderOverload},
+		{"ceiling", CeilTextOmittedCharRenderOverload},
+		{"floor", FloorTextOmittedCharRenderOverload},
+	} {
+		get, err := GetFunctionByNameWithOverload(proc.Ctx, tc.name, textArg, tc.overload)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid, tc.name)
+		_, boundOverload := DecodeOverloadID(get.GetEncodedOverloadID())
+		require.Equal(t, tc.overload, boundOverload, tc.name)
+
+		in := testutil.NewVector(3, types.T_text.ToType(), proc.Mp(), false,
+			[]string{"9007199254740993", "1.5", "1e40"})
+		out, err := RunFunctionDirectly(proc, get.GetEncodedOverloadID(),
+			[]*vector.Vector{in}, 3)
+		require.NoError(t, err, tc.name)
+		// The FLOAT64-fallback row renders the full 41-digit expansion of
+		// 1e40, matching the pinned displays of the ordinary overload.
+		const oneE40 = "10000000000000000000000000000000000000000"
+		strs := vector.InefficientMustStrCol(out)
+		if tc.name == "floor" {
+			require.Equal(t, []string{"9007199254740993", "1", oneE40}, strs, tc.name)
+		} else {
+			require.Equal(t, []string{"9007199254740993", "2", oneE40}, strs, tc.name)
+		}
+		out.Free(proc.Mp())
+		in.Free(proc.Mp())
+	}
 }

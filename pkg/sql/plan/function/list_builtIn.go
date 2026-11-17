@@ -7756,6 +7756,29 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilText
 				},
 			},
+			{
+				// Planner-only provenance twin of overload 13, selected
+				// exclusively through GetFunctionByNameWithOverload when the
+				// TEXT argument IS the omitted-length CAST/CONVERT-to-CHAR
+				// widening (#32336, #32374). The executor, arguments and
+				// return are identical to overload 13, so every standalone
+				// display keeps its digit rendering; only the overload id
+				// differs, which lets bind-time retype rules distinguish the
+				// base VARCHAR/FLOAT64-route provenance from explicit TEXT
+				// inputs (which keep the exact integer domain the
+				// pre-widening UINT64 route produced and retype through
+				// DECIMAL128 instead of FLOAT64, PR #32438 review).
+				// fixedTypeMatchWithExactText always reports the first direct
+				// match, so ordinary binding keeps selecting overload 13.
+				overloadId: 15,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilTextUnary
+				},
+			},
 		},
 	},
 
@@ -8025,6 +8048,26 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return FloorText
+				},
+			},
+			{
+				// Planner-only provenance twin of FLOOR overload 13, the
+				// counterpart of CEIL's overload 15: bindUnaryMathOmitted-
+				// CharTextRenderExpr selects it when the TEXT argument is the
+				// omitted-length CAST/CONVERT-to-CHAR widening so retype
+				// rules can restore the base VARCHAR-route FLOAT64
+				// compositions for those inputs while explicit TEXT inputs
+				// keep the exact integer domain through DECIMAL128
+				// (#32336, #32374, PR #32438 review). Identical executor,
+				// arguments and return as overload 13; ordinary binding
+				// keeps selecting the first direct match (overload 13).
+				overloadId: 15,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorTextUnary
 				},
 			},
 		},

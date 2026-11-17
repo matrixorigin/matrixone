@@ -452,3 +452,61 @@ drop table if exists func_cast_omit_char_order;
 select ceil(cast('中文' as text));
 strconv.ParseFloat: parsing "中文": invalid syntax
 drop table if exists func_cast_omit_char_unary;
+create table func_cast_omit_char_agg (v varchar(8));
+insert into func_cast_omit_char_agg values ('2'), ('10');
+select max(ceil(cast(v as char))) as max_ceil,
+min(ceil(cast(v as char))) as min_ceil,
+sum(ceil(cast(v as char))) as sum_ceil,
+max(floor(convert(v, char))) as max_floor,
+min(floor(convert(v, char))) as min_floor,
+sum(floor(cast(v as char))) as sum_floor
+from func_cast_omit_char_agg;
+➤ max_ceil[8,54,0]  ¦  min_ceil[8,54,0]  ¦  sum_ceil[8,54,0]  ¦  max_floor[8,54,0]  ¦  min_floor[8,54,0]  ¦  sum_floor[8,54,0]  𝄀
+10.0  ¦  2.0  ¦  12.0  ¦  10.0  ¦  2.0  ¦  12.0
+select round(ceil(cast('1e40' as char))) as round_1e40,
+round(ceil(convert('20.5', char)), 1) as round_1d,
+floor(ceil(cast('30.7' as char))) as floor_ceil,
+ceil(floor(convert('-5.5', char))) as ceil_floor,
+abs(ceil(convert('-30.7', char))) as abs_ceil,
+power(floor(cast('5.9' as char)), 2) as pow_floor,
+truncate(ceil(convert('19.87', char)), 1) as trunc_ceil,
+ceil(convert('2.5', char)) in (3, 4) as in_true,
+ceil(cast('1e40' as char)) in (2) as in_big_false,
+json_object('v', ceil(convert('20.5', char))) as jobj_ceil,
+json_array(floor(cast('5.9' as char))) as jarr_floor;
+➤ round_1e40[8,54,0]  ¦  round_1d[8,54,0]  ¦  floor_ceil[8,54,0]  ¦  ceil_floor[8,54,0]  ¦  abs_ceil[8,54,0]  ¦  pow_floor[8,54,0]  ¦  trunc_ceil[8,54,0]  ¦  in_true[-7,1,0]  ¦  in_big_false[-7,1,0]  ¦  jobj_ceil[-1,2147483647,0]  ¦  jarr_floor[-1,2147483647,0]  𝄀
+1.0E40  ¦  21.0  ¦  31.0  ¦  -6.0  ¦  30.0  ¦  25.0  ¦  20.0  ¦  1  ¦  0  ¦  {"v": 21}  ¦  [5]
+drop table if exists func_cast_omit_char_agg;
+select ceil(cast('9007199254740993' as text)) = 9007199254740992 as eq_false,
+ceil(cast('9007199254740993' as text)) = 9007199254740993 as eq_true,
+floor(cast('9007199254740993' as text)) = 9007199254740992 as floor_eq_false,
+ceil(cast('9007199254740993' as text)) > 9007199254740992 as gt_true,
+ceil(cast('9007199254740993' as text)) + 1 as add_exact,
+floor(cast('9223372036854775807' as text)) - 1 as sub_exact,
+round(ceil(cast('9007199254740993' as text))) as round_exact,
+ceil(cast('9007199254740993' as text)) in (9007199254740992) as in_eq_false,
+ceil(cast('9007199254740993' as text)) in (9007199254740993) as in_eq_true,
+json_object('v', ceil(cast('9007199254740993' as text))) as jobj_exact;
+➤ eq_false[-7,1,0]  ¦  eq_true[-7,1,0]  ¦  floor_eq_false[-7,1,0]  ¦  gt_true[-7,1,0]  ¦  add_exact[3,38,0]  ¦  sub_exact[3,38,0]  ¦  round_exact[3,38,0]  ¦  in_eq_false[-7,1,0]  ¦  in_eq_true[-7,1,0]  ¦  jobj_exact[-1,2147483647,0]  𝄀
+0  ¦  1  ¦  0  ¦  1  ¦  9007199254740994  ¦  9223372036854775806  ¦  9007199254740993  ¦  0  ¦  1  ¦  {"v": 9007199254740993}
+create table func_cast_omit_char_textcol (vt text);
+insert into func_cast_omit_char_textcol values ('2'), ('10'), ('9007199254740993'),
+('9007199254740992'), ('2.5');
+select max(ceil(vt)) as max_exact, min(ceil(vt)) as min_exact
+from func_cast_omit_char_textcol;
+➤ max_exact[3,38,0]  ¦  min_exact[3,38,0]  𝄀
+9007199254740993  ¦  2
+select vt from func_cast_omit_char_textcol where ceil(vt) = 9007199254740993;
+➤ vt[12,0,0]  𝄀
+9007199254740993
+select vt, ceil(vt) as c from func_cast_omit_char_textcol order by c;
+➤ vt[12,0,0]  ¦  c[12,-1,0]  𝄀
+2  ¦  2  𝄀
+2.5  ¦  3  𝄀
+10  ¦  10  𝄀
+9007199254740992  ¦  9007199254740992  𝄀
+9007199254740993  ¦  9007199254740993
+select vt, floor(vt) as f from func_cast_omit_char_textcol where floor(vt) <> ceil(vt);
+➤ vt[12,0,0]  ¦  f[12,-1,0]  𝄀
+2.5  ¦  2
+drop table if exists func_cast_omit_char_textcol;
