@@ -1,0 +1,86 @@
+DROP TABLE IF EXISTS cte_32799_join_build;
+WITH RECURSIVE r(s, v) AS (
+SELECT 0, 1
+UNION ALL
+SELECT 1, v * 2 FROM r WHERE s = 0
+UNION ALL
+SELECT 2, v + 10 FROM r WHERE s = 1
+UNION ALL
+SELECT 3, v - 5 FROM r WHERE s IN (0, 1)
+)
+SELECT s, v FROM r ORDER BY s, v;
+➤ s[-5,64,0]  ¦  v[-5,64,0]  𝄀
+0  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  12  𝄀
+3  ¦  -4  𝄀
+3  ¦  -3
+WITH RECURSIVE r(s, v) AS (
+SELECT 0, 10
+UNION ALL
+SELECT 1, v + 1 FROM r WHERE s = 0
+UNION ALL
+SELECT 2, v + 3 FROM r WHERE s = 1
+)
+SELECT s, v FROM r ORDER BY s, v;
+➤ s[-5,64,0]  ¦  v[-5,64,0]  𝄀
+0  ¦  10  𝄀
+1  ¦  11  𝄀
+2  ¦  14
+WITH RECURSIVE r(s, v) AS (
+SELECT 0, 1
+UNION DISTINCT
+SELECT 1, v * 2 FROM r WHERE s = 0
+UNION DISTINCT
+SELECT 2, v + 10 FROM r WHERE s = 1
+UNION DISTINCT
+SELECT 3, v - 5 FROM r WHERE s IN (0, 1)
+)
+SELECT s, v FROM r ORDER BY s, v;
+➤ s[-5,64,0]  ¦  v[-5,64,0]  𝄀
+0  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  12  𝄀
+3  ¦  -4  𝄀
+3  ¦  -3
+WITH RECURSIVE r(n, member_id) AS (
+SELECT 0, 0
+UNION DISTINCT
+SELECT 0, 0 FROM r
+UNION DISTINCT
+SELECT 1, 1 FROM r
+)
+SELECT n, member_id FROM r ORDER BY n, member_id;
+➤ n[-5,64,0]  ¦  member_id[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1
+DROP TABLE IF EXISTS cte_32799_join_build;
+CREATE TABLE cte_32799_join_build (n INT PRIMARY KEY, delta INT);
+INSERT INTO cte_32799_join_build VALUES (1, 10), (2, 20), (3, 30);
+WITH RECURSIVE r(n, v) AS (
+SELECT 0, 0
+UNION ALL
+SELECT b.n, r.v + b.delta
+FROM r JOIN cte_32799_join_build AS b ON b.n = r.n + 1
+WHERE r.n < 3
+UNION ALL
+SELECT 100, v + 100 FROM r WHERE n = 1
+)
+SELECT n, v FROM r ORDER BY n, v;
+➤ n[-5,64,0]  ¦  v[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  60  𝄀
+100  ¦  110
+DROP TABLE cte_32799_join_build;
+WITH RECURSIVE r(n, member_id) AS (
+SELECT 0, 0
+UNION ALL
+SELECT n + 1, 0 FROM r WHERE n < 3
+UNION ALL
+SELECT 2, 1 FROM r WHERE n = 1
+)
+SELECT n, member_id FROM r LIMIT 1;
+➤ n[-5,64,0]  ¦  member_id[-5,64,0]  𝄀
+0  ¦  0
