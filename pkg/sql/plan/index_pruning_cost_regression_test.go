@@ -93,6 +93,7 @@ func TestJoinIndexBackfillAdmission(t *testing.T) {
 		force        bool
 		missingStats bool
 		defaultStats bool
+		matchedParts int
 		wantSkip     bool
 	}{
 		{name: "broad lookup preparation", ndv: 1_000, buildRows: 200, wantSkip: true},
@@ -100,6 +101,9 @@ func TestJoinIndexBackfillAdmission(t *testing.T) {
 		{name: "unique lookup bounds fanout", ndv: 1_000, buildRows: 200, unique: true},
 		{name: "correlated composite keys", ndv: 1_000, secondNDV: 1_000, buildRows: 200, wantSkip: true},
 		{name: "selective composite component", ndv: 1_000, secondNDV: 1_000_000, buildRows: 200},
+		{name: "partial composite prefix ignores trailing NDV", ndv: 1_000, secondNDV: 1_000_000, buildRows: 200, matchedParts: 1, wantSkip: true},
+		{name: "unique complete composite bounds fanout", ndv: 1_000, secondNDV: 1_000, buildRows: 200, unique: true},
+		{name: "unique partial composite uses prefix fanout", ndv: 1_000, secondNDV: 1_000_000, buildRows: 200, unique: true, matchedParts: 1, wantSkip: true},
 		{name: "hidden PK below capacity", ndv: 20_000, buildRows: 199, hiddenPK: true},
 		{name: "hidden PK at capacity", ndv: 20_000, buildRows: 200, hiddenPK: true},
 		{name: "hidden PK above capacity", ndv: 20_000, buildRows: 201, hiddenPK: true, wantSkip: true},
@@ -136,6 +140,9 @@ func TestJoinIndexBackfillAdmission(t *testing.T) {
 			if tc.unique {
 				index.Unique = true
 				index.Parts = []string{"tenant_id"}
+				if tc.secondNDV > 0 {
+					index.Parts = []string{"tenant_id", "category"}
+				}
 			}
 			if tc.hiddenPK {
 				name := catalog.FakePrimaryKeyColName
@@ -151,7 +158,11 @@ func TestJoinIndexBackfillAdmission(t *testing.T) {
 				node.Stats = DefaultStats()
 			}
 			ctx := builder.newEncodedRegularIndexCostContext(node, refs)
-			require.Equal(t, tc.wantSkip, ctx.shouldSkipJoinIndexBackfill(index, tc.buildRows))
+			gotSkip := ctx.shouldSkipJoinIndexBackfill(index, tc.buildRows)
+			if tc.matchedParts > 0 {
+				gotSkip = ctx.shouldSkipJoinIndexBackfillForPrefix(index, tc.matchedParts, tc.buildRows)
+			}
+			require.Equal(t, tc.wantSkip, gotSkip)
 		})
 	}
 }
