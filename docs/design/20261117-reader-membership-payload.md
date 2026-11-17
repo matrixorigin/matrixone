@@ -59,3 +59,25 @@ competing builds. Keep configured budgets matched. Benchmark scripts do not
 verify input/results. Append results as comments, use the PR template, and keep
 draft until acceptance. Preserve raw datasets/evidence; remove task-owned run
 clones at terminal completion. Material design changes need requester review.
+
+## Approved revision 2: admission and generic predicate-first repair
+
+The requester approved this repair before implementation. Preserve direct
+BuildPlan annotations, then rederive ordinary optimized SELECT domains after the
+existing folding pass and final node numbering, using the same compiler-context
+statistics and session/per-statement disabled-hint policy. Keep prepare and
+correlation paths conservative. A domain-specific totality wrapper accepts valid
+n-ary AND/OR only when every operand passes the existing leaf/error proof. Do not
+rewrite Boolean IR, broaden the global Aggregate/LIMIT proof or evaluate new
+expressions.
+
+Generic filtered readers evaluate their original ordered predicates first, test
+ready membership on survivors, compose both maps through physical storage rows
+and tombstones, and construct remaining payload once. Read a membership-only key
+for predicate survivors and reuse predicate keys. Preserve native exact/Top-K
+paths, bounded scratch, capacity/pin refusal fallback and low-rejection bypass.
+Record input rows/bytes once across the two stages. Require real optimized Q19
+reachability and Q10 component work improvement before isolated all22 timing.
+Keep CPU-only local SF10 memory/disk and SF100 disk with one process/open, six
+suites (first excluded), all existing resource/acceptance gates and draft status
+until actual acceptance. No new public flag, type, wire contract or cache layer.
