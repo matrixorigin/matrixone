@@ -154,20 +154,20 @@ loses little by reading its ranges.
 
 The queued bytes stay below the smaller of:
 - half the disk cache's capacity;
-- what the node reads from object storage within a 30-second horizon, at a configured
-  network rate, 110 MiB/s by default (decision 2026-11-17).
+- what the file service reads from object storage within a 30-second horizon, at a
+  configured network rate, 110 MiB/s by default (decision 2026-11-17).
 
 The rate is configured, not measured: a rate measured per download falls as more
 downloads share the node's link, and shrank the bound when the link was busiest.
 
-A request that a read reaches within the horizon is never dropped: it is queued past the
-bound, and is not dropped to make room (decision 2026-11-17). Of the other requests, when
-a new one does not fit:
-- A request larger than the bound is dropped, and the queue is left unchanged.
+A request due within 30 seconds of now, before or after, is queued past the network-rate
+bound, up to half the disk cache's capacity, and is not dropped to make room for a
+request due later (decision 2026-11-17). When a new request does not fit:
+- A request larger than its bound is dropped, and the queue is left unchanged.
 - Otherwise, entries whose scans have all ended are dropped first.
-- Then, if the new request orders before the last entry in download order, and a read
-  reaches that entry after the horizon, that entry is dropped. If not, the new request
-  is dropped.
+- Then the last entry in download order of those not due within the horizon is dropped,
+  if the new request is due within it or orders before that entry. If not, the new
+  request is dropped.
 
 A dropped request is asked for again, due now, when the scan reaches its object (see
 below), so the scan's reads of the object still join one download.
@@ -253,7 +253,7 @@ whole-object download to amortize them; distributed SSB ran 8–11 times slower
 ([#32796](https://github.com/matrixorigin/matrixone/issues/32796)).
 
 When such a scan reaches an object, it asks again for the object's column ranges, due now
-(decision 2026-11-17). A queued request moves up, a dropped one is queued again, and one
+(decision 2026-11-17); an ordered scan, which may read one block of an object, does not. A queued request moves up, a dropped one is queued again, and one
 cached or downloading is left. Without it, a scan that reached an object whose request
 the full queue had dropped read that object's column block by block: in TPC-H SF100 Q19,
 at 110 MiB/s per CN, 41 objects took 72 reads each, one after another, about 3.3 s per

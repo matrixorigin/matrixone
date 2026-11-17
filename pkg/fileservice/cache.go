@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -268,7 +269,7 @@ const (
 
 func (c *CacheConfig) diskPrefetchNetworkRate() int64 {
 	if c.DiskPrefetchNetworkRate != nil && *c.DiskPrefetchNetworkRate > 0 {
-		return int64(*c.DiskPrefetchNetworkRate)
+		return int64(min(uint64(*c.DiskPrefetchNetworkRate), math.MaxInt64))
 	}
 	return DefaultDiskPrefetchNetworkRate
 }

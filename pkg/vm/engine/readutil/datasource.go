@@ -122,7 +122,9 @@ func (rs *RemoteDataSource) Next(
 	}
 	rs.batchPrefetch(ctx, seqNums)
 	cur := rs.blockAt(rs.cursor)
-	if fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+	// An ordered scan reads blocks of objects in zone-map order and may read one block of
+	// an object; it does not ask for the object's columns.
+	if rs.orderedBlocks == nil && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
 		rs.prefetch.Reach(ctx, rs.fs, &cur, seqNums)
 	}
 	rs.cursor++

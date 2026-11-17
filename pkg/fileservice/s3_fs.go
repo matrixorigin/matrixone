@@ -197,6 +197,7 @@ func NewS3FS(
 			}
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
+			fs.prefetcher.bound = fs.prefetchQueueBound()
 		}
 	}
 
@@ -557,13 +558,14 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 }
 
 // joinQueued waits until the read can join the prefetcher's download of the object of
-// vector, when it is one the read would join: one of the whole object for a read that may
+// vector, when it is one the read would join and the read reads the disk cache: one of the whole object for a read that may
 // download it, and for a column read also one of ranges holding bytes it reads; it
 // reports whether there was one. A download still waiting moves to the live queue. The
 // reads of a download join none.
 func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 	columns := vector.Policy.Any(ColumnPrefetch)
-	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
+	// A read that skips the disk cache cannot read what a download puts there.
+	if vector.Policy.Any(SkipDiskCacheReads) || !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
 		return false
 	}
 	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool {

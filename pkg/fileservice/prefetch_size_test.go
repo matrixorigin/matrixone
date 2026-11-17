@@ -386,3 +386,26 @@ func TestS3FSColumnReadLeavesQueuedOtherColumns(t *testing.T) {
 	require.NotZero(t, storage.reads.Load())
 	require.True(t, fs.prefetcher.isQueued("object"), "the other columns stay queued")
 }
+
+// A read that skips the disk cache reads its bytes without waiting for a queued download
+// of its object, which stays queued.
+func TestS3FSCacheBypassReadLeavesQueuedObject(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	ctx := context.Background()
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
+	require.True(t, fs.prefetcher.isQueued("object"))
+
+	got := make(chan error, 1)
+	vec := &IOVector{FilePath: "object", Policy: SkipAllCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
+	go func() { got <- fs.Read(ctx, vec) }()
+	select {
+	case err := <-got:
+		require.NoError(t, err)
+		require.Equal(t, data[100:110], vec.Entries[0].Data)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the read waited for the queued download")
+	}
+	require.NotZero(t, storage.reads.Load())
+	require.True(t, fs.prefetcher.isQueued("object"), "the download stays queued")
+}

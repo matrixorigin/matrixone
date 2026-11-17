@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -100,38 +101,56 @@ func TestPrefetchQueueLimit(t *testing.T) {
 	fs.diskCache.networkRate = 1 << 50
 	require.Equal(t, fs.diskCache.capacityFunc()/2, fs.prefetchQueueLimit()())
 
+	fs.diskCache.networkRate = math.MaxInt64
+	require.Equal(t, fs.diskCache.capacityFunc()/2, fs.prefetchQueueLimit()(), "a huge rate does not overflow")
+	require.Equal(t, fs.diskCache.capacityFunc()/2, fs.prefetchQueueBound()())
+
 	rate := toml.ByteSize(10 << 20)
 	require.Equal(t, int64(10<<20), (&CacheConfig{DiskPrefetchNetworkRate: &rate}).diskPrefetchNetworkRate())
 	require.Equal(t, int64(DefaultDiskPrefetchNetworkRate), (&CacheConfig{}).diskPrefetchNetworkRate())
+	huge := toml.ByteSize(math.MaxUint64)
+	require.Equal(t, int64(math.MaxInt64), (&CacheConfig{DiskPrefetchNetworkRate: &huge}).diskPrefetchNetworkRate())
 }
 
-// A request a read reaches within the horizon is queued past the queue's bytes, and is
-// not dropped to make room; a request reached later is.
+// A request due within the horizon is queued past the queue's limit, up to its bound, and
+// is not dropped to make room; a request due later, or due before the horizon, is.
 func TestPrefetcherKeepsRequestsDueSoon(t *testing.T) {
 	r := newPrefetchRecorder()
 	p := newPrefetcher(0, func() int64 { return 200 }, func(ObjectPrefetch) bool { return false }, r.run)
+	p.bound = func() int64 { return 500 }
 	defer p.close(context.Background())
 	now := time.Now().UnixNano()
 	far := now + 2*prefetchHorizon.Nanoseconds()
 	p.add(ObjectPrefetch{FilePath: "soon1", Size: 100, Due: now + 1})
 	p.add(ObjectPrefetch{FilePath: "soon2", Size: 100, Due: now + 2})
 	p.add(ObjectPrefetch{FilePath: "soon3", Size: 100, Due: now + 3})
-	require.True(t, p.isQueued("soon3"), "queued past the bytes")
+	require.True(t, p.isQueued("soon3"), "queued past the limit")
 	p.add(ObjectPrefetch{FilePath: "late", Size: 100, Due: far})
-	require.False(t, p.isQueued("late"), "dropped: the queue is past its bytes")
-	p.add(ObjectPrefetch{FilePath: "soon0", Size: 1000, Due: now})
-	for _, path := range []string{"soon0", "soon1", "soon2", "soon3"} {
+	require.False(t, p.isQueued("late"), "dropped: the queue is past its limit")
+	p.add(ObjectPrefetch{FilePath: "soon4", Size: 300, Due: now})
+	require.False(t, p.isQueued("soon4"), "past the bound")
+	p.add(ObjectPrefetch{FilePath: "soon5", Size: 200, Due: now})
+	for _, path := range []string{"soon1", "soon2", "soon3", "soon5"} {
 		require.True(t, p.isQueued(path), path)
 	}
+	require.Equal(t, int64(500), p.prefetch.bytes)
 
+	// The last entry in download order is due within the horizon; one due later goes.
 	q := newPrefetcher(0, func() int64 { return 200 }, func(ObjectPrefetch) bool { return false }, r.run)
+	q.bound = func() int64 { return 200 }
 	defer q.close(context.Background())
 	q.add(ObjectPrefetch{FilePath: "late", Size: 100, Due: far})
-	q.add(ObjectPrefetch{FilePath: "later", Size: 100, Due: far + 1})
-	q.add(ObjectPrefetch{FilePath: "soon", Size: 100, Due: now})
+	q.add(ObjectPrefetch{FilePath: "soon", Size: 100, Due: now, Reads: 1, Blocks: 2})
+	q.add(ObjectPrefetch{FilePath: "new", Size: 100, Due: now + 1})
+	require.False(t, q.isQueued("late"), "dropped though it orders before the soon entry")
 	require.True(t, q.isQueued("soon"))
-	require.True(t, q.isQueued("late"))
-	require.False(t, q.isQueued("later"), "the latest makes room")
+	require.True(t, q.isQueued("new"))
+
+	// A request due before the horizon, of a scan that stalled, is not kept.
+	stale := now - 2*prefetchHorizon.Nanoseconds()
+	require.False(t, dueSoon(stale))
+	require.True(t, dueSoon(now-prefetchHorizon.Nanoseconds()/2))
+	require.False(t, dueSoon(0))
 }
 
 // A read that reaches a queued object drops its download.
