@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -176,4 +177,119 @@ func TestCheckpointRestoreMetadataProvenance(t *testing.T) {
 	s.SchemaExtra.CollationVersion = uint32(collation.RevisionV1)
 	_, err = RestoreTableCollation(context.Background(), s, false)
 	require.Error(t, err)
+}
+
+func TestCheckpointImplicitNullableDefaultUsesTypedCatalogProof(t *testing.T) {
+	implicit, err := (&plan.Default{NullAbility: true}).Marshal()
+	require.NoError(t, err)
+	extra, err := (&api.SchemaExtra{DefaultCharset: 2}).Marshal()
+	require.NoError(t, err)
+	tables := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "rel_id", "relname", "reldatabase", "extra_info"},
+		Rows:    [][]string{{"o", "0", "0", "42", "nullable_table", "restore_db", string(extra)}},
+	}
+	set := func(view *LogicalTableView, name, value string) {
+		t.Helper()
+		for i, header := range view.Headers {
+			if header == name {
+				view.Rows[0][i] = value
+				return
+			}
+		}
+		t.Fatalf("fixture has no catalog column %s", name)
+	}
+	makeColumns := func() *LogicalTableView {
+		v := &LogicalTableView{
+			Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+			Rows:    [][]string{make([]string, 3+len(catalog.MoColumnsSchema))},
+		}
+		set(v, catalog.SystemColAttr_RelID, "42")
+		set(v, catalog.SystemColAttr_Name, "id")
+		set(v, catalog.SystemColAttr_Type, encodedSQLType(t, types.T_int32.ToType()))
+		set(v, catalog.SystemColAttr_Num, "1")
+		set(v, catalog.SystemColAttr_NullAbility, "0")
+		set(v, catalog.SystemColAttr_HasExpr, "1")
+		set(v, catalog.SystemColAttr_DefaultExpr, string(implicit))
+		set(v, catalog.SystemColAttr_HasUpdate, "0")
+		set(v, catalog.SystemColAttr_HasGenerated, "0")
+		return v
+	}
+	checkAccepted := func(schema *TableSchema) {
+		t.Helper()
+		require.NotNil(t, schema)
+		require.Len(t, schema.Columns, 1)
+		require.True(t, schema.Columns[0].HasDefault)
+		require.True(t, schema.Columns[0].implicitNullableDefault)
+		name, err := RestoreTableCollation(t.Context(), schema, false)
+		require.NoError(t, err)
+		ddl := RenderCreateTableDDLFromSchemaWithCollation(schema, name)
+		require.Contains(t, ddl, "DEFAULT NULL")
+		require.Contains(t, ddl, "utf8mb4_bin")
+	}
+	v := makeColumns()
+	checkAccepted(buildTableSchemaFromCatalogViews(42, tables, v))
+	grouped := buildTableSchemasForIDs([]uint64{42}, tables, v)[42]
+	checkAccepted(grouped)
+	checkAccepted(cloneTableSchema(grouped))
+
+	defaultBytes := func(def *plan.Default) string {
+		t.Helper()
+		data, err := def.Marshal()
+		require.NoError(t, err)
+		return string(data)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*LogicalTableView)
+	}{
+		{"empty bytes", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_DefaultExpr, "") }},
+		{"catalog NULL", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_DefaultExpr, "NULL") }},
+		{"malformed default", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_DefaultExpr, "\\xff") }},
+		{"textual null", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_DefaultExpr, "null") }},
+		{"explicit null expression", func(v *LogicalTableView) {
+			set(v, catalog.SystemColAttr_DefaultExpr, defaultBytes(&plan.Default{NullAbility: true, Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}))
+		}},
+		{"unknown default field", func(v *LogicalTableView) {
+			set(v, catalog.SystemColAttr_DefaultExpr, defaultBytes(&plan.Default{NullAbility: true, XXX_unrecognized: []byte{0xa0, 0x06, 0x01}}))
+		}},
+		{"default nullable disagreement", func(v *LogicalTableView) {
+			set(v, catalog.SystemColAttr_DefaultExpr, defaultBytes(&plan.Default{}))
+		}},
+		{"not null column", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_NullAbility, "1") }},
+		{"unknown nullable flag", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_NullAbility, "NULL") }},
+		{"hidden on-update", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_HasUpdate, "1") }},
+		{"hidden generated", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_HasGenerated, "1") }},
+		{"invalid update flag", func(v *LogicalTableView) { set(v, catalog.SystemColAttr_HasUpdate, "2") }},
+		{"missing update flag", func(v *LogicalTableView) {
+			v.Headers[3+catalogColumnIndex(catalog.SystemColAttr_HasUpdate)] = "unknown_update"
+		}},
+		{"duplicate generated flag", func(v *LogicalTableView) {
+			v.Headers = append(v.Headers, catalog.SystemColAttr_HasGenerated)
+			v.Rows[0] = append(v.Rows[0], "0")
+		}},
+		{"shifted default slot", func(v *LogicalTableView) {
+			i := 3 + catalogColumnIndex(catalog.SystemColAttr_DefaultExpr)
+			j := 3 + catalogColumnIndex(catalog.SystemColAttr_HasUpdate)
+			v.Headers[i], v.Headers[j] = v.Headers[j], v.Headers[i]
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := makeColumns()
+			tc.change(v)
+			schema := buildTableSchemaFromCatalogViews(42, tables, v)
+			require.NotNil(t, schema)
+			require.False(t, schema.Columns[0].implicitNullableDefault)
+			_, err := RestoreTableCollation(t.Context(), schema, false)
+			require.Error(t, err)
+		})
+	}
+}
+
+func catalogColumnIndex(name string) int {
+	for i, column := range catalog.MoColumnsSchema {
+		if column == name {
+			return i
+		}
+	}
+	return -1
 }

@@ -200,10 +200,8 @@ func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart
 	}
 }
 
-// indexTablePrimaryKeyTypeWithFormat preserves the historical primary-key
-// hidden-column projection. It intentionally does not copy auto-increment or
-// enum metadata; the regular secondary-index path has always used this
-// narrower schema than the unique-index path.
+// indexTablePrimaryKeyTypeWithFormat builds the single-part comparison key;
+// the origin-PK payload itself must retain its stored representation.
 func indexTablePrimaryKeyTypeWithFormat(col *ColDef, keyFormat uint32) Type {
 	if col == nil {
 		return Type{}
@@ -216,16 +214,28 @@ func indexTablePrimaryKeyTypeWithFormat(col *ColDef, keyFormat uint32) Type {
 			Charset: uint32(types.CharsetBinary),
 		}
 	}
-	return Type{
-		Id:                       col.Typ.Id,
-		Width:                    col.Typ.Width,
-		Scale:                    col.Typ.Scale,
-		Charset:                  col.Typ.Charset,
-		CollationVersion:         col.Typ.CollationVersion,
-		CollationCoercibility:    col.Typ.CollationCoercibility,
-		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
-		CollationMergeConflict:   col.Typ.CollationMergeConflict,
+	return indexTablePrimaryKeyPayloadType(col.Typ)
+}
+
+// indexTablePrimaryKeyPayloadType is shared by UNIQUE, regular and MASTER
+// origin-PK columns. It copies physical identity, never source constraints or
+// auto-increment. ENUM domain and identity are inseparable for assignment.
+func indexTablePrimaryKeyPayloadType(src Type) Type {
+	typ := Type{
+		Id:                       src.Id,
+		Width:                    src.Width,
+		Scale:                    src.Scale,
+		Charset:                  src.Charset,
+		CollationVersion:         src.CollationVersion,
+		CollationCoercibility:    src.CollationCoercibility,
+		CollationCoercibilitySet: src.CollationCoercibilitySet,
+		CollationMergeConflict:   src.CollationMergeConflict,
 	}
+	if isEnumPlanType(&src) {
+		typ.Enumvalues = src.Enumvalues
+		typ.EnumCollation = src.EnumCollation
+	}
+	return typ
 }
 
 func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {

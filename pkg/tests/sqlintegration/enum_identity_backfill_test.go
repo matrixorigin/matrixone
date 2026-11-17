@@ -66,6 +66,8 @@ func TestEnumIdentityPopulatedIndexBackfill(t *testing.T) {
 		}
 		exec(t, "create database enum_identity_backfill")
 		exec(t, "use enum_identity_backfill")
+		t.Run("index_storage_parity", func(t *testing.T) { testEnumIndexStorageParity(t, ctx, db) })
+		t.Run("serial_storage_contract", func(t *testing.T) { testMySQLSpecialSerialContract(t, ctx, db) })
 		t.Run("unique", func(t *testing.T) {
 			exec(t, "create table u(id int primary key,e enum('a','A','') collate utf8mb4_bin)")
 			exec(t, "insert into u values(1,2),(2,1),(3,3),(4,NULL)")

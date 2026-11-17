@@ -119,18 +119,19 @@ type TableColumn struct {
 	Unsigned         bool
 	// Zerofill is the SECOND numeric attribute bit of a DECIMAL column
 	// (catalog mask 3). It renders only with Unsigned and only on DECIMAL.
-	Zerofill        bool
-	NotNull         bool
-	Default         string
-	HasDefault      bool
-	OnUpdate        string
-	Generated       string
-	GeneratedStored bool
-	Comment         string
-	ConstraintType  string
-	AutoIncrement   bool
-	ClusterBy       bool
-	EnumValues      string
+	Zerofill                bool
+	NotNull                 bool
+	Default                 string
+	HasDefault              bool
+	implicitNullableDefault bool // proved once from typed catalog metadata
+	OnUpdate                string
+	Generated               string
+	GeneratedStored         bool
+	Comment                 string
+	ConstraintType          string
+	AutoIncrement           bool
+	ClusterBy               bool
+	EnumValues              string
 }
 
 type TableUniqueKey struct {
@@ -1650,6 +1651,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				ClusterBy:        col.ClusterBy,
 				EnumValues:       strings.Clone(col.EnumValues),
 			}
+			clone.Columns[i].implicitNullableDefault = col.implicitNullableDefault
 			if col.NativeType != nil {
 				typ := *col.NativeType
 				clone.Columns[i].NativeType = &typ
@@ -4009,9 +4011,11 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.HasDefault = isTruthyCatalogValue(row[hasDefaultCol])
 		}
 		if defaultCol >= 0 && defaultCol < len(row) {
-			if defaultExpr := decodeMoColumnDefault(row[defaultCol]); defaultExpr != "" {
-				col.Default = defaultExpr
-			}
+			var implicitNullable bool
+			col.Default, implicitNullable = decodeMoColumnDefault(row[defaultCol])
+			col.implicitNullableDefault = implicitNullable && col.NativeType != nil &&
+				defaultCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_DefaultExpr) &&
+				provedImplicitNullableDefaultFlags(view, row)
 		}
 		if constraintCol >= 0 && constraintCol < len(row) {
 			col.ConstraintType = row[constraintCol]
@@ -5394,18 +5398,21 @@ func decodeMoColumnSQLType(raw string) (string, bool) {
 	return "", false
 }
 
-func decodeMoColumnDefault(raw string) string {
+func decodeMoColumnDefault(raw string) (display string, implicitNullable bool) {
 	if raw == "" {
-		return ""
+		return "", false
 	}
 	var def plan.Default
 	if err := types.Decode([]byte(raw), &def); err == nil {
-		return strings.TrimSpace(def.OriginString)
+		// An implicit nullable default has no expression to rebind. Do not
+		// infer this from an empty display string or a textual NULL spelling.
+		return strings.TrimSpace(def.OriginString), def.NullAbility &&
+			def.Expr == nil && def.OriginString == "" && len(def.XXX_unrecognized) == 0
 	}
 	if isPrintableDDLExpression(raw) {
-		return strings.TrimSpace(raw)
+		return strings.TrimSpace(raw), false
 	}
-	return ""
+	return "", false
 }
 
 func decodeMoColumnOnUpdate(raw string) string {

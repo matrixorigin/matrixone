@@ -948,3 +948,40 @@ func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
 		}
 	}
 }
+
+// The SQL column binder now selects ordinal serialization, but a stored,
+// already-bound display expression must keep its original wire tree/result.
+func TestPersistedEnumDisplaySerializationIsNotRebound(t *testing.T) {
+	for _, tc := range []struct {
+		ordinal uint32
+		display string
+	}{
+		{0, ""}, {1, "a"}, {2, "A"}, {3, ""},
+	} {
+		t.Run(fmt.Sprint(tc.ordinal), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			raw := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,A,"},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_EnumVal{EnumVal: tc.ordinal}}},
+			}
+			display, err := makeEnumOrSetDisplayValue(proc.Ctx, raw)
+			require.NoError(t, err)
+			oldBound, err := BindFuncExprImplByPlanExpr(proc.Ctx, "serial_full", []*Expr{display})
+			require.NoError(t, err)
+			data, err := oldBound.Marshal()
+			require.NoError(t, err)
+			var persisted planpb.Expr
+			require.NoError(t, persisted.Unmarshal(data))
+			before := DeepCopyExpr(&persisted)
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, &persisted, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeStringType([]byte(tc.display))
+			require.Equal(t, packer.GetBuf(), result.GetBytesAt(0))
+			require.True(t, proto.Equal(before, &persisted), "execution must not rewrite persisted display operands")
+		})
+	}
+}

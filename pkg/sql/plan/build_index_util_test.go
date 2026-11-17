@@ -473,3 +473,37 @@ func TestGeneratedIndexNames(t *testing.T) {
 		}
 	}
 }
+
+func TestIndexStoredPrimaryKeyTypePreservesEnumIdentity(t *testing.T) {
+	for _, identity := range []uint32{0, 2, 3, 9, 10} {
+		src := Type{Id: int32(types.T_enum), Enumvalues: "a,A,", EnumCollation: identity,
+			AutoIncr: true, NotNullable: true, Table: "source"}
+		want := Type{Id: src.Id, Enumvalues: src.Enumvalues, EnumCollation: identity}
+		require.Equal(t, want, indexTablePrimaryKeyPayloadType(src))
+		for _, format := range []uint32{collation.KeyFormatLegacy, collation.KeyFormatV1} {
+			require.Equal(t, want, indexTablePrimaryKeyTypeWithFormat(&ColDef{Typ: src}, format))
+		}
+	}
+	// The payload is the original stored value, not the Unicode comparison key.
+	src := Type{Id: int32(types.T_varchar), Width: 64, Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+		CollationVersion: 1, AutoIncr: true}
+	payload := indexTablePrimaryKeyPayloadType(src)
+	require.Equal(t, src.Id, payload.Id)
+	require.Equal(t, src.Charset, payload.Charset)
+	require.Equal(t, src.CollationVersion, payload.CollationVersion)
+	require.False(t, payload.AutoIncr)
+	require.Equal(t, int32(types.T_varbinary), indexTablePrimaryKeyTypeWithFormat(&ColDef{Typ: src}, collation.KeyFormatV1).Id)
+	for _, src := range []Type{
+		{Id: int32(types.T_varbinary), Width: 32, Charset: uint32(types.CharsetBinary)},
+		{Id: int32(types.T_uint64), Enumvalues: "legacy-set-metadata"},
+		{Id: int32(types.T_int64), AutoIncr: true, NotNullable: true},
+	} {
+		got := indexTablePrimaryKeyPayloadType(src)
+		require.Equal(t, src.Id, got.Id)
+		require.Equal(t, src.Width, got.Width)
+		require.Equal(t, src.Charset, got.Charset)
+		require.Empty(t, got.Enumvalues)
+		require.False(t, got.AutoIncr)
+		require.False(t, got.NotNullable)
+	}
+}

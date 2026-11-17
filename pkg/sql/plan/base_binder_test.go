@@ -1981,3 +1981,75 @@ func TestNormalizeDecimalParamInArgsUsesFloatForMixedApproximateList(t *testing.
 	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
 	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
 }
+
+func TestSerialEnumColumnStorageRequiresColumnSyntax(t *testing.T) {
+	ctx := context.Background()
+	raw := &plan.Expr{Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A,", EnumCollation: types.EnumCollationUTF8Bin},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}}
+	display, err := makeEnumOrSetDisplayValue(ctx, raw)
+	require.NoError(t, err)
+	col := tree.NewUnresolvedColName("e")
+	for _, name := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+		for _, ast := range []tree.Expr{col, &tree.ParenExpr{Expr: col}} {
+			args := []*Expr{display}
+			got := useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{ast}, args)
+			require.Equal(t, raw, got[0])
+			require.NotSame(t, raw, got[0])
+			require.Same(t, display, args[0], "do not mutate caller-owned arguments")
+		}
+		// The same function-shaped plan node may have been authored explicitly.
+		// Only source-column syntax proves this is a presentation wrapper.
+		for _, ast := range []tree.Expr{
+			&tree.FuncExpr{},
+			&tree.CastExpr{Expr: col},
+			tree.NewNumVal("a", "a", false, tree.P_char),
+		} {
+			got := useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{ast}, []*Expr{display})
+			require.Same(t, display, got[0])
+		}
+		fake := DeepCopyExpr(display)
+		fake.GetF().Args[1] = makePlan2StringConstExprWithType("a")
+		require.Same(t, fake, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{col}, []*Expr{fake})[0])
+	}
+	require.Same(t, display, useStoredMySQLSpecialColumnsForSerial("length", []tree.Expr{col}, []*Expr{display})[0])
+	require.Nil(t, useStoredMySQLSpecialColumnsForSerial("serial", nil, nil))
+}
+
+func TestSerialSetColumnUsesStoredBitmap(t *testing.T) {
+	members, err := types.EncodeSetValues([]string{"", "x"})
+	require.NoError(t, err)
+	raw := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: members},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}}
+	display, err := makeEnumOrSetDisplayValue(t.Context(), raw)
+	require.NoError(t, err)
+	col := tree.NewUnresolvedColName("s")
+	for _, name := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+		got := useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{col}, []*Expr{display})
+		require.Equal(t, raw.GetCol(), got[0].GetCol())
+		require.Equal(t, int32(types.T_uint64), got[0].Typ.Id)
+		require.Empty(t, got[0].Typ.Enumvalues)
+		require.NotEmpty(t, raw.Typ.Enumvalues)
+		require.Same(t, display, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{&tree.CastExpr{Expr: col}}, []*Expr{display})[0])
+		require.Same(t, display, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{&tree.FuncExpr{}}, []*Expr{display})[0])
+	}
+}
+
+func TestSerialCorrelatedColumnKeepsStorageAndDepth(t *testing.T) {
+	members, err := types.EncodeSetValues([]string{"", "x"})
+	require.NoError(t, err)
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "a,A,", EnumCollation: types.EnumCollationUTF8Bin},
+		{Id: int32(types.T_uint64), Enumvalues: members},
+	} {
+		raw := &plan.Expr{Typ: typ, Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 1, ColPos: 2, Depth: 2}}}
+		display, err := makeEnumOrSetDisplayValue(t.Context(), raw)
+		require.NoError(t, err)
+		for _, name := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+			got := useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{tree.NewUnresolvedColName("e")}, []*Expr{display})
+			require.Equal(t, raw.GetCorr(), got[0].GetCorr())
+			require.NotSame(t, raw.GetCorr(), got[0].GetCorr())
+			require.Equal(t, raw.Typ.Id, got[0].Typ.Id)
+			require.Equal(t, int32(2), got[0].GetCorr().Depth)
+		}
+	}
+}

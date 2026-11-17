@@ -5473,17 +5473,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: catalog.IndexTablePrimaryColName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: plan.Type{
-					// don't copy auto increment
-					Id:                       colMap[pkeyName].Typ.Id,
-					Width:                    colMap[pkeyName].Typ.Width,
-					Scale:                    colMap[pkeyName].Typ.Scale,
-					Charset:                  colMap[pkeyName].Typ.Charset,
-					CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-					CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-					CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-					CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-				},
+				Typ:  indexTablePrimaryKeyPayloadType(colMap[pkeyName].Typ),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -5704,17 +5694,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		pkColDef := &ColDef{
 			Name: catalog.MasterIndexTablePrimaryColName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:                       colMap[pkeyName].Typ.Id,
-				Width:                    colMap[pkeyName].Typ.Width,
-				Scale:                    colMap[pkeyName].Typ.Scale,
-				Charset:                  colMap[pkeyName].Typ.Charset,
-				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-			},
+			Typ:  indexTablePrimaryKeyPayloadType(colMap[pkeyName].Typ),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -5848,10 +5828,8 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			// Keep legacy primary-key payloads unchanged. A versioned
-			// Unicode key is opaque binary, just like the unique-index
-			// hidden table above; otherwise a storage consumer can apply the
-			// source collation a second time.
+			// A versioned Unicode comparison key is opaque binary. Other
+			// single-part PK keys retain the stored value type and domain.
 			Typ: indexTablePrimaryKeyTypeWithFormat(colMap[pkeyName], keyFormat),
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -5890,17 +5868,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: catalog.IndexTablePrimaryColName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:                       colMap[pkeyName].Typ.Id,
-				Width:                    colMap[pkeyName].Typ.Width,
-				Scale:                    colMap[pkeyName].Typ.Scale,
-				Charset:                  colMap[pkeyName].Typ.Charset,
-				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-			},
+			Typ:  indexTablePrimaryKeyPayloadType(colMap[pkeyName].Typ),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,

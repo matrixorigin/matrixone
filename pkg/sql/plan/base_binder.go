@@ -4949,6 +4949,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	args = useStoredMySQLSpecialColumnsForSerial(name, astArgs, args)
 	rewrittenArgs, rewriteErr := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		b.GetContext(), name, args)
 	if rewriteErr != nil {
@@ -6340,6 +6341,55 @@ func isPositiveIntegerLiteral(lit *plan.Literal) bool {
 	default:
 		return false
 	}
+}
+
+// Serial functions encode typed storage, not column presentation. Only a
+// direct column (optionally parenthesized) proves that this wrapper was added
+// by column binding; an explicit function or CHAR cast keeps its text result.
+func useStoredMySQLSpecialColumnsForSerial(name string, astArgs []tree.Expr, args []*Expr) []*Expr {
+	switch name {
+	case "serial", "serial_full", "physical_serial", "physical_serial_full":
+	default:
+		return args
+	}
+	if len(astArgs) != len(args) {
+		return args
+	}
+	var result []*Expr
+	for i, ast := range astArgs {
+		for {
+			paren, ok := ast.(*tree.ParenExpr)
+			if !ok {
+				break
+			}
+			ast = paren.Expr
+		}
+		if _, ok := ast.(*tree.UnresolvedName); !ok || args[i] == nil {
+			continue
+		}
+		fn := args[i].GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil ||
+			(fn.Args[1].GetCol() == nil && fn.Args[1].GetCorr() == nil) {
+			continue
+		}
+		var storage *Expr
+		switch {
+		case fn.Func.ObjName == moEnumCastIndexToValueFun && isEnumPlanType(&fn.Args[1].Typ):
+			storage = DeepCopyExpr(fn.Args[1])
+		case fn.Func.ObjName == moSetCastIndexToValueFun && isSetPlanType(&fn.Args[1].Typ):
+			storage, _ = storedSetBitmapExpr(args[i])
+		default:
+			continue
+		}
+		if result == nil {
+			result = append([]*Expr(nil), args...)
+		}
+		result[i] = storage
+	}
+	if result == nil {
+		return args
+	}
+	return result
 }
 
 func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {

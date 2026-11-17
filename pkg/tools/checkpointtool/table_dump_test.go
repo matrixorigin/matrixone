@@ -1112,10 +1112,16 @@ func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
 }
 
 func TestMoColumnExpressionDecoders(t *testing.T) {
-	assert.Empty(t, decodeMoColumnDefault(""))
-	assert.Equal(t, "42", decodeMoColumnDefault(encodedDefault(t, " 42 ", true)))
-	assert.Equal(t, "current_timestamp()", decodeMoColumnDefault(" current_timestamp() "))
-	assert.Empty(t, decodeMoColumnDefault(string([]byte{0xff})))
+	for _, tc := range []struct{ raw, want string }{
+		{"", ""},
+		{encodedDefault(t, " 42 ", true), "42"},
+		{" current_timestamp() ", "current_timestamp()"},
+		{string([]byte{0xff}), ""},
+	} {
+		display, implicit := decodeMoColumnDefault(tc.raw)
+		assert.Equal(t, tc.want, display)
+		assert.False(t, implicit)
+	}
 
 	onUpdate, err := types.Encode(&plan.OnUpdate{OriginString: " now() "})
 	require.NoError(t, err)

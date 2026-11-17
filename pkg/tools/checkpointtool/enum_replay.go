@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,7 +107,8 @@ func RestoreTableCollation(ctx context.Context, schema *TableSchema, readOnlyExt
 		if err := typ.ValidateCollation(); err != nil {
 			return "", err
 		}
-		if col.HasDefault || col.Default != "" || col.OnUpdate != "" || col.Generated != "" {
+		if (col.HasDefault && (!col.implicitNullableDefault || col.NotNull)) ||
+			col.Default != "" || col.OnUpdate != "" || col.Generated != "" {
 			return reject("stored expression replay is not proved")
 		}
 		if col.EnumValues != "" {
@@ -141,4 +143,36 @@ func uniqueCatalogColumnIndex(view *LogicalTableView, name string) int {
 		found = i - logicalViewDataOffset(view)
 	}
 	return found
+}
+
+// Prove all presence flags used by the newly admitted implicit-NULL case;
+// display decoders alone can turn malformed expression bytes into empty text.
+func provedImplicitNullableDefaultFlags(view *LogicalTableView, row []string) bool {
+	for _, flag := range []struct {
+		name string
+		want bool
+	}{
+		{catalog.SystemColAttr_NullAbility, false},
+		{catalog.SystemColAttr_HasExpr, true},
+		{catalog.SystemColAttr_HasUpdate, false},
+		{catalog.SystemColAttr_HasGenerated, false},
+	} {
+		index := uniqueCatalogColumnIndex(view, flag.name)
+		if index < 0 || index >= len(row) {
+			return false
+		}
+		switch row[index] {
+		case "0", "false":
+			if flag.want {
+				return false
+			}
+		case "1", "true":
+			if !flag.want {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
