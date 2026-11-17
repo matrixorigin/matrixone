@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -528,7 +529,7 @@ func TestHandleLoadTable(t *testing.T) {
 	db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
 
 	def := &plan.TableDef{
-		Name: "orders", DefaultCharset: types.EnumCollationUTF8Bin,
+		Name: "orders",
 		Cols: []*plan.ColDef{{
 			Name: "o_orderkey", Typ: plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{},
@@ -560,9 +561,7 @@ func TestHandleLoadTable(t *testing.T) {
 		FilePath: tableDumpReadyName,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}},
 	}))
-	legacyDef := *def
-	legacyDef.DefaultCharset = types.EnumCollationLegacy
-	schemaHash, err := tableSchemaHash(&legacyDef)
+	schemaHash, err := tableSchemaHash(def)
 	require.NoError(t, err)
 	require.NoError(t, writeTableDumpJSON(context.Background(), dumpFS, tableDumpManifestName, &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: "tpch", SourceTable: "orders",
@@ -655,7 +654,6 @@ func TestHandleDumpTable(t *testing.T) {
 	require.NoError(t, err)
 	manifest, err := readTableDumpManifest(context.Background(), dumpFS)
 	require.NoError(t, err)
-	require.Equal(t, tableDumpSchemaHashVersionCurrent, manifest.SchemaHashVersion)
 	require.Len(t, manifest.Relations, 1)
 	require.Len(t, manifest.Relations[0].Objects, 1)
 	require.Equal(t, object.Name, manifest.Relations[0].Objects[0].Name)
@@ -739,17 +737,14 @@ func TestHandleLoadTableRejectsNonObjectBackedRelations(t *testing.T) {
 
 func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		writeReady         bool
-		wrongHash          bool
-		emptyTopology      bool
-		foreignKey         bool
-		legacyCollatedEnum bool
-		wantError          string
+		name          string
+		writeReady    bool
+		wrongHash     bool
+		emptyTopology bool
+		foreignKey    bool
 	}{
 		{name: "missing-ready"},
 		{name: "schema-mismatch", writeReady: true, wrongHash: true},
-		{name: "legacy-dump-rejects-new-enum-identity", writeReady: true, legacyCollatedEnum: true, wantError: "newly authored ENUM collation metadata"},
 		{name: "topology-mismatch", writeReady: true, emptyTopology: true},
 		{name: "foreign-key", writeReady: true, foreignKey: true},
 	} {
@@ -757,8 +752,6 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
 			defer ses.Close()
-			ses.proc.Base.SessionInfo.Account = sysAccountName
-			ses.proc.Base.SessionInfo.Role = moAdminRoleName
 			ses.SetDatabaseName("tpch")
 			eng := mock_frontend.NewMockEngine(ctrl)
 			db := mock_frontend.NewMockDatabase(ctrl)
@@ -767,12 +760,6 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil).AnyTimes()
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
 			def := &plan.TableDef{Name: "orders", Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}}}
-			if tc.legacyCollatedEnum {
-				def.DefaultCharset = types.EnumCollationUTF8Bin
-				def.Cols = append(def.Cols, &plan.ColDef{
-					Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: types.EnumCollationUTF8Bin}, Default: &plan.Default{},
-				})
-			}
 			if tc.foreignKey {
 				def.Fkeys = []*plan.ForeignKeyDef{{Name: "fk_parent"}}
 			}
@@ -780,16 +767,6 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 			rel.EXPECT().GetTableName().Return("orders").AnyTimes()
 			hash, err := tableSchemaHash(def)
 			require.NoError(t, err)
-			if tc.legacyCollatedEnum {
-				legacyDef := *def
-				legacyDef.DefaultCharset = types.EnumCollationLegacy
-				legacyDef.Cols = append([]*plan.ColDef(nil), def.Cols...)
-				legacyCol := *def.Cols[1]
-				legacyCol.Typ.EnumCollation = types.EnumCollationLegacy
-				legacyDef.Cols[1] = &legacyCol
-				hash, err = tableSchemaHash(&legacyDef)
-				require.NoError(t, err)
-			}
 			manifest := &tableDumpManifest{Version: tableDumpFormatVersion, SchemaHash: hash}
 			if tc.wrongHash {
 				manifest.SchemaHash = "wrong"
@@ -806,11 +783,7 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 			err = handleLoadTable(context.Background(), ses, &tree.LoadTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: root,
 			})
-			if tc.wantError != "" {
-				require.ErrorContains(t, err, tc.wantError)
-			} else {
-				require.Error(t, err)
-			}
+			require.Error(t, err)
 		})
 	}
 }
@@ -841,7 +814,6 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	read, err := readTableDumpManifest(ctx, fixture)
 	require.NoError(t, err)
 	require.Equal(t, manifest.Relations, read.Relations)
-	require.Equal(t, 0, read.SchemaHashVersion)
 	created, err := installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
 	require.NoError(t, err)
 	require.True(t, created)
@@ -918,12 +890,6 @@ func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
 	require.Error(t, err)
 	require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
 
-	require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{
-		Version: tableDumpFormatVersion, SchemaHashVersion: tableDumpSchemaHashVersionCurrent + 1,
-	}))
-	_, err = readTableDumpManifest(ctx, fs)
-	require.ErrorContains(t, err, "unsupported table dump schema hash version")
-	require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
 	require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: tableDumpFormatVersion + 1}))
 	_, err = readTableDumpManifest(ctx, fs)
 	require.Error(t, err)
@@ -983,7 +949,6 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "db", manifest.SourceDatabase)
 	require.Equal(t, "src", manifest.SourceTable)
-	require.Equal(t, 0, manifest.SchemaHashVersion, "pre-versioned manifests retain the legacy default")
 	require.True(t, manifest.MetadataOnly)
 	require.Len(t, manifest.Relations, 1)
 	require.Len(t, manifest.Relations[0].Objects, 1)
@@ -1319,111 +1284,6 @@ func TestTableSchemaHashExpandsCreateLike(t *testing.T) {
 	require.NotEqual(t, leftHash, rightHash)
 }
 
-func TestTableSchemaHashVersionCompatibility(t *testing.T) {
-	ordinary := &plan.TableDef{
-		Name: "ordinary", DefaultCharset: types.EnumCollationUTF8Bin,
-		Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}},
-	}
-	legacyOrdinary := *ordinary
-	legacyOrdinary.DefaultCharset = types.EnumCollationLegacy
-	wantLegacy, err := tableSchemaHash(&legacyOrdinary)
-	require.NoError(t, err)
-	gotLegacy, err := tableSchemaHashForVersion(ordinary, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	require.Equal(t, wantLegacy, gotLegacy, "legacy table-level collation is ignored when the table has no ENUM columns")
-	gotAbsentVersion, err := tableSchemaHashForVersion(ordinary, 0)
-	require.NoError(t, err)
-	require.Equal(t, gotLegacy, gotAbsentVersion, "manifests written before schema_hash_version use the legacy contract")
-	gotCurrent, err := tableSchemaHashForVersion(ordinary, tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	require.NotEqual(t, gotLegacy, gotCurrent)
-
-	enum := &plan.TableDef{
-		Name: "enum_table", DefaultCharset: types.EnumCollationUTF8Bin,
-		Cols: []*plan.ColDef{{Name: "value", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: types.EnumCollationUTF8Bin}, Default: &plan.Default{}}},
-	}
-	_, err = tableSchemaHashForVersion(enum, tableDumpSchemaHashVersionLegacy)
-	require.ErrorContains(t, err, "newly authored ENUM collation metadata")
-	currentEnum, err := tableSchemaHashForVersion(enum, tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-
-	legacyEnum := *enum
-	legacyEnum.DefaultCharset = types.EnumCollationLegacy
-	legacyEnum.Cols = []*plan.ColDef{{Name: "value", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: types.EnumCollationLegacy}, Default: &plan.Default{}}}
-	legacyEnumHash, err := tableSchemaHashForVersion(&legacyEnum, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	legacyCurrentHash, err := tableSchemaHashForVersion(&legacyEnum, tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	require.Equal(t, legacyEnumHash, legacyCurrentHash)
-
-	changed := *legacyEnum.Cols[0]
-	changed.Typ.Id = int32(types.T_int32)
-	changed.Typ.Enumvalues = ""
-	changedDef := legacyEnum
-	changedDef.Cols = []*plan.ColDef{&changed}
-	changedHash, err := tableSchemaHashForVersion(&changedDef, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	require.NotEqual(t, legacyEnumHash, changedHash)
-	require.NotEqual(t, legacyEnumHash, currentEnum)
-
-	_, err = tableSchemaHashForVersion(&plan.TableDef{}, tableDumpSchemaHashVersionCurrent+1)
-	require.ErrorContains(t, err, "unsupported table dump schema hash version")
-}
-
-func TestTableSchemaHashLegacyFallbackPreservesCatalogDDL(t *testing.T) {
-	def := &plan.TableDef{
-		Name: "ordinary_table", DefaultCharset: types.EnumCollationUTF8Bin,
-		Createsql: "CREATE TABLE ordinary_table(id int primary key, v varchar(32)) COLLATE=utf8mb4_bin",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "v", Typ: plan.Type{Id: int32(types.T_varchar)}, Default: &plan.Default{NullAbility: true}},
-		},
-	}
-	legacy := *def
-	legacy.DefaultCharset = types.EnumCollationLegacy
-	want, err := tableSchemaHashForVersion(&legacy, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	got, err := tableSchemaHashForVersion(def, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-}
-
-func TestTableSchemaHashNonReconstructableEnumIdentity(t *testing.T) {
-	definition := func(collation uint32) *plan.TableDef {
-		return &plan.TableDef{
-			TableType:      catalog.SystemClusterRel,
-			Name:           "cluster_items",
-			Createsql:      "create cluster table mo_catalog.cluster_items(id int primary key, e enum('A','a') collate utf8mb4_bin)",
-			DefaultCharset: types.EnumCollationUTF8Bin,
-			Cols: []*plan.ColDef{
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{}},
-				{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: collation}, Default: &plan.Default{}},
-			},
-		}
-	}
-
-	current, err := tableSchemaHashForVersion(definition(types.EnumCollationUTF8Bin), tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	same, err := tableSchemaHashForVersion(definition(types.EnumCollationUTF8Bin), tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	require.Equal(t, current, same)
-
-	different, err := tableSchemaHashForVersion(definition(types.EnumCollationGeneralCI), tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	require.NotEqual(t, current, different)
-
-	_, err = tableSchemaHashForVersion(definition(types.EnumCollationUTF8Bin), tableDumpSchemaHashVersionLegacy)
-	require.ErrorContains(t, err, "cannot verify a legacy table dump schema hash with newly authored ENUM collation metadata")
-
-	legacy := definition(types.EnumCollationLegacy)
-	legacy.DefaultCharset = types.EnumCollationLegacy
-	oldHash, err := tableSchemaHashForVersion(legacy, tableDumpSchemaHashVersionLegacy)
-	require.NoError(t, err)
-	newHash, err := tableSchemaHashForVersion(legacy, tableDumpSchemaHashVersionCurrent)
-	require.NoError(t, err)
-	require.Equal(t, oldHash, newHash, "legacy cluster schemas keep their old-compatible fingerprint")
-}
-
 func TestTableSchemaHashFallback(t *testing.T) {
 	def := &plan.TableDef{
 		TblId: 10, DbId: 20, DbName: "db", Name: "table", OriginalName: "old",
@@ -1449,4 +1309,140 @@ func TestTableSchemaHashFallback(t *testing.T) {
 	require.Error(t, err)
 	_, err = tableSchemaHash(&plan.TableDef{Createsql: "not valid sql", Cols: []*plan.ColDef{{Name: "a"}}})
 	require.Error(t, err)
+}
+
+func TestTableDumpManifestReconstructsLegacyOrdinaryTable(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(v varchar(32)) COLLATE utf8mb4_bin",
+		Cols: []*plan.ColDef{{
+			Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 32},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "varchar(32)")
+	require.NotContains(t, ddl, "COLLATE")
+
+	def.DefaultCharset = types.EnumCollationUTF8Bin
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "COLLATE=utf8mb4_bin")
+
+	def.TableType = catalog.SystemClusterRel
+	def.DefaultCharset = 0
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl, "unverified CREATE SQL must not be published")
+}
+
+func TestTableDumpManifestRejectsUnrepresentableLegacyEnum(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		DefaultCharset: types.EnumCollationUTF8Bin,
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	_, err := tableDumpManifestCreateSQL(def)
+	require.Error(t, err, "a table default would reauthor the legacy ENUM identity")
+	def.DefaultCharset = 0
+	def.Cols[0].Typ.Enumvalues = ""
+	_, err = tableDumpManifestCreateSQL(def)
+	require.Error(t, err, "a singleton empty legacy domain reauthors its encoding")
+}
+
+func TestTableDumpRejectsUnverifiableTextHashIdentity(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemClusterRel,
+		Createsql: "CREATE CLUSTER TABLE source(id int primary key, e enum('A','a') COLLATE utf8mb4_bin)",
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	require.NoError(t, validateTableDumpSchema(def), "legacy identity remains admissible")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify ENUM collation identity")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationLegacy
+	def.Cols[0].Typ.EnumEncoding = types.EnumEncodingFramed
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify ENUM domain encoding")
+	def.Cols[0].Typ.EnumEncoding = types.EnumEncodingLegacy
+	def.DefaultCharset = types.EnumCollationUTF8Bin
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify table collation identity")
+	def.TableType = catalog.SystemOrdinaryRel
+	require.NoError(t, validateTableDumpSchema(def), "typed hashes cover ordinary tables")
+}
+
+func TestTableDumpSchemaHashDistinguishesAmbiguousDomains(t *testing.T) {
+	table := func(typ types.T, values string) *plan.TableDef {
+		return &plan.TableDef{Name: "__table_dump_target__", TableType: catalog.SystemOrdinaryRel,
+			Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(typ), Enumvalues: values}, Default: &plan.Default{NullAbility: true}}}}
+	}
+	for _, tc := range []struct {
+		name          string
+		typ           types.T
+		first, second string
+	}{
+		{"enum newline", types.T_enum, "a\nb", `a\nb`},
+		{"enum nul", types.T_enum, "a\x00b", `a\0b`},
+		{"set case", types.T_uint64, "Alpha,beta", "alpha,beta"},
+		{"set dotted I", types.T_uint64, "i", "İ"},
+		{"enum invalid UTF8", types.T_enum, string([]byte{0xff}), "�"},
+		{"set invalid UTF8", types.T_uint64, string([]byte{0xff}), "�"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := table(tc.typ, tc.first), table(tc.typ, tc.second)
+			oldLeft, err := sqlplan.ConstructCreateTableSQLForSchemaHash(left)
+			require.NoError(t, err)
+			oldRight, err := sqlplan.ConstructCreateTableSQLForSchemaHash(right)
+			require.NoError(t, err)
+			require.Equal(t, oldLeft, oldRight, "fixture must exercise a historical collision")
+			leftHash, err := tableSchemaHash(left)
+			require.NoError(t, err)
+			rightHash, err := tableSchemaHash(right)
+			require.NoError(t, err)
+			require.NotEqual(t, leftHash, rightHash)
+			legacyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldLeft)))
+			require.NotEqual(t, legacyHash, leftHash, "old ambiguous archives must not match either target")
+			require.NotEqual(t, legacyHash, rightHash, "the reverse target must also reject an old archive")
+			same := table(tc.typ, tc.first)
+			same.Name = "different_table_name"
+			sameHash, err := tableSchemaHash(same)
+			require.NoError(t, err)
+			require.Equal(t, leftHash, sameHash)
+		})
+	}
+	// Keep the released digest where the legacy rendering is injective.
+	for _, tc := range []struct {
+		name   string
+		typ    types.T
+		values string
+	}{
+		{"plain enum", types.T_enum, "red,blue"},
+		{"numeric set", types.T_uint64, "1,2"},
+		{"uncased set", types.T_uint64, "中,☃"},
+		{"dotless set", types.T_uint64, "ı"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stable := table(tc.typ, tc.values)
+			canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(stable)
+			require.NoError(t, err)
+			hash, err := tableSchemaHash(stable)
+			require.NoError(t, err)
+			require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(canonical))), hash)
+		})
+	}
+}
+
+func TestTableDumpManifestOmitsUnverifiableLegacyClusterDDL(t *testing.T) {
+	def := &plan.TableDef{Name: "source", TableType: catalog.SystemClusterRel,
+		Createsql: "CREATE CLUSTER TABLE source (id int primary key, e enum('A','a'))",
+		Cols:      []*plan.ColDef{{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"}, Default: &plan.Default{NullAbility: true}}}}
+	require.NoError(t, validateTableDumpSchema(def))
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
 }

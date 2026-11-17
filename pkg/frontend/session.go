@@ -1965,6 +1965,10 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 
 			// overwrite with the values from table `mo_mysql_compatibility`
 			if sv, ok := gSysVarsDefs[varName]; ok {
+				if varName == "sql_mode" && mysql.IsLegacySQLMode(varValue) {
+					gSysVars[varName] = mysql.NormalizeLegacySQLMode(varValue)
+					continue
+				}
 				var val interface{}
 				if val, err = sv.GetType().ConvertFromString(varValue); err != nil {
 					return

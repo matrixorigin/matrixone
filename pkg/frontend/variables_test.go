@@ -47,23 +47,6 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	})
 }
 
-func TestNormalizePersistedSQLModeUsesSystemVariableSet(t *testing.T) {
-	for _, tc := range []struct {
-		input string
-		want  string
-	}{
-		{"ANS", "ANSI"},
-		{" ans , pipes_as_concat ", "ANSI,PIPES_AS_CONCAT"},
-		{"ANSI_QUOTES,NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"},
-	} {
-		got, err := NormalizePersistedSQLMode(tc.input)
-		assert.NoError(t, err)
-		assert.Equal(t, tc.want, got)
-	}
-	_, err := NormalizePersistedSQLMode("NOT_A_SQL_MODE")
-	assert.Error(t, err)
-}
-
 func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]
@@ -383,4 +366,28 @@ func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
 		_, err = sv.Type.Convert("sometimes")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func TestSQLModeSetCanonicalization(t *testing.T) {
+	mode := gSysVarsDefs["sql_mode"].Type
+	for _, tc := range []struct{ input, want string }{
+		{"", ""},
+		{"ANSI", "ANSI"},
+		{"ANSI,NO_BACKSLASH_ESCAPES", "ANSI,NO_BACKSLASH_ESCAPES"},
+		{"ANSI_QUOTES,PIPES_AS_CONCAT", "ANSI_QUOTES,PIPES_AS_CONCAT"},
+		{"ansi,only_full_group_by", "ANSI,ONLY_FULL_GROUP_BY"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := mode.Convert(tc.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	_, err := mode.Convert("ANS")
+	assert.Error(t, err)
+	// Separator placement is based on selected members, even for an empty one.
+	set := InitSystemVariableSetType("test", "", "SECOND")
+	got, err := set.Convert(uint64(3))
+	assert.NoError(t, err)
+	assert.Equal(t, ",SECOND", got)
 }

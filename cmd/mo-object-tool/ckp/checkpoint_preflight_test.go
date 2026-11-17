@@ -16,6 +16,8 @@ package ckp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,4 +71,14 @@ func TestRestorePreflightUsesAccountRestoreFilter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, preflightRestoreTables(ctx, nil, []checkpointtool.TableCatalogEntry{user}, data, types.TS{}, true), context.Canceled)
+}
+
+func TestRestoreScriptCanceledBeforeOutput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dir := filepath.Join(t.TempDir(), "not-created")
+	_, err := writeRestoreScript(ctx, nil, &dumpOutput{}, nil, nil, types.TS{}, dir, dir, loadDataPathResolver{}, false, false)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = os.Stat(dir)
+	require.True(t, os.IsNotExist(err))
 }

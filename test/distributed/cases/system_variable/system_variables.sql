@@ -214,6 +214,10 @@ set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select @@sql_mode;
 set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
+set @@sql_mode = 'ANSI';
+select @@sql_mode;
+set @@sql_mode = 'ANSI,NO_BACKSLASH_ESCAPES';
+select @@sql_mode;
 set @@sql_mode = default;
 
 --double type

@@ -626,18 +626,18 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	require.NotEqual(t, catalogTables, scriptTables)
 	require.NotContains(t, scriptTables, catalogOnly)
 
-	ordered := orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, other, parent}, byID)
+	ordered := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{child, other, parent}, byID).tables
 	require.Equal(t, []uint64{1, 2, 3}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
-	require.Equal(t, []checkpointtool.TableCatalogEntry{parent}, orderTablesForRestore([]checkpointtool.TableCatalogEntry{parent}, byID))
+	require.Equal(t, []checkpointtool.TableCatalogEntry{parent}, buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{parent}, byID).tables)
 
 	byID[1].Schema.ForeignKeys = []checkpointtool.TableForeignKey{{ReferDatabase: child.DatabaseName, ReferTable: child.TableName}}
-	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, parent}, byID)
+	ordered = buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{child, parent}, byID).tables
 	require.Len(t, ordered, 2)
-	restoreOrder := buildRestoreTableOrder([]checkpointtool.TableCatalogEntry{child, parent}, byID)
+	restoreOrder := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{child, parent}, byID)
 	require.True(t, restoreOrder.cyclicFKTables[parent.TableID])
 	require.True(t, restoreOrder.cyclicFKTables[child.TableID])
 
-	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{view, view2, base}, byID)
+	ordered = buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{view, view2, base}, byID).tables
 	require.Equal(t, []uint64{4, 5, 6}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
 }
 

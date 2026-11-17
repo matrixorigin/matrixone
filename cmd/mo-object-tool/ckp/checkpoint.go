@@ -25,8 +25,8 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
-	"reflect"
 	"runtime/pprof"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,9 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -912,7 +912,7 @@ func preflightRestoreTables(
 	snapshotTS types.TS,
 	includeLoad bool,
 ) error {
-	order := buildRestoreTableOrder(tables, dumpDataByTable)
+	order := buildRestoreTableOrder(ctx, tables, dumpDataByTable)
 	for _, table := range order.tables {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -970,6 +970,9 @@ func writeRestoreScript(
 	includeLoad bool,
 	csvHasHeader bool,
 ) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := dumpOut.MkdirAll(scriptDir); err != nil {
 		return "", fmt.Errorf("create script dir: %w", err)
 	}
@@ -979,7 +982,10 @@ func writeRestoreScript(
 	// Reconstructed literals and LOAD DATA delimiters use ordinary MySQL
 	// backslash escapes. A dedicated session also confines its mode if a
 	// client aborts the script before the final restore statement.
-	if _, err := fmt.Fprintln(&script, "-- Run this restore script in a dedicated session."); err != nil {
+	if _, err := fmt.Fprintln(&script, "-- Run this restore script in a dedicated session with a valid SQL mode."); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(&script, "-- If a legacy global mode is malformed, first set the session sql_mode to an empty string."); err != nil {
 		return "", err
 	}
 	if _, err := fmt.Fprintln(&script, "SET @__mo_ckp_saved_sql_mode = @@SESSION.sql_mode;"); err != nil {
@@ -1002,9 +1008,12 @@ func writeRestoreScript(
 	for _, table := range tables {
 		selectedDBs[strings.ToLower(table.DatabaseName)] = true
 	}
-	restoreOrder := buildRestoreTableOrder(tables, dumpDataByTable)
+	restoreOrder := buildRestoreTableOrder(ctx, tables, dumpDataByTable)
 	deferredFKs := make([]deferredForeignKeyDDL, 0)
 	for _, table := range restoreOrder.tables {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if table.DatabaseName == "" {
 			return "", fmt.Errorf("table %d has empty database name in checkpoint catalog", table.TableID)
 		}
@@ -1187,19 +1196,13 @@ func isSystemDatabase(databaseName string) bool {
 	return false
 }
 
-func orderTablesForRestore(
-	tables []checkpointtool.TableCatalogEntry,
-	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
-) []checkpointtool.TableCatalogEntry {
-	return buildRestoreTableOrder(tables, dumpDataByTable).tables
-}
-
 type restoreTableOrder struct {
 	tables         []checkpointtool.TableCatalogEntry
 	cyclicFKTables map[uint64]bool
 }
 
 func buildRestoreTableOrder(
+	ctx context.Context,
 	tables []checkpointtool.TableCatalogEntry,
 	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
 ) restoreTableOrder {
@@ -1225,9 +1228,36 @@ func buildRestoreTableOrder(
 	isView := func(table checkpointtool.TableCatalogEntry) bool {
 		return isViewRelation(table)
 	}
+	// Capture verified, qualified dependencies once per view. Text matching
+	// cannot reliably recognize comments or whitespace around a qualifier.
+	verifiedDependencies := make(map[uint64]tableKey)
+	normalizedViewSQL := make(map[uint64]string)
+	for _, table := range tables {
+		if ctx.Err() != nil {
+			break
+		}
+		data := dumpDataByTable[table.TableID]
+		if !isView(table) || data == nil || data.Schema == nil || !data.Schema.ViewDefinitionKnown {
+			continue
+		}
+		var definition sqlplan.ViewData
+		if json.Unmarshal([]byte(data.Schema.ViewDefinition), &definition) != nil {
+			continue
+		}
+		if view, err := prepareCheckpointViewRestore(ctx, table, data); err == nil {
+			if definition.DefaultDatabase == "" {
+				verifiedDependencies[table.TableID] = tableKey{database: view.sourceDatabase, table: view.sourceTable}
+			} else {
+				normalizedViewSQL[table.TableID] = view.normalizedSQL
+			}
+		}
+	}
 	viewDependsOn := func(view, dependency checkpointtool.TableCatalogEntry) bool {
 		if !isView(view) {
 			return false
+		}
+		if source, ok := verifiedDependencies[view.TableID]; ok {
+			return source.table != "" && strings.EqualFold(source.database, dependency.DatabaseName) && strings.EqualFold(source.table, dependency.TableName)
 		}
 		dumpData := dumpDataByTable[view.TableID]
 		if dumpData == nil || dumpData.Schema == nil {
@@ -1245,6 +1275,9 @@ func buildRestoreTableOrder(
 					defaultDB = data.DefaultDatabase
 				}
 			}
+		}
+		if normalized := normalizedViewSQL[view.TableID]; normalized != "" {
+			sql = normalized
 		}
 		sql = strings.ToLower(sql)
 		if sql == "" {
@@ -1686,6 +1719,8 @@ func isViewRelation(table checkpointtool.TableCatalogEntry) bool {
 
 type checkpointViewRestore struct {
 	ddl, sqlMode, defaultDB, security string
+	sourceDatabase, sourceTable       string
+	normalizedSQL                     string
 }
 
 func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.TableCatalogEntry, dumpData *checkpointtool.TableDumpData) (*checkpointViewRestore, error) {
@@ -1735,13 +1770,12 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if !ok {
 		return fail("view definition is not CREATE VIEW")
 	}
+	var sourceDatabase, sourceTable string
 	if defaultDB == "" {
-		// A view created without a selected database is safe to replay only
-		// when every relation is explicitly qualified and the query does not
-		// inspect the session's current database. The restore session may
-		// already have selected a database for an earlier table.
-		if viewStmt.Name == nil || viewStmt.Name.SchemaName == "" || viewStmt.AsSource == nil || !checkpointViewUsesNoImplicitDatabase(viewStmt.AsSource) {
-			return fail("view without default database has an unqualified or unsupported relation")
+		var ok bool
+		sourceDatabase, sourceTable, ok = checkpointNoDefaultViewSource(viewStmt)
+		if !ok {
+			return fail("view without default database is not a self-contained literal SELECT or a simple qualified SELECT")
 		}
 		defaultDB = table.DatabaseName
 	}
@@ -1767,126 +1801,86 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if !ok || rewrittenView.Name == nil || !strings.EqualFold(string(rewrittenView.Name.SchemaName), table.DatabaseName) || !strings.EqualFold(string(rewrittenView.Name.ObjectName), table.TableName) {
 		return fail("qualified view definition has unexpected target")
 	}
-	return &checkpointViewRestore{ddl: ddl, sqlMode: mode, defaultDB: defaultDB, security: security}, nil
+	return &checkpointViewRestore{ddl: ddl, sqlMode: mode, defaultDB: defaultDB, security: security, sourceDatabase: sourceDatabase, sourceTable: sourceTable, normalizedSQL: tree.String(viewStmt.AsSource, dialect.MYSQL)}, nil
+}
+
+// A view created without a current database can be replayed with the target
+// database only when its admitted shape contains no database-dependent names.
+func checkpointNoDefaultViewSource(view *tree.CreateView) (string, string, bool) {
+	if view == nil || view.Name == nil || view.Name.SchemaName == "" || view.AsSource == nil {
+		return "", "", false
+	}
+	q := view.AsSource
+	if q.With != nil || q.IsPerform || q.TimeWindow != nil || len(q.OrderBy) != 0 || q.Limit != nil || q.RankOption != nil || q.Ep != nil || q.SelectLockInfo != nil {
+		return "", "", false
+	}
+	clause, ok := q.Select.(*tree.SelectClause)
+	if !ok || clause.Distinct || clause.Option != 0 || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) == 0 {
+		return "", "", false
+	}
+	from := clause.From.Tables[0]
+	if join, ok := from.(*tree.JoinTableExpr); ok {
+		if join.Right != nil || join.Cond != nil || (join.JoinType != "" && join.JoinType != tree.JOIN_TYPE_CROSS) || join.Option != "" {
+			return "", "", false
+		}
+		from = join.Left
+	}
+	alias, ok := from.(*tree.AliasedTableExpr)
+	if !ok || alias.As.Alias != "" || len(alias.As.Cols) != 0 || len(alias.IndexHints) != 0 {
+		return "", "", false
+	}
+	source, ok := alias.Expr.(*tree.TableName)
+	if !ok || source.AtTsExpr != nil || source.IcebergRef != nil || source.ExplicitCatalog {
+		return "", "", false
+	}
+	database, table := string(source.SchemaName), string(source.ObjectName)
+	if table != "" && (database == "" || !source.ExplicitSchema) || table == "" && database != "" {
+		return "", "", false
+	}
+	for _, projection := range clause.Exprs {
+		if !checkpointNoDefaultViewExpr(projection.Expr, table != "") {
+			return "", "", false
+		}
+	}
+	return database, table, true
+}
+
+func checkpointNoDefaultViewExpr(expr tree.Expr, allowColumns bool) bool {
+	switch value := expr.(type) {
+	case *tree.NumVal, *tree.StrVal:
+		return true
+	case *tree.UnresolvedName:
+		return allowColumns && value.NumParts == 1
+	case *tree.ParenExpr:
+		return checkpointNoDefaultViewExpr(value.Expr, allowColumns)
+	case *tree.UnaryExpr:
+		return checkpointNoDefaultViewExpr(value.Expr, allowColumns)
+	case *tree.BinaryExpr:
+		return checkpointNoDefaultViewExpr(value.Left, allowColumns) && checkpointNoDefaultViewExpr(value.Right, allowColumns)
+	default:
+		return false
+	}
 }
 
 func checkpointReplaySQLMode(mode string) (string, error) {
-	return frontend.NormalizePersistedSQLMode(mode)
+	if len(mode) > 4096 {
+		return "", fmt.Errorf("view SQL mode is too long")
+	}
+	mode = mysql.NormalizeLegacySQLMode(mode)
+	allowed := mysql.SystemSQLModes()
+	if mode == "" {
+		return "", nil
+	}
+	parts := strings.Split(mode, ",")
+	for i, part := range parts {
+		parts[i] = strings.ToUpper(strings.TrimSpace(part))
+		if !slices.Contains(allowed, parts[i]) {
+			return "", fmt.Errorf("unsupported view SQL mode %q", parts[i])
+		}
+	}
+	return strings.Join(parts, ","), nil
 }
 
-func checkpointViewUsesNoImplicitDatabase(source *tree.Select) bool {
-	if source == nil {
-		return false
-	}
-	selectType := reflect.TypeOf((*tree.Select)(nil))
-	tableNameType := reflect.TypeOf((*tree.TableName)(nil))
-	withType := reflect.TypeOf((*tree.With)(nil))
-	funcExprType := reflect.TypeOf((*tree.FuncExpr)(nil))
-	seen := make(map[uintptr]struct{})
-	var walk func(reflect.Value, map[string]struct{}) bool
-	var walkStructFields func(reflect.Value, map[string]struct{}, string) bool
-	walkStructFields = func(value reflect.Value, cteScope map[string]struct{}, skip string) bool {
-		for i := 0; i < value.NumField(); i++ {
-			if value.Type().Field(i).Name == skip {
-				continue
-			}
-			if !walk(value.Field(i), cteScope) {
-				return false
-			}
-		}
-		return true
-	}
-	walk = func(value reflect.Value, cteScope map[string]struct{}) bool {
-		if !value.IsValid() {
-			return true
-		}
-		switch value.Kind() {
-		case reflect.Interface:
-			if value.IsNil() {
-				return true
-			}
-			return walk(value.Elem(), cteScope)
-		case reflect.Pointer:
-			if value.IsNil() {
-				return true
-			}
-			if value.Type() == tableNameType {
-				if !value.CanInterface() {
-					return false
-				}
-				name := value.Interface().(*tree.TableName)
-				if name.ObjectName == "" || name.SchemaName != "" {
-					return true
-				}
-				_, isCTE := cteScope[strings.ToLower(string(name.ObjectName))]
-				return isCTE
-			}
-			if value.Type() == withType {
-				return false
-			}
-			if value.Type() == funcExprType {
-				if !value.CanInterface() {
-					return false
-				}
-				function := value.Interface().(*tree.FuncExpr)
-				if function.FuncName != nil {
-					switch strings.ToLower(function.FuncName.Origin()) {
-					case "database", "schema", "current_database", "current_schema":
-						return false
-					}
-				}
-			}
-			pointer := value.Pointer()
-			if _, ok := seen[pointer]; ok {
-				return true
-			}
-			seen[pointer] = struct{}{}
-			defer delete(seen, pointer)
-			if value.Type() == selectType {
-				selectNode := value.Interface().(*tree.Select)
-				if selectNode.With == nil {
-					return walkStructFields(value.Elem(), cteScope, "")
-				}
-				localScope := make(map[string]struct{}, len(cteScope)+len(selectNode.With.CTEs))
-				for name := range cteScope {
-					localScope[name] = struct{}{}
-				}
-				for _, cte := range selectNode.With.CTEs {
-					if cte == nil || cte.Name == nil || cte.Name.Alias == "" || cte.Stmt == nil {
-						return false
-					}
-					name := strings.ToLower(string(cte.Name.Alias))
-					if selectNode.With.IsRecursive {
-						localScope[name] = struct{}{}
-					}
-					if !walk(reflect.ValueOf(cte.Stmt), localScope) {
-						return false
-					}
-					localScope[name] = struct{}{}
-				}
-				return walkStructFields(value.Elem(), localScope, "With")
-			}
-			return walk(value.Elem(), cteScope)
-		case reflect.Struct:
-			return walkStructFields(value, cteScope, "")
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				if !walk(value.Index(i), cteScope) {
-					return false
-				}
-			}
-		case reflect.Map:
-			iterator := value.MapRange()
-			for iterator.Next() {
-				if !walk(iterator.Key(), cteScope) || !walk(iterator.Value(), cteScope) {
-					return false
-				}
-			}
-		}
-		return true
-	}
-	return walk(reflect.ValueOf(source), nil)
-}
 func isLocalInfileExternalTableDDL(ddl string) bool {
 	if !hasSQLKeywordSequence(ddl, "CREATE", "EXTERNAL", "TABLE") {
 		return false

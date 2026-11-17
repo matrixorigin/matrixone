@@ -477,8 +477,11 @@ func constructCreateTableSQLWithFormat(
 				}
 			}
 			if indexdef.Comment != "" {
-				formattedComment := formatStr(indexdef.Comment)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
+				formattedComment := formatDDLString(indexdef.Comment, noBackslashEscapes)
+				if legacySchemaHash {
+					formattedComment = "'" + formatStr(indexdef.Comment) + "'"
+				}
+				indexStr += " COMMENT " + formattedComment
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -486,7 +489,7 @@ func constructCreateTableSQLWithFormat(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + " COMMENT " + formattedComment,
 					}
 				}
 			}

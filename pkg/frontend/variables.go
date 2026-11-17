@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -724,6 +725,7 @@ func (svst SystemVariableSetType) bitmap() uint64 {
 
 func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 	bld := strings.Builder{}
+	first := true
 	bitCount := 64 - bits2.LeadingZeros64(bits)
 	if bitCount > len(svst.bitIndex2Value) {
 		return "", errorValuesAreNotEnough
@@ -736,18 +738,14 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if !first {
 				bld.WriteByte(',')
 			}
+			first = false
+			bld.WriteString(v)
 		}
 	}
-
-	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bld.String(), nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -1298,7 +1296,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
+		Type:              InitSystemVariableSetType("sql_mode", mysql.SystemSQLModes()...),
 		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
 	},
 	"completion_type": {
@@ -4196,57 +4194,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("sidecar_url"),
 		Default:           "",
 	},
-}
-
-// NormalizePersistedSQLMode validates and canonicalizes a SQL mode read from
-// catalog metadata using the same token set as SET sql_mode. ANSI was stored
-// as the truncated legacy token ANS by older view metadata writers.
-func NormalizePersistedSQLMode(mode string) (string, error) {
-	if len(mode) > 4096 {
-		return "", fmt.Errorf("view SQL mode is too long")
-	}
-	mode = strings.TrimSpace(mode)
-	if mode == "" {
-		return "", nil
-	}
-	parts := strings.Split(mode, ",")
-	for i, part := range parts {
-		part = strings.ToUpper(strings.TrimSpace(part))
-		if part == "ANS" {
-			part = "ANSI"
-		}
-		parts[i] = part
-	}
-	definition, ok := gSysVarsDefs["sql_mode"]
-	if !ok || definition.Type == nil {
-		return "", fmt.Errorf("sql_mode system variable definition is unavailable")
-	}
-	setType, ok := definition.Type.(SystemVariableSetType)
-	if !ok {
-		return "", fmt.Errorf("sql_mode system variable is not a SET")
-	}
-	allowed := setType.Values()
-	allowedByName := make(map[string]struct{}, len(allowed))
-	selected := make(map[string]struct{}, len(parts))
-	for _, token := range allowed {
-		allowedByName[strings.ToUpper(token)] = struct{}{}
-	}
-	for _, part := range parts {
-		if _, ok := allowedByName[part]; !ok {
-			return "", fmt.Errorf("invalid persisted view SQL mode %q", part)
-		}
-		selected[part] = struct{}{}
-	}
-	if _, err := definition.Type.ConvertFromString(strings.Join(parts, ",")); err != nil {
-		return "", fmt.Errorf("invalid persisted view SQL mode: %w", err)
-	}
-	canonicalParts := make([]string, 0, len(selected))
-	for _, token := range allowed {
-		if _, ok := selected[strings.ToUpper(token)]; ok {
-			canonicalParts = append(canonicalParts, strings.ToUpper(token))
-		}
-	}
-	return strings.Join(canonicalParts, ","), nil
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {

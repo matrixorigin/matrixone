@@ -40,17 +40,12 @@ func TestCheckpointViewRestoreCreationContext(t *testing.T) {
 		{"no backslash escapes", `CREATE VIEW old AS SELECT 'a\b' AS value`, "NO_BACKSLASH_ESCAPES"},
 		{"ansi quotes", `CREATE VIEW "old" AS SELECT "col" FROM source`, "ANSI_QUOTES"},
 		{"pipes", `CREATE VIEW old AS SELECT 'a'||'b' AS value`, "PIPES_AS_CONCAT"},
-		{"legacy ANSI alias", `CREATE VIEW old AS SELECT 1`, "ANS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := checkpointViewTestData(t, tc.stmt, tc.mode, "source_db", "INVOKER")
 			view, err := prepareCheckpointViewRestore(context.Background(), table, data)
 			require.NoError(t, err)
-			wantMode := tc.mode
-			if wantMode == "ANS" {
-				wantMode = "ANSI"
-			}
-			require.Equal(t, wantMode, view.sqlMode)
+			require.Equal(t, tc.mode, view.sqlMode)
 			require.Equal(t, "source_db", view.defaultDB)
 			require.Equal(t, "INVOKER", view.security)
 			require.Contains(t, view.ddl, "VIEW `view_db`.`actual` AS")
@@ -77,30 +72,14 @@ func TestCheckpointViewRestoreRejectsUnverifiedMetadata(t *testing.T) {
 
 func TestCheckpointViewWithoutDefaultDatabase(t *testing.T) {
 	table := checkpointtool.TableCatalogEntry{TableID: 1, DatabaseName: "db", TableName: "v", RelKind: "v"}
-	for _, tc := range []struct {
-		stmt, want, mode string
-	}{
-		{"CREATE VIEW db.expression_v AS SELECT 1 + 1 AS n", "CREATE VIEW `db`.`v` AS SELECT 1 + 1 AS n", "ANS"},
-		{"CREATE VIEW db.qualified_v AS SELECT n FROM db.t", "CREATE VIEW `db`.`v` AS SELECT n FROM db.t", "ANS"},
-		{"CREATE VIEW db.cte_v AS WITH q AS (SELECT n FROM db.t) SELECT n FROM q", "CREATE VIEW `db`.`v` AS WITH q AS (SELECT n FROM db.t) SELECT n FROM q", "ANS"},
-	} {
-		view, err := prepareCheckpointViewRestore(context.Background(), table,
-			checkpointViewTestData(t, tc.stmt, tc.mode, "", "DEFINER"))
-		require.NoError(t, err)
-		require.Equal(t, "db", view.defaultDB)
-		require.Equal(t, "ANSI", view.sqlMode)
-		require.Equal(t, tc.want, view.ddl)
-	}
-	for _, stmt := range []string{
-		"CREATE VIEW db.old AS SELECT * FROM source",
-		"CREATE VIEW db.old AS SELECT (SELECT n FROM source) AS n",
-		"CREATE VIEW db.old AS SELECT DATABASE() AS db_name",
-		"CREATE VIEW db.old AS WITH q AS (SELECT n FROM source) SELECT n FROM q",
-	} {
-		_, err := prepareCheckpointViewRestore(context.Background(), table,
-			checkpointViewTestData(t, stmt, "", "", "DEFINER"))
-		require.ErrorContains(t, err, "unqualified or unsupported relation")
-	}
+	view, err := prepareCheckpointViewRestore(context.Background(), table,
+		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT 1 AS n", "", "", "DEFINER"))
+	require.NoError(t, err)
+	require.Equal(t, "db", view.defaultDB)
+	require.Equal(t, "CREATE VIEW `db`.`v` AS SELECT 1 AS n", view.ddl)
+	_, err = prepareCheckpointViewRestore(context.Background(), table,
+		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT * FROM source", "", "", "DEFINER"))
+	require.ErrorContains(t, err, "not a self-contained literal SELECT")
 }
 
 func TestCheckpointViewScriptRestoresModeAndDatabase(t *testing.T) {
@@ -139,7 +118,7 @@ func TestCheckpointViewCrossDatabaseOrderAndContext(t *testing.T) {
 		10: checkpointViewTestData(t, "CREATE VIEW consumer AS SELECT * FROM base_view", "", "source_db", "DEFINER"),
 		11: checkpointViewTestData(t, "CREATE VIEW base_view AS SELECT 1 AS id", "PIPES_AS_CONCAT", "source_db", "INVOKER"),
 	}
-	order := buildRestoreTableOrder([]checkpointtool.TableCatalogEntry{consumer, dependency}, data)
+	order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{consumer, dependency}, data)
 	require.Equal(t, []checkpointtool.TableCatalogEntry{dependency, consumer}, order.tables)
 
 	// A selected default database containing only unrelated views may otherwise
@@ -179,6 +158,74 @@ func TestCheckpointViewCrossDatabaseANSIQuotedDependency(t *testing.T) {
 		10: checkpointViewTestData(t, `CREATE VIEW consumer AS SELECT * FROM "other_db"."dep_view"`, "ANSI_QUOTES", "first_db", "DEFINER"),
 		11: checkpointViewTestData(t, "CREATE VIEW dep_view AS SELECT 1 AS id", "", "other_db", "DEFINER"),
 	}
-	order := buildRestoreTableOrder([]checkpointtool.TableCatalogEntry{consumer, dependency}, data)
+	order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{consumer, dependency}, data)
+	require.Equal(t, []checkpointtool.TableCatalogEntry{dependency, consumer}, order.tables)
+}
+
+func TestCheckpointReplaySQLModeServerValues(t *testing.T) {
+	for _, tc := range []struct{ saved, want string }{
+		{"", ""},
+		{"ANS", ""}, // historical ANSI value had no recognized parser flags
+		{"ANSI", "ANSI"},
+		{"ANSI_QUOTES,NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"},
+		{"ansi, only_full_group_by", "ANSI,ONLY_FULL_GROUP_BY"},
+	} {
+		t.Run(tc.saved, func(t *testing.T) {
+			got, err := checkpointReplaySQLMode(tc.saved)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	for _, mode := range []string{"ANSIONLY_FULL_GROUP_BY", "UNKNOWN", "ANSI'; DROP TABLE t"} {
+		_, err := checkpointReplaySQLMode(mode)
+		require.Error(t, err)
+	}
+}
+
+func TestCheckpointViewWithoutDefaultDatabaseDependencies(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{TableID: 1, DatabaseName: "db", TableName: "v", RelKind: "v"}
+	for _, tc := range []struct {
+		name, sql, database, relation string
+	}{
+		{"expression", "CREATE VIEW db.v AS SELECT (1 + 2) * -3 AS n", "", ""},
+		{"qualified", "CREATE VIEW db.v AS SELECT n FROM other.t", "other", "t"},
+		{"qualified trivia", "CREATE VIEW db.v AS SELECT n FROM `other` /* comment */ . `t`", "other", "t"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view, err := prepareCheckpointViewRestore(context.Background(), table, checkpointViewTestData(t, tc.sql, "", "", "DEFINER"))
+			require.NoError(t, err)
+			require.Equal(t, tc.database, view.sourceDatabase)
+			require.Equal(t, tc.relation, view.sourceTable)
+		})
+	}
+	for _, sql := range []string{
+		"CREATE VIEW db.v AS SELECT n FROM t",
+		"CREATE VIEW db.v AS SELECT f(1)",
+		"CREATE VIEW db.v AS SELECT (SELECT 1)",
+		"CREATE VIEW db.v AS SELECT n FROM other.t WHERE n = 1",
+		"CREATE VIEW db.v AS SELECT n FROM other.t JOIN other.u ON t.n = u.n",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := prepareCheckpointViewRestore(context.Background(), table, checkpointViewTestData(t, sql, "", "", "DEFINER"))
+			require.Error(t, err)
+		})
+	}
+	dependency := checkpointtool.TableCatalogEntry{TableID: 2, DatabaseName: "other", TableName: "t", RelKind: "v"}
+	data := map[uint64]*checkpointtool.TableDumpData{
+		1: checkpointViewTestData(t, "CREATE VIEW db.v AS SELECT n FROM `other` /* comment */ . `t`", "", "", "DEFINER"),
+		2: checkpointViewTestData(t, "CREATE VIEW other.t AS SELECT 1 AS n", "", "", "DEFINER"),
+	}
+	order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{table, dependency}, data)
+	require.Equal(t, []checkpointtool.TableCatalogEntry{dependency, table}, order.tables)
+}
+
+func TestCheckpointViewQualifiedDependencyWithDifferentDefault(t *testing.T) {
+	consumer := checkpointtool.TableCatalogEntry{TableID: 10, DatabaseName: "app", TableName: "a_consumer", RelKind: "v"}
+	dependency := checkpointtool.TableCatalogEntry{TableID: 11, DatabaseName: "app", TableName: "z_dep", RelKind: "v"}
+	data := map[uint64]*checkpointtool.TableDumpData{
+		10: checkpointViewTestData(t, "CREATE VIEW app.a_consumer AS SELECT * FROM app /* source */ . z_dep", "", "other", "DEFINER"),
+		11: checkpointViewTestData(t, "CREATE VIEW app.z_dep AS SELECT 1 AS n", "", "app", "DEFINER"),
+	}
+	order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{consumer, dependency}, data)
 	require.Equal(t, []checkpointtool.TableCatalogEntry{dependency, consumer}, order.tables)
 }
