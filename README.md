@@ -57,6 +57,7 @@ Contents
 * [Get Started in 60 Seconds](#️-get-started-in-60-seconds)
 * [Tutorials & Demos](#-tutorials--demos)
 * [Installation & Deployment](#️-installation--deployment)
+* [One-Click Deploy](#one-click-deploy)
 * [Architecture](#architecture)
 * [Python SDK](#python-sdk)
 * [Citing MatrixOne](#citation)
@@ -317,6 +318,10 @@ Build MatrixOne from source for development, customization, or contributing. Req
 Docker standalone, Kubernetes, binary packages, and more deployment options.
 
 📖 **[All Installation Options →](INSTALLATION.md)**
+
+## 🚀 One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/MatrixOne/)
 
 ## 🔎 <a id="architecture">Architecture</a>
 
