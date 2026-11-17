@@ -46,12 +46,14 @@ func TestIssue31824SelfJoinMultiTargetUpdateUnique(t *testing.T) {
 
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
-		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cleanupCancel()
-			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
+			if _, err := db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName)); err != nil {
+				t.Errorf("drop test database %s: %v", dbName, err)
+			}
 		}()
+		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
 
 		originalRows := []string{"1,1,10,100", "2,1,20,200"}
 		conflictTests := []struct {
