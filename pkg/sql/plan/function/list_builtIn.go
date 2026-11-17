@@ -4068,6 +4068,25 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `__mo_enum_set_ci_key`
+	// Internal only: byte equality of these keys is general-ci equality.
+	{
+		functionId: MYSQL_SPECIAL_CI_KEY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    stringDomainFixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType:    physicalCollationKeyReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInMySQLSpecialGeneralCIKey
+				},
+			},
+		},
+	},
+
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,

@@ -1933,7 +1933,7 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 	pos := int32(len(node.ProjectList))
 	node.ProjectList = append(node.ProjectList, bitmap)
 	bitmapType = bitmap.Typ
-	bitmapType.Enumvalues = ""
+	clearSetDisplayMetadata(&bitmapType)
 	builder.setBitmapByDisplayNode[key] = pos
 	return GetColExpr(bitmapType, outputTag, pos), true
 }

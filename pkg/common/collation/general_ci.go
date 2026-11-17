@@ -80,6 +80,21 @@ func CompareGeneralCI(a, b []byte) int {
 	return 0
 }
 
+// GeneralCIEqualityKey returns a key whose byte equality matches
+// CompareGeneralCI equality, including PAD SPACE and malformed UTF-8. Each
+// weight occupies three unsigned big-endian bytes. The key is not ordered:
+// virtual padding spaces cannot be represented by a finite byte terminator.
+func GeneralCIEqualityKey(value []byte) []byte {
+	value = bytes.TrimRight(value, " ")
+	key := make([]byte, 0, 3*len(value))
+	for len(value) > 0 {
+		weight, size := NextGeneralCIWeight(value)
+		key = append(key, byte(weight>>16), byte(weight>>8), byte(weight))
+		value = value[size:]
+	}
+	return key
+}
+
 func NextGeneralCIWeight(value []byte) (uint32, int) {
 	r, size := utf8.DecodeRune(value)
 	if r == utf8.RuneError && size == 1 {

@@ -936,6 +936,10 @@ type BindContext struct {
 	// The generated plan consumes the provenance by materializing an ordinary
 	// numeric sort expression, so this metadata never crosses the plan wire.
 	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// mysqlSpecialComparisonTypes records equality provenance independently of
+	// storage order. A present nil value explicitly clears comparison provenance
+	// when a query boundary or multi-input construct makes it unsafe.
+	mysqlSpecialComparisonTypes map[int32]*plan.Type
 	// mysqlSpecialCanonicalTypes records outputs whose SQL-visible value has
 	// already passed through GROUP BY or DISTINCT and must be canonically
 	// re-encoded when a persisted View exposes an ENUM/SET catalog type.
@@ -1420,6 +1424,10 @@ type Binding struct {
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.
 	mysqlSpecialOrderTypes []*plan.Type
+	// mysqlSpecialComparisonTypes is aligned with cols and carries equality
+	// provenance through expressions, such as explicit COLLATE, that clear
+	// storage-order provenance. It remains planner-local metadata.
+	mysqlSpecialComparisonTypes []*plan.Type
 	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
 	// post-semantic canonical-value contract through transparent bindings.
 	mysqlSpecialCanonicalTypes []*plan.Type

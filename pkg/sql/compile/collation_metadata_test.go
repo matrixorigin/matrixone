@@ -50,6 +50,54 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
 }
 
+func TestUnicodeSetRemoteBatchAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	logical := pb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b", Charset: 4, CollationVersion: 1}
+	storage := types.MustTypeFromPlan(logical)
+	source := batch.NewWithSize(1)
+	defer source.Clean(mp)
+	source.Vecs[0] = vector.NewVec(storage)
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], uint64(3), false, mp))
+	source.SetRowCount(1)
+	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	require.NoError(t, err)
+	decoded, err := decodeBatch(mp, data)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+	defer decoded.Clean(mp)
+	require.Zero(t, decoded.Vecs[0].GetType().Charset)
+	require.Zero(t, decoded.Vecs[0].GetType().CollationVersion)
+	require.Equal(t, []uint64{3}, vector.MustFixedColWithTypeCheck[uint64](decoded.Vecs[0]))
+
+	// Raw decoding remains fail-closed. Forge the same physical payload as an
+	// ordinary versioned uint64; it is valid native metadata but an invalid plan
+	// type, and batch admission must reject it before execution.
+	wireSource := vector.NewVec(storage)
+	defer wireSource.Free(mp)
+	require.NoError(t, vector.AppendFixed(wireSource, uint64(3), false, mp))
+	wire, err := wireSource.MarshalBinary()
+	require.NoError(t, err)
+	wire[1+1] = 4 // Type.Charset, after the vector class byte.
+	wire[1+3] = 1 // Type.CollationVersion.
+	forged := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, forged.UnmarshalBinary(wire))
+	require.Equal(t, uint8(1), forged.GetType().CollationVersion)
+	invalid := batch.NewWithSize(1)
+	defer invalid.Clean(mp)
+	invalid.Vecs[0] = forged
+	invalid.SetRowCount(1)
+	data, err = invalid.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	require.NoError(t, err)
+	decoded, err = decodeBatch(mp, data)
+	require.ErrorContains(t, err, "collation revision on a non-string type")
+	require.Nil(t, decoded)
+}
+
 func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	typ := pb.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1}

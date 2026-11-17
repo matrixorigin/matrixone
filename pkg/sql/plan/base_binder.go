@@ -993,7 +993,12 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			args[len(args)-1] = virtualRead
 		}
 
-		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
+		displayValue, err := BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
+		if err != nil {
+			return nil, err
+		}
+		inheritEnumOrSetDisplayCollation(displayValue, typ)
+		return displayValue, nil
 	}
 
 	if colPos != NotFound {
@@ -4955,6 +4960,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, rewriteErr
 	}
 	args = rewrittenArgs
+	args, rewriteErr = b.rewriteMySQLSpecialGeneralCIComparison(b.GetContext(), name, args)
+	if rewriteErr != nil {
+		return nil, rewriteErr
+	}
 	// Preserve the source expression behind derived columns before the generic
 	// plan binder loses that query-block boundary. A derived column can have a
 	// binary-shaped common type while still carrying text rows at runtime.
@@ -5925,7 +5934,7 @@ func rewriteFindInSetStoredOperand(args []*Expr) ([]*Expr, bool) {
 	} else if isSetPlanType(&args[1].Typ) {
 		storageTyp = DeepCopyType(&args[1].Typ)
 		bitmap = DeepCopyExpr(args[1])
-		bitmap.Typ.Enumvalues = ""
+		clearSetDisplayMetadata(&bitmap.Typ)
 	} else {
 		return args, false
 	}
@@ -5981,7 +5990,7 @@ func rewriteFindInSetSetProvenance(
 	}
 	// This is an ordinary physical bitmap inside the hidden overload.  Do not
 	// let a later SET-aware assignment/cast treat it as a display value again.
-	bitmap.Typ.Enumvalues = ""
+	clearSetDisplayMetadata(&bitmap.Typ)
 
 	rewritten := make([]*Expr, 0, 3)
 	rewritten = append(rewritten, args[0], bitmap)
@@ -7932,6 +7941,11 @@ func bindFuncExprImplByPlanExpr(
 		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
+	}
+	args, err = rewriteMySQLSpecialGeneralCIComparison(
+		ctx, name, args, mysqlSpecialDisplayTypeForComparison)
+	if err != nil {
+		return nil, err
 	}
 	args, err = normalizeExpressionCollations(ctx, name, args)
 	if err != nil {
@@ -12973,10 +12987,28 @@ func makeEnumOrSetDisplayValue(ctx context.Context, expr *Expr) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
+	displayValue, err := BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
 		makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
 		expr,
 	})
+	if err != nil {
+		return nil, err
+	}
+	inheritEnumOrSetDisplayCollation(displayValue, &expr.Typ)
+	return displayValue, nil
+}
+
+// ENUM/SET display functions return VARCHAR but retain their column's
+// comparison collation and implicit coercibility.
+func inheritEnumOrSetDisplayCollation(displayValue *Expr, source *plan.Type) {
+	displayValue.Typ.Charset = source.Charset
+	displayValue.Typ.CollationVersion = source.CollationVersion
+	displayValue.Typ.CollationCoercibility = 2
+	displayValue.Typ.CollationCoercibilitySet = true
+	if source.CollationCoercibilitySet {
+		displayValue.Typ.CollationCoercibility = source.CollationCoercibility
+	}
+	displayValue.Typ.CollationMergeConflict = source.CollationMergeConflict
 }
 
 func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
@@ -12991,7 +13023,7 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 	// The hidden projection is the physical uint64 representation, not a SQL
 	// SET value. Clear the member metadata so downstream assignment treats it
 	// as an ordinary bitmap and does not convert it back through SET semantics.
-	bitmap.Typ.Enumvalues = ""
+	clearSetDisplayMetadata(&bitmap.Typ)
 	return bitmap, true
 }
 

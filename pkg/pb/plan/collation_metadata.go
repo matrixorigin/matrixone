@@ -25,7 +25,7 @@ func (t Type) ValidateCollation() error {
 	if t.CollationCoercibility > 6 || (!t.CollationCoercibilitySet && t.CollationCoercibility != 0) {
 		return moerr.NewInvalidInputNoCtx("invalid collation coercibility")
 	}
-	if isPlanMySQLStringType(t.Id) {
+	if isPlanMySQLStringType(t.Id) || isPlanEnumOrSetType(t) {
 		return collation.ValidateMetadata(t.Charset, t.CollationVersion)
 	}
 	if t.CollationVersion != 0 {
@@ -69,6 +69,12 @@ func (t *TableDef) ValidateCollation() error {
 
 func (t *IndexDef) ValidateCollation() error {
 	return collation.ValidateKeyFormat(t.KeyFormat)
+}
+
+// ENUM/SET expression metadata describes their display labels. Their physical
+// ordinal/bitmap vectors do not own a collation revision or a native key format.
+func isPlanEnumOrSetType(t Type) bool {
+	return t.Id == 66 || (t.Id == 28 && t.Enumvalues != "")
 }
 
 func requireLegacyType(value Type) error {

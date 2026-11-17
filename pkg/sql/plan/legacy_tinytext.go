@@ -39,9 +39,10 @@ type legacyTinyTextColumn struct {
 }
 
 type legacyTinyTextCreateEvidence struct {
-	columns  []legacyTinyTextColumn
-	likeDB   string
-	likeName string
+	columns        []legacyTinyTextColumn
+	enumSetColumns []legacyEnumSetColumn
+	likeDB         string
+	likeName       string
 }
 
 // LegacyTinyTextTableResolver returns a raw catalog definition for a table in
@@ -320,13 +321,24 @@ func parseLegacyTinyTextEvidence(ctx context.Context, createSQL string) (legacyT
 			stmt.Free()
 			return legacyTinyTextCreateEvidence{}, moerr.NewInvalidInput(ctx, "stored SQL is not a CREATE TABLE statement")
 		}
-		evidence := legacyTinyTextEvidenceFromCreate(createTable)
+		evidence, err := legacyTinyTextEvidenceFromCreate(ctx, createTable)
 		stmt.Free()
+		if err != nil {
+			return legacyTinyTextCreateEvidence{}, err
+		}
 
 		if successfulModes == 0 {
 			recovered = evidence
-		} else if !equalLegacyTinyTextEvidence(recovered, evidence) {
-			return legacyTinyTextCreateEvidence{}, moerr.NewInvalidInput(ctx, "stored SQL is ambiguous across SQL modes")
+		} else {
+			if !equalLegacyTinyTextEvidence(recovered, evidence) {
+				return legacyTinyTextCreateEvidence{}, moerr.NewInvalidInput(ctx, "stored SQL is ambiguous across SQL modes")
+			}
+			if !equalLegacyEnumSetColumns(recovered.enumSetColumns, evidence.enumSetColumns) {
+				// SQL modes can change only the ENUM/SET declaration evidence.
+				// Keep independently trustworthy TEXT recovery available while
+				// suppressing the ambiguous ENUM/SET identities.
+				recovered.enumSetColumns = nil
+			}
 		}
 		successfulModes++
 	}
@@ -336,14 +348,21 @@ func parseLegacyTinyTextEvidence(ctx context.Context, createSQL string) (legacyT
 	return recovered, nil
 }
 
-func legacyTinyTextEvidenceFromCreate(stmt *tree.CreateTable) legacyTinyTextCreateEvidence {
+func legacyTinyTextEvidenceFromCreate(ctx context.Context, stmt *tree.CreateTable) (legacyTinyTextCreateEvidence, error) {
 	if stmt.IsAsLike {
 		return legacyTinyTextCreateEvidence{
 			likeDB:   string(stmt.LikeTableName.Schema()),
 			likeName: string(stmt.LikeTableName.Name()),
-		}
+		}, nil
 	}
-	return legacyTinyTextCreateEvidence{columns: tinyTextColumnsFromLegacyCreate(stmt)}
+	enumSetColumns, err := legacyEnumSetColumnsFromCreate(ctx, stmt)
+	if err != nil {
+		return legacyTinyTextCreateEvidence{}, err
+	}
+	return legacyTinyTextCreateEvidence{
+		columns:        tinyTextColumnsFromLegacyCreate(stmt),
+		enumSetColumns: enumSetColumns,
+	}, nil
 }
 
 func tinyTextColumnsFromLegacyCreate(stmt *tree.CreateTable) []legacyTinyTextColumn {
@@ -389,6 +408,26 @@ func equalLegacyTinyTextEvidence(left, right legacyTinyTextCreateEvidence) bool 
 		if left.columns[index].ordinal != right.columns[index].ordinal ||
 			!strings.EqualFold(left.columns[index].name, right.columns[index].name) ||
 			left.columns[index].width != right.columns[index].width {
+			return false
+		}
+	}
+	return true
+}
+
+func equalLegacyEnumSetColumns(left, right []legacyEnumSetColumn) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftColumn := left[index]
+		rightColumn := right[index]
+		if leftColumn.ordinal != rightColumn.ordinal ||
+			!strings.EqualFold(leftColumn.name, rightColumn.name) ||
+			leftColumn.inheritTableCharset != rightColumn.inheritTableCharset ||
+			leftColumn.typ.Id != rightColumn.typ.Id ||
+			leftColumn.typ.Enumvalues != rightColumn.typ.Enumvalues ||
+			leftColumn.typ.Charset != rightColumn.typ.Charset ||
+			leftColumn.typ.CollationVersion != rightColumn.typ.CollationVersion {
 			return false
 		}
 	}

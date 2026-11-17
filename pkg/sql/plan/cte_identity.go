@@ -39,17 +39,17 @@ func (e *cteEvaluation) merge(other cteEvaluation) {
 // boundCTE is a statement-local publication descriptor, never a cache of rows.
 // Runtime generations and budgets remain owned by Compile or dependent.region.
 type boundCTE struct {
-	ref                        *CTERef
-	evaluation                 cteEvaluation
-	hasSingleRow               bool
-	sourceStep                 int32
-	output                     cteOccurrence
-	provenance                 []OutputColumnProvenance
-	orderTypes, canonicalTypes []*planpb.Type
-	semanticKeys               []string
-	database                   string
-	snapshot                   *Snapshot
-	views                      []string
+	ref                                         *CTERef
+	evaluation                                  cteEvaluation
+	hasSingleRow                                bool
+	sourceStep                                  int32
+	output                                      cteOccurrence
+	provenance                                  []OutputColumnProvenance
+	orderTypes, comparisonTypes, canonicalTypes []*planpb.Type
+	semanticKeys                                []string
+	database                                    string
+	snapshot                                    *Snapshot
+	views                                       []string
 }
 
 func (builder *QueryBuilder) appendCTEProducer(root int32, ctx *BindContext, tag int32) int32 {
@@ -83,14 +83,16 @@ func (builder *QueryBuilder) publishBoundCTE(useCtx *BindContext, ref *CTERef, r
 	}
 	bound := &boundCTE{ref: ref, evaluation: evaluation, output: output, database: ctx.cteDatabase, hasSingleRow: !recursive && ctx.hasSingleRow,
 		provenance: make([]OutputColumnProvenance, len(headings)),
-		orderTypes: make([]*planpb.Type, len(headings)), canonicalTypes: make([]*planpb.Type, len(headings)),
-		semanticKeys: append([]string(nil), ctx.projectSemanticKeys...), snapshot: useCtx.snapshot}
+		orderTypes: make([]*planpb.Type, len(headings)), comparisonTypes: make([]*planpb.Type, len(headings)),
+		canonicalTypes: make([]*planpb.Type, len(headings)),
+		semanticKeys:   append([]string(nil), ctx.projectSemanticKeys...), snapshot: useCtx.snapshot}
 	if ref.snapshot != nil {
 		bound.snapshot = ref.snapshot
 	}
 	for i := range headings {
 		bound.provenance[i] = ctx.outputColumnProvenanceForProject(int32(i))
 		bound.orderTypes[i] = ctx.mysqlSpecialOrderTypeForProject(int32(i))
+		bound.comparisonTypes[i] = ctx.mysqlSpecialComparisonTypeForProject(int32(i))
 		bound.canonicalTypes[i] = ctx.mysqlSpecialCanonicalTypeForProject(int32(i))
 	}
 	bound.sourceStep = builder.appendCTEProducer(root, ctx, tag)
@@ -148,6 +150,7 @@ func (builder *QueryBuilder) bindCTEReader(useCtx *BindContext, ref *CTERef, bou
 	for i := range projects {
 		projects[i] = GetColExpr(occurrence.types[i], occurrence.rootTag, int32(i))
 		ctx.setMySQLSpecialOrderType(int32(i), DeepCopyType(bound.orderTypes[i]))
+		ctx.setMySQLSpecialComparisonType(int32(i), bound.comparisonTypes[i])
 		ctx.setMySQLSpecialCanonicalType(int32(i), bound.canonicalTypes[i])
 		if ctx.outputColumnProvenance == nil {
 			ctx.outputColumnProvenance = make(map[int32]OutputColumnProvenance)

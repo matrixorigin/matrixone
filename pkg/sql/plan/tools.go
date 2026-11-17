@@ -23,6 +23,8 @@ const (
 	moSetCastValueToIndexFun      = "cast_set_value_to_index"
 	moSetCastIndexValueToIndexFun = "cast_set_index_value_to_index"
 
+	moMySQLSpecialGeneralCIKeyFun = "__mo_enum_set_ci_key"
+
 	moGeometryCastToSubtypeFun = "cast_geometry_to_subtype"
 	moJsonCastToArrayFun       = "cast_json_to_array"
 )

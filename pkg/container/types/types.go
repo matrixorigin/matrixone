@@ -373,7 +373,10 @@ func (t *Type) Unmarshal(data []byte) error {
 // ValidateCollation validates a type without admitting new SQL semantics.
 // Numeric CAST's private Charset=255 marker is not a string identity.
 func (t Type) ValidateCollation() error {
-	if t.Oid.IsMySQLString() {
+	// SET shares its physical uint64 type with ordinary integers; EnumValues is
+	// stored beside this type in the catalog. Plan admission distinguishes those
+	// columns, while this codec must retain the display labels' collation.
+	if t.Oid.IsMySQLString() || t.Oid == T_enum || (t.Oid == T_uint64 && t.Charset != 255) {
 		return collation.ValidateMetadata(uint32(t.Charset), uint32(t.CollationVersion))
 	}
 	if t.CollationVersion != 0 {

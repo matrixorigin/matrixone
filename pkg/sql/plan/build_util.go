@@ -601,11 +601,15 @@ func applyDefaultAndColumnAttributesToType(
 func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
-		typ.Charset = charset
-		typ.CollationVersion = uint32(types.CollationVersionLegacy)
-		if types.IsUnicodeCollation(uint8(charset)) {
-			typ.CollationVersion = uint32(types.CollationVersionV1)
+	default:
+		if !isEnumOrSetPlanType(typ) {
+			return
 		}
+	}
+	typ.Charset = charset
+	typ.CollationVersion = uint32(types.CollationVersionLegacy)
+	if types.IsUnicodeCollation(uint8(charset)) {
+		typ.CollationVersion = uint32(types.CollationVersionV1)
 	}
 }
 

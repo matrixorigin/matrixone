@@ -60,6 +60,25 @@ func TestCollationMetadataWireAndAdmission(t *testing.T) {
 	require.True(t, legacy.SameCollation(legacy))
 }
 
+func TestEnumSetCollationMetadataIsExpressionOnly(t *testing.T) {
+	for _, typ := range []Type{
+		{Id: 66, Enumvalues: "Red,GREEN", Charset: 4, CollationVersion: 1},
+		{Id: 28, Enumvalues: "a,b", Charset: 4, CollationVersion: 1},
+	} {
+		require.NoError(t, typ.ValidateCollation())
+		wire, err := typ.Marshal()
+		require.NoError(t, err)
+		var restored Type
+		require.NoError(t, restored.Unmarshal(wire))
+		require.Equal(t, typ, restored)
+		require.NoError(t, RequireLegacyCollations(&restored))
+	}
+
+	ordinaryUint64 := Type{Id: 28, Charset: 4, CollationVersion: 1}
+	require.Error(t, ordinaryUint64.ValidateCollation())
+	require.Error(t, RequireLegacyCollations(&ordinaryUint64))
+}
+
 func TestCollationMetadataUnknownValuesFailClosed(t *testing.T) {
 	for _, typ := range []Type{
 		{Id: 61, Charset: 259}, {Id: 61, Charset: 255}, {Id: 61, Charset: 4},

@@ -71,6 +71,46 @@ func TestVersionedCollationTypeRoundTrip(t *testing.T) {
 	}))
 }
 
+func TestEnumSetCollationCatalogRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  plan.Type
+	}{
+		{name: "ENUM legacy", typ: plan.Type{Id: int32(T_enum), Enumvalues: "Red,GREEN", Charset: uint32(CharsetUTF8)}},
+		{name: "ENUM Unicode", typ: plan.Type{Id: int32(T_enum), Enumvalues: "Red,GREEN", Charset: uint32(CharsetUTF8MB4UnicodeCI), CollationVersion: uint32(CollationVersionV1)}},
+		{name: "SET legacy", typ: plan.Type{Id: int32(T_uint64), Enumvalues: "a,b", Charset: uint32(CharsetUTF8)}},
+		{name: "SET Unicode", typ: plan.Type{Id: int32(T_uint64), Enumvalues: "a,b", Charset: uint32(CharsetUTF8MB4UnicodeCI), CollationVersion: uint32(CollationVersionV1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, err := tc.typ.Marshal()
+			require.NoError(t, err)
+			var received plan.Type
+			require.NoError(t, received.Unmarshal(wire))
+
+			runtimeType, err := TypeFromPlan(received)
+			require.NoError(t, err)
+			want := NewWithCharset(T(tc.typ.Id), tc.typ.Width, tc.typ.Scale, uint8(tc.typ.Charset))
+			want.CollationVersion = uint8(tc.typ.CollationVersion)
+			require.Equal(t, want, runtimeType)
+			require.NoError(t, runtimeType.ValidateCollation())
+			require.Equal(t, runtimeType, MustTypeFromPlan(received))
+
+			catalogBytes, err := runtimeType.Marshal()
+			require.NoError(t, err)
+			var decoded Type
+			require.NoError(t, decoded.Unmarshal(catalogBytes))
+			restored := decoded.PlanType()
+			restored.Enumvalues = received.Enumvalues
+			require.Equal(t, received, restored)
+		})
+	}
+
+	ordinaryUint64 := plan.Type{Id: int32(T_uint64), Charset: uint32(CharsetUTF8MB4UnicodeCI), CollationVersion: uint32(CollationVersionV1)}
+	_, err := TypeFromPlan(ordinaryUint64)
+	require.Error(t, err)
+	require.Panics(t, func() { MustTypeFromPlan(ordinaryUint64) })
+}
+
 func TestMergeStringCollationMetadataPreservesRevision(t *testing.T) {
 	native := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB4UnicodeCI)
 	general := New(T_varchar, 1, 0)

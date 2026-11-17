@@ -1,0 +1,518 @@
+DROP DATABASE IF EXISTS issue_31364;
+CREATE DATABASE issue_31364 CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+USE issue_31364;
+CREATE TABLE en2 (id INT, e ENUM('Red','GREEN'));
+INSERT INTO en2 VALUES (1,'Red'), (2,'GREEN'), (3,NULL);
+SELECT id, e FROM en2 WHERE e='RED';
+➤ id[4,32,0]  ¦  e[1,5,0]  𝄀
+1  ¦  Red
+SELECT COUNT(*) FROM en2 WHERE e='red';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM en2 WHERE e='green';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM en2 WHERE e='RED ';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM en2 WHERE e IN ('red','green') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM en2 WHERE e IN ('RED',2) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM en2 WHERE e IN (1,2) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM en2 WHERE e NOT IN ('red','green') ORDER BY id;
+➤ id[4,32,0]
+SELECT id FROM en2 WHERE e != 'RED' ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM en2 WHERE e <=> 'RED' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM en2 WHERE e <=> NULL ORDER BY id;
+➤ id[4,32,0]  𝄀
+3
+SELECT id FROM en2 WHERE e LIKE 'r%' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT COUNT(*) FROM en2 WHERE e='missing';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM en2 WHERE e IS NULL;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM en2 WHERE e=1 ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM (SELECT id, e FROM en2) derived WHERE e='RED' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT (SELECT e FROM en2 WHERE id=1) = 'RED';
+➤ (select e from en2 where id = 1) = RED[-6,8,0]  𝄀
+1
+SELECT (SELECT e FROM en2 WHERE id=3) <=> NULL;
+➤ (select e from en2 where id = 3) <=> null[-6,8,0]  𝄀
+1
+SELECT 'RED' IN (SELECT e FROM en2);
+➤ RED in (select e from en2)[-6,8,0]  𝄀
+1
+SELECT 'RED' NOT IN (SELECT e FROM en2);
+➤ RED not in (select e from en2)[-6,8,0]  𝄀
+0
+SELECT 'missing' IN (SELECT e FROM en2);
+➤ missing in (select e from en2)[-6,8,0]  𝄀
+null
+SELECT 'missing' NOT IN (SELECT e FROM en2);
+➤ missing not in (select e from en2)[-6,8,0]  𝄀
+null
+SELECT COUNT(*) FROM en2 WHERE e COLLATE utf8mb4_bin='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM en2 WHERE e COLLATE utf8mb4_general_ci='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+INSERT INTO en2 VALUES (4,'RED');
+SELECT id, e FROM en2 WHERE id=4;
+➤ id[4,32,0]  ¦  e[1,5,0]  𝄀
+4  ¦  Red
+DELETE FROM en2 WHERE id=4;
+INSERT INTO en2 VALUES (4,2);
+SELECT id, e FROM en2 WHERE id=4;
+➤ id[4,32,0]  ¦  e[1,5,0]  𝄀
+4  ¦  GREEN
+DELETE FROM en2 WHERE id=4;
+CREATE TABLE st1 (id INT, s SET('a','b','c','d'));
+INSERT INTO st1 VALUES (1,'a'), (2,'a,b'), (3,'b,c,d'), (4,'d'), (5,NULL), (6,'');
+SELECT id, s FROM st1 WHERE s='A,B';
+➤ id[4,32,0]  ¦  s[1,7,0]  𝄀
+2  ¦  a,b
+SELECT id FROM st1 WHERE s IN ('A,B','D') ORDER BY id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+4
+SELECT id FROM st1 WHERE s IN ('A,B',4) ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM st1 WHERE s IN (1,3) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM st1 WHERE s NOT IN ('A,B','D') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+6
+SELECT id FROM st1 WHERE s != 'A,B' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4  𝄀
+6
+SELECT id FROM st1 WHERE s <=> 'A,B' ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM st1 WHERE s <=> NULL ORDER BY id;
+➤ id[4,32,0]  𝄀
+5
+SELECT id FROM st1 WHERE s LIKE 'A,%' ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT COUNT(*) FROM st1 WHERE s='B,A';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM st1 WHERE s='missing';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM st1 WHERE s IS NULL;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM st1 WHERE s='' ORDER BY id;
+➤ id[4,32,0]  𝄀
+6
+SELECT id FROM st1 WHERE s=3 ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT (SELECT s FROM st1 WHERE id=2) = 'A,B';
+➤ (select s from st1 where id = 2) = A,B[-6,8,0]  𝄀
+1
+SELECT (SELECT s FROM st1 WHERE id=5) <=> NULL;
+➤ (select s from st1 where id = 5) <=> null[-6,8,0]  𝄀
+1
+SELECT 'A,B' IN (SELECT s FROM st1);
+➤ A,B in (select s from st1)[-6,8,0]  𝄀
+1
+SELECT 'A,B' NOT IN (SELECT s FROM st1);
+➤ A,B not in (select s from st1)[-6,8,0]  𝄀
+0
+SELECT 'missing' IN (SELECT s FROM st1);
+➤ missing in (select s from st1)[-6,8,0]  𝄀
+null
+SELECT 'missing' NOT IN (SELECT s FROM st1);
+➤ missing not in (select s from st1)[-6,8,0]  𝄀
+null
+INSERT INTO st1 VALUES (7,'A,B');
+SELECT id, s FROM st1 WHERE id=7;
+➤ id[4,32,0]  ¦  s[1,7,0]  𝄀
+7  ¦  a,b
+DELETE FROM st1 WHERE id=7;
+CREATE TABLE en_bin (id INT, e ENUM('Red','GREEN') COLLATE utf8mb4_bin);
+INSERT INTO en_bin VALUES (1,'Red'), (2,'GREEN'), (3,NULL);
+SELECT COUNT(*) FROM en_bin WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM en_bin WHERE e='Red';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM en_bin WHERE e IN ('RED','green');
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM en_bin WHERE e IN ('Red','GREEN');
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM en_bin WHERE e COLLATE utf8mb4_general_ci='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM en_bin WHERE e LIKE 'R%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM en_bin WHERE e LIKE 'Red%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM en_bin WHERE e=1 ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT (SELECT e FROM en_bin WHERE id=1) = 'RED';
+➤ (select e from en_bin where id = 1) = RED[-6,8,0]  𝄀
+0
+SELECT (SELECT e FROM en_bin WHERE id=1) = 'Red';
+➤ (select e from en_bin where id = 1) = Red[-6,8,0]  𝄀
+1
+SELECT (SELECT e FROM en_bin WHERE id=3) <=> NULL;
+➤ (select e from en_bin where id = 3) <=> null[-6,8,0]  𝄀
+1
+SELECT 'RED' IN (SELECT e FROM en_bin WHERE id IN (1,2));
+➤ RED in (select e from en_bin where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT 'RED' NOT IN (SELECT e FROM en_bin WHERE id IN (1,2));
+➤ RED not in (select e from en_bin where id in (1, 2))[-6,8,0]  𝄀
+1
+CREATE TABLE st_bin (id INT, s SET('a','b','c','d') COLLATE utf8mb4_bin);
+INSERT INTO st_bin VALUES (1,'a'), (2,'a,b'), (3,'b,c,d'), (4,'d'), (5,NULL), (6,'');
+SELECT COUNT(*) FROM st_bin WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM st_bin WHERE s='a,b';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM st_bin WHERE s IN ('A,B','D');
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM st_bin WHERE s IN ('a,b','d');
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM st_bin WHERE s COLLATE utf8mb4_general_ci='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM st_bin WHERE s LIKE 'A,%';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM st_bin WHERE s LIKE 'a,%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM st_bin WHERE s=3 ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT (SELECT s FROM st_bin WHERE id=2) = 'A,B';
+➤ (select s from st_bin where id = 2) = A,B[-6,8,0]  𝄀
+0
+SELECT (SELECT s FROM st_bin WHERE id=2) = 'a,b';
+➤ (select s from st_bin where id = 2) = a,b[-6,8,0]  𝄀
+1
+SELECT (SELECT s FROM st_bin WHERE id=5) <=> NULL;
+➤ (select s from st_bin where id = 5) <=> null[-6,8,0]  𝄀
+1
+SELECT 'A,B' IN (SELECT s FROM st_bin WHERE id IN (1,2));
+➤ A,B in (select s from st_bin where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT 'A,B' NOT IN (SELECT s FROM st_bin WHERE id IN (1,2));
+➤ A,B not in (select s from st_bin where id in (1, 2))[-6,8,0]  𝄀
+1
+SELECT ((SELECT e FROM en2 WHERE id=1) COLLATE utf8mb4_general_ci) = 'RED';
+➤ (((select e from en2 where id = 1)) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT (d.e COLLATE utf8mb4_general_ci) = 'RED' FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ ((d.e) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT ((SELECT e FROM en_bin WHERE id=1) COLLATE utf8mb4_general_ci) = 'RED';
+➤ (((select e from en_bin where id = 1)) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT (d.e COLLATE utf8mb4_general_ci) = 'RED' FROM (SELECT e FROM en_bin WHERE id=1) d;
+➤ ((d.e) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT ((SELECT e FROM en2 WHERE id=1) COLLATE utf8mb4_bin) = 'RED';
+➤ (((select e from en2 where id = 1)) collate utf8mb4_bin) = RED[-6,8,0]  𝄀
+0
+SELECT d.e IN (SELECT 'RED') FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e in (select RED)[-6,8,0]  𝄀
+1
+SELECT d.e NOT IN (SELECT 'RED') FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e not in (select RED)[-6,8,0]  𝄀
+0
+SELECT d.e IN (SELECT r.v FROM (SELECT 'RED' AS v) r) FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e in (select r.v from (select RED as v) as r)[-6,8,0]  𝄀
+1
+SELECT d.e NOT IN (SELECT r.v FROM (SELECT 'RED' AS v) r) FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e not in (select r.v from (select RED as v) as r)[-6,8,0]  𝄀
+0
+SELECT d.e IN (SELECT NULL) FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e in (select null)[-6,8,0]  𝄀
+null
+SELECT d.e NOT IN (SELECT NULL) FROM (SELECT e FROM en2 WHERE id=1) d;
+➤ d.e not in (select null)[-6,8,0]  𝄀
+null
+SELECT d.e IN (SELECT 'RED') FROM (SELECT e FROM en_bin WHERE id=1) d;
+➤ d.e in (select RED)[-6,8,0]  𝄀
+0
+SELECT d.e IN (SELECT 'Red') FROM (SELECT e FROM en_bin WHERE id=1) d;
+➤ d.e in (select Red)[-6,8,0]  𝄀
+1
+SELECT ((SELECT s FROM st1 WHERE id=2) COLLATE utf8mb4_general_ci) = 'A,B';
+➤ (((select s from st1 where id = 2)) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT (d.s COLLATE utf8mb4_general_ci) = 'A,B' FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ ((d.s) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT ((SELECT s FROM st_bin WHERE id=2) COLLATE utf8mb4_general_ci) = 'A,B';
+➤ (((select s from st_bin where id = 2)) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT (d.s COLLATE utf8mb4_general_ci) = 'A,B' FROM (SELECT s FROM st_bin WHERE id=2) d;
+➤ ((d.s) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT ((SELECT s FROM st1 WHERE id=2) COLLATE utf8mb4_bin) = 'A,B';
+➤ (((select s from st1 where id = 2)) collate utf8mb4_bin) = A,B[-6,8,0]  𝄀
+0
+SELECT d.s IN (SELECT 'A,B') FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s in (select A,B)[-6,8,0]  𝄀
+1
+SELECT d.s NOT IN (SELECT 'A,B') FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s not in (select A,B)[-6,8,0]  𝄀
+0
+SELECT d.s IN (SELECT r.v FROM (SELECT 'A,B' AS v) r) FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s in (select r.v from (select A,B as v) as r)[-6,8,0]  𝄀
+1
+SELECT d.s NOT IN (SELECT r.v FROM (SELECT 'A,B' AS v) r) FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s not in (select r.v from (select A,B as v) as r)[-6,8,0]  𝄀
+0
+SELECT d.s IN (SELECT NULL) FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s in (select null)[-6,8,0]  𝄀
+null
+SELECT d.s NOT IN (SELECT NULL) FROM (SELECT s FROM st1 WHERE id=2) d;
+➤ d.s not in (select null)[-6,8,0]  𝄀
+null
+SELECT d.s IN (SELECT 'A,B') FROM (SELECT s FROM st_bin WHERE id=2) d;
+➤ d.s in (select A,B)[-6,8,0]  𝄀
+0
+SELECT d.s IN (SELECT 'a,b') FROM (SELECT s FROM st_bin WHERE id=2) d;
+➤ d.s in (select a,b)[-6,8,0]  𝄀
+1
+SELECT (SELECT e COLLATE utf8mb4_general_ci FROM en2 WHERE id=1) = 'RED';
+➤ (select (e) collate utf8mb4_general_ci from en2 where id = 1) = RED[-6,8,0]  𝄀
+1
+SELECT d.e = 'RED' FROM (SELECT e COLLATE utf8mb4_general_ci AS e FROM en2 WHERE id=1) d;
+➤ d.e = RED[-6,8,0]  𝄀
+1
+SELECT 'RED' IN (SELECT e COLLATE utf8mb4_general_ci FROM en2 WHERE id IN (1,2));
+➤ RED in (select (e) collate utf8mb4_general_ci from en2 where id in (1, 2))[-6,8,0]  𝄀
+1
+SELECT 'RED' NOT IN (SELECT e COLLATE utf8mb4_general_ci FROM en2 WHERE id IN (1,2));
+➤ RED not in (select (e) collate utf8mb4_general_ci from en2 where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT (SELECT e COLLATE utf8mb4_general_ci FROM en_bin WHERE id=1) = 'RED';
+➤ (select (e) collate utf8mb4_general_ci from en_bin where id = 1) = RED[-6,8,0]  𝄀
+1
+SELECT d.e = 'RED' FROM (SELECT e COLLATE utf8mb4_general_ci AS e FROM en_bin WHERE id=1) d;
+➤ d.e = RED[-6,8,0]  𝄀
+1
+SELECT 'RED' IN (SELECT e COLLATE utf8mb4_general_ci FROM en_bin WHERE id IN (1,2));
+➤ RED in (select (e) collate utf8mb4_general_ci from en_bin where id in (1, 2))[-6,8,0]  𝄀
+1
+SELECT 'RED' NOT IN (SELECT e COLLATE utf8mb4_general_ci FROM en_bin WHERE id IN (1,2));
+➤ RED not in (select (e) collate utf8mb4_general_ci from en_bin where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT (SELECT e COLLATE utf8mb4_bin FROM en2 WHERE id=1) = 'RED';
+➤ (select (e) collate utf8mb4_bin from en2 where id = 1) = RED[-6,8,0]  𝄀
+0
+SELECT d.e = 'RED' FROM (SELECT e COLLATE utf8mb4_bin AS e FROM en2 WHERE id=1) d;
+➤ d.e = RED[-6,8,0]  𝄀
+0
+SELECT (SELECT s COLLATE utf8mb4_general_ci FROM st1 WHERE id=2) = 'A,B';
+➤ (select (s) collate utf8mb4_general_ci from st1 where id = 2) = A,B[-6,8,0]  𝄀
+1
+SELECT d.s = 'A,B' FROM (SELECT s COLLATE utf8mb4_general_ci AS s FROM st1 WHERE id=2) d;
+➤ d.s = A,B[-6,8,0]  𝄀
+1
+SELECT 'A,B' IN (SELECT s COLLATE utf8mb4_general_ci FROM st1 WHERE id IN (1,2));
+➤ A,B in (select (s) collate utf8mb4_general_ci from st1 where id in (1, 2))[-6,8,0]  𝄀
+1
+SELECT 'A,B' NOT IN (SELECT s COLLATE utf8mb4_general_ci FROM st1 WHERE id IN (1,2));
+➤ A,B not in (select (s) collate utf8mb4_general_ci from st1 where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT (SELECT s COLLATE utf8mb4_general_ci FROM st_bin WHERE id=2) = 'A,B';
+➤ (select (s) collate utf8mb4_general_ci from st_bin where id = 2) = A,B[-6,8,0]  𝄀
+1
+SELECT d.s = 'A,B' FROM (SELECT s COLLATE utf8mb4_general_ci AS s FROM st_bin WHERE id=2) d;
+➤ d.s = A,B[-6,8,0]  𝄀
+1
+SELECT 'A,B' IN (SELECT s COLLATE utf8mb4_general_ci FROM st_bin WHERE id IN (1,2));
+➤ A,B in (select (s) collate utf8mb4_general_ci from st_bin where id in (1, 2))[-6,8,0]  𝄀
+1
+SELECT 'A,B' NOT IN (SELECT s COLLATE utf8mb4_general_ci FROM st_bin WHERE id IN (1,2));
+➤ A,B not in (select (s) collate utf8mb4_general_ci from st_bin where id in (1, 2))[-6,8,0]  𝄀
+0
+SELECT (SELECT s COLLATE utf8mb4_bin FROM st1 WHERE id=2) = 'A,B';
+➤ (select (s) collate utf8mb4_bin from st1 where id = 2) = A,B[-6,8,0]  𝄀
+0
+SELECT d.s = 'A,B' FROM (SELECT s COLLATE utf8mb4_bin AS s FROM st1 WHERE id=2) d;
+➤ d.s = A,B[-6,8,0]  𝄀
+0
+SELECT n.id FROM en2 n WHERE EXISTS (SELECT 1 WHERE n.e='RED') ORDER BY n.id;
+➤ id[4,32,0]  𝄀
+1
+SELECT d.id FROM (SELECT id, e FROM en2) d WHERE EXISTS (SELECT 1 WHERE d.e='RED') ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+1
+SELECT d.id FROM (SELECT id, e FROM en2) d WHERE EXISTS (SELECT 1 WHERE d.e<=>NULL) ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+3
+SELECT d.id FROM (SELECT id, e FROM en2) d WHERE EXISTS (SELECT 1 FROM st1 WHERE EXISTS (SELECT 1 WHERE d.e='RED')) ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+1
+SELECT d.id FROM (SELECT id, e FROM en_bin) d WHERE EXISTS (SELECT 1 WHERE d.e='RED') ORDER BY d.id;
+➤ id[4,32,0]
+SELECT d.id FROM (SELECT id, e FROM en_bin) d WHERE EXISTS (SELECT 1 WHERE d.e='Red') ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+1
+SELECT n.id FROM st1 n WHERE EXISTS (SELECT 1 WHERE n.s='A,B') ORDER BY n.id;
+➤ id[4,32,0]  𝄀
+2
+SELECT d.id FROM (SELECT id, s FROM st1) d WHERE EXISTS (SELECT 1 WHERE d.s='A,B') ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+2
+SELECT d.id FROM (SELECT id, s FROM st1) d WHERE EXISTS (SELECT 1 WHERE d.s<=>NULL) ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+5
+SELECT d.id FROM (SELECT id, s FROM st1) d WHERE EXISTS (SELECT 1 FROM en2 WHERE EXISTS (SELECT 1 WHERE d.s='A,B')) ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+2
+SELECT d.id FROM (SELECT id, s FROM st_bin) d WHERE EXISTS (SELECT 1 WHERE d.s='A,B') ORDER BY d.id;
+➤ id[4,32,0]
+SELECT d.id FROM (SELECT id, s FROM st_bin) d WHERE EXISTS (SELECT 1 WHERE d.s='a,b') ORDER BY d.id;
+➤ id[4,32,0]  𝄀
+2
+WITH d AS (SELECT e COLLATE utf8mb4_general_ci AS e, RAND() AS r FROM en2 WHERE id=1) SELECT COUNT(*) FROM d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+WITH d AS (SELECT s COLLATE utf8mb4_general_ci AS s, RAND() AS r FROM st1 WHERE id=2) SELECT COUNT(*) FROM d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+WITH d AS (SELECT e COLLATE utf8mb4_general_ci AS e, RAND() AS r FROM en_bin WHERE id=1) SELECT COUNT(*) FROM d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+WITH d AS (SELECT s COLLATE utf8mb4_general_ci AS s, RAND() AS r FROM st_bin WHERE id=2) SELECT COUNT(*) FROM d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+WITH d AS (SELECT e COLLATE utf8mb4_bin AS e, RAND() AS r FROM en2 WHERE id=1) SELECT COUNT(*) FROM d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+WITH d AS (SELECT s COLLATE utf8mb4_bin AS s, RAND() AS r FROM st1 WHERE id=2) SELECT COUNT(*) FROM d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+WITH d AS (SELECT CAST(e AS CHAR) COLLATE utf8mb4_general_ci AS e, RAND() AS r FROM en2 WHERE id=1) SELECT COUNT(*) FROM d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+WITH d AS (SELECT CAST(s AS CHAR) COLLATE utf8mb4_general_ci AS s, RAND() AS r FROM st1 WHERE id=2) SELECT COUNT(*) FROM d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT e COLLATE utf8mb4_general_ci AS e FROM en2 WHERE id=1 UNION ALL SELECT NULL) d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM (SELECT s COLLATE utf8mb4_general_ci AS s FROM st1 WHERE id=2 UNION ALL SELECT NULL) d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM (SELECT e COLLATE utf8mb4_general_ci AS e FROM en_bin WHERE id=1 UNION ALL SELECT NULL) d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM (SELECT s COLLATE utf8mb4_general_ci AS s FROM st_bin WHERE id=2 UNION ALL SELECT NULL) d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM (SELECT e COLLATE utf8mb4_bin AS e FROM en2 WHERE id=1 UNION ALL SELECT NULL) d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT s COLLATE utf8mb4_bin AS s FROM st1 WHERE id=2 UNION ALL SELECT NULL) d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT CAST(e AS CHAR) COLLATE utf8mb4_general_ci AS e FROM en2 WHERE id=1 UNION ALL SELECT NULL) d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT CAST(s AS CHAR) COLLATE utf8mb4_general_ci AS s FROM st1 WHERE id=2 UNION ALL SELECT NULL) d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT e COLLATE utf8mb4_general_ci AS e FROM en2 WHERE id=1 UNION ALL SELECT 'GREEN') d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM (SELECT e FROM en2 WHERE id=1 UNION ALL SELECT e FROM en2 WHERE id=1) d WHERE e='RED';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM (SELECT s FROM st1 WHERE id=2 UNION ALL SELECT s FROM st1 WHERE id=2) d WHERE s='A,B';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT (e COLLATE utf8mb4_general_ci)='RED' FROM en2 WHERE id=1 GROUP BY e COLLATE utf8mb4_general_ci;
+➤ ((e) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT (s COLLATE utf8mb4_general_ci)='A,B' FROM st1 WHERE id=2 GROUP BY s COLLATE utf8mb4_general_ci;
+➤ ((s) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT (e COLLATE utf8mb4_general_ci)='RED' FROM en_bin WHERE id=1 GROUP BY e COLLATE utf8mb4_general_ci;
+➤ ((e) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+1
+SELECT (s COLLATE utf8mb4_general_ci)='A,B' FROM st_bin WHERE id=2 GROUP BY s COLLATE utf8mb4_general_ci;
+➤ ((s) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+1
+SELECT (e COLLATE utf8mb4_bin)='RED' FROM en2 WHERE id=1 GROUP BY e COLLATE utf8mb4_bin;
+➤ ((e) collate utf8mb4_bin) = RED[-6,8,0]  𝄀
+0
+SELECT (s COLLATE utf8mb4_bin)='A,B' FROM st1 WHERE id=2 GROUP BY s COLLATE utf8mb4_bin;
+➤ ((s) collate utf8mb4_bin) = A,B[-6,8,0]  𝄀
+0
+SELECT (CAST(e AS CHAR) COLLATE utf8mb4_general_ci)='RED' FROM en2 WHERE id=1 GROUP BY CAST(e AS CHAR) COLLATE utf8mb4_general_ci;
+➤ ((cast(e as varchar)) collate utf8mb4_general_ci) = RED[-6,8,0]  𝄀
+0
+SELECT (CAST(s AS CHAR) COLLATE utf8mb4_general_ci)='A,B' FROM st1 WHERE id=2 GROUP BY CAST(s AS CHAR) COLLATE utf8mb4_general_ci;
+➤ ((cast(s as varchar)) collate utf8mb4_general_ci) = A,B[-6,8,0]  𝄀
+0
+CREATE TABLE special_unicode (
+id INT,
+e ENUM('Red','GREEN') COLLATE utf8mb4_unicode_ci,
+s SET('a','b','c','d') COLLATE utf8mb4_unicode_ci
+);
+INSERT INTO special_unicode VALUES (1,'Red','a,b'), (2,'GREEN','d'), (3,NULL,NULL);
+SELECT id FROM special_unicode WHERE e='RED' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM special_unicode WHERE s='A,B' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM special_unicode WHERE e IN ('red','green') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM special_unicode WHERE s IN ('A,B','D') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+DROP DATABASE issue_31364;

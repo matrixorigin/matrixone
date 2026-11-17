@@ -15,6 +15,8 @@
 package collation
 
 import (
+	"bytes"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,6 +85,34 @@ func TestCompareGeneralCIPadsExhaustedKeyWithSpace(t *testing.T) {
 	// Leading remainder spaces compare equal and fall through to the first
 	// non-space character.
 	require.Negative(t, CompareGeneralCI([]byte("a"), []byte("a  b")))
+}
+
+func TestGeneralCIEqualityKeyMatchesComparator(t *testing.T) {
+	values := make([][]byte, 0, 1+256+256*256+16)
+	values = append(values, nil)
+	for first := 0; first <= 0xff; first++ {
+		values = append(values, []byte{byte(first)})
+		for second := 0; second <= 0xff; second++ {
+			values = append(values, []byte{byte(first), byte(second)})
+		}
+	}
+	for _, value := range []string{
+		"a", "A", "a ", "a\t", "a\x00", "a b", "å", "Å", "ß", "ss",
+		"中", "文", "😜", "😃", "ａ", "RED", "Red", "A,B", "a,b",
+	} {
+		values = append(values, []byte(value))
+	}
+
+	sort.Slice(values, func(i, j int) bool {
+		return CompareGeneralCI(values[i], values[j]) < 0
+	})
+	for i := 1; i < len(values); i++ {
+		left, right := values[i-1], values[i]
+		require.Equal(t,
+			CompareGeneralCI(left, right) == 0,
+			bytes.Equal(GeneralCIEqualityKey(left), GeneralCIEqualityKey(right)),
+			"values %x and %x", left, right)
+	}
 }
 
 func TestCompareGeneralCIMalformedUTF8IsTransitive(t *testing.T) {

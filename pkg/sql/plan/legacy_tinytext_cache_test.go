@@ -74,20 +74,27 @@ func legacyCacheRetainedPayload(cache *legacyTextParseCache) (entries, bytes int
 		for _, column := range entry.evidence.columns {
 			bytes += len(column.name)
 		}
+		bytes += len(entry.evidence.enumSetColumns) * int(unsafe.Sizeof(legacyEnumSetColumn{}))
+		for _, column := range entry.evidence.enumSetColumns {
+			bytes += len(column.name) + len(column.typ.Enumvalues)
+		}
 	}
 	return
 }
 
 func TestLegacyTextParseCacheOwnershipAndExactKeys(t *testing.T) {
 	var cache legacyTextParseCache
-	backing := strings.Repeat("padding", 1024) + "CREATE TABLE X db_name source_name column_name"
+	backing := strings.Repeat("padding", 1024) + "CREATE TABLE X db_name source_name column_name Red,GREEN"
 	start := strings.Index(backing, "CREATE TABLE")
 	key := backing[start : start+len("CREATE TABLE X")]
 	db := backing[strings.Index(backing, "db_name"):][:len("db_name")]
 	name := backing[strings.Index(backing, "source_name"):][:len("source_name")]
 	columnName := backing[strings.Index(backing, "column_name"):][:len("column_name")]
+	labels := backing[strings.Index(backing, "Red,GREEN"):]
 	input := legacyTinyTextCreateEvidence{likeDB: db, likeName: name,
-		columns: []legacyTinyTextColumn{{ordinal: 1, name: columnName, width: types.MaxTinyTextLen}}}
+		columns: []legacyTinyTextColumn{{ordinal: 1, name: columnName, width: types.MaxTinyTextLen}},
+		enumSetColumns: []legacyEnumSetColumn{{ordinal: 2, name: columnName,
+			typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: labels, Charset: uint32(types.CharsetUTF8)}}}}
 	cache.put(key, input)
 	got, hit := cache.get(key)
 	require.True(t, hit)
@@ -96,15 +103,21 @@ func TestLegacyTextParseCacheOwnershipAndExactKeys(t *testing.T) {
 	require.False(t, unsafe.StringData(name) == unsafe.StringData(got.likeName), "LIKE name must be detached")
 	require.False(t, unsafe.StringData(columnName) == unsafe.StringData(got.columns[0].name), "column name must be detached")
 	require.NotSame(t, &input.columns[0], &got.columns[0])
+	require.False(t, unsafe.StringData(labels) == unsafe.StringData(got.enumSetColumns[0].typ.Enumvalues), "ENUM labels must be detached")
+	require.NotSame(t, &input.enumSetColumns[0], &got.enumSetColumns[0])
 	require.False(t, unsafe.StringData(key) == unsafe.StringData(cache.entries[0].createSQL), "SQL key must be detached")
 	// Mutate only caller-owned input, never returned/shared cached evidence.
 	input.likeDB, input.likeName = "changed_db", "changed_table"
 	input.columns[0] = legacyTinyTextColumn{ordinal: 9, name: "changed_column", width: types.MaxLongTextLen}
+	input.enumSetColumns[0].name = "changed_enum"
+	input.enumSetColumns[0].typ.Enumvalues = "changed,labels"
 	got, hit = cache.get(key)
 	require.True(t, hit)
 	require.Equal(t, "db_name", got.likeDB)
 	require.Equal(t, "source_name", got.likeName)
 	require.Equal(t, legacyTinyTextColumn{ordinal: 1, name: "column_name", width: types.MaxTinyTextLen}, got.columns[0])
+	require.Equal(t, "column_name", got.enumSetColumns[0].name)
+	require.Equal(t, "Red,GREEN", got.enumSetColumns[0].typ.Enumvalues)
 	for _, different := range []string{strings.ToLower(key), key + " ", key + " /* x */"} {
 		_, hit = cache.get(different)
 		require.False(t, hit, "cache keys must be exact SQL text")
@@ -130,6 +143,7 @@ func TestLegacyTextParseCacheAdmissionAndEviction(t *testing.T) {
 		{"SQL above limit", strings.Repeat("s", (16<<10)+1), legacyTinyTextCreateEvidence{}, false},
 		{"columns at limit", "c", legacyTinyTextCreateEvidence{columns: make([]legacyTinyTextColumn, 256)}, true},
 		{"columns above limit", "c", legacyTinyTextCreateEvidence{columns: make([]legacyTinyTextColumn, 257)}, false},
+		{"ENUM fixed storage above limit", "e", legacyTinyTextCreateEvidence{enumSetColumns: make([]legacyEnumSetColumn, 256)}, false},
 		// Synthetic private-API evidence isolates the owned-byte guard from SQL
 		// and column limits; a valid <=16KiB SQL need not reach this defensive cap.
 		{"owned bytes at limit", "b", legacyTinyTextCreateEvidence{likeName: strings.Repeat("n", (64<<10)-1)}, true},

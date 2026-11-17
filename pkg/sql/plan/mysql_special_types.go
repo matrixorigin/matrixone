@@ -469,6 +469,17 @@ func isSetPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_uint64) && len(typ.GetEnumvalues()) > 0
 }
 
+// clearSetDisplayMetadata marks an expression as a physical uint64 bitmap.
+// The display labels and their collation remain on the logical SET type.
+func clearSetDisplayMetadata(typ *plan.Type) {
+	typ.Enumvalues = ""
+	typ.Charset = 0
+	typ.CollationVersion = 0
+	typ.CollationCoercibility = 0
+	typ.CollationCoercibilitySet = false
+	typ.CollationMergeConflict = false
+}
+
 func isEnumOrSetPlanType(typ *plan.Type) bool {
 	return isEnumPlanType(typ) || isSetPlanType(typ)
 }
@@ -799,7 +810,7 @@ func (bc *BindContext) mysqlSpecialGroupStorageSlotFor(expr *plan.Expr) *plan.Ex
 	if isSetPlanType(&typ) {
 		// Truth reads the plain uint64 bitmap; SET metadata belongs only to
 		// display-value semantics.
-		typ.Enumvalues = ""
+		clearSetDisplayMetadata(&typ)
 	}
 	return GetColExpr(typ, col.RelPos, storagePos)
 }
@@ -976,7 +987,7 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		bitmap, isSet := storedSetBitmapExpr(args[0])
 		if !isSet && isSetPlanType(&args[0].Typ) {
 			bitmap = DeepCopyExpr(args[0])
-			bitmap.Typ.Enumvalues = ""
+			clearSetDisplayMetadata(&bitmap.Typ)
 			isSet = true
 		}
 		if !isSet && b != nil && b.ctx != nil && isSetPlanType(b.ctx.mysqlSpecialOrderTypeForExpr(args[0])) {
@@ -1306,7 +1317,7 @@ func makeCanonicalSetValue(ctx context.Context, expr *plan.Expr, typ *plan.Type)
 		return nil, err
 	}
 	value.Typ.NotNullable = expr.Typ.NotNullable
-	value.Typ.Enumvalues = ""
+	clearSetDisplayMetadata(&value.Typ)
 	return value, nil
 }
 
@@ -1391,7 +1402,7 @@ func makeMySQLSpecialNumericValue(
 		}
 		// The SET value-to-index function returns an ordinary uint64 bitmap.
 		// Do not let later SET-aware casts reinterpret it as a display value.
-		numericExpr.Typ.Enumvalues = ""
+		clearSetDisplayMetadata(&numericExpr.Typ)
 		return numericExpr, nil
 	}
 	return nil, moerr.NewInternalError(ctx, "invalid ENUM/SET numeric provenance")

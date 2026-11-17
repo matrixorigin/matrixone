@@ -243,8 +243,22 @@ func (builder *QueryBuilder) bindDependentSubquery(sub *plan.SubqueryRef) (*plan
 		if sub.Typ == plan.SubqueryRef_IN || sub.Typ == plan.SubqueryRef_NOT_IN {
 			op = "="
 		}
+		outerCtx := ctx.parent
+		outerSource := func(expr *plan.Expr) *plan.Type {
+			for i, synthetic := range lhs {
+				if expr == synthetic {
+					// Relation zero belongs to the dependent input, not the outer
+					// query. Resolve its provenance from the original left expression.
+					if outerCtx != nil {
+						return outerCtx.mysqlSpecialComparisonTypeForExpr(call.Lhs[i])
+					}
+					return mysqlSpecialDisplayTypeForComparison(call.Lhs[i])
+				}
+			}
+			return mysqlSpecialDisplayTypeForComparison(expr)
+		}
 		var err error
-		call.Comparison, err = builder.generateRowComparisonWithProjects(op, left, rhs, false)
+		call.Comparison, err = builder.generateRowComparisonWithProjectsAndSource(op, left, outerSource, ctx, rhs, false)
 		if err != nil {
 			return nil, err
 		}

@@ -4935,18 +4935,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	integerBranches := make([][]uint32, len(subCtxList))
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setBranchComparisonTypes := make([][]*plan.Type, len(subCtxList))
 	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
 	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		integerBranches[branchIdx] = make([]uint32, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		setBranchComparisonTypes[branchIdx] = make([]*plan.Type, projectLength)
 		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			integerBranches[branchIdx][colIdx] = branchCtx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			setBranchComparisonTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialComparisonTypeForProject(int32(colIdx))
 			setBranchPadSpaceProvenance[branchIdx][colIdx] =
 				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
 		}
@@ -5409,6 +5412,39 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		if compatible && candidate != nil {
 			ctx.setMySQLSpecialOrderType(int32(colIdx), candidate)
+		}
+	}
+	// Comparison provenance also survives explicit COLLATE, which deliberately
+	// clears definition-order provenance. Retain it only for one compatible
+	// ENUM/SET definition and effective collation across every non-NULL branch.
+	for colIdx, output := range ctx.projects {
+		if !types.T(output.Typ.Id).IsMySQLString() {
+			continue
+		}
+		var candidate *plan.Type
+		compatible := true
+		for branchIdx := range subCtxList {
+			branchType := setBranchComparisonTypes[branchIdx][colIdx]
+			if branchType == nil {
+				if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+					compatible = false
+					break
+				}
+				continue
+			}
+			if candidate == nil {
+				candidate = branchType
+				continue
+			}
+			if !mysqlSpecialComparisonTypesCompatible(candidate, branchType) {
+				compatible = false
+				break
+			}
+		}
+		if compatible && candidate != nil {
+			ctx.setMySQLSpecialComparisonType(int32(colIdx), candidate)
+		} else {
+			ctx.setMySQLSpecialComparisonType(int32(colIdx), nil)
 		}
 	}
 	havingBinder := NewHavingBinder(builder, ctx)
@@ -14547,6 +14583,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var colIsHidden []bool
 	var types []*plan.Type
 	var mysqlSpecialOrderTypes []*plan.Type
+	var mysqlSpecialComparisonTypes []*plan.Type
 	var mysqlSpecialCanonicalTypes []*plan.Type
 	var outputColumnProvenance []OutputColumnProvenance
 	var headingMetadata headingProvenanceMap
@@ -14726,6 +14763,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				}
 				mysqlSpecialOrderTypes[i] = orderType
 			}
+			if comparisonType := subCtx.mysqlSpecialComparisonTypeForProject(int32(i)); comparisonType != nil {
+				if mysqlSpecialComparisonTypes == nil {
+					mysqlSpecialComparisonTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialComparisonTypes[i] = comparisonType
+			}
 			if canonicalType := subCtx.mysqlSpecialCanonicalTypeForProject(int32(i)); canonicalType != nil {
 				if mysqlSpecialCanonicalTypes == nil {
 					mysqlSpecialCanonicalTypes = make([]*plan.Type, colLength)
@@ -14757,6 +14800,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.originCols = originCols
 		binding.headingProvenance = headingMetadata
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
+		binding.mysqlSpecialComparisonTypes = mysqlSpecialComparisonTypes
 		binding.mysqlSpecialCanonicalTypes = mysqlSpecialCanonicalTypes
 		binding.outputColumnProvenance = outputColumnProvenance
 		if colLength > 0 && len(subCtx.projectSemanticKeys) >= colLength {

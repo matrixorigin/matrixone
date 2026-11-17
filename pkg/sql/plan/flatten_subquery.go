@@ -545,7 +545,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
 			if subquery.Child != nil {
-				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true, true)
+				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, ctx, subCtx, true, true)
 				return nodeID, newExpr, err
 			}
 			newProj, _ := decreaseDepth(subNode.ProjectList[0])
@@ -558,7 +558,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newSubqueryBoolConst(false), nil
 
 		case plan.SubqueryRef_IN:
-			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true, false)
+			newExpr, err := builder.generateRowComparison("=", subquery.Child, ctx, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -566,7 +566,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newExpr, nil
 
 		case plan.SubqueryRef_NOT_IN:
-			newExpr, err := builder.generateRowComparison("<>", subquery.Child, subCtx, true, false)
+			newExpr, err := builder.generateRowComparison("<>", subquery.Child, ctx, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -574,7 +574,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newExpr, nil
 
 		case plan.SubqueryRef_ANY, plan.SubqueryRef_ALL:
-			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true, false)
+			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, ctx, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -776,7 +776,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				if err != nil {
 					return 0, nil, err
 				}
-				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
+				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, ctx, subCtx, projects, true)
 				return nodeID, newExpr, err
 			}
 			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
@@ -893,7 +893,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		if subquery.Child != nil {
 			if finalizeProjection {
 				newExpr, err := builder.generateRowComparisonWithProjects(
-					subquery.Op, subquery.Child, postJoinProjections, true)
+					subquery.Op, subquery.Child, ctx, subCtx, postJoinProjections, true)
 				if err != nil {
 					return 0, nil, err
 				}
@@ -914,7 +914,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			if err != nil {
 				return 0, nil, err
 			}
-			newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
+			newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, ctx, subCtx, projects, true)
 			return nodeID, newExpr, err
 		}
 
@@ -1048,7 +1048,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_IN:
-		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false, false)
+		outerPred, err := builder.generateRowComparison("=", subquery.Child, ctx, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1062,7 +1062,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_NOT_IN:
-		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false, false)
+		outerPred, err := builder.generateRowComparison("=", subquery.Child, ctx, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1076,7 +1076,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ANY:
-		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false, false)
+		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, ctx, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1090,7 +1090,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ALL:
-		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false, false)
+		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, ctx, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1730,17 +1730,66 @@ func getProjectExpr(idx int, ctx *BindContext, strip bool) *plan.Expr {
 	}
 }
 
-func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, ctx *BindContext, strip, guardVolatile bool) (*plan.Expr, error) {
-	projects := make([]*plan.Expr, len(ctx.results))
+func (builder *QueryBuilder) generateRowComparison(
+	op string,
+	child *plan.Expr,
+	outerCtx *BindContext,
+	subCtx *BindContext,
+	strip, guardVolatile bool,
+) (*plan.Expr, error) {
+	projects := make([]*plan.Expr, len(subCtx.results))
 	for i := range projects {
-		projects[i] = getProjectExpr(i, ctx, strip)
+		projects[i] = getProjectExpr(i, subCtx, strip)
 	}
-	return builder.generateRowComparisonWithProjects(op, child, projects, guardVolatile)
+	return builder.generateRowComparisonWithProjects(op, child, outerCtx, subCtx, projects, guardVolatile)
+}
+
+func (builder *QueryBuilder) bindGeneratedRowComparison(
+	op string,
+	args []*plan.Expr,
+	outerSource func(*plan.Expr) *plan.Type,
+	subCtx *BindContext,
+	projects []*plan.Expr,
+) (*plan.Expr, error) {
+	args, err := rewriteMySQLSpecialGeneralCIComparison(
+		builder.GetContext(), op, args, func(expr *plan.Expr) *plan.Type {
+			for i, project := range projects {
+				if expr == project && subCtx != nil {
+					return subCtx.mysqlSpecialComparisonTypeForProject(int32(i))
+				}
+			}
+			if outerSource != nil {
+				return outerSource(expr)
+			}
+			return mysqlSpecialDisplayTypeForComparison(expr)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), op, args)
 }
 
 func (builder *QueryBuilder) generateRowComparisonWithProjects(
 	op string,
 	child *plan.Expr,
+	outerCtx *BindContext,
+	subCtx *BindContext,
+	projects []*plan.Expr,
+	guardVolatile bool,
+) (*plan.Expr, error) {
+	var outerSource func(*plan.Expr) *plan.Type
+	if outerCtx != nil {
+		outerSource = outerCtx.mysqlSpecialComparisonTypeForExpr
+	}
+	return builder.generateRowComparisonWithProjectsAndSource(
+		op, child, outerSource, subCtx, projects, guardVolatile)
+}
+
+func (builder *QueryBuilder) generateRowComparisonWithProjectsAndSource(
+	op string,
+	child *plan.Expr,
+	outerSource func(*plan.Expr) *plan.Type,
+	subCtx *BindContext,
 	projects []*plan.Expr,
 	guardVolatile bool,
 ) (*plan.Expr, error) {
@@ -1762,10 +1811,10 @@ func (builder *QueryBuilder) generateRowComparisonWithProjects(
 
 			comparisons := make([]*plan.Expr, len(childList))
 			for i := range childList {
-				comparison, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+				comparison, err := builder.bindGeneratedRowComparison(op, []*plan.Expr{
 					childList[i],
 					projects[i],
-				})
+				}, outerSource, subCtx, projects)
 				if err != nil {
 					return nil, err
 				}
@@ -1794,10 +1843,10 @@ func (builder *QueryBuilder) generateRowComparisonWithProjects(
 		if len(projects) != 1 {
 			return nil, moerr.NewInternalError(builder.GetContext(), "scalar comparison requires exactly one subquery column")
 		}
-		return BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+		return builder.bindGeneratedRowComparison(op, []*plan.Expr{
 			child,
 			projects[0],
-		})
+		}, outerSource, subCtx, projects)
 	}
 }
 
@@ -3973,7 +4022,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			}
 			projects[i] = GetColExpr(aggExprs[aggregatePos].Typ, newAggTag, aggregatePos)
 		}
-		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
+		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, ctx, subCtx, projects, true)
 		return nodeID, retExpr, err
 	}
 

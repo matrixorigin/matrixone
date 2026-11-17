@@ -787,6 +787,7 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
+	plan.RecoverLegacyEnumSetCollation(ctx, tableDef)
 	if err := plan.MigrateLegacyFloatStringTableDef(c, tableDef); err != nil {
 		return nil, nil, err
 	}

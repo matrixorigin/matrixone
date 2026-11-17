@@ -12,11 +12,100 @@ package vector
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
+
+func TestMySQLSpecialPhysicalVectorCollation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for _, tc := range []struct {
+		name string
+		typ  plan.Type
+	}{
+		{name: "ENUM", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "Red,GREEN", Charset: 4, CollationVersion: 1}},
+		{name: "SET", typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b", Charset: 4, CollationVersion: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, err := types.TypeFromPlan(tc.typ)
+			require.NoError(t, err)
+			checkPhysical := func(t *testing.T, vec *Vector) {
+				t.Helper()
+				require.Equal(t, storage.Oid, vec.GetType().Oid)
+				require.Zero(t, vec.GetType().Charset)
+				require.Zero(t, vec.GetType().CollationVersion)
+			}
+
+			for _, tc := range []struct {
+				name string
+				new  func() *Vector
+			}{
+				{name: "new", new: func() *Vector { return NewVec(storage) }},
+				{name: "constant null", new: func() *Vector { return NewConstNull(storage, 1, mp) }},
+				{name: "reset", new: func() *Vector {
+					vec := NewVec(types.T_int32.ToType())
+					vec.Reset(storage)
+					return vec
+				}},
+				{name: "reset with new type", new: func() *Vector {
+					vec := NewVec(types.T_int32.ToType())
+					vec.ResetWithNewType(&storage)
+					return vec
+				}},
+				{name: "set type", new: func() *Vector {
+					vec := NewVec(types.T_int32.ToType())
+					vec.SetType(storage)
+					return vec
+				}},
+				{name: "set type and fix data", new: func() *Vector {
+					vec := NewVec(types.T_int32.ToType())
+					require.NoError(t, vec.SetTypeAndFixData(storage, mp))
+					return vec
+				}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					vec := tc.new()
+					defer vec.Free(mp)
+					checkPhysical(t, vec)
+				})
+			}
+
+			src := NewVec(storage)
+			defer src.Free(mp)
+			proto, err := VectorToProtoVector(src)
+			require.NoError(t, err)
+			require.Zero(t, proto.Type.Charset)
+			require.Zero(t, proto.Type.CollationVersion)
+			fromProto, err := ProtoVectorToVector(proto)
+			require.NoError(t, err)
+			defer fromProto.Free(mp)
+			checkPhysical(t, fromProto)
+
+			logicalProto := proto
+			logicalProto.Type = tc.typ
+			fromProto, err = ProtoVectorToVector(logicalProto)
+			require.NoError(t, err)
+			defer fromProto.Free(mp)
+			checkPhysical(t, fromProto)
+
+			// Validation happens before physical normalization. In particular, an
+			// ordinary uint64 cannot acquire SET metadata by crossing this codec.
+			invalid := proto
+			invalid.Type = plan.Type{Id: int32(types.T_uint64), Charset: 4, CollationVersion: 1}
+			fromProto, err = ProtoVectorToVector(invalid)
+			require.Error(t, err)
+			require.Nil(t, fromProto)
+		})
+	}
+}
 
 func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()

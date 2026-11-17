@@ -974,8 +974,12 @@ const (
 	TEMPORAL_DATETIME_BOUND  = 634
 	TEMPORAL_TIMESTAMP_BOUND = 635
 
+	// MYSQL_SPECIAL_CI_KEY is the plan-internal equality key for
+	// ENUM/SET display labels under legacy utf8mb4_general_ci.
+	MYSQL_SPECIAL_CI_KEY = 636
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 637
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1374,6 +1378,7 @@ var functionIdRegister = map[string]int32{
 	"physical_serial":                PHYSICAL_SERIAL,
 	"physical_serial_full":           PHYSICAL_SERIAL_FULL,
 	"physical_collation_key":         PHYSICAL_COLLATION_KEY,
+	"__mo_enum_set_ci_key":           MYSQL_SPECIAL_CI_KEY,
 	"hash_value":                     HASH,
 	"hash_partition":                 HASH_PARTITION,
 	"mo_tuple_expr":                  MO_TUPLE_EXPR,

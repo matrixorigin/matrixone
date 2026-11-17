@@ -313,7 +313,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	rvec := NewVecFromReuse()
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
-	rvec.typ = typ
+	rvec.typ = physicalVectorType(typ)
 	rvec.cantFreeData = true
 	rvec.cantFreeArea = true
 

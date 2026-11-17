@@ -2917,7 +2917,7 @@ func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
 		{name: "tuple not in inequality", op: "<>", logicalOp: "or"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false, false)
+			expr, err := builder.generateRowComparison(tt.op, child, nil, subqueryCtx, false, false)
 			require.NoError(t, err)
 			require.Equal(t, tt.logicalOp, expr.GetF().Func.GetObjName())
 
@@ -2936,7 +2936,7 @@ func TestGenerateRowComparisonRejectsEmptyTuple(t *testing.T) {
 		Expr: &plan.Expr_List{
 			List: &plan.ExprList{},
 		},
-	}, subqueryCtx, false, false)
+	}, nil, subqueryCtx, false, false)
 	require.ErrorContains(t, err, "row comparison requires at least one column")
 }
 

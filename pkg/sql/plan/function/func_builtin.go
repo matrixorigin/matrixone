@@ -3939,6 +3939,36 @@ func BuiltInPhysicalCollationKey(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
+// BuiltInMySQLSpecialGeneralCIKey materializes equality-only keys for ENUM/SET
+// display labels. The planner emits this function only after resolving legacy
+// utf8mb4_general_ci; it is not an ordered or persisted index key.
+func BuiltInMySQLSpecialGeneralCIKey(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 1 {
+		return moerr.NewInvalidInputNoCtx("mysql special general-ci key expects one argument")
+	}
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := 0; i < length; i++ {
+		if functionRowSkipped(selectList, uint64(i)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(uint64(i))
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(collation.GeneralCIEqualityKey(value), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SerialHelper encodes original values for the generic SERIAL/SERIAL_FULL
 // contract.  Generic serialization is intentionally lossless: transformed
 // comparison keys belong only to the physical index-key boundary.

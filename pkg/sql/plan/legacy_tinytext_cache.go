@@ -59,11 +59,17 @@ func (cache *legacyTextParseCache) get(createSQL string) (legacyTinyTextCreateEv
 }
 
 func (cache *legacyTextParseCache) put(createSQL string, evidence legacyTinyTextCreateEvidence) {
-	if len(createSQL) == 0 || len(createSQL) > legacyTextCacheSQLBytes || len(evidence.columns) > legacyTextCacheColumns {
+	columnCount := len(evidence.columns) + len(evidence.enumSetColumns)
+	if len(createSQL) == 0 || len(createSQL) > legacyTextCacheSQLBytes || columnCount > legacyTextCacheColumns {
 		return
 	}
-	// The conservative per-column allowance includes the slice element storage.
-	remaining := legacyTextCacheEntryBytes - len(createSQL) - 64*len(evidence.columns)
+	// Conservative fixed allowances include slice element storage. ENUM/SET
+	// evidence also owns a plan.Type and needs a separate, larger allowance.
+	remaining := legacyTextCacheEntryBytes - len(createSQL) -
+		64*len(evidence.columns) - 256*len(evidence.enumSetColumns)
+	if remaining < 0 {
+		return
+	}
 	for _, text := range []string{evidence.likeDB, evidence.likeName} {
 		if len(text) > remaining {
 			return
@@ -76,6 +82,16 @@ func (cache *legacyTextParseCache) put(createSQL string, evidence legacyTinyText
 		}
 		remaining -= len(column.name)
 	}
+	for _, column := range evidence.enumSetColumns {
+		if len(column.name) > remaining {
+			return
+		}
+		remaining -= len(column.name)
+		if len(column.typ.Enumvalues) > remaining {
+			return
+		}
+		remaining -= len(column.typ.Enumvalues)
+	}
 
 	owned := legacyTinyTextCreateEvidence{
 		likeDB: strings.Clone(evidence.likeDB), likeName: strings.Clone(evidence.likeName),
@@ -85,6 +101,14 @@ func (cache *legacyTextParseCache) put(createSQL string, evidence legacyTinyText
 		copy(owned.columns, evidence.columns)
 		for i := range owned.columns {
 			owned.columns[i].name = strings.Clone(owned.columns[i].name)
+		}
+	}
+	if evidence.enumSetColumns != nil {
+		owned.enumSetColumns = make([]legacyEnumSetColumn, len(evidence.enumSetColumns))
+		copy(owned.enumSetColumns, evidence.enumSetColumns)
+		for i := range owned.enumSetColumns {
+			owned.enumSetColumns[i].name = strings.Clone(owned.enumSetColumns[i].name)
+			owned.enumSetColumns[i].typ.Enumvalues = strings.Clone(owned.enumSetColumns[i].typ.Enumvalues)
 		}
 	}
 	key := strings.Clone(createSQL)

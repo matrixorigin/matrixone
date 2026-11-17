@@ -245,7 +245,7 @@ func (v *Vector) SetSorted(b bool) {
 // we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
 	v.releaseBorrowedBacking()
-	v.typ = typ
+	v.typ = physicalVectorType(typ)
 	v.resetPrepareParamKind()
 	v.resetStringSource()
 
@@ -296,7 +296,7 @@ func (v *Vector) ResetArea() {
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.releaseBorrowedBacking()
-	v.typ = *t
+	v.typ = physicalVectorType(*t)
 	v.resetPrepareParamKind()
 	v.resetStringSource()
 	v.class = FLAT
@@ -607,7 +607,7 @@ func (v *Vector) SetType(typ types.Type) {
 		// storage still contains stale bytes.
 		v.areaDisjoint = v.length == 0
 	}
-	v.typ = typ
+	v.typ = physicalVectorType(typ)
 }
 
 // SetTypeAndFixData changes a fixed-width result type and grows its owned data
@@ -618,7 +618,7 @@ func (v *Vector) SetTypeAndFixData(
 	mp *mpool.MPool,
 ) error {
 	if v.typ.IsVarlen() && typ.IsVarlen() {
-		v.typ = typ
+		v.typ = physicalVectorType(typ)
 		return nil
 	}
 
@@ -632,7 +632,7 @@ func (v *Vector) SetTypeAndFixData(
 	}
 
 	oldType := v.typ
-	v.typ = typ
+	v.typ = physicalVectorType(typ)
 	oldLength := v.length
 	v.length = 0
 	if err := extend(v, oldLength, mp); err != nil {
@@ -4074,9 +4074,21 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 	return nil
 }
 
+// physicalVectorType removes display-label metadata from ENUM ordinals and
+// SET bitmaps. Their logical plan/catalog types retain the collation. Raw
+// decoders deliberately bypass this helper so batch admission can reject an
+// invalid ordinary uint64 before execution.
+func physicalVectorType(typ types.Type) types.Type {
+	if typ.Oid == types.T_enum || (typ.Oid == types.T_uint64 && typ.Charset != 255) {
+		typ.Charset = 0
+		typ.CollationVersion = 0
+	}
+	return typ
+}
+
 func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = FLAT
 	vec.areaDisjoint = true
 	return vec
@@ -4153,7 +4165,7 @@ func NewVecWithDataCopy(
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = CONSTANT
 	vec.length = length
 	return vec
@@ -4162,7 +4174,7 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
 	vec.gsp.AddRange(0, uint64(length))
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = CONSTANT
 	vec.length = length
 	return vec
@@ -4170,7 +4182,7 @@ func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
 
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = CONSTANT
 
 	if length > 0 {
@@ -4182,7 +4194,7 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (v
 
 func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = CONSTANT
 
 	if length > 0 {
@@ -4195,7 +4207,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 // NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.ArrayElement](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	vec.typ = typ
+	vec.typ = physicalVectorType(typ)
 	vec.class = CONSTANT
 
 	if length > 0 {

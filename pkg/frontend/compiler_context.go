@@ -630,6 +630,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	}); err != nil {
 		return err
 	}
+	plan2.RecoverLegacyEnumSetCollation(ctx, tableDef)
 	if err := plan2.MigrateLegacyFloatStringTableDef(tcc, tableDef); err != nil {
 		return err
 	}
