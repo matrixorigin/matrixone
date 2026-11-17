@@ -295,6 +295,13 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 	var exit *exec.ExitError
 	require.ErrorAs(t, err, &exit)
 	require.Equal(t, syscall.SIGKILL, exit.Sys().(syscall.WaitStatus).Signal())
+	// Preparation includes checkpoint persistence and may consume most of its
+	// deadline under coverage/race. Recovery is a new process with its own
+	// bounded startup (including normal HAKeeper expiry), not the remainder of
+	// preparation's budget. Keep the child timeout and enclosing test deadline.
+	cancel()
+	ctx, cancel = context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
 	_, verified := runChild("verify", nil)
 	select {
 	case err := <-verified:
