@@ -16,13 +16,17 @@ package table_scan
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -146,6 +150,47 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		s.elapsed += time.Since(start)
 		s.rows += int64(bat.RowCount())
 	}
+	if tableScan.ctr.membershipApplied {
+		active := false
+		for _, probe := range tableScan.ctr.domainProbes {
+			active = active || !probe.pass
+		}
+		if !active {
+			// Reuse the existing low-rejection bypass. Once it fires, future
+			// blocks return to the original eager/late column schedule.
+			tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
+			tableScan.ctr.readerFilter.Membership = nil
+			tableScan.configureLateMaterialization()
+			if len(tableScan.ctr.earlyColumns) == 0 {
+				for column := range tableScan.Types {
+					tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, column)
+				}
+			}
+		}
+		return nil
+	}
+	rows, all, err := tableScan.selectLocalDomains(proc, bat)
+	if err != nil || all {
+		return err
+	}
+	if len(rows) == bat.RowCount() {
+		return nil
+	}
+	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
+		next, _, err := colexec.SelectBatchColumns(bat, nil, rows, proc.Mp(), tableScan.OutputAllocation, true)
+		if err != nil {
+			return err
+		}
+		bat.Clean(proc.Mp())
+		tableScan.ctr.buf = next
+		return nil
+	}
+	return shrinkPopulatedVecs(bat, rows, proc.Mp())
+}
+
+// selectLocalDomains returns a borrowed mapping without mutating payload. The
+// reader consumes it before invoking another predicate callback.
+func (tableScan *TableScan) selectLocalDomains(proc *process.Process, bat *batch.Batch) ([]int64, bool, error) {
 	var combined []uint8
 	for i := range tableScan.ctr.domainProbes {
 		p := &tableScan.ctr.domainProbes[i]
@@ -156,8 +201,11 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		vec := bat.Vecs[p.column]
 		matched := false
 		if vec.GetType().Oid == p.domain.KeyType() && ((!vec.IsConst() && vec.Length() == bat.RowCount()) || vec.IsConst() && vec.Length() > 0) {
-			if err := tableScan.withFlatDomainKey(proc, vec, func(key *vector.Vector) error { matched = p.bloom.TestFixedVectorInto(key, p.mask); return nil }); err != nil {
-				return err
+			if err := tableScan.withFlatDomainKey(proc, vec, func(key *vector.Vector) error {
+				matched = p.bloom.TestFixedVectorInto(key, p.mask)
+				return nil
+			}); err != nil {
+				return nil, false, err
 			}
 		}
 		if !matched {
@@ -193,7 +241,7 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		}
 	}
 	if combined == nil {
-		return nil
+		return nil, true, nil
 	}
 	tableScan.ctr.domainRows = tableScan.ctr.domainRows[:0]
 	for row, keep := range combined {
@@ -201,22 +249,70 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 			tableScan.ctr.domainRows = append(tableScan.ctr.domainRows, int64(row))
 		}
 	}
-	if len(tableScan.ctr.domainRows) == bat.RowCount() {
-		return nil
+	return tableScan.ctr.domainRows, len(tableScan.ctr.domainRows) == bat.RowCount(), nil
+}
+
+func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
+	request := tableScan.ctr.readerFilter
+	if request == nil || request.Select == nil || len(tableScan.ctr.domainProbes) == 0 ||
+		len(tableScan.ctr.allFilterExecutors) == 0 || tableScan.ctr.padCharToFullLength {
+		return
 	}
-	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
-		next, _, err := colexec.SelectBatchColumns(bat, nil, tableScan.ctr.domainRows, proc.Mp(), tableScan.OutputAllocation, true)
-		if err != nil {
-			return err
+	needed := make([]bool, len(tableScan.Types))
+	for _, exprs := range [][]*plan.Expr{tableScan.RuntimeFilterExprs, tableScan.FilterExprs} {
+		for _, expr := range exprs {
+			if !CollectFilterColumnPositions(expr, needed) {
+				return
+			}
 		}
-		bat.Clean(proc.Mp())
-		tableScan.ctr.buf = next
-		return nil
 	}
-	return shrinkPopulatedVecs(bat, tableScan.ctr.domainRows, proc.Mp())
+	var membershipColumns []int
+	for _, probe := range tableScan.ctr.domainProbes {
+		if !probe.pass {
+			membershipColumns = append(membershipColumns, probe.column)
+			needed[probe.column] = true
+		}
+	}
+	if len(membershipColumns) == 0 {
+		return
+	}
+	slices.Sort(membershipColumns)
+	request.Membership = &engine.ReaderMembershipFilter{Columns: slices.Compact(membershipColumns)}
+	tableScan.ctr.earlyColumns = tableScan.ctr.earlyColumns[:0]
+	tableScan.ctr.lateColumns = tableScan.ctr.lateColumns[:0]
+	for column := range needed {
+		if needed[column] {
+			tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, column)
+		} else {
+			tableScan.ctr.lateColumns = append(tableScan.ctr.lateColumns, column)
+		}
+	}
+	request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		started := time.Now()
+		defer func() { tableScan.ctr.filterActiveDuration += time.Since(started) }()
+		tableScan.recordFilterInput(bat, loaded)
+		rows, all, err := tableScan.selectLocalDomains(proc, bat)
+		if err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+		tableScan.ctr.membershipApplied = true
+		tableScan.ctr.membershipInputRows += int64(bat.RowCount())
+		if all {
+			tableScan.ctr.membershipOutputRows += int64(bat.RowCount())
+		} else {
+			tableScan.ctr.membershipOutputRows += int64(len(rows))
+		}
+		return engine.ReaderFilterResult{Sels: rows, All: all}, nil
+	}
 }
 
 func (tableScan *TableScan) releaseLocalDomains() {
+	if tableScan.OpAnalyzer != nil && tableScan.ctr.membershipInputRows > 0 {
+		stats := tableScan.OpAnalyzer.GetOpStats()
+		stats.AddExtraStat("RuntimeDomainReaderInputRows", tableScan.ctr.membershipInputRows)
+		stats.AddExtraStat("RuntimeDomainReaderSurvivingRows", tableScan.ctr.membershipOutputRows)
+	}
+	tableScan.ctr.membershipInputRows, tableScan.ctr.membershipOutputRows = 0, 0
 	for _, source := range tableScan.ctr.domainSources {
 		source.producer.Complete(true)
 		if tableScan.OpAnalyzer != nil {

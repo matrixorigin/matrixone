@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -762,6 +763,163 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			&engine.ReaderFilterRequest{Apply: filter},
 		)
 		return err
+	}
+
+	for _, tc := range []struct {
+		name                                string
+		predicatePayload                    bool
+		member, residual                    engine.ReaderFilterResult
+		residualInput, want                 []int32
+		storage                             []int64
+		memberError, residualError, refusal bool
+		exact                               bool
+		keyOnly                             bool
+	}{
+		{name: "membership then late payload", member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, residualInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "membership then residual column", predicatePayload: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, residualInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "empty membership skips residual and payload", member: engine.ReaderFilterResult{}},
+		{name: "identity membership preserves physical mapping", member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{Sels: []int64{3, 5}}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{4, 6}},
+		{name: "identity membership and residual", member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{All: true}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{0, 1, 2, 4, 5, 6, 7}},
+		{name: "native rows compose before membership", storage: []int64{0, 2, 5, 7}, member: engine.ReaderFilterResult{Sels: []int64{1, 3}}, residual: engine.ReaderFilterResult{Sels: []int64{1}}, residualInput: []int32{2, 7}, want: []int32{7}},
+		{name: "membership narrows exact fallback", exact: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, want: []int32{4, 6}},
+		{name: "membership narrows native exact program", exact: true, keyOnly: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, want: []int32{4, 6}},
+		{name: "membership error precedes residual", memberError: true},
+		{name: "residual error restores scoped headers", member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residualInput: []int32{1, 4, 6}, residualError: true},
+		{name: "scratch refusal preserves ordinary read", refusal: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{3}}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			limit := uint64(1 << 20)
+			if tc.refusal {
+				limit = 96
+			}
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			readTypes, readColumns := colTypes, []uint16{0, 1}
+			if tc.keyOnly {
+				readTypes, readColumns = colTypes[:1], []uint16{0}
+			}
+			output.Clean(queryMP)
+			output = batch.NewOffHeapWithSize(len(readTypes))
+			require.NoError(t, output.SetAllocationAccount(allocation))
+			for column := range readTypes {
+				output.Vecs[column], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[column], allocation)
+				require.NoError(t, err)
+			}
+			workspace := make([]*vector.Vector, len(readTypes))
+			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}}}
+			if tc.refusal {
+				request.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
+			}
+			if tc.exact {
+				request.Exact = objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: colTypes[0], Op: objectio.ExactScanGE, Value: 4}}))
+				t.Cleanup(request.Exact.Close)
+			}
+			t.Cleanup(func() {
+				request.FreeMembership(queryMP)
+				output.Clean(queryMP)
+				for _, v := range workspace {
+					if v != nil {
+						v.Free(queryMP)
+					}
+				}
+				cacheVectors.Free(queryMP)
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+				output = batch.NewWithSize(len(colTypes))
+				for column := range colTypes {
+					output.Vecs[column] = vector.NewOffHeapVecWithType(colTypes[column])
+				}
+			})
+			membershipCalls, residualCalls := 0, 0
+			failure := moerr.NewInvalidInputNoCtx("ordered membership fixture error")
+			request.Apply = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				if !tc.exact || tc.keyOnly {
+					t.Fatal("staged read must not reevaluate through Apply")
+				}
+				require.Nil(t, loaded)
+				require.Equal(t, 3, bat.RowCount())
+				for _, v := range bat.Vecs {
+					require.NoError(t, v.Shrink([]int64{1, 2}, false, queryMP))
+				}
+				bat.SetRowCount(2)
+				return engine.ReaderFilterResult{Sels: []int64{1, 2}}, nil
+			}
+			request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				membershipCalls++
+				require.Equal(t, []int{0}, loaded)
+				if !tc.keyOnly {
+					require.Zero(t, bat.Vecs[1].Length(), "membership must precede non-key reads")
+				}
+				want := []int32{0, 1, 2, 4, 5, 6, 7}
+				if tc.storage != nil {
+					want = []int32{0, 2, 5, 7}
+				}
+				require.Equal(t, len(want), bat.RowCount())
+				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
+				if tc.memberError {
+					return engine.ReaderFilterResult{}, failure
+				}
+				return tc.member, nil
+			}
+			early := []int{0}
+			if tc.predicatePayload {
+				early = []int{0, 1}
+			}
+			request.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				residualCalls++
+				require.Equal(t, early, loaded)
+				require.Equal(t, len(tc.residualInput), bat.RowCount())
+				for row, want := range tc.residualInput {
+					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row))
+				}
+				if tc.predicatePayload {
+					require.Equal(t, 3, bat.Vecs[1].Length())
+					require.Equal(t, "payload-4", string(bat.Vecs[1].GetBytesAt(1)))
+				} else {
+					require.Zero(t, bat.Vecs[1].Length())
+				}
+				if tc.residualError {
+					return engine.ReaderFilterResult{}, failure
+				}
+				return tc.residual, nil
+			}
+			if tc.storage != nil {
+				handled, readErr := blockDataReadMembership(ctx, &info, ds, []uint16{0, 1}, colTypes, tc.storage, early, fileservice.Policy(0), output, queryMP, fs, request, nil)
+				require.True(t, handled)
+				err = readErr
+			} else {
+				_, err = BlockDataReadWithFilter(ctx, &info, ds, readColumns, readTypes, -1, timestamp.Timestamp{}, nil, nil,
+					objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "membership-late-read", output, cacheVectors, queryMP, fs, early, request)
+			}
+			if tc.memberError || tc.residualError {
+				require.ErrorIs(t, err, failure)
+				require.False(t, output.Vecs[0].IsDictionary(), "callback failure must retire scoped aliases")
+				return
+			}
+			require.NoError(t, err)
+			wantMembershipCalls := 1
+			if tc.refusal {
+				wantMembershipCalls = 0
+			}
+			require.Equal(t, wantMembershipCalls, membershipCalls)
+			wantResidualCalls := 0
+			if tc.residualInput != nil {
+				wantResidualCalls = 1
+			}
+			require.Equal(t, wantResidualCalls, residualCalls)
+			require.Equal(t, len(tc.want), output.RowCount())
+			for row, want := range tc.want {
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], row))
+				if !tc.keyOnly {
+					require.Equal(t, "payload-"+string(rune('0'+want)), string(output.Vecs[1].GetBytesAt(row)))
+				}
+			}
+		})
 	}
 
 	for _, complete := range []bool{false, true} {

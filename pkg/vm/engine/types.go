@@ -1335,6 +1335,11 @@ func (s *ReaderSelectionScratch) Clear() {
 }
 
 type ReaderFilterRequest struct {
+	// Membership is an optional necessary predicate over its key Columns.
+	// It is read-only and runs after storage visibility, before residual Select.
+	// Its sorted unique mapping is consumed before another callback. Readers
+	// without staged support ignore it and preserve the ordinary Apply path.
+	Membership *ReaderMembershipFilter
 	// ColumnUses is opt-in, proven by a caller with distinct read headers.
 	// Missing/unknown policies retain all columns. It never changes filter inputs.
 	ColumnUses       []ReaderColumnUse
@@ -1359,6 +1364,61 @@ type ReaderFilterRequest struct {
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)
+}
+
+// ReaderMembershipFilter is allocated only by a scan with an admitted ready
+// domain. Ordinary reader requests carry only a nil optional pointer.
+type ReaderMembershipFilter struct {
+	Columns []int
+	Select  ReaderSelection
+	scratch *ReaderMembershipScratch
+}
+
+// ReaderMembershipScratch belongs to the sequential prepared scan, never to a
+// cached block. Maps are accounted vectors; Sources/Views are non-owning operands
+// cleared before every read returns. Scope cannot escape the synchronous read.
+type ReaderMembershipScratch struct {
+	Physical, Logical *vector.Vector
+	Scope             vector.DictionarySelectionScope
+	Sources, Views    []*vector.Vector
+	Predicates        []int
+}
+
+func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {
+	if r.Membership.scratch == nil {
+		r.Membership.scratch = &ReaderMembershipScratch{
+			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
+			Predicates: make([]int, 0, width),
+		}
+	}
+	s := r.Membership.scratch
+	for _, slot := range []**vector.Vector{&s.Physical, &s.Logical} {
+		if *slot == nil {
+			var err error
+			*slot, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return s, nil
+}
+
+// FreeMembership is terminal for this prepared request; the owner calls it on
+// Reset/Free and before replacing a request during preparation.
+func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
+	if r == nil || r.Membership == nil || r.Membership.scratch == nil {
+		return
+	}
+	s := r.Membership.scratch
+	s.Scope.Free(mp)
+	if s.Physical != nil {
+		s.Physical.Free(mp)
+	}
+	if s.Logical != nil {
+		s.Logical.Free(mp)
+	}
+	r.Membership.scratch = nil
 }
 
 // ColumnUse preserves the original behavior for absent or incompatible policy.

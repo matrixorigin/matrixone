@@ -131,7 +131,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
+	if !tableScan.ctr.membershipPrepared {
+		tableScan.prepareReaderMembership(proc)
+		tableScan.ctr.membershipPrepared = true
+	}
+
 	for {
+		tableScan.ctr.membershipApplied = false
 		// receive topvalue message
 		if tableScan.ctr.msgReceiver != nil {
 			msgs, _, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)

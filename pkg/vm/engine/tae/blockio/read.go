@@ -334,6 +334,15 @@ func blockDataRead(
 		}
 	}
 
+	if applyFilter != nil && orderByLimit == nil && phyAddrColumnPos < 0 {
+		handled, memberErr := blockDataReadMembership(ctx, info, ds, columns, colTypes, sels, earlyColumns,
+			policy, bat, mp, fs, applyFilter, preFilterRows)
+		if handled || memberErr != nil {
+			cacheVectors.Free(mp)
+			return memberErr
+		}
+	}
+
 	if applyFilter != nil && applyFilter.Exact != nil &&
 		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
 		cacheVectors.Free(mp)

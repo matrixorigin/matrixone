@@ -23,7 +23,9 @@ Keep intermediate mappings reader-local and publish final output once. Reuse
 existing low-rejection bypass rather than introducing another threshold.
 
 Existing exact-filter, Top-K and unsupported reader paths retain their proven
-implementations. Fall back through the established route without reevaluating
+implementations. Compatible exact programs consume the membership survivors as
+an initial physical-row selection through the existing exact-read function;
+this does not replace their native predicate/payload implementation. Fall back through the established route without reevaluating
 predicates, changing their errors, or rejecting valid input. Default output stays
 flat; view publication still requires existing account/capability admission.
 
