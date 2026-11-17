@@ -15,13 +15,13 @@ insert into vector_ivfflat_async_pk values
 create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
 lists=1 op_type "vector_l2_ops" async;
 
--- ENUM origin PK and INCLUDE types must retain distinct member lists through
+-- Legacy ENUM origin PK and INCLUDE types must retain distinct member lists through
 -- async catalog creation, initial population, and subsequent CDC replay.
 create table vector_ivfflat_async_enum(
-    id enum('cold','hot','warm') primary key,
-    status enum('warm','cold','hot'),
+    id enum('cold','hot','warm') collate __mo_enum_legacy_main_v1 primary key,
+    status enum('warm','cold','hot') collate __mo_enum_legacy_main_v1,
     embedding vecf32(2),
-    stored enum('','2','1')
+    stored enum('','2','1') collate __mo_enum_legacy_main_v1
 );
 insert into vector_ivfflat_async_enum values
     ('cold', 'hot', '[0,0]', null), (2, 2, '[1,0]', null);
@@ -169,8 +169,8 @@ drop table vector_ivfflat_fake_pk;
 -- Synchronous population and DML use the same value-bearing ENUM metadata.
 -- Different PK/INCLUDE member orders expose accidental ordinal-domain copying.
 create table vector_ivfflat_sync_enum(
-    id enum('cold','hot','warm') primary key,
-    status enum('warm','cold','hot'),
+    id enum('cold','hot','warm') collate __mo_enum_legacy_main_v1 primary key,
+    status enum('warm','cold','hot') collate __mo_enum_legacy_main_v1,
     embedding vecf32(2)
 );
 insert into vector_ivfflat_sync_enum values
