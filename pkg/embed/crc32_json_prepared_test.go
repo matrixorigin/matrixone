@@ -170,6 +170,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, binarySnapshot)
 		require.NotNil(t, binarySnapshot.MigrateConnFromResponse)
+		require.NotNil(t, binarySnapshot.MigrateConnFromResponse.Principal)
+		principal := *binarySnapshot.MigrateConnFromResponse.Principal
 		require.Len(t, binarySnapshot.MigrateConnFromResponse.PrepareStmts, 1)
 		queryClient.Release(binarySnapshot)
 		check(1, 4012824821) // exporting must leave the original handle executable
@@ -233,7 +235,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		require.Equal(t, uint64(1), initialLastInsertID)
 		request := queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 		request.MigrateConnToRequest = &query.MigrateConnToRequest{
-			ConnID: targetID, DB: "crc32_prepared_contract", LastInsertIDExported: true, LastInsertID: 91,
+			ConnID: targetID, Principal: &principal, DB: "crc32_prepared_contract",
+			LastInsertIDExported: true, LastInsertID: 91,
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "safe_first", SQL: "select 1"}, {Name: "crc_later", SQL: "select crc32(cast(? as json))"},
 			},
