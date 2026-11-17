@@ -1,0 +1,85 @@
+-- @suite
+-- @setup
+drop user if exists issue_32869_reader;
+drop role if exists issue_32869_role;
+drop database if exists test_issue_32869;
+create database test_issue_32869;
+use test_issue_32869;
+create table outer_rows (a int);
+create table inner_rows (d int);
+create table restricted_wrapper (d int);
+insert into outer_rows values (1), (1), (11), (null);
+insert into inner_rows values (4), (99);
+insert into restricted_wrapper values (4);
+create function issue_32869_identity(x int) returns int language sql as '$1';
+create function issue_32869_identity_query(x int) returns int language sql as 'select $1';
+create function issue_32869_add_twice(x int) returns int language sql as '$1 + $1';
+
+-- @case
+-- @desc:issue #32869 correlated scalar root LIMIT 0 returns a typed NULL per outer row
+-- @label:bvt
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0) as filtered_zero
+from outer_rows o order by o.a;
+select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
+from outer_rows o order by o.a;
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
+from outer_rows o order by o.a;
+select o.a, (select cast(concat(o.a, char(120)) as signed) from inner_rows limit 0) as value_zero
+from outer_rows o order by o.a;
+select o.a, (select o.a as alias_value from inner_rows i where i.d > o.a order by i.d limit 0) as alias_order_zero
+from outer_rows o order by o.a;
+select o.a, issue_32869_identity((select (select o.d from inner_rows i limit 0) from inner_rows o limit 1)) as identity_zero
+from outer_rows o order by o.a;
+select o.a, issue_32869_identity((select o.a from inner_rows i where i.d > o.a limit 0)) as direct_identity_zero
+from outer_rows o order by o.a;
+select o.a, issue_32869_identity_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_identity_zero
+from outer_rows o order by o.a;
+select o.a, issue_32869_add_twice((select o.a from inner_rows i where i.d > o.a limit 0)) as repeated_argument_zero
+from outer_rows o order by o.a;
+
+-- Nonzero LIMIT still evaluates the original scalar and preserves one-row behavior.
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
+from outer_rows o order by o.a;
+
+-- A nested zero boundary does not erase its enclosing aggregate.
+select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
+
+-- The discarded SQL-UDF argument must not erase a nested correlated LIMIT 0
+-- table dependency before privilege checking.
+create table secret_rows (s int);
+insert into secret_rows values (5);
+create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
+create role issue_32869_role;
+create user issue_32869_reader identified by '111' default role issue_32869_role;
+grant connect on account * to issue_32869_role;
+grant select on table test_issue_32869.outer_rows to issue_32869_role;
+grant select on table test_issue_32869.inner_rows to issue_32869_role;
+-- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
+use test_issue_32869;
+select a from outer_rows order by a;
+select (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as root_zero
+from test_issue_32869.outer_rows o
+window unused_w as (order by (select s from test_issue_32869.secret_rows limit 1));
+select issue_32869_keep_second(
+  (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+   from test_issue_32869.inner_rows o limit 1),
+  a
+) from test_issue_32869.outer_rows;
+select issue_32869_keep_second(
+  (select (select o.d from test_issue_32869.inner_rows s where s.d > o.d limit 0)
+   from test_issue_32869.restricted_wrapper o limit 1),
+  a
+) from test_issue_32869.outer_rows;
+select issue_32869_keep_second(
+  (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+   from test_issue_32869.inner_rows o
+   union all select 5 limit 1),
+  a
+) from test_issue_32869.outer_rows;
+select s from test_issue_32869.secret_rows;
+-- @session
+drop user issue_32869_reader;
+drop role issue_32869_role;
+
+-- @teardown
+drop database test_issue_32869;

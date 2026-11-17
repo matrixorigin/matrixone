@@ -1216,6 +1216,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, b.ctx)
+	udfResolutionCount := b.builder.udfResolutionCount
+	udfExpansionDepth := b.builder.udfExpansionDepth
 	b.builder.nextExistentialBlock++
 	subCtx.existentialBlock = b.builder.nextExistentialBlock
 	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
@@ -1254,6 +1257,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
 
+	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
+		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+
 	rowSize := int32(len(subCtx.results))
 
 	returnExpr := &plan.Expr{
@@ -1281,6 +1287,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 	}
 
+	subCtx.zeroScalarRootCandidate = subCtx.zeroScalarRootSourceSafe && subCtx.isCorrelated
 	return returnExpr, nil
 }
 
@@ -3832,6 +3839,10 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 // name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
 // not recognize that spelling as a native built-in call.
 func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	zeroScalarRewriteGeneration := uint64(0)
+	if b.builder != nil {
+		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
+	}
 	args := make([]*Expr, len(astArgs))
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
@@ -3852,7 +3863,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4603,6 +4614,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	zeroScalarRewriteGeneration := uint64(0)
+	if b.builder != nil {
+		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
+	}
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -5299,7 +5314,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 		return nil, err
 	}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
 func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.Udf, error) {
@@ -5625,6 +5640,170 @@ func (e *UdfDisallowedInPublicationViewBinding) Error() string {
 		"user-defined function '%s' cannot bind in publication view binding", e.Name)
 }
 
+// isUDFArgumentAuthorizationSource mirrors the sources authenticated by the
+// frontend for SELECT statements. View references are tracked separately on
+// Query.ViewReferences and remain pinned when SQL UDF bodies are expanded.
+func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return true
+	case plan.Node_EXTERNAL_SCAN:
+		return node.GetExternScan() != nil &&
+			node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
+	case plan.Node_FUNCTION_SCAN:
+		tableDef := node.GetTableDef()
+		return tableDef != nil && tableDef.GetTblFunc() != nil &&
+			tableDef.GetTblFunc().GetName() == "table_changes"
+	default:
+		return false
+	}
+}
+
+// collectUDFArgumentAuthorizationSources follows bound subquery and dependent-
+// program roots to their privilege-bearing sources. It is used only when
+// binding an argument applied the correlated root LIMIT 0 rewrite.
+func collectUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	exprs []*plan.Expr,
+	roots []int32,
+) (map[int32]struct{}, error) {
+	if builder == nil || builder.qry == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+
+	pending := append([]int32(nil), roots...)
+	visitExpr := func(expr *plan.Expr) error {
+		return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			if sub := e.GetSub(); sub != nil {
+				pending = append(pending, sub.NodeId)
+			}
+			if dependent := e.GetDependent(); dependent != nil {
+				spec := builder.qry.Correlation
+				if spec == nil || dependent.ProgramId == 0 || int(dependent.ProgramId) > len(spec.Programs) {
+					return moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF dependent source")
+				}
+				program := spec.Programs[dependent.ProgramId-1]
+				if program == nil {
+					return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF dependent program")
+				}
+				pending = append(pending, program.RootNode)
+			}
+			return nil
+		})
+	}
+	for _, expr := range exprs {
+		if err := visitExpr(expr); err != nil {
+			return nil, err
+		}
+	}
+
+	sources := make(map[int32]struct{})
+	visited := make(map[int32]struct{})
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source node")
+		}
+		if _, ok := visited[id]; ok {
+			continue
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if isUDFArgumentAuthorizationSource(node) {
+			sources[id] = struct{}{}
+		}
+		pending = append(pending, node.Children...)
+		for _, step := range node.SourceStep {
+			if step < 0 || int(step) >= len(builder.qry.Steps) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source step")
+			}
+			pending = append(pending, builder.qry.Steps[step])
+		}
+		if err := plan.VisitExpressionsInOwner(node, visitExpr); err != nil {
+			return nil, err
+		}
+	}
+	return sources, nil
+}
+
+func udfArgsContainCorrelatedRootZero(builder *QueryBuilder, args []*plan.Expr) bool {
+	if builder == nil {
+		return false
+	}
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		found := false
+		_ = plan.VisitExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub != nil && sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
+				if ctx := builder.ctxByNode[sub.NodeId]; ctx != nil {
+					found = found || ctx.zeroScalarRootCandidate
+				}
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func validateUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	required map[int32]struct{},
+	result *plan.Expr,
+) error {
+	if builder == nil || builder.qry == nil {
+		return moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+	if len(required) == 0 {
+		return moerr.NewNYI(builder.GetContext(), "SQL UDF with an untracked correlated scalar LIMIT 0 source")
+	}
+
+	bodySources, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{result}, nil)
+	if err != nil {
+		return err
+	}
+	missing := make(map[int32]struct{})
+	for source := range required {
+		if _, inBody := bodySources[source]; !inBody {
+			missing[source] = struct{}{}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// Only walk the retained statement plan when the returned expression
+	// itself does not retain every required authorization source.
+	retainedRoots := append([]int32(nil), builder.qry.Steps...)
+	if spec := builder.qry.Correlation; spec != nil {
+		for _, program := range spec.Programs {
+			if program == nil {
+				return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF retained program")
+			}
+			retainedRoots = append(retainedRoots, program.RootNode)
+		}
+	}
+	retainedSources, err := collectUDFArgumentAuthorizationSources(builder, nil, retainedRoots)
+	if err != nil {
+		return err
+	}
+	for source := range missing {
+		if _, inPlan := retainedSources[source]; !inPlan {
+			return moerr.NewNYI(builder.GetContext(), "SQL UDF with an unretained correlated scalar LIMIT 0 source")
+		}
+	}
+	return nil
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -5632,25 +5811,53 @@ func bindFuncExprImplUdf(
 	astArgs []tree.Expr,
 	boundArgs []*plan.Expr,
 	depth int32,
+	zeroScalarRewriteGeneration uint64,
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 	if defines.IsPublicationViewBinding(b.GetContext()) {
-		// The binder reached user-defined function binding for this call -
-		// builtin resolution by name, arity and argument types did not claim
-		// it, and this account's catalog row did. A subscriber resolves the
-		// same call in its own catalog, where the function may be missing or
-		// carry another body, so the metadata binding refuses it outright and
-		// the caller reports the stable publication error.
+		// A selected UDF is forbidden during publication-view validation,
+		// regardless of its arguments or any planner rewrite they trigger.
 		return nil, &UdfDisallowedInPublicationViewBinding{Name: name}
 	}
-
+	requiresUDFSourceValidation := b.builder != nil &&
+		(b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration ||
+			udfArgsContainCorrelatedRootZero(b.builder, boundArgs))
+	var requiredSources map[int32]struct{}
+	if requiresUDFSourceValidation {
+		if udf.Language != string(tree.SQL) {
+			return nil, moerr.NewNYI(b.GetContext(), "non-SQL UDF with a correlated scalar LIMIT 0 argument")
+		}
+		// Capture the original authorization dependencies before binding the
+		// SQL UDF body can mutate or discard the bound argument graph.
+		var err error
+		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	validateBoundResult := func(expr *plan.Expr) (*plan.Expr, error) {
+		if requiresUDFSourceValidation {
+			if err := validateUDFArgumentAuthorizationSources(b.builder, requiredSources, expr); err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	}
+	if b.builder != nil {
+		b.builder.udfResolutionCount++
+		b.builder.udfExpansionDepth++
+		defer func() { b.builder.udfExpansionDepth-- }()
+	}
 	switch udf.Language {
 	case string(tree.SQL):
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
+		}
+		if requiresUDFSourceValidation && hasRepeatedSQLUdfArgument(udf.Body, len(boundArgs), parserSQLMode) {
+			return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
 		}
 		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
@@ -5659,6 +5866,12 @@ func bindFuncExprImplUdf(
 		// make it start with a 'SELECT'.
 
 		expressionBody := !strings.Contains(sql, "select")
+		if requiresUDFSourceValidation && !expressionBody {
+			// Query-body UDFs add a lexical SELECT scope around the bound
+			// argument. Until that scope has a dedicated correlation mapping,
+			// preserve the prior fail-closed behavior.
+			return nil, moerr.NewNYI(b.GetContext(), "SQL UDF query body with a correlated scalar LIMIT 0 argument")
+		}
 		if expressionBody {
 			sql = "select " + sql
 		}
@@ -5687,9 +5900,17 @@ func bindFuncExprImplUdf(
 			}
 		}
 		if expressionBody {
-			return b.impl.BindExpr(bodyExpr, depth, false)
+			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			return validateBoundResult(expr)
 		}
-		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		expr, err := b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		if err != nil {
+			return nil, err
+		}
+		return validateBoundResult(expr)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5776,6 +5997,39 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 
 	result.WriteString(sql[written:])
 	return result.String()
+}
+
+// hasRepeatedSQLUdfArgument reports when a raw parameter marker is referenced
+// more than once. Duplicating a plan-level scalar subquery currently reuses its
+// relational owner, so calls with a root-zero argument fail closed rather than
+// mutating the shared dependent plan twice.
+func hasRepeatedSQLUdfArgument(sql string, argCount int, sqlMode string) bool {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
+	counts := make([]uint8, argCount+1)
+	previousToken := 0
+	for {
+		token, value := scanSQLToken(scanner, &previousToken)
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			return false
+		}
+		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
+			continue
+		}
+		ordinal, err := strconv.Atoi(value[1:])
+		if err != nil || ordinal < 1 || ordinal > argCount {
+			continue
+		}
+		if counts[ordinal] == 1 {
+			return true
+		}
+		counts[ordinal]++
+	}
 }
 
 // scanSQLToken keeps secondary SQL scans consistent with qualified identifiers.
