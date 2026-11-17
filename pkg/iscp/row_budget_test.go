@@ -202,7 +202,8 @@ func TestIndexCatchupDeliversDeferredCommitAcrossIterations(t *testing.T) {
 		return rows, nil
 	}
 	sink := new(indexCatchupRecordingConsumer)
-	for i, expectedFrom := range []types.TS{types.BuildTS(20, 0), types.BuildTS(30, 0)} {
+	expectedFrom := types.BuildTS(20, 0)
+	for i := range commits {
 		iterations, _ := table.getCandidate()
 		require.Len(t, iterations, 1)
 		iteration := iterations[0]
@@ -232,7 +233,11 @@ func TestIndexCatchupDeliversDeferredCommitAcrossIterations(t *testing.T) {
 		require.Zero(t, statuses[0].ErrorCode)
 		require.Equal(t, i+1, len(sink.rows))
 		require.Equal(t, commits[i].pk, sink.rows[i])
+		if i == 0 {
+			require.True(t, iteration.toTS.LT(&commits[1].ts), "first range must defer the later commit")
+		}
 		require.NoError(t, table.UpdateWatermark(iteration))
+		expectedFrom = iteration.toTS.Next()
 	}
 	require.Equal(t, []int64{1, 2}, sink.rows)
 	watermark, ok := table.GetWatermark("index")
