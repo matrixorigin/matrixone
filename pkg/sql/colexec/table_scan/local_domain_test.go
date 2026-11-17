@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -30,6 +31,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReaderMembershipTotalityUsesExecutableFilters(t *testing.T) {
+	for _, location := range []string{"safe", "static", "runtime"} {
+		t.Run(location, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			scan := NewArgument()
+			t.Cleanup(scan.Release)
+			scan.Types = []plan.Type{{Id: int32(types.T_int32)}}
+			scan.ctr.readerFilter = &engine.ReaderFilterRequest{Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+				t.Fatal("admission must not execute a predicate")
+				return engine.ReaderFilterResult{}, nil
+			}}
+			scan.ctr.allFilterExecutors = []colexec.ExpressionExecutor{nil}
+			scan.ctr.domainProbes = []localDomainProbeState{{column: 0}}
+			scan.FilterExprs = []*plan.Expr{lateTestCompare(t, ">", 0, 0)}
+			if location != "safe" {
+				unknown := lateTestCompare(t, ">", 0, 0)
+				unknown.GetF().Func.Obj = -1
+				if location == "runtime" {
+					scan.RuntimeFilterExprs = []*plan.Expr{unknown}
+				} else {
+					scan.FilterExprs = []*plan.Expr{unknown}
+				}
+			}
+			scan.prepareReaderMembership(proc)
+			require.NotNil(t, scan.ctr.readerFilter.Membership)
+			require.Equal(t, location == "safe", scan.ctr.readerFilter.Membership.PredicatesTotal)
+		})
+	}
+}
 
 type localDomainTestReader struct {
 	engine.Reader

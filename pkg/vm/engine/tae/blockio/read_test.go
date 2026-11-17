@@ -771,7 +771,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		memberInput, want                                   []int32
 		storage                                             []int64
 		predicatePayload, textPredicate                     bool
-		scoped, unusedPredicate                             bool
+		scoped, unusedPredicate, total                      bool
 		memberError, residualError, refusal, exact, keyOnly bool
 	}{
 		{name: "predicates then membership then late payload", residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
@@ -779,6 +779,14 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		{name: "membership-only key loads after predicates", textPredicate: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
 		{name: "scoped cached predicates survive membership", textPredicate: true, scoped: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
 		{name: "scoped unused predicate stays empty", textPredicate: true, scoped: true, unusedPredicate: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "total membership precedes predicates", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, want: []int32{4, 6}},
+		{name: "total predicate key overlaps membership", scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, want: []int32{4, 6}},
+		{name: "total identity membership", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{Sels: []int64{4, 6}}, want: []int32{4, 6}},
+		{name: "total empty membership skips predicates", textPredicate: true, scoped: true, total: true},
+		{name: "total empty predicate retires cached inputs", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}},
+		{name: "total unused predicate stays empty", textPredicate: true, scoped: true, total: true, unusedPredicate: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{All: true}, want: []int32{1, 4, 6}},
+		{name: "total predicate error restores headers", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residualError: true},
+		{name: "total membership error restores headers", textPredicate: true, scoped: true, total: true, memberError: true},
 		{name: "scoped predicate error restores owned headers", textPredicate: true, scoped: true, residualError: true},
 		{name: "scoped membership error restores owned headers", textPredicate: true, scoped: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, memberInput: []int32{1, 4, 6}, memberError: true},
 		{name: "empty predicate skips membership and payload", residual: engine.ReaderFilterResult{}},
@@ -825,7 +833,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				predicates = []int{1}
 				early = []int{0, 1}
 			}
-			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, PredicateColumns: predicates}}
+			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, PredicateColumns: predicates, PredicatesTotal: tc.total}}
 			if tc.refusal || tc.scoped {
 				request.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
 			}
@@ -875,7 +883,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			if tc.scoped {
 				caseDS = &blockReadTestDataSource{}
 				visible = []int32{0, 1, 2, 3, 4, 5, 6, 7}
-				if !tc.residualError {
+				if !tc.residualError && !tc.total {
 					tc.residual.Sels = []int64{1, 4, 6}
 				}
 			}
@@ -885,6 +893,32 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			request.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 				residualCalls++
 				require.False(t, tc.exact)
+				if tc.total {
+					require.Equal(t, 1, memberCalls)
+					require.Equal(t, predicates, loaded)
+					rows := len(visible)
+					if !tc.member.All {
+						rows = len(tc.member.Sels)
+					}
+					require.Equal(t, rows, bat.RowCount())
+					predicate := predicates[0]
+					require.Equal(t, !tc.member.All, bat.Vecs[predicate].IsDictionary())
+					for row := range rows {
+						original := row
+						if !tc.member.All {
+							original = int(tc.member.Sels[row])
+						}
+						if tc.textPredicate {
+							require.Equal(t, "payload-"+string(rune('0'+original)), string(bat.Vecs[1].GetBytesAt(row)))
+						} else {
+							require.Equal(t, int32(original), vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row))
+						}
+					}
+					if tc.residualError {
+						return engine.ReaderFilterResult{}, failure
+					}
+					return tc.residual, nil
+				}
 				require.Zero(t, memberCalls, "ordinary predicates must run before membership")
 				require.Equal(t, predicates, loaded)
 				require.Equal(t, len(visible), bat.RowCount())
@@ -915,10 +949,10 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				memberCalls++
 				require.Equal(t, []int{0}, loaded)
 				want := tc.memberInput
-				if tc.exact {
+				if tc.exact || tc.total {
 					want = visible
 					require.Zero(t, residualCalls)
-					if !tc.keyOnly {
+					if !tc.keyOnly && !tc.total {
 						require.Zero(t, bat.Vecs[1].Length())
 					}
 				} else {
@@ -947,7 +981,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					require.Same(t, originalHeaders[1], output.Vecs[1])
 					require.False(t, output.Vecs[1].HasBorrowedBacking())
 				}
-				if tc.residualError {
+				if tc.residualError && !tc.total {
 					require.Zero(t, memberCalls)
 				}
 				return
@@ -958,12 +992,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				require.False(t, output.Vecs[1].HasBorrowedBacking())
 			}
 			wantMember := 0
-			if tc.exact || tc.memberInput != nil {
+			if tc.exact || tc.total || tc.memberInput != nil {
 				wantMember = 1
 			}
 			require.Equal(t, wantMember, memberCalls)
 			wantResidual := 1
-			if tc.exact {
+			if tc.exact || (tc.total && !tc.member.All && len(tc.member.Sels) == 0) {
 				wantResidual = 0
 			}
 			require.Equal(t, wantResidual, residualCalls)

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -284,7 +285,12 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 		return
 	}
 	slices.Sort(membershipColumns)
-	request.Membership = &engine.ReaderMembershipFilter{Columns: slices.Compact(membershipColumns), PredicateColumns: predicateColumns}
+	request.Membership = &engine.ReaderMembershipFilter{
+		Columns: slices.Compact(membershipColumns), PredicateColumns: predicateColumns,
+		// Runtime predicates are installed before Prepare; validate the actual
+		// executable chain here rather than relying on earlier logical filters.
+		PredicatesTotal: plan2.LocalDomainPredicatesAreTotal(tableScan.FilterExprs) && plan2.LocalDomainPredicatesAreTotal(tableScan.RuntimeFilterExprs),
+	}
 	tableScan.ctr.earlyColumns = tableScan.ctr.earlyColumns[:0]
 	tableScan.ctr.lateColumns = tableScan.ctr.lateColumns[:0]
 	for column := range needed {
@@ -297,7 +303,7 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 	request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 		started := time.Now()
 		defer func() { tableScan.ctr.filterActiveDuration += time.Since(started) }()
-		if request.Exact != nil {
+		if request.Exact != nil || !tableScan.ctr.filterReadMetrics {
 			tableScan.recordFilterInput(bat, loaded)
 		} else {
 			tableScan.recordMembershipKeyInput(bat, loaded, request.Membership.PredicateColumns)

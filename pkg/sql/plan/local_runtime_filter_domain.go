@@ -86,7 +86,7 @@ func (p *localDomainProof) output(nodeID, pos int32, depth int) (localDomainColu
 	if n.NodeType != planpb.Node_JOIN && n.NodeType != planpb.Node_PROJECT && n.NodeType != planpb.Node_FILTER {
 		return localDomainColumn{}, false
 	}
-	if !localDomainPredicatesAreTotal(n.FilterList) {
+	if !LocalDomainPredicatesAreTotal(n.FilterList) {
 		return localDomainColumn{}, false
 	}
 	if n.NodeType == planpb.Node_PROJECT {
@@ -130,7 +130,7 @@ func newLocalDomainProof(q *planpb.Query) *localDomainProof {
 		if n.NodeType != planpb.Node_JOIN {
 			continue
 		}
-		if !localDomainPredicatesAreTotal(n.OnList) || !localDomainPredicatesAreTotal(n.FilterList) {
+		if !LocalDomainPredicatesAreTotal(n.OnList) || !LocalDomainPredicatesAreTotal(n.FilterList) {
 			return nil
 		}
 		for _, expr := range n.OnList {
@@ -209,7 +209,9 @@ func localDomainPredicateIsTotal(expr *planpb.Expr) bool {
 	return isTruncationSafePredicateExpr(expr)
 }
 
-func localDomainPredicatesAreTotal(exprs []*planpb.Expr) bool {
+// LocalDomainPredicatesAreTotal proves that membership rejection may skip these
+// deterministic predicates without hiding a semantic evaluation error.
+func LocalDomainPredicatesAreTotal(exprs []*planpb.Expr) bool {
 	for _, expr := range exprs {
 		if !localDomainPredicateIsTotal(expr) {
 			return false
@@ -283,7 +285,7 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 		sourceNode := q.Nodes[source.scan]
 		unsafe := false
 		for _, id := range p.tree.order {
-			if id != source.scan && !localDomainPredicatesAreTotal(q.Nodes[id].FilterList) {
+			if id != source.scan && !LocalDomainPredicatesAreTotal(q.Nodes[id].FilterList) {
 				unsafe = true
 				break
 			}
@@ -296,7 +298,7 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 		for _, col := range columns {
 			n := q.Nodes[col.scan]
 			if col.scan == source.scan || n.Stats == nil || n.Stats.Outcnt <= 0 ||
-				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || !localDomainPredicatesAreTotal(n.BlockFilterList) {
+				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || !LocalDomainPredicatesAreTotal(n.BlockFilterList) {
 				// Reader composition preserves native filtering and can reject
 				// impossible keys before safe residual/payload construction.
 				// Source completion and truncation safety are proved above.

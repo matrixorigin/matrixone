@@ -165,6 +165,12 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 		s.Keys = s.Keys[:0]
 		s.Overlap = s.Overlap[:0]
 	}()
+	if identity && request.Membership.PredicatesTotal && len(predicates) > 0 && scopedOwnedColumns(request, len(columns)) {
+		handled, err := withScopedTotalMembership(ctx, info, columns, typs, early, predicates, physical, policy, output, mp, fs, request, s)
+		if handled || err != nil {
+			return err
+		}
+	}
 	var readRows []int64
 	if !identity {
 		readRows = physical

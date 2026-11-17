@@ -1373,7 +1373,10 @@ type ReaderMembershipFilter struct {
 	Columns []int
 	// PredicateColumns is the original ordered chain's required input set.
 	// Nil retains early-column behavior for callers without staged metadata.
-	PredicateColumns      []int
+	PredicateColumns []int
+	// PredicatesTotal permits early rejection only for a proven total chain.
+	// Custom callbacks and unknown/fallible predicates preserve their order.
+	PredicatesTotal       bool
 	Select                ReaderSelection
 	InputRows, OutputRows int64
 	scratch               *ReaderMembershipScratch
