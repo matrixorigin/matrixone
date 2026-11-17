@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1231,7 +1230,6 @@ func buildRestoreTableOrder(
 	// Capture verified, qualified dependencies once per view. Text matching
 	// cannot reliably recognize comments or whitespace around a qualifier.
 	verifiedDependencies := make(map[uint64]tableKey)
-	normalizedViewSQL := make(map[uint64]string)
 	for _, table := range tables {
 		if ctx.Err() != nil {
 			break
@@ -1240,16 +1238,8 @@ func buildRestoreTableOrder(
 		if !isView(table) || data == nil || data.Schema == nil || !data.Schema.ViewDefinitionKnown {
 			continue
 		}
-		var definition sqlplan.ViewData
-		if json.Unmarshal([]byte(data.Schema.ViewDefinition), &definition) != nil {
-			continue
-		}
-		if view, err := prepareCheckpointViewRestore(ctx, table, data); err == nil {
-			if definition.DefaultDatabase == "" {
-				verifiedDependencies[table.TableID] = tableKey{database: view.sourceDatabase, table: view.sourceTable}
-			} else {
-				normalizedViewSQL[table.TableID] = view.normalizedSQL
-			}
+		if view, err := prepareCheckpointViewRestore(ctx, table, data); err == nil && view.sourceKnown {
+			verifiedDependencies[table.TableID] = tableKey{database: view.sourceDatabase, table: view.sourceTable}
 		}
 	}
 	viewDependsOn := func(view, dependency checkpointtool.TableCatalogEntry) bool {
@@ -1264,20 +1254,11 @@ func buildRestoreTableOrder(
 			return false
 		}
 		sql := dumpData.Schema.CreateSQL
-		defaultDB := view.DatabaseName
 		if dumpData.Schema.ViewDefinitionKnown && dumpData.Schema.ViewDefinition != "" {
 			var data sqlplan.ViewData
-			if json.Unmarshal([]byte(dumpData.Schema.ViewDefinition), &data) == nil {
-				if data.Stmt != "" {
-					sql = data.Stmt
-				}
-				if data.DefaultDatabase != "" {
-					defaultDB = data.DefaultDatabase
-				}
+			if json.Unmarshal([]byte(dumpData.Schema.ViewDefinition), &data) == nil && data.Stmt != "" {
+				sql = data.Stmt
 			}
-		}
-		if normalized := normalizedViewSQL[view.TableID]; normalized != "" {
-			sql = normalized
 		}
 		sql = strings.ToLower(sql)
 		if sql == "" {
@@ -1295,7 +1276,7 @@ func buildRestoreTableOrder(
 				candidates = append(candidates, dbName+"."+tableName)
 			}
 		}
-		if strings.EqualFold(defaultDB, dependency.DatabaseName) {
+		if strings.EqualFold(view.DatabaseName, dependency.DatabaseName) {
 			candidates = append(candidates, quotedTable, ansiTable, table)
 		}
 		for _, candidate := range candidates {
@@ -1720,7 +1701,7 @@ func isViewRelation(table checkpointtool.TableCatalogEntry) bool {
 type checkpointViewRestore struct {
 	ddl, sqlMode, defaultDB, security string
 	sourceDatabase, sourceTable       string
-	normalizedSQL                     string
+	sourceKnown                       bool
 }
 
 func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.TableCatalogEntry, dumpData *checkpointtool.TableDumpData) (*checkpointViewRestore, error) {
@@ -1770,14 +1751,23 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if !ok {
 		return fail("view definition is not CREATE VIEW")
 	}
-	var sourceDatabase, sourceTable string
+	sourceDatabase, sourceTable, sourceKnown := checkpointSimpleViewSource(viewStmt)
+	if sourceKnown && sourceTable != "" && sourceDatabase == "" {
+		if defaultDB == "" {
+			sourceKnown = false
+		} else {
+			sourceDatabase = defaultDB
+		}
+	}
 	if defaultDB == "" {
-		var ok bool
-		sourceDatabase, sourceTable, ok = checkpointNoDefaultViewSource(viewStmt)
-		if !ok {
+		if viewStmt.Name == nil || viewStmt.Name.SchemaName == "" || !sourceKnown {
 			return fail("view without default database is not a self-contained literal SELECT or a simple qualified SELECT")
 		}
 		defaultDB = table.DatabaseName
+	} else if !strings.EqualFold(defaultDB, table.DatabaseName) && !sourceKnown {
+		// The old substring fallback cannot prove unqualified cross-database
+		// dependencies and may mistake a literal or alias for a relation.
+		return fail("cannot safely determine cross-database view dependencies")
 	}
 	start, end, ok := createTableNameRange(stmt)
 	if !ok {
@@ -1801,17 +1791,22 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if !ok || rewrittenView.Name == nil || !strings.EqualFold(string(rewrittenView.Name.SchemaName), table.DatabaseName) || !strings.EqualFold(string(rewrittenView.Name.ObjectName), table.TableName) {
 		return fail("qualified view definition has unexpected target")
 	}
-	return &checkpointViewRestore{ddl: ddl, sqlMode: mode, defaultDB: defaultDB, security: security, sourceDatabase: sourceDatabase, sourceTable: sourceTable, normalizedSQL: tree.String(viewStmt.AsSource, dialect.MYSQL)}, nil
+	return &checkpointViewRestore{ddl: ddl, sqlMode: mode, defaultDB: defaultDB, security: security, sourceDatabase: sourceDatabase, sourceTable: sourceTable, sourceKnown: sourceKnown}, nil
 }
 
-// A view created without a current database can be replayed with the target
-// database only when its admitted shape contains no database-dependent names.
-func checkpointNoDefaultViewSource(view *tree.CreateView) (string, string, bool) {
-	if view == nil || view.Name == nil || view.Name.SchemaName == "" || view.AsSource == nil {
+// For a simple view, identify its only possible relation without mistaking
+// string literals for dependencies. Complex same-database views retain the
+// existing fallback; cross-database ones require a proven dependency.
+func checkpointSimpleViewSource(view *tree.CreateView) (string, string, bool) {
+	if view == nil || view.AsSource == nil {
 		return "", "", false
 	}
 	q := view.AsSource
-	if q.With != nil || q.IsPerform || q.TimeWindow != nil || len(q.OrderBy) != 0 || q.Limit != nil || q.RankOption != nil || q.Ep != nil || q.SelectLockInfo != nil {
+	if q.With != nil || q.IsPerform || q.TimeWindow != nil || len(q.OrderBy) != 0 || q.RankOption != nil || q.Ep != nil || q.SelectLockInfo != nil {
+		return "", "", false
+	}
+	if q.Limit != nil && ((q.Limit.Count != nil && !checkpointNoDefaultViewExpr(q.Limit.Count, false)) ||
+		(q.Limit.Offset != nil && !checkpointNoDefaultViewExpr(q.Limit.Offset, false))) {
 		return "", "", false
 	}
 	clause, ok := q.Select.(*tree.SelectClause)
@@ -1834,7 +1829,7 @@ func checkpointNoDefaultViewSource(view *tree.CreateView) (string, string, bool)
 		return "", "", false
 	}
 	database, table := string(source.SchemaName), string(source.ObjectName)
-	if table != "" && (database == "" || !source.ExplicitSchema) || table == "" && database != "" {
+	if table != "" && database != "" && !source.ExplicitSchema || table == "" && database != "" {
 		return "", "", false
 	}
 	for _, projection := range clause.Exprs {
@@ -1849,6 +1844,8 @@ func checkpointNoDefaultViewExpr(expr tree.Expr, allowColumns bool) bool {
 	switch value := expr.(type) {
 	case *tree.NumVal, *tree.StrVal:
 		return true
+	case tree.UnqualifiedStar:
+		return allowColumns
 	case *tree.UnresolvedName:
 		return allowColumns && value.NumParts == 1
 	case *tree.ParenExpr:
@@ -1857,6 +1854,13 @@ func checkpointNoDefaultViewExpr(expr tree.Expr, allowColumns bool) bool {
 		return checkpointNoDefaultViewExpr(value.Expr, allowColumns)
 	case *tree.BinaryExpr:
 		return checkpointNoDefaultViewExpr(value.Left, allowColumns) && checkpointNoDefaultViewExpr(value.Right, allowColumns)
+	case *tree.FuncExpr:
+		// PIPES_AS_CONCAT is parsed as the built-in concat function.
+		name, ok := value.Func.FunctionReference.(*tree.UnresolvedName)
+		return ok && name.NumParts == 1 && strings.EqualFold(name.ColName(), "concat") &&
+			value.Type == tree.FUNC_TYPE_DEFAULT && value.WindowSpec == nil && len(value.OrderBy) == 0 &&
+			len(value.Exprs) == 2 && checkpointNoDefaultViewExpr(value.Exprs[0], allowColumns) &&
+			checkpointNoDefaultViewExpr(value.Exprs[1], allowColumns)
 	default:
 		return false
 	}

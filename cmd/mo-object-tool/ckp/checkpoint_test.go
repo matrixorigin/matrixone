@@ -641,6 +641,36 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	require.Equal(t, []uint64{4, 5, 6}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
 }
 
+func TestRestoreViewCrossDefaultDependencies(t *testing.T) {
+	base := checkpointtool.TableCatalogEntry{DatabaseName: "a", TableName: "a", TableID: 1, RelKind: "v"}
+	dependent := checkpointtool.TableCatalogEntry{DatabaseName: "b", TableName: "z", TableID: 2, RelKind: "v"}
+	data := map[uint64]*checkpointtool.TableDumpData{
+		1: {Schema: &checkpointtool.TableSchema{CreateSQL: "CREATE VIEW a.a AS SELECT 'z' AS x LIMIT 1"}},
+		2: {Schema: &checkpointtool.TableSchema{CreateSQL: "CREATE VIEW b.z AS SELECT x FROM a.a"}},
+	}
+	setTestViewDefinition(t, data[1], "b")
+	setTestViewDefinition(t, data[2], "b")
+	ordered := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{base, dependent}, data).tables
+	require.Equal(t, []checkpointtool.TableCatalogEntry{base, dependent}, ordered)
+
+	data[1].Schema.CreateSQL = "CREATE VIEW a.a AS SELECT x FROM z WHERE x IS NOT NULL"
+	setTestViewDefinition(t, data[1], "b")
+	_, err := prepareCheckpointViewRestore(context.Background(), base, data[1])
+	require.ErrorContains(t, err, "cannot safely determine cross-database view dependencies")
+
+	data[1].Schema.CreateSQL = "CREATE VIEW a.a AS SELECT x FROM z"
+	setTestViewDefinition(t, data[1], "b")
+	view, err := prepareCheckpointViewRestore(context.Background(), base, data[1])
+	require.NoError(t, err)
+	require.True(t, view.sourceKnown)
+	require.Equal(t, "b", view.sourceDatabase)
+	require.Equal(t, "z", view.sourceTable)
+
+	setTestViewDefinition(t, data[1], "")
+	_, err = prepareCheckpointViewRestore(context.Background(), base, data[1])
+	require.ErrorContains(t, err, "without default database")
+}
+
 func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	dumpOut := &dumpOutput{}

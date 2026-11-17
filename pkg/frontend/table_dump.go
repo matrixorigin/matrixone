@@ -265,8 +265,7 @@ func tableDumpSchemaDigest(def *plan.TableDef, canonical string) string {
 		}
 		if isSet {
 			for _, r := range typ.Enumvalues {
-				// The old renderer lowercased SET labels; SimpleFold alone misses
-				// some lowercase collisions (for example a dotted capital I).
+				// Lowercase mappings include collisions that SimpleFold alone misses.
 				if unicode.ToLower(r) != r || unicode.SimpleFold(r) != r {
 					exact = true
 					break
@@ -427,9 +426,39 @@ func tableDumpManifestCreateSQL(def *plan.TableDef) (string, error) {
 				return "", moerr.NewNotSupportedNoCtx("DUMP TABLE cannot faithfully reconstruct ENUM metadata")
 			}
 		}
+		// The catalog stores the result of evaluating a default at CREATE time.
+		// Its original expression alone cannot reproduce that value under every
+		// SQL mode. The same applies to generated and ON UPDATE expressions.
+		origin := strings.TrimSpace(col.Default.OriginString)
+		if (origin != "" && !strings.EqualFold(origin, "null")) ||
+			(origin == "" && col.Default.Expr != nil) ||
+			(col.GeneratedCol != nil && col.GeneratedCol.Expr != nil) ||
+			(col.OnUpdate != nil && col.OnUpdate.Expr != nil) {
+			return "", nil
+		}
 	}
 	returnSQL, _, err := sqlplan.ConstructCreateTableSQL(nil, def, nil, false, nil)
-	return returnSQL, err
+	if err != nil {
+		return "", err
+	}
+	// The manifest does not record the reader's SQL mode. These are the four
+	// parser-sensitive spellings: backslash escapes, double quotes, || and REAL.
+	// CHECK expressions can also depend on the replay context. Omit optional
+	// DDL if either parsing or expression semantics may differ.
+	if !utf8.ValidString(returnSQL) || strings.ContainsAny(returnSQL, "\\\"") || strings.Contains(returnSQL, "||") {
+		return "", nil
+	}
+	scanner := mysql.NewScanner(dialect.MYSQL, returnSQL)
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0:
+			return returnSQL, nil
+		case mysql.LEX_ERROR, mysql.REAL, mysql.CHECK:
+			return "", nil
+		}
+	}
 }
 
 func validateTableDumpRelations(ctx context.Context, refs []tableDumpRelationRef) error {

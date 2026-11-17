@@ -189,6 +189,7 @@ func TestCheckpointViewWithoutDefaultDatabaseDependencies(t *testing.T) {
 	}{
 		{"expression", "CREATE VIEW db.v AS SELECT (1 + 2) * -3 AS n", "", ""},
 		{"qualified", "CREATE VIEW db.v AS SELECT n FROM other.t", "other", "t"},
+		{"qualified wildcard", "CREATE VIEW db.v AS SELECT * FROM other.t", "other", "t"},
 		{"qualified trivia", "CREATE VIEW db.v AS SELECT n FROM `other` /* comment */ . `t`", "other", "t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -228,4 +229,23 @@ func TestCheckpointViewQualifiedDependencyWithDifferentDefault(t *testing.T) {
 	}
 	order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{consumer, dependency}, data)
 	require.Equal(t, []checkpointtool.TableCatalogEntry{dependency, consumer}, order.tables)
+}
+
+func TestCheckpointViewOrderingIgnoresLiteralDependencies(t *testing.T) {
+	first := checkpointtool.TableCatalogEntry{TableID: 20, DatabaseName: "app", TableName: "a", RelKind: "v"}
+	second := checkpointtool.TableCatalogEntry{TableID: 21, DatabaseName: "app", TableName: "z_dep", RelKind: "v"}
+	for _, tc := range []struct{ name, mode, literal string }{
+		{"escaped", "", `'app.\z_dep'`},
+		{"no backslash escapes", "NO_BACKSLASH_ESCAPES", `'app.z_dep'`},
+		{"ansi quotes", "ANSI_QUOTES", `'app.z_dep'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := map[uint64]*checkpointtool.TableDumpData{
+				20: checkpointViewTestData(t, "CREATE VIEW app.a AS SELECT "+tc.literal+" AS txt", tc.mode, "app", "DEFINER"),
+				21: checkpointViewTestData(t, "CREATE VIEW app.z_dep AS SELECT * FROM app.a", "", "app", "DEFINER"),
+			}
+			order := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{first, second}, data)
+			require.Equal(t, []checkpointtool.TableCatalogEntry{first, second}, order.tables)
+		})
+	}
 }

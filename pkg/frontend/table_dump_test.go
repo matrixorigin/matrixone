@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -1435,6 +1436,88 @@ func TestTableDumpSchemaHashDistinguishesAmbiguousDomains(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(canonical))), hash)
 		})
 	}
+}
+
+func TestTableDumpManifestOmitsModeSensitiveDDL(t *testing.T) {
+	enumTable := func(value string) *plan.TableDef {
+		return &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: value}, Default: &plan.Default{NullAbility: true},
+		}}}
+	}
+	ddl, err := tableDumpManifestCreateSQL(enumTable("realistic"))
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl, "the word REAL inside a string does not change its meaning")
+	ddl, err = tableDumpManifestCreateSQL(enumTable("A,a"))
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl)
+	for _, mode := range mysql.ParserSQLModeCombinations() {
+		stmt, err := mysql.ParseOneWithSQLMode(context.Background(), ddl, 1, mode)
+		require.NoErrorf(t, err, "mode %s", mode)
+		create, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok)
+		column, ok := create.Defs[0].(*tree.ColumnTableDef)
+		require.True(t, ok)
+		typ, ok := column.Type.(*tree.T)
+		require.True(t, ok)
+		require.Equal(t, []string{"A", "a"}, typ.InternalType.EnumValues)
+		stmt.Free()
+	}
+	for _, value := range []string{`a\b`, "a\nb", string([]byte{0xff})} {
+		ddl, err = tableDumpManifestCreateSQL(enumTable(value))
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	for _, origin := range []string{`"text"`, `('a'||'b')`, `(cast(1 as real))`} {
+		def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}, Default: &plan.Default{NullAbility: true, OriginString: origin},
+		}}}
+		ddl, err = tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}}},
+		Indexes: []*plan.IndexDef{{IndexName: "idx", Parts: []string{"v"}, IndexAlgoTableType: "regular", Comment: `a\b`}}}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+}
+
+func TestTableDumpManifestOmitsUnprovenExpressions(t *testing.T) {
+	table := func() *plan.TableDef {
+		return &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "d", Typ: plan.Type{Id: int32(types.T_date)}, Default: &plan.Default{NullAbility: true},
+		}}}
+	}
+	for _, origin := range []string{"(cast('0000-00-00' as date))", "'2026-01-01'", "current_date()"} {
+		def := table()
+		def.Cols[0].Default.OriginString = origin
+		ddl, err := tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl, "default %s needs its original evaluation context", origin)
+	}
+	def := table()
+	def.Cols[0].Default.OriginString = "NULL"
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl)
+
+	def = table()
+	def.Cols[0].GeneratedCol = &plan.GeneratedCol{Expr: &plan.Expr{}, OriginString: "cast('0000-00-00' as date)"}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+
+	def = table()
+	def.Cols[0].OnUpdate = &plan.OnUpdate{Expr: &plan.Expr{}, OriginString: "current_date()"}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+
+	def = table()
+	def.Createsql = "CREATE TABLE source (d DATE, CHECK (cast('0000-00-00' as date) IS NULL))"
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
 }
 
 func TestTableDumpManifestOmitsUnverifiableLegacyClusterDDL(t *testing.T) {
