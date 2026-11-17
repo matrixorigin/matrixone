@@ -1360,9 +1360,16 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(val)
+			vec, unmarshalErr := vector.UnmarshalPrefixInVector(val)
+			if unmarshalErr != nil {
+				canCompile = false
+				return
+			}
 			colDef := getColDefByName(expr, colExpr.Col, tableDef)
+			if !types.T(colDef.Typ.Id).IsMySQLString() {
+				canCompile = false
+				return
+			}
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1386,7 +1393,7 @@ func compileFilterExpr(
 			if vec.Length() > 0 {
 				col, area := vector.MustVarlenaRawData(vec)
 				minPrefix = col[0].GetByteSlice(area)
-				maxPrefix = col[len(col)-1].GetByteSlice(area)
+				maxPrefix = col[vec.Length()-1].GetByteSlice(area)
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -1395,7 +1402,10 @@ func compileFilterExpr(
 					return false, true, nil
 				}
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxPrefix != nil && types.PrefixCompare(zm.GetMinBuf(), maxPrefix) > 0 {
+				if !zm.Valid() || !zm.GetType().IsMySQLString() {
+					return false, true, nil
+				}
+				if isSorted && vec.Length() > 0 && types.PrefixCompare(zm.GetMinBuf(), maxPrefix) > 0 {
 					return true, false, nil
 				}
 				if !zm.PrefixIn(vec) {
@@ -1403,15 +1413,23 @@ func compileFilterExpr(
 				}
 				return false, true, nil
 			}
-			if isSorted && minPrefix != nil {
+			if isSorted && vec.Length() > 0 {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return types.PrefixCompare(
-							meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().GetMaxBuf(),
-							minPrefix,
-						) >= 0
-					})
+					// Unknown summaries can occur before known, nonmatching blocks.
+					// Only skip a continuous prefix of provably lower blocks.
+					for i := range blockCnt {
+						blk := meta.GetBlockMeta(uint32(i))
+						if blk.IsEmpty() {
+							return i
+						}
+						zm := blk.MustGetColumn(uint16(seqNum)).ZoneMap()
+						if !zm.Valid() || !zm.GetType().IsMySQLString() || zm.MaxTruncated() ||
+							types.PrefixCompare(zm.GetMaxBuf(), minPrefix) >= 0 {
+							return i
+						}
+					}
+					return blockCnt
 				}
 			}
 			// ok
