@@ -493,11 +493,23 @@ func paginationAggregateSafe(expr *plan.Expr) bool {
 // Direct-outer projection normalization can discard sorting or pagination.
 // Only discard it when expressions beneath it are safe to move or omit.
 func (builder *QueryBuilder) paginationSubtreeExpressionsSafe(nodeID int32, allowAggregate bool) bool {
+	return builder.paginationSubtreeExpressionsSafeExceptProjection(nodeID, allowAggregate, -1)
+}
+
+func (builder *QueryBuilder) paginationSubtreeExpressionsSafeExceptProjection(nodeID int32, allowAggregate bool, skipProjection int32) bool {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_AGG && !allowAggregate {
 		return false
 	}
-	for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.GroupBy} {
+	for i, expr := range node.ProjectList {
+		if nodeID == skipProjection && i == 0 {
+			continue
+		}
+		if !paginationExpressionSafe(expr) {
+			return false
+		}
+	}
+	for _, exprs := range [][]*plan.Expr{node.FilterList, node.OnList, node.GroupBy} {
 		for _, expr := range exprs {
 			if !paginationExpressionSafe(expr) {
 				return false
@@ -510,7 +522,7 @@ func (builder *QueryBuilder) paginationSubtreeExpressionsSafe(nodeID int32, allo
 		}
 	}
 	for _, child := range node.Children {
-		if !builder.paginationSubtreeExpressionsSafe(child, allowAggregate) {
+		if !builder.paginationSubtreeExpressionsSafeExceptProjection(child, allowAggregate, skipProjection) {
 			return false
 		}
 	}
@@ -935,6 +947,7 @@ func (builder *QueryBuilder) nullExtendScalarValue(marker, value *plan.Expr) (*p
 	if !makeTypeByPlan2Expr(result).Eq(makeTypeByPlan2Expr(value)) {
 		return nil, moerr.NewNYI(builder.GetContext(), "correlated pagination result type")
 	}
+	result.Typ = value.Typ
 	result.Typ.NotNullable = false
 	return result, nil
 }
@@ -943,13 +956,19 @@ func (builder *QueryBuilder) nullExtendScalarValue(marker, value *plan.Expr) (*p
 // outer row. The right-side marker distinguishes a real NULL value from the
 // NULL-extended row produced by a LEFT JOIN.
 func (builder *QueryBuilder) flattenPostJoinPagination(
-	outerID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext, pagination *postJoinPagination,
+	outerID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext, pagination *postJoinPagination, lifted *plan.Expr,
 ) (int32, *plan.Expr, error) {
 	filters, joins := decreaseDepthAndDispatch(preds)
 	if !pagination.crossed || len(filters) != 0 || len(subCtx.results) != 1 {
 		return 0, nil, moerr.NewNYI(builder.GetContext(), "deep or incomplete correlated pagination")
 	}
 	value := GetColExpr(subCtx.results[0].Typ, subCtx.topTag(), 0)
+	if lifted != nil {
+		if pagination.marker == nil || pagination.offset != 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "lifted correlated pagination without a safe match marker")
+		}
+		value = lifted
+	}
 	value.Typ.NotNullable = false
 	if pagination.marker != nil {
 		var err error

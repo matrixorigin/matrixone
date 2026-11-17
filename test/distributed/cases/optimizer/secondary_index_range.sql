@@ -280,6 +280,15 @@ select count(*) as count_eq from t9 where status = 'active';
 select count(*) as count_in from t9 where status in ('active', 'expiring');
 select count(*) as count_range from t9 where status >= 'active' and status <= 'expired';
 select count(*) as count_nullsafe from t9 where status <=> 'active';
+
+-- Nullable IN must preserve hits in the persisted secondary index.
+-- @regex("prefix_in",true)
+explain select id from t9 force index (idx_ret) where status in ('active', 'expiring', NULL);
+select id from t9 force index (idx_ret) where status in ('active', 'expiring', NULL) order by id;
+select id from t9 ignore index (idx_ret) where status in ('active', 'expiring', NULL) order by id;
+select id from t9 force index (idx_ret) where status in (NULL, 'active', 'active') order by id;
+select id from t9 force index (idx_ret) where status in (NULL, 'missing') order by id;
+
 -- @sortkey:0
 select id, status, status = 'active' as row_eq, status <=> 'active' as row_nullsafe from t9 order by id;
 prepare stmt_t9_status_in from 'select count(*) as count_prepare_in from t9 where status in (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -295,6 +304,10 @@ execute stmt_t9_status_eq_null using @t9_null;
 deallocate prepare stmt_t9_status_eq_null;
 prepare stmt_t9_status_in_null from 'select count(*) as count_prepare_in_null from t9 where status in (?, ?)';
 execute stmt_t9_status_in_null using @t9_null,@t9_missing;
+execute stmt_t9_status_in_null using @t9_active,@t9_null;
+execute stmt_t9_status_in_null using @t9_null,@t9_expiring;
+execute stmt_t9_status_in_null using @t9_missing,@t9_missing;
+execute stmt_t9_status_in_null using @t9_null,@t9_null;
 deallocate prepare stmt_t9_status_in_null;
 prepare stmt_t9_status_between_null from 'select count(*) as count_prepare_between_null from t9 where status between ? and ?';
 execute stmt_t9_status_between_null using @t9_null,@t9_active;
@@ -321,6 +334,24 @@ select count(*) as count_after_odku_active from t9 where status = 'active';
 select count(*) as count_after_odku_closed from t9 where status = 'closed';
 -- @sortkey:0
 select id, status, attempts from t9 order by id;
+
+-- Raw prefix bytes are not serialized SQL NULL tags. Empty prefix matches
+-- every non-null key, and overlapping prefixes preserve their prefix union.
+create table t10(k varchar(64) primary key, id int);
+insert into t10 values ('', 1), ('abc', 2), ('az', 3), ('zebra', 4),
+    (char(0), 5), (concat(char(0), 'xy'), 6);
+select id from t10 where prefix_in(k, ('', 'zz')) order by id;
+select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
+select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
+select mo_ctl('dn', 'flush', 'd1.t10');
+-- Unfiltered scalar results must agree with persisted predicate pruning.
+select id, prefix_in(k, ('', 'zz')) as scalar_match from t10 order by id;
+select id from t10 where prefix_in(k, ('', 'zz')) order by id;
+select id, prefix_in(k, ('a', 'aa', 'az')) as scalar_match from t10 order by id;
+select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
+select id, prefix_in(k, (char(0), 'zz')) as scalar_match from t10 order by id;
+select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
+select id from t10 where prefix_in(k, ('ab', 'missing')) order by id;
 
 -- Cleanup
 drop database d1;

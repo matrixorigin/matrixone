@@ -60,11 +60,21 @@ func GetShardInfo(
 	shardID uint64,
 	excludeHardDownReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
+	return getShardInfoWithContext(context.Background(), sid, address, shardID, excludeHardDownReplicaAddresses...)
+}
+
+func getShardInfoWithContext(
+	ctx context.Context,
+	sid string,
+	address string,
+	shardID uint64,
+	excludeHardDownReplicaAddresses ...bool,
+) (ShardInfo, bool, error) {
 	excludeHardDown := true
 	if len(excludeHardDownReplicaAddresses) > 0 {
 		excludeHardDown = excludeHardDownReplicaAddresses[0]
 	}
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}

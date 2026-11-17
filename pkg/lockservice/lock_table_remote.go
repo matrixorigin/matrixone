@@ -501,6 +501,15 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if !mustHandleLockBindChangedErr && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 		return nil
 	}
+	lookupCtx := ctx
+	if deadline, ok := morpc.BackendWaitDeadline(ctx); ok {
+		if !deadline.After(time.Now()) {
+			return oldError
+		}
+		var cancel context.CancelFunc
+		lookupCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 
 	// any other errors, retry.
 	// Note. Since the cn where the remote lock table is located may
@@ -511,7 +520,7 @@ func (l *remoteLockTable) handleErrorWithContext(
 		requestAllocator = l.allocatorStateProvider()
 	}
 	new, allocator, err := getLockTableBindWithContext(
-		ctx,
+		lookupCtx,
 		l.client,
 		l.bind.Group,
 		l.bind.Table,

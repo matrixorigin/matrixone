@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -508,6 +509,480 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 	return moerr.NewNotSupported(ctx,
 		"definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values")
+}
+
+// mysqlSpecialNumericTypeForExpr also resolves correlated references using the
+// same binder-bearing ancestor traversal as baseBindColRef. The temporary
+// ColRef is only for provenance lookup; recovery keeps the original CorrColRef.
+func (bc *BindContext) mysqlSpecialNumericTypeForExpr(expr *plan.Expr) *plan.Type {
+	if bc == nil || expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	corr := expr.GetCorr()
+	if corr == nil {
+		return bc.mysqlSpecialOrderTypeForExpr(expr)
+	}
+	if corr.Depth <= 0 {
+		return nil
+	}
+	owner := bc
+	for depth := int32(0); depth < corr.Depth; depth++ {
+		owner = owner.parent
+		for owner != nil && owner.binder == nil {
+			owner = owner.parent
+		}
+		if owner == nil {
+			return nil
+		}
+	}
+	return owner.mysqlSpecialOrderTypeForExpr(&plan.Expr{
+		Typ:  expr.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: corr.RelPos, ColPos: corr.ColPos}},
+	})
+}
+
+func (bc *BindContext) mysqlSpecialNumericTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialOrderTypes[colPos]; recorded {
+		return DeepCopyType(typ)
+	}
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialNumericTypeForExpr(bc.projects[colPos])
+}
+
+// useStoredMySQLSpecialTypesForNumericContractWithProvenance extends the
+// structural row-level rewrite with a narrow recovery for display values that
+// crossed a GROUP BY or transparent query boundary. It only rewrites operands
+// whose resolved function contract is numeric and whose source provenance is
+// still the exact ENUM/SET display value.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+	ctx context.Context,
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
+	if b == nil || b.ctx == nil {
+		return result, nil
+	}
+	if err := b.rejectUnprovenCorrelatedSpecialIn(ctx, name, args); err != nil {
+		return nil, err
+	}
+
+	hasSpecial, hasProvenanceCandidate := false, false
+	for _, arg := range args {
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			hasSpecial = true
+		} else if b.ctx.mysqlSpecialNumericTypeForExpr(arg) != nil {
+			hasSpecial, hasProvenanceCandidate = true, true
+		}
+	}
+	if !hasSpecial {
+		return result, nil
+	}
+
+	// An operator such as '+' may resolve two display strings as concatenation.
+	// A proven special column still uses the numeric operator contract.
+	if name == "+" && stringPlusConcatenates(args) {
+		var numeric []*plan.Expr
+		for i, arg := range args {
+			raw, direct := storedMySQLSpecialTypeExpr(arg)
+			typ := b.ctx.mysqlSpecialNumericTypeForExpr(arg)
+			if !direct && typ == nil {
+				continue
+			}
+			if !direct {
+				if !mysqlSpecialOrderTypeReversible(typ) {
+					return nil, moerr.NewNYI(ctx, "numeric expression with non-reversible ENUM/SET display")
+				}
+				var err error
+				raw, err = makeMySQLSpecialNumericValue(ctx, arg, typ)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if numeric == nil {
+				numeric = append([]*plan.Expr(nil), result...)
+			}
+			numeric[i] = raw
+		}
+		if numeric != nil {
+			return numeric, nil
+		}
+	}
+
+	if !hasProvenanceCandidate {
+		return result, nil
+	}
+	if mysqlSpecialNumericInList(name, args) {
+		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
+			storageType := b.ctx.mysqlSpecialNumericTypeForExpr(args[0])
+			if storageType != nil && mysqlSpecialOrderTypeReversible(storageType) {
+				recovered, err := makeMySQLSpecialNumericValue(ctx, args[0], storageType)
+				if err != nil {
+					return nil, err
+				}
+				result = append([]*plan.Expr(nil), result...)
+				result[0] = recovered
+				return result, nil
+			}
+		}
+	}
+
+	targets, shouldCast := mysqlSpecialNumericFunctionTargets(ctx, name, args)
+	if !shouldCast {
+		return result, nil
+	}
+
+	changed := false
+	for i, arg := range args {
+		if !targets[i].IsNumeric() {
+			continue
+		}
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			continue
+		}
+		if err := rejectNonReversibleCorrelatedNumeric(ctx, b.ctx, arg); err != nil {
+			return nil, err
+		}
+		storageType := b.ctx.mysqlSpecialNumericTypeForExpr(arg)
+		if storageType == nil || !mysqlSpecialOrderTypeReversible(storageType) {
+			continue
+		}
+
+		recovered, err := makeMySQLSpecialNumericValue(ctx, arg, storageType)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
+			result = append([]*plan.Expr(nil), result...)
+			changed = true
+		}
+		result[i] = recovered
+	}
+	return result, nil
+}
+
+// A mixed or dynamic IN list may compare a display value numerically.
+// Only NULL and literal string members are known to need no numeric recovery.
+func mysqlSpecialInListMayNeedNumeric(name string, args []*plan.Expr) bool {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 {
+		return false
+	}
+	list := args[1].GetList()
+	if list == nil {
+		return false
+	}
+	for _, member := range list.List {
+		if !mysqlSpecialInOperandIsLexical(member) {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlSpecialInOperandIsLexical(expr *plan.Expr) bool {
+	lit := expr.GetLit()
+	return lit != nil && (lit.Isnull || (lit.Src == nil && types.T(expr.Typ.Id).IsMySQLString()))
+}
+
+func correlatedMySQLSpecialDisplay(bindCtx *BindContext, expr *plan.Expr) bool {
+	if bindCtx == nil || expr == nil || !hasCorrCol(expr) {
+		return false
+	}
+	if _, raw := storedMySQLSpecialTypeExpr(expr); raw {
+		return true
+	}
+	return bindCtx.mysqlSpecialNumericTypeForExpr(expr) != nil
+}
+
+// IN expands some lists into separate comparisons. Do not let that expansion
+// lose correlated special-type provenance on either side of a numeric test.
+func (b *baseBinder) rejectUnprovenCorrelatedSpecialIn(ctx context.Context, name string, args []*plan.Expr) error {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 || args[1].GetList() == nil {
+		return nil
+	}
+	if correlatedMySQLSpecialDisplay(b.ctx, args[0]) && mysqlSpecialInListMayNeedNumeric(name, args) {
+		// A direct display wrapper still has the original stored value. The
+		// existing IN owner uses it for an entirely numeric, static list.
+		_, raw := storedMySQLSpecialTypeExpr(args[0])
+		proven := raw && mysqlSpecialNumericInList(name, args)
+		for _, member := range args[1].GetList().List {
+			lit := member.GetLit()
+			if containsDynamicParam(member) || (lit != nil && lit.Src != nil) {
+				proven = false
+			}
+		}
+		if !proven {
+			return moerr.NewNYI(ctx, "correlated special IN comparison requires a proven numeric contract")
+		}
+	}
+	if !mysqlSpecialInOperandIsLexical(args[0]) {
+		for _, member := range args[1].GetList().List {
+			if correlatedMySQLSpecialDisplay(b.ctx, member) {
+				return moerr.NewNYI(ctx, "correlated special IN comparison requires a proven numeric contract")
+			}
+		}
+	}
+	return nil
+}
+
+// A correlated grouped display with an ambiguous domain cannot be converted
+// back to its stored ordinal or bitmap without guessing.
+func rejectNonReversibleCorrelatedNumeric(ctx context.Context, bindCtx *BindContext, expr *plan.Expr) error {
+	if bindCtx != nil && hasCorrCol(expr) {
+		if _, raw := storedMySQLSpecialTypeExpr(expr); raw {
+			return nil
+		}
+		if typ := bindCtx.mysqlSpecialNumericTypeForExpr(expr); typ != nil && !mysqlSpecialOrderTypeReversible(typ) {
+			return moerr.NewNYI(ctx, "numeric correlated value with non-reversible ENUM/SET display")
+		}
+	}
+	return nil
+}
+
+// noFromSpecialScalarProjection exposes the same singleton projection that
+// flattenSubquery would expose, but only for a direct special-type column.
+// Keeping this proof narrow avoids moving subquery execution into an operand.
+func (b *baseBinder) noFromSpecialScalarProjection(ast tree.Expr, expr *plan.Expr) *plan.Expr {
+	if b == nil || b.builder == nil || b.ctx == nil || expr == nil || expr.GetSub() == nil ||
+		expr.GetSub().Typ != plan.SubqueryRef_SCALAR || expr.GetSub().RowSize != 1 {
+		return nil
+	}
+	subquery, ok := scalarSubqueryExpr(ast)
+	if !ok || subquery.Exists {
+		return nil
+	}
+	var selectStmt *tree.Select
+	switch stmt := subquery.Select.(type) {
+	case *tree.Select:
+		selectStmt = stmt
+	case *tree.ParenSelect:
+		selectStmt = stmt.Select
+	}
+	if selectStmt == nil || selectStmt.With != nil || len(selectStmt.OrderBy) != 0 ||
+		selectStmt.Limit != nil || selectStmt.RankOption != nil || selectStmt.TimeWindow != nil {
+		return nil
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || clause.Distinct || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
+		len(clause.Exprs) != 1 || clause.From == nil || len(clause.From.Tables) != 1 {
+		return nil
+	}
+	if _, ok := unwrapParenExpr(clause.Exprs[0].Expr).(*tree.UnresolvedName); !ok {
+		return nil
+	}
+	from, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+	if !ok {
+		return nil
+	}
+	table, ok := from.Expr.(*tree.TableName)
+	if !ok || table.ObjectName != "" {
+		return nil
+	}
+	node := b.builder.noFromSubqueryProject(expr.GetSub().NodeId)
+	if node == nil || node.Limit != nil || node.Offset != nil || node.RankOption != nil ||
+		len(node.ProjectList) != 1 || len(node.FilterList) != 0 || len(node.OrderBy) != 0 {
+		return nil
+	}
+	project := node.ProjectList[0]
+	if project == nil {
+		return nil
+	}
+	corr := project.GetCorr()
+	if corr == nil {
+		fn := project.GetF()
+		raw, valid := storedMySQLSpecialTypeExpr(project)
+		if !valid || fn == nil || fn.Func == nil || fn.Args[0].GetLit().Src != nil {
+			return nil
+		}
+		id, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if _, exists := function.GetFunctionByIdWithoutError(fn.Func.Obj); !exists {
+			return nil
+		}
+		if !((id == function.CAST_INDEX_TO_VALUE && ((overload == 0 && len(fn.Args) == 2) ||
+			(overload == 1 && len(fn.Args) == 3 && fn.Args[2].GetLit().Src == nil))) ||
+			(id == function.CAST_INDEX_TO_SET_VALUE && overload == 0 && len(fn.Args) == 2)) {
+			return nil
+		}
+		corr = raw.GetCorr()
+	}
+	if corr == nil || corr.Depth != 1 {
+		return nil
+	}
+	exposed, remainsCorrelated := decreaseDepth(DeepCopyExpr(project))
+	if remainsCorrelated {
+		return nil
+	}
+	if _, raw := storedMySQLSpecialTypeExpr(exposed); !raw && b.ctx.mysqlSpecialNumericTypeForExpr(exposed) == nil {
+		return nil
+	}
+	return exposed
+}
+
+// Apply the existing numeric-contract decision to the exposed projections,
+// publishing only operands that it actually recognizes as numeric.
+func (b *baseBinder) useStoredNoFromSpecialScalarArgs(name string, astArgs []tree.Expr, args []*plan.Expr) ([]*plan.Expr, error) {
+	if len(astArgs) != len(args) {
+		return args, nil
+	}
+	if (name == "in" || name == "not_in" || name == "partition_in") && len(args) == 2 &&
+		args[1].GetList() != nil && !mysqlSpecialInOperandIsLexical(args[0]) {
+		if tuple, ok := unwrapParenExpr(astArgs[1]).(*tree.Tuple); ok && len(tuple.Exprs) == len(args[1].GetList().List) {
+			for i, member := range args[1].GetList().List {
+				if b.noFromSpecialScalarProjection(tuple.Exprs[i], member) != nil {
+					return nil, moerr.NewNYI(b.GetContext(), "numeric scalar IN list needs a proven lossless shared type")
+				}
+			}
+		}
+	}
+	var staged []*plan.Expr
+	var candidates []bool
+	for i := range args {
+		if exposed := b.noFromSpecialScalarProjection(astArgs[i], args[i]); exposed != nil {
+			if staged == nil {
+				staged = append([]*plan.Expr(nil), args...)
+				candidates = make([]bool, len(args))
+			}
+			staged[i], candidates[i] = exposed, true
+		}
+	}
+	if staged == nil {
+		return args, nil
+	}
+	if candidates[0] && mysqlSpecialInListMayNeedNumeric(name, staged) && !mysqlSpecialNumericInList(name, staged) {
+		return nil, moerr.NewNYI(b.GetContext(), "numeric scalar IN list needs a proven lossless shared type")
+	}
+	rewritten, err := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(b.GetContext(), name, staged)
+	if err != nil {
+		return nil, err
+	}
+	var result []*plan.Expr
+	for i, candidate := range candidates {
+		if !candidate {
+			continue
+		}
+		value := rewritten[i]
+		if value == staged[i] {
+			if typ := b.ctx.mysqlSpecialNumericTypeForExpr(staged[i]); typ != nil && !mysqlSpecialOrderTypeReversible(typ) {
+				targets, hasTargets := mysqlSpecialNumericFunctionTargets(b.GetContext(), name, staged)
+				if (hasTargets && targets[i].IsNumeric()) || (i == 0 && mysqlSpecialNumericInList(name, staged)) {
+					return nil, moerr.NewNYI(b.GetContext(), "numeric scalar with non-reversible ENUM/SET display")
+				}
+			}
+			continue
+		}
+		if result == nil {
+			result = append([]*plan.Expr(nil), args...)
+		}
+		result[i] = value
+		if i == 0 && mysqlSpecialNumericInList(name, staged) {
+			// Reuse the IN owner's typed vector so grouped recovery executes
+			// once. Do not round fractional or otherwise unsafe members.
+			if types.T(result[i].Typ.Id) == types.T_enum {
+				intType := types.T_int64.ToType()
+				result[i], err = appendCastBeforeExpr(b.GetContext(), result[i], makePlan2Type(&intType))
+				if err != nil {
+					return nil, err
+				}
+			}
+			list := DeepCopyExpr(args[1])
+			for _, member := range list.GetList().List {
+				if lit := member.GetLit(); lit != nil && lit.Isnull {
+					if lit.Src != nil {
+						return nil, moerr.NewNYI(b.GetContext(), "numeric scalar IN list needs a proven lossless shared type")
+					}
+					member.Typ = result[i].Typ
+					member.Typ.NotNullable = false
+				} else {
+					memberType, targetType := makeTypeByPlan2Expr(member), makeTypeByPlan2Expr(result[i])
+					if (member.GetP() != nil && !memberType.Eq(targetType)) || !checkNoNeedCast(memberType, targetType, member) {
+						return nil, moerr.NewNYI(b.GetContext(), "numeric scalar IN list needs a proven lossless shared type")
+					}
+				}
+			}
+			result[1] = list
+		}
+	}
+	if result != nil {
+		return result, nil
+	}
+	return args, nil
+}
+
+func makeMySQLSpecialNumericValue(
+	ctx context.Context,
+	displayExpr *plan.Expr,
+	storageType *plan.Type,
+) (*plan.Expr, error) {
+	if isEnumPlanType(storageType) {
+		_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
+		if err != nil {
+			return nil, err
+		}
+		// A reversible ENUM definition has no empty label, so an empty grouped
+		// display uniquely represents the error member at ordinal zero. The
+		// legacy parser cannot convert that display, so feed it a valid label
+		// first and restore ordinal zero after parsing. This keeps the serialized
+		// legacy domains on the two-argument overload understood by old workers.
+		// Framed domains use the existing encoding-aware overload.
+		emptyDisplay, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			DeepCopyExpr(displayExpr), makePlan2StringConstExprWithType(""),
+		})
+		if err != nil {
+			return nil, err
+		}
+		members, err := types.DecodeEnumMembers(storageType.Enumvalues, storageType.EnumEncoding)
+		if err != nil {
+			return nil, err
+		}
+		firstLabel := members[0]
+		safeDisplay, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay),
+			makePlan2StringConstExprWithType(firstLabel),
+			DeepCopyExpr(displayExpr),
+		})
+		if err != nil {
+			return nil, err
+		}
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, safeDisplay))
+		if err != nil {
+			return nil, err
+		}
+		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
+		numericExpr.Typ.Enumvalues = storageType.Enumvalues
+		numericExpr.Typ.EnumEncoding = storageType.EnumEncoding
+
+		numericZero := &plan.Expr{
+			Typ: *DeepCopyType(storageType),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_EnumVal{EnumVal: 0},
+			}},
+		}
+		recovered, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay), numericZero, numericExpr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
+		recovered.Typ.Enumvalues = storageType.Enumvalues
+		recovered.Typ.EnumEncoding = storageType.EnumEncoding
+		return recovered, nil
+	}
+
+	if isSetPlanType(storageType) {
+		numericExpr, err := makeMySQLSpecialOrderKey(ctx, displayExpr, storageType)
+		if err != nil {
+			return nil, err
+		}
+		// The SET value-to-index function returns an ordinary uint64 bitmap.
+		// Do not let later SET-aware casts reinterpret it as a display value.
+		numericExpr.Typ.Enumvalues = ""
+		numericExpr.Typ.EnumEncoding = 0
+		return numericExpr, nil
+	}
+	return nil, moerr.NewInternalError(ctx, "invalid ENUM/SET numeric provenance")
 }
 
 // makeMySQLSpecialOrderKey restores definition-order comparison after a query
