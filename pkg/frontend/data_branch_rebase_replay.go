@@ -39,6 +39,12 @@ func rebaseDeltaLayout(columns []rebaseSQLColumn) ([]types.Type, bool) {
 	var keys []types.Type
 	width := int64(0)
 	for _, column := range columns {
+		// Replay formats values as SQL literals. A session-local TIMESTAMP
+		// literal loses its UTC offset during a DST fold; keep typed INSERT
+		// SELECT replay for this layout instead.
+		if column.typ.Oid == types.T_timestamp {
+			return nil, false
+		}
 		if column.primary {
 			if !rebaseIntegerKeyType(column.typ.Oid) {
 				return nil, false

@@ -128,6 +128,46 @@ func TestNativeRebasePoliciesAndAdmission(t *testing.T) {
 	runNativeRebaseDatabaseCases(t, []string{"fail", "skip", "accept", "changed_bag", "wrong_scope"})
 }
 
+func TestNativeRebaseTimestampDSTFold(t *testing.T) {
+	count := captureRebasePhases(t)
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+		defer cleanupSQLIntegration(t, cn,
+			"drop snapshot if exists nr_dst_bu", "drop snapshot if exists nr_dst_bf",
+			"drop snapshot if exists nr_dst_fh", "drop snapshot if exists nr_dst_uh",
+			"drop database if exists nr_dst_result", "drop database if exists nr_dst_f",
+			"drop database if exists nr_dst_u")
+		f := rebaseSQLFixture{t, ctx, db, "nr_dst_"}
+		f.exec("set time_zone='+00:00'")
+		f.exec("create database nr_dst_u")
+		f.exec("create table nr_dst_u.t(id int primary key,v timestamp(6))")
+		f.exec("insert into nr_dst_u.t values(1,'2026-10-31 00:00:00'),(2,'2026-10-31 00:00:00')")
+		bu := f.snapshot("nr_dst_u", "bu")
+		f.exec("data branch create database nr_dst_f from " + bu)
+		bf := f.snapshot("nr_dst_f", "bf")
+		f.exec("update nr_dst_f.t set v='2026-11-01 05:30:00.123456' where id=1")
+		f.exec("update nr_dst_f.t set v='2026-11-01 06:30:00.123456' where id=2")
+		fh, uh := f.snapshot("nr_dst_f", "fh"), f.snapshot("nr_dst_u", "uh")
+		f.exec("set time_zone='America/New_York'")
+		require.EqualValues(t, 1, f.scalar("select (select cast(v as char) from nr_dst_f.t where id=1) = (select cast(v as char) from nr_dst_f.t where id=2)"))
+		_, counts, err := f.rebaseTables("nr_dst_result", fh, uh, bf, bu, "", 1)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, counts[0])
+		f.exec("set time_zone='+00:00'")
+		require.EqualValues(t, 1, f.scalar("select v=cast('2026-11-01 05:30:00.123456' as timestamp(6)) from nr_dst_result.t where id=1"))
+		require.EqualValues(t, 1, f.scalar("select v=cast('2026-11-01 06:30:00.123456' as timestamp(6)) from nr_dst_result.t where id=2"))
+	})
+	require.Zero(t, count("delta_keys"))
+	require.Positive(t, count("changes"))
+}
+
 func TestNativeRebaseFloatValueIdentity(t *testing.T) {
 	count := captureRebasePhases(t)
 	runSQLIntegration(t, func(c embed.Cluster) {

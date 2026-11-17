@@ -220,7 +220,7 @@ func TestRebaseDeltaLayout(t *testing.T) {
 	floatColumns[1].typ = types.T_float64.ToType()
 	_, ok = rebaseDeltaLayout(floatColumns)
 	require.True(t, ok, "candidate keys precede DIFF value equality")
-	for _, typ := range []types.Type{types.T_text.ToType(), types.New(types.T_varchar, 4097, 0)} {
+	for _, typ := range []types.Type{types.T_text.ToType(), types.New(types.T_varchar, 4097, 0), types.T_timestamp.ToType(), types.New(types.T_timestamp, 0, 6)} {
 		copy := append([]rebaseSQLColumn(nil), columns...)
 		copy[1].typ = typ
 		_, ok = rebaseDeltaLayout(copy)
