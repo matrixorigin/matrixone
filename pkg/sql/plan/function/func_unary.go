@@ -1084,6 +1084,137 @@ func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWr
 	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 }
 
+// PreparedBitCountCastOverload is a binder-only conversion for a string
+// execution after BIT_COUNT has latched to a numeric parameter domain.
+const PreparedBitCountCastOverload int32 = 10
+
+func appendPreparedBitCountConversionWarning(proc *process.Process, value, typeName string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimASCIISpace(value)),
+	)
+}
+
+func preparedBitCountIntegerPrefix(prefix string) (int64, bool, error) {
+	rounded, err := parseMySQLDecimal256Prefix(prefix, 65, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	integer, ok := new(big.Int).SetString(rounded.Format(0), 10)
+	if !ok {
+		return 0, false, strconv.ErrSyntax
+	}
+	if integer.IsInt64() {
+		return integer.Int64(), false, nil
+	}
+	if integer.Sign() < 0 {
+		return math.MinInt64, true, nil
+	}
+	return math.MaxInt64, true, nil
+}
+
+func preparedBitCountTextRows[T types.FixedSizeTExceptStrType](
+	source *vector.Vector, result *vector.FunctionResult[T], proc *process.Process, length int,
+	selectList *FunctionSelectList, convert func(string) (T, string, error),
+) error {
+	input := vector.GenerateFunctionStrParameter(source)
+	var zero T
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := input.GetStrValue(row)
+		if null {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text := convertByteSliceToString(value)
+		trimmed := trimASCIISpace(text)
+		prefix, _, hasPrefix := scanDecimalFloatPrefix(trimmed)
+		if !hasPrefix {
+			appendPreparedBitCountConversionWarning(proc, text, "INTEGER")
+			if err := result.Append(zero, false); err != nil {
+				return err
+			}
+			continue
+		}
+		converted, warningType, err := convert(prefix)
+		if err != nil {
+			return err
+		}
+		if warningType == "" && prefix != trimmed {
+			warningType = "INTEGER"
+		}
+		if warningType != "" {
+			appendPreparedBitCountConversionWarning(proc, text, warningType)
+		}
+		if err = result.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewPreparedBitCountCast keeps prepared string reuse out of the generic
+// strict CAST contract. Integer latches round the exact decimal prefix and
+// saturate at signed BIGINT boundaries; DOUBLE and DECIMAL retain their own
+// later BIT_COUNT conversion rules.
+func NewPreparedBitCountCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 2 || !parameters[0].GetType().Oid.IsMySQLString() {
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires a string value and numeric target")
+	}
+	source := parameters[0]
+	// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+	// other float-family members cannot reach this binder-only conversion.
+	switch target := result.GetResultVector().GetType(); target.Oid {
+	case types.T_int64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[int64](result), proc, length, selectList, func(prefix string) (int64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return value, "DECIMAL", err
+			}
+			return value, "", err
+		})
+	case types.T_uint64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, func(prefix string) (uint64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return uint64(value), "DECIMAL", err
+			}
+			return uint64(value), "", err
+		})
+	case types.T_float64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[float64](result), proc, length, selectList, func(prefix string) (float64, string, error) {
+			value, err := strconv.ParseFloat(prefix, 64)
+			if errors.Is(err, strconv.ErrRange) && math.IsInf(value, 0) {
+				// Retain the infinity for BIT_COUNT's existing floating conversion;
+				// the string conversion owns warning 1292.
+				return value, "INTEGER", nil
+			}
+			return value, "", err
+		})
+	case types.T_decimal256:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[types.Decimal256](result), proc, length, selectList, func(prefix string) (types.Decimal256, string, error) {
+			value, err := parseMySQLDecimal256Prefix(prefix, target.Width, target.Scale)
+			return value, "", err
+		})
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires an int64, uint64, float64, or decimal256 target")
+	}
+}
+
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return int64(len(v) * 8)
