@@ -1171,14 +1171,15 @@ func TestRoundFamilyTemporalInputsKeepBindTimeRejection(t *testing.T) {
 	}
 
 	// The one-argument CEIL/FLOOR TEXT overloads keep the dual-domain
-	// executors with the exact-integer, wide-domain DECIMAL256 return; the
-	// VARCHAR spellings keep the string-parsing FLOAT64 return type.
+	// executors returning VARCHAR digits (exact integers below the widened
+	// decimal range, the FLOAT64 route's renders above it); the VARCHAR
+	// spellings keep the string-parsing FLOAT64 return type.
 	for _, name := range []string{"ceil", "floor"} {
 		get, err := GetFunctionByName(proc.Ctx, name,
 			[]types.Type{types.T_text.ToType()})
 		require.NoError(t, err)
-		require.Equal(t, types.T_decimal256, get.GetReturnType().Oid,
-			"%s(text) must keep the wide-domain exact overload", name)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid,
+			"%s(text) must keep the wide-domain digit-rendering return", name)
 
 		get, err = GetFunctionByName(proc.Ctx, name,
 			[]types.Type{types.T_varchar.ToType()})
