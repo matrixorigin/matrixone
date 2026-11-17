@@ -46,16 +46,22 @@ func NewBatchSetWithAllocation(batchMaxRow int, selection *vector.AllocationAcco
 }
 
 func (bs *BatchSet) matchesDestination(destination, source *Batch) bool {
-	if bs.outputAllocation == nil {
+	allocation := bs.outputAllocation
+	if allocation == nil && source != nil {
+		// getOrCreateBatch uses the batch account for every copied column.
+		// Borrowed input columns may have different physical owners.
+		allocation = source.allocationAccount
+	}
+	if allocation == nil {
 		return vectorAllocationSelectionsMatch(destination, source)
 	}
 	if destination == nil || source == nil || len(destination.Vecs) != len(source.Vecs) ||
-		!vector.AllocationAccountSelectionsEqual(destination.allocationAccount, bs.outputAllocation) {
+		!vector.AllocationAccountSelectionsEqual(destination.allocationAccount, allocation) {
 		return false
 	}
 	for i, v := range destination.Vecs {
 		if v == nil || source.Vecs[i] == nil || !v.GetType().Eq(*source.Vecs[i].GetType()) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), bs.outputAllocation) {
+			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), allocation) {
 			return false
 		}
 	}
@@ -202,11 +208,11 @@ func (bs *BatchSet) Extend(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch) 
 	// empty bats or last batch is full - can directly use fast path
 	lastIdx := batLen - 1
 	if batLen > 0 && bs.batches[lastIdx].rowCount < bs.batchMaxRow &&
-		!vectorAllocationSelectionsMatch(bs.batches[lastIdx], inBatch) {
+		!bs.matchesDestination(bs.batches[lastIdx], inBatch) {
 		return bs.extendWithNewProvenance(mpool, inBatch, reuseBuf)
 	}
 	if batLen == 0 || bs.batches[lastIdx].rowCount == bs.batchMaxRow {
-		if vectorAllocationSelectionsMatch(reuseBuf, inBatch) {
+		if bs.matchesDestination(reuseBuf, inBatch) {
 			reuseBuf.CleanOnlyData()
 			reuseBuf, err = reuseBuf.AppendWithCopy(context.TODO(), mpool, inBatch)
 			if err != nil {
