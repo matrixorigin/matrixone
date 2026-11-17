@@ -1791,7 +1791,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 			nil,
 			tbl.store.rt.Fs,
 			loc,
-			fileservice.ExactColumnsRead,
+			fileservice.Policy(0),
 			false,
 			nil,
 		)

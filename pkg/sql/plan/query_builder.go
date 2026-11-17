@@ -1833,9 +1833,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
-		if node.NodeType == plan.Node_TABLE_SCAN && readsSubsetOfColumns(originalCols, newTableDef.Cols) {
-			readColumnRanges(node)
-		}
 		node.TableDef = newTableDef
 
 		colMap := maps.Clone(internalRemapping.globalToLocal)
@@ -4544,6 +4541,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
+		if builder.pushDownOuterCounts(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
@@ -4564,6 +4564,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		// Keep qualification as SEMI through join ordering and pushdown before
+		// carrying its grouped measure through the surviving dimension joins.
+		if builder.reuseGroupedMeasures(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
+		if builder.restrictAggregateMembership(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		// Compare unique filtering joins against ANTI on their original fact-key
 		// domain after the legacy existence-pushdown pass has finished.
 		if !builder.outerAntiPlanningDisabled() &&
@@ -13399,7 +13407,7 @@ func (builder *QueryBuilder) bindView(
 	}()
 	previousWarningContext := builder.compCtx.GetContext()
 	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
-		previousWarningContext, JSONMergeWarningStoredView))
+		defines.WithPersistentViewBinding(previousWarningContext), JSONMergeWarningStoredView))
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
@@ -13885,6 +13893,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
+				// The reference resolved to the very declaration that is being
+				// bound as the initial statement of a recursive CTE. Re-entering
+				// bindCte would rebind the same anchor before the declaration is
+				// published and recurse without bound, so reject the reference:
+				// an anchor that references its own recursion has no
+				// non-recursive seed member.
+				if ctx.initStmtInBinding(cteRef) {
+					return 0, "", moerr.NewParseErrorf(builder.GetContext(),
+						"In the initial statement of Recursive Common Table Expression %s, the recursive table must not be referenced", table)
+				}
 				if ctx.cteInBinding(table) {
 					if ctx.bindingNonRecurCte() {
 						return 0, "", moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)

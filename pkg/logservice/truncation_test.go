@@ -114,6 +114,7 @@ func TestTruncationExportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -227,6 +228,135 @@ func TestExportSnapshotTimeoutAfterAdmissionReconcilesLateCompletion(t *testing.
 	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
 	_, err = fs.Stat(dir)
 	require.True(t, os.IsNotExist(err), "later import must remove the timed-out export")
+}
+
+func TestRetiringReplicaWaitsForTimedOutExport(t *testing.T) {
+	testRetiringReplicaWaitsForLateExport(t, false)
+}
+
+func TestRetiringReplicaWaitsForStoppedExport(t *testing.T) {
+	testRetiringReplicaWaitsForLateExport(t, true)
+}
+
+func testRetiringReplicaWaitsForLateExport(t *testing.T, stopBeforeTimeout bool) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &pausedExportRenameFS{
+		FS: cfg.FS, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	closed := false
+	t.Cleanup(func() {
+		fs.resume()
+		if !closed {
+			require.NoError(t, l.close())
+		}
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	_, err = l.append(ctx, shardID, getTestUserEntry())
+	require.NoError(t, err)
+
+	exportCtx := &controlledDeadlineContext{
+		Context: context.Background(), deadline: time.Now().Add(30 * time.Second),
+		done: make(chan struct{}),
+	}
+	t.Cleanup(exportCtx.expire)
+	result := make(chan error, 1)
+	go func() { result <- l.exportSnapshot(exportCtx, shardID, replicaID) }()
+	select {
+	case <-fs.entered:
+	case err := <-result:
+		t.Fatalf("export returned before finalization: %v", err)
+	case <-ctx.Done():
+		t.Fatal("export did not reach finalization")
+	}
+	l.markReplicaRetiring(shardID, replicaID)
+	require.ErrorIs(t, l.beginExport(shardID, replicaID), dragonboat.ErrShardNotFound)
+	require.ErrorIs(t, l.snapshotMgr.RemoveReplica(shardID, replicaID), errSnapshotExportPending)
+	wantExportErr := dragonboat.ErrTimeout
+	if stopBeforeTimeout {
+		require.NoError(t, exportCtx.Err())
+		require.NoError(t, l.stopReplica(shardID, replicaID))
+		wantExportErr = dragonboat.ErrShardClosed
+	} else {
+		exportCtx.expire()
+	}
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, wantExportErr)
+	case <-ctx.Done():
+		t.Fatal("export request did not return")
+	}
+	_, _, err = l.snapshotMgr.ReconcileUncertainExports(shardID, replicaID,
+		l.cfg.MaxExportedSnapshot)
+	require.NoError(t, err)
+	(&Service{store: l, runtime: l.runtime}).handleKillZombie(pb.ScheduleCommand{
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.KillZombie,
+			Replica:    pb.Replica{ShardID: shardID, ReplicaID: replicaID},
+		},
+	})
+	l.cleanupStaleReplica(shardID, replicaID, 0)
+	has, err := hasMetadataRec(l.cfg.DataDir, logMetadataFilename, shardID, replicaID, fs)
+	require.NoError(t, err)
+	require.True(t, has, "retirement must remain durable while export can still finish")
+	var persisted metadata.LogStore
+	require.NoError(t, readMetadataFile(l.cfg.DataDir, logMetadataFilename, &persisted, fs))
+	retiring := false
+	for _, rec := range persisted.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			retiring = rec.Retiring
+		}
+	}
+	require.True(t, retiring)
+	fs.resume()
+	require.Eventually(t, func() bool {
+		names, err := fs.List(l.snapshotMgr.exportPath(shardID, replicaID))
+		if err != nil {
+			return false
+		}
+		for _, name := range names {
+			var index uint64
+			count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+			if err == nil && count == 1 && name == fmt.Sprintf(snapshotPathPattern, index) {
+				files, err := fs.List(l.snapshotMgr.snapshotPath(
+					nodeID{shardID: shardID, replicaID: replicaID}, snapshotIndex(index)))
+				return err == nil && len(files) == 2
+			}
+		}
+		return false
+	}, testIOTimeout, 10*time.Millisecond)
+	l.cleanupStaleReplica(shardID, replicaID, 0)
+	has, err = hasMetadataRec(l.cfg.DataDir, logMetadataFilename, shardID, replicaID, fs)
+	require.NoError(t, err)
+	require.True(t, has, "a directory scan cannot prove that Dragonboat stopped writing")
+	require.NoError(t, l.close())
+	closed = true
+	// A new process has no in-flight Dragonboat requests. Its durable Retiring
+	// record retries the cleanup and removes the late final directory.
+	restarted, err := newLogStoreWithRetry(func() Config { return cfg }, nil, nil,
+		runtime.DefaultRuntime(), newFS())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, restarted.close()) }()
+	restartCtx, restartCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer restartCancel()
+	require.NoError(t, restarted.loadMetadata())
+	require.NoError(t, restarted.startReplicas(restartCtx))
+	require.NoError(t, restarted.processTruncateLog(restartCtx))
+	has, err = hasMetadataRec(cfg.DataDir, logMetadataFilename, shardID, replicaID, fs)
+	require.NoError(t, err)
+	require.False(t, has)
+	_, err = fs.Stat(restarted.snapshotMgr.exportPath(shardID, replicaID))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestUncertainExportReconcilesLateCompletion(t *testing.T) {
@@ -468,6 +598,7 @@ func TestTruncationRealignsSnapshotIndexAfterStaleReplicaCleanup(t *testing.T) {
 					Method: pb.TRUNCATE,
 					LogRequest: pb.LogRequest{
 						ShardID: shardID,
+						TNID:    tnID,
 						Lsn:     4,
 					},
 				}
@@ -579,6 +710,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -612,6 +744,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     10,
 			},
 		}
@@ -644,6 +777,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     15,
 			},
 		}
@@ -743,6 +877,7 @@ func TestTruncationImportSnapshot2(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -861,6 +996,7 @@ func TestTruncationDropNewestOnTimeout(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}

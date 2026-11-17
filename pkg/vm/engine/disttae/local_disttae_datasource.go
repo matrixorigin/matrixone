@@ -19,11 +19,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -120,12 +117,7 @@ type LocalDisttaeDataSource struct {
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
-		// prefetchScan is what the scan's prefetches are for.
-		prefetchScan *fileservice.PrefetchScan
-		// paceStart and paceCursor are when and where the scan's pace is measured from.
-		paceStart       time.Time
-		paceCursor      int
-		WorkspaceLocked bool
+		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
 	}
 
@@ -139,11 +131,13 @@ type LocalDisttaeDataSource struct {
 
 	//TODO:: It's so ugly, need to refactor
 	//for order by
-	desc     bool
-	blockZMS []index.ZM
-	sorted   bool // blks need to be sorted by zonemap
-	OrderBy  []*plan.OrderBySpec
-	Limit    uint64
+	desc       bool
+	nullsLead  bool
+	blockZMS   []index.ZM
+	blockNulls []uint32
+	sorted     bool // blks need to be sorted by zonemap
+	OrderBy    []*plan.OrderBySpec
+	Limit      uint64
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
@@ -195,6 +189,7 @@ func (ls *LocalDisttaeDataSource) String() string {
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 	ls.desc = len(orderby) > 0 && orderby[0] != nil && orderby[0].Flag&plan.OrderBySpec_DESC != 0
+	ls.nullsLead = len(orderby) > 0 && orderby[0] != nil && readutil.OrderHeadNullsLead(orderby[0].Flag)
 	// Ordered scans prune blocks after reading their zone maps. Prefetching the
 	// original block order can read whole objects that the scan will skip.
 	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
@@ -228,20 +223,34 @@ func (ls *LocalDisttaeDataSource) needReadBlkByZM(i int) bool {
 	if !ls.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
+	keep := false
 	if ls.desc {
-		return ls.filterZM.CompareMax(zm) <= 0
+		keep = ls.filterZM.CompareMax(zm) <= 0
 	} else {
-		return ls.filterZM.CompareMin(zm) >= 0
+		keep = ls.filterZM.CompareMin(zm) >= 0
 	}
+	if keep {
+		return true
+	}
+	// Zone maps describe non-NULL extrema only, so the interval rule above
+	// says nothing about rows a NULL-carrying block keeps unless NULLs also
+	// lead the requested head: those blocks must always be read. Under a
+	// trailing placement every NULL ranks after all head candidates, so the
+	// interval rule alone stays sound and null counts are deliberately
+	// ignored.
+	if ls.nullsLead && i < len(ls.blockNulls) && ls.blockNulls[i] > 0 {
+		return true
+	}
+	return false
 }
 
-func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, error) {
+func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, []uint32, error) {
 	if len(ls.OrderBy) == 0 || ls.OrderBy[0] == nil || ls.OrderBy[0].Expr == nil {
-		return nil, moerr.NewInternalError(ctx, "missing ORDER BY expression for ordered scan")
+		return nil, nil, moerr.NewInternalError(ctx, "missing ORDER BY expression for ordered scan")
 	}
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
 	if orderByCol == nil || orderByCol.Col == nil {
-		return nil, moerr.NewInternalError(ctx, "invalid ORDER BY column for ordered scan")
+		return nil, nil, moerr.NewInternalError(ctx, "invalid ORDER BY column for ordered scan")
 	}
 
 	def := ls.table.tableDef
@@ -340,18 +349,22 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		for _, col := range def.Cols {
 			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
 		}
-		return nil, moerr.NewInternalErrorf(ctx,
+		return nil, nil, moerr.NewInternalErrorf(ctx,
 			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
 			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols)
 	}
 
 	sliceLen := ls.rangeSlice.Len()
 	blockZMS := make([]index.ZM, sliceLen)
+	// Null counts ride the same immutable metadata the zone maps come from
+	// (an upper bound of visible NULLs under any tombstone overlay), so the
+	// reader can honor a leading NULL placement without extra object reads.
+	blockNulls := make([]uint32, sliceLen)
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
 	for i := ls.rangesCursor; i < sliceLen; i++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		block := ls.rangeSlice.Get(i)
 		if block.IsAppendable() {
@@ -361,22 +374,24 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, ls.fs)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
-			zm := blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+			colMeta := blkMeta.ColumnMeta(uint16(orderByColIDX))
+			zm := colMeta.ZoneMap()
 			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
 				blockZMS[i] = zm
+				blockNulls[i] = colMeta.NullCnt()
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return blockZMS, nil
+	return blockZMS, blockNulls, nil
 }
 
 func (ls *LocalDisttaeDataSource) sortBlockList() {
@@ -385,6 +400,9 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	for i := range sliceLen {
 		helper[i].blk = ls.rangeSlice.Get(i)
 		helper[i].zm = ls.blockZMS[i]
+		if i < len(ls.blockNulls) {
+			helper[i].nulls = ls.blockNulls[i]
+		}
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
@@ -426,12 +444,13 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 		ls.rangeSlice.Set(i, helper[i].blk)
 		//ls.ranges[i] = helper[i].blk
 		ls.blockZMS[i] = helper[i].zm
+		if i < len(ls.blockNulls) {
+			ls.blockNulls[i] = helper[i].nulls
+		}
 	}
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
-	ls.rc.prefetchScan.End()
-	ls.rc.prefetchScan = nil
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -568,11 +587,13 @@ func (ls *LocalDisttaeDataSource) handleOrderBy(ctx context.Context) error {
 	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
 			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
-			blockZMS, err := ls.getBlockZMs(ctx)
+			ls.nullsLead = readutil.OrderHeadNullsLead(ls.OrderBy[0].Flag)
+			blockZMS, blockNulls, err := ls.getBlockZMs(ctx)
 			if err != nil {
 				return err
 			}
 			ls.blockZMS = blockZMS
+			ls.blockNulls = blockNulls
 			ls.sortBlockList()
 			ls.sorted = true
 		}
@@ -1742,80 +1763,32 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	if ls.rc.prefetchDisabled {
 		return
 	}
-	n := ls.rangeSlice.Len()
-	// The prefetches stay at least half a window ahead of the scan.
-	if ls.rc.batchPrefetchCursor >= n ||
-		ls.rc.batchPrefetchCursor-ls.rangesCursor >= readutil.BatchPrefetchSize/2 {
+	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
+		ls.rangesCursor < ls.rc.batchPrefetchCursor {
 		return
 	}
 
-	begin := max(ls.rc.batchPrefetchCursor, ls.rangesCursor)
-	end := min(ls.rangesCursor+readutil.BatchPrefetchSize, n)
-	now := time.Now()
-	pace := ls.scanPace(now)
+	batchSize := min(readutil.BatchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
+
+	begin := ls.rangesCursor
+	end := ls.rangesCursor + batchSize
 
 	policy := fileservice.GetFileServicePolicy(ctx)
-	for idx := begin; idx < end; {
-		due := now.Add(time.Duration(float64(idx-ls.rangesCursor) / pace * float64(time.Second))).UnixNano()
+	var preObj types.Objectid
+	for idx := begin; idx < end; idx++ {
 		blk := ls.rangeSlice.Get(idx)
-		obj := *blk.BlockID.Object()
-		first := idx
-		// The object's blocks past the window are its too: the next window does not
-		// prefetch it again.
-		idx++
-		for idx < n && ls.rangeSlice.Get(idx).BlockID.Object().EQ(&obj) {
-			idx++
-		}
-		end = max(end, idx)
-		var size int64
-		var blocks int
-		if ls.pState != nil {
-			if entry, ok := ls.pState.GetObject(*blk.MetaLocation().Name().Short()); ok {
-				size, blocks = int64(entry.ObjectStats.Size()), int(entry.ObjectStats.BlkCnt())
-			}
-		}
-		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
-		if policy.Any(fileservice.ColumnPrefetch) {
-			if !isPrefetcher {
-				continue
-			}
-			ranges, bytes, recorded, err := ls.columnRanges(ctx, blk, seqNums)
-			if err != nil {
-				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-				continue
-			}
-			if !recorded || len(ranges) == 0 {
-				// The object records no column ranges, or stores none of the columns.
-				continue
-			}
-			if ls.rc.prefetchScan == nil {
-				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-			}
-			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
-				FilePath: blk.MetaLocation().Name().String(),
-				Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
-			})
-			if err != nil {
-				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-			}
+		if blk.BlockID.Object().EQ(&preObj) {
 			continue
-		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+		}
+
+		preObj = *blk.BlockID.Object()
+		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
 
 		// prefetch blk data
-		var err error
-		if isPrefetcher && size > 0 {
-			if ls.rc.prefetchScan == nil {
-				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-			}
-			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
-				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
-			})
-		} else {
-			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
-		}
+		err := ioutil.Prefetch(
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",
 				err.Error(),
@@ -1823,66 +1796,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		}
 	}
 
-	ls.rc.batchPrefetchCursor = max(end, begin)
-}
-
-// columnRanges returns the ranges that hold the columns seqNums across all the blocks of
-// the object of blk, and their bytes in all. It returns false when the object stores a
-// column of seqNums without recording its range.
-func (ls *LocalDisttaeDataSource) columnRanges(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16) ([]fileservice.PrefetchRange, int64, bool, error) {
-	loc := blk.MetaLocation()
-	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, ls.fs)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	data := meta.MustDataMeta()
-	var ranges []fileservice.PrefetchRange
-	var bytes int64
-	recorded := true
-	for _, seq := range seqNums {
-		if seq > data.BlockHeader().MaxSeqnum() {
-			continue
-		}
-		ext := data.MustGetColumn(seq).Location()
-		if ext.Length() == 0 {
-			recorded = false
-			continue
-		}
-		ranges = append(ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
-		bytes += int64(ext.Length())
-	}
-	return ranges, bytes, recorded, nil
-}
-
-const (
-	// scanPaceMin is how far a scan goes before its own pace is used.
-	scanPaceMinBlocks = 8
-	scanPaceMinTime   = 50 * time.Millisecond
-	// scanPaceWeight is the weight of a scan's pace in the pace of scans.
-	scanPaceWeight = 0.2
-)
-
-// scanPaces is the average pace of the scans, in blocks a second.
-var scanPaces atomic.Uint64
-
-func init() {
-	scanPaces.Store(math.Float64bits(100))
-}
-
-// scanPace returns the blocks a second the scan reads: its own pace once it has read
-// enough to measure it, which counts toward the pace of scans, or that pace before.
-func (ls *LocalDisttaeDataSource) scanPace(now time.Time) float64 {
-	if ls.rc.paceStart.IsZero() {
-		ls.rc.paceStart, ls.rc.paceCursor = now, ls.rangesCursor
-	}
-	blocks, elapsed := ls.rangesCursor-ls.rc.paceCursor, now.Sub(ls.rc.paceStart)
-	average := math.Float64frombits(scanPaces.Load())
-	if blocks < scanPaceMinBlocks || elapsed < scanPaceMinTime {
-		return average
-	}
-	pace := float64(blocks) / elapsed.Seconds()
-	scanPaces.Store(math.Float64bits((1-scanPaceWeight)*average + scanPaceWeight*pace))
-	return pace
+	ls.rc.batchPrefetchCursor = end
 }
 
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(

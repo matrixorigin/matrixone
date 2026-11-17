@@ -395,6 +395,97 @@ func TestOrderedJoinInstallsOnlyAvailableCrossingPredicates(t *testing.T) {
 	require.Equal(t, []*plan.Expr{three}, remaining)
 }
 
+func TestJoinOrderPrefersAvailablePredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		star     bool
+		triangle bool
+		threeWay bool
+		volatile bool
+		products int
+		first    []int32
+	}{
+		{"available binary before incomplete hyperedge", true, false, true, false, 0, []int32{1, 2}},
+		{"all binary choices preserve cost order", true, true, true, false, 0, []int32{2, 3}},
+		{"volatile predicate cannot constrain join", true, false, false, true, 0, []int32{1, 2}},
+		{"unavoidable three-way product", false, false, true, false, 1, []int32{2, 3}},
+		{"disconnected inputs", false, false, false, false, 2, []int32{2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			for i, rows := range []float64{1000, 10, 20} {
+				builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+					NodeId: int32(i), NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{int32(i + 1)},
+					Stats: &plan.Stats{Outcnt: rows, Cost: rows, Selectivity: 1},
+				})
+			}
+			bind := func(name string, args ...*plan.Expr) *plan.Expr {
+				expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+				require.NoError(t, err)
+				return expr
+			}
+			typ := plan.Type{Id: int32(types.T_int64)}
+			a, b, c := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+			var conds []*plan.Expr
+			if tc.star {
+				// Theta edges avoid the separate PK/FK dimension-ordering path.
+				conds = append(conds, bind(">", a, b), bind(">", a, c))
+			}
+			if tc.triangle {
+				conds = append(conds, bind(">", b, c))
+			}
+			if tc.threeWay {
+				conds = append(conds, bind("=", a, bind("+", b, c)))
+			}
+			if tc.volatile {
+				conds = append(conds, bind(">", bind("+", b, bind("rand")), c))
+			}
+			ab := builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{0, 1}}, nil)
+			root := builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{ab, 2}, OnList: conds}, nil)
+			root = builder.determineJoinOrder(root)
+			products := 0
+			var first []int32
+			var walk func(int32)
+			walk = func(id int32) {
+				node := builder.qry.Nodes[id]
+				for _, child := range node.Children {
+					walk(child)
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
+					if len(node.OnList) == 0 {
+						products++
+					}
+					if first == nil {
+						first = builder.enumerateTags(id)
+					}
+				}
+			}
+			walk(root)
+			require.Equal(t, tc.products, products)
+			require.ElementsMatch(t, tc.first, first)
+		})
+	}
+}
+
+func TestJoinHyperedgeCollectsOnlyKnownInputs(t *testing.T) {
+	col := func(tag int32) *plan.Expr { return GetColExpr(plan.Type{Id: int32(types.T_int64)}, tag, 0) }
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want map[int32]bool
+	}{
+		{"unknown tag is not leaf zero", col(99), map[int32]bool{}},
+		{"list dependencies", &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{col(2), col(3), col(99)}}}}, map[int32]bool{1: true, 2: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make(map[int32]bool)
+			getHyperEdgeFromExpr(tc.expr, map[int32]int32{1: 0, 2: 1, 3: 2}, got)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestHasColExprRequiresCompleteInputOwnership(t *testing.T) {
 	col := func(rel int32) *plan.Expr { return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel}}} }
 	fn := func(args ...*plan.Expr) *plan.Expr {

@@ -1274,12 +1274,14 @@ func TestSemiJoinStatsUseSemanticPreservedSide(t *testing.T) {
 		wantPhysicalRight float64
 		limit             *planpb.Expr
 	}{
-		{name: "unfiltered", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 5},
-		{name: "directional filtering", preservedRows: 5, matchingSel: 0, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 0},
-		{name: "empty preserved input", matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40},
+		// Both direct inputs have unique join keys, so even the pre-swap
+		// logical-left estimate cannot exceed the matching input's row count.
+		{name: "unfiltered", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 5, wantPhysicalRight: 5},
+		{name: "directional filtering", preservedRows: 5, matchingSel: 0, preservedSel: 1, wantLogicalLeft: 5, wantPhysicalRight: 0},
+		{name: "empty preserved input", matchingSel: 1, preservedSel: 1},
 		{name: "limit zero", preservedRows: 5, matchingSel: 1, preservedSel: 1, limit: MakePlan2Uint64ConstExprWithType(0)},
 		{name: "limit one", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 1, wantPhysicalRight: 1, limit: MakePlan2Uint64ConstExprWithType(1)},
-		{name: "limit above preserved input", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 7, wantPhysicalRight: 5, limit: MakePlan2Uint64ConstExprWithType(7)},
+		{name: "limit above preserved input", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 5, wantPhysicalRight: 5, limit: MakePlan2Uint64ConstExprWithType(7)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder := newRuntimeFilterSingleTestBuilder(t, true)

@@ -895,7 +895,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary && resolveTemporaryAlias {
+	if useSessionTemporary && resolveTemporaryAlias && !defines.IsPersistentViewBinding(tcc.GetContext()) {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
@@ -1641,11 +1641,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
+	// Only session-owned temporary references may need alias translation.
+	// Statistics can run after leaving the View binding scope; translating a
+	// bound permanent source here would read/cache the shadow's statistics.
+	if obj.NotLockMeta {
+		if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+			tableName = realName
+		}
 	}
 
 	// 1. Check database and subscription
