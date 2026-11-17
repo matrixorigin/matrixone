@@ -38,9 +38,9 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Exercise a typed ENUM scan across two actual CNs, then lower the receiver's
-// protocol floor and require either safe local execution or an explicit error,
-// never delivery of the affected plan to an older worker.
+// Exercise a typed ENUM scan across two actual same-binary CNs. Lowering the
+// advertised protocol floor must not disable delivery: ENUM metadata follows
+// the homogeneous-cluster contract and has no per-feature protocol gate.
 func TestRemoteEnumCollationProtocol(t *testing.T) {
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
 	if cluster != nil {

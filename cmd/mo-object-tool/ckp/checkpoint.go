@@ -35,11 +35,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
@@ -586,7 +588,7 @@ Examples:
 			}
 			defer logFile.Close()
 
-			ctx := context.Background()
+			ctx := cmd.Context()
 			kind, err := kindFromFlags(cmd)
 			if err != nil {
 				return err
@@ -657,6 +659,12 @@ Examples:
 						return err
 					}
 				}
+				if loadScript {
+					scriptTables, _ := filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
+					if err := preflightRestoreScript(ctx, reader, scriptTables, dumpDataByTableID(dumpPlans), snapshotTS); err != nil {
+						return err
+					}
+				}
 				if !noLoad {
 					if jobs < 1 {
 						jobs = 1
@@ -695,6 +703,9 @@ Examples:
 				dumpData, err := reader.PrepareTableDumpData(ctx, tableEntry.TableID, snapshotTS)
 				if err != nil {
 					return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
+				}
+				if err := preflightRestoreScript(ctx, reader, []checkpointtool.TableCatalogEntry{tableEntry}, map[uint64]*checkpointtool.TableDumpData{tableEntry.TableID: dumpData}, snapshotTS); err != nil {
+					return err
 				}
 				if !noLoad {
 					if err := dumpOneTable(ctx, reader, dumpOut, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
@@ -863,6 +874,9 @@ func writeRestoreScript(
 	includeLoad bool,
 	csvHasHeader bool,
 ) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := dumpOut.MkdirAll(scriptDir); err != nil {
 		return "", fmt.Errorf("create script dir: %w", err)
 	}
@@ -1247,21 +1261,34 @@ func restoreCreateTableDDLWithOptions(
 				return "", fmt.Errorf("external table %d (%s.%s): missing external table parameter JSON in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
 			}
 			var err error
-			ddl, err = renderExternalCreateTableDDLFromParamJSON(table, schema)
+			ddl, err = renderExternalCreateTableDDLFromParamJSON(ctx, table, schema)
 			if err != nil {
 				return "", err
 			}
 		} else {
+			if table.RelKind != "" && table.RelKind != catalog.SystemOrdinaryRel {
+				return "", moerr.NewNotSupportedf(ctx, "checkpoint restore of relation kind %s cannot preserve its table default", table.RelKind)
+			}
+			name, err := checkpointtool.RestoreTableCollation(ctx, schema, false)
+			if err != nil {
+				return "", err
+			}
 			schemaCopy := *schema
 			schemaCopy.TableName = table.TableName
 			schemaCopy.DatabaseName = table.DatabaseName
 			if options.omitForeignKeys {
 				schemaCopy.ForeignKeys = nil
 			}
-			ddl = checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
+			ddl = checkpointtool.RenderCreateTableDDLFromSchemaWithCollation(&schemaCopy, name)
+			if ddl == "" {
+				return "", moerr.NewNotSupportedf(ctx, "checkpoint restore of %s.%s cannot render its verified schema", table.DatabaseName, table.TableName)
+			}
 		}
 	}
 	if ddl == "" {
+		if !isViewRelation(table) {
+			return "", moerr.NewNotSupportedf(ctx, "checkpoint restore of %s.%s requires prepared typed metadata", table.DatabaseName, table.TableName)
+		}
 		var err error
 		ddl, err = reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
 		if err != nil {
@@ -1289,10 +1316,20 @@ func deferredForeignKeyDDLsForTable(table checkpointtool.TableCatalogEntry, dump
 	return ddls
 }
 
-func renderExternalCreateTableDDLFromParamJSON(table checkpointtool.TableCatalogEntry, schema *checkpointtool.TableSchema) (string, error) {
+func renderExternalCreateTableDDLFromParamJSON(ctx context.Context, table checkpointtool.TableCatalogEntry, schema *checkpointtool.TableSchema) (string, error) {
 	var param tree.ExternParam
 	if err := json.Unmarshal([]byte(schema.CreateSQL), &param); err != nil {
 		return "", fmt.Errorf("external table %d (%s.%s): decode external table parameter JSON: %w", table.TableID, table.DatabaseName, table.TableName, err)
+	}
+	if len(param.Option)%2 != 0 {
+		return "", moerr.NewInvalidInputf(ctx, "external table %s.%s has malformed option pairs", table.DatabaseName, table.TableName)
+	}
+	_, writable := plan.GetWriteFilePattern(&param)
+	if writable || (plan.GetFilePathFromParam(&param) == "" && param.StageFilepath == "" && param.StageName == "") {
+		return "", moerr.NewNotSupportedf(ctx, "checkpoint restore of %s.%s requires a proved read-only external mapping", table.DatabaseName, table.TableName)
+	}
+	if _, err := checkpointtool.RestoreTableCollation(ctx, schema, true); err != nil {
+		return "", err
 	}
 	applyExternalParamOptions(&param)
 
@@ -2590,4 +2627,18 @@ Examples:
 	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or local time (default: latest)")
 
 	return cmd
+}
+
+// Preflight the exact prepared selection before a CSV writer can replace an
+// earlier export. This does not provide atomicity for unrelated IO failures.
+func preflightRestoreScript(ctx context.Context, reader *checkpointtool.CheckpointReader, tables []checkpointtool.TableCatalogEntry, data map[uint64]*checkpointtool.TableDumpData, snapshotTS types.TS) error {
+	for _, table := range tables {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := restoreCreateTableDDLWithOptions(ctx, reader, table, data[table.TableID], snapshotTS, restoreCreateTableDDLOptions{}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }

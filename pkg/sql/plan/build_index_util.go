@@ -191,6 +191,7 @@ func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart
 		Width:                    col.Typ.Width,
 		Scale:                    col.Typ.Scale,
 		Enumvalues:               col.Typ.Enumvalues,
+		EnumCollation:            col.Typ.EnumCollation,
 		Charset:                  col.Typ.Charset,
 		CollationVersion:         col.Typ.CollationVersion,
 		CollationCoercibility:    col.Typ.CollationCoercibility,

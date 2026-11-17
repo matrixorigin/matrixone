@@ -39,10 +39,11 @@ const maxIvfflatIncludeColumns = 10
 // physical type, however, and omitting it creates an unusable ENUM(0) column.
 func copyIvfflatColumnType(src plan.Type) plan.Type {
 	return plan.Type{
-		Id:         src.Id,
-		Width:      src.Width,
-		Scale:      src.Scale,
-		Enumvalues: src.Enumvalues,
+		Id:            src.Id,
+		Width:         src.Width,
+		Scale:         src.Scale,
+		Enumvalues:    src.Enumvalues,
+		EnumCollation: src.EnumCollation,
 	}
 }
 
@@ -126,6 +127,15 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 	if err := validateIvfflatIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
 		return nil, nil, err
+	}
+
+	if indexInfo.IndexOption != nil && indexInfo.IndexOption.Async {
+		for _, include := range ivfflatIncludeColumnNames(indexInfo) {
+			typ := colMap[include].Typ
+			if typ.Id == int32(types.T_enum) && typ.EnumCollation != 0 {
+				return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(), "index %s cannot preserve collated ENUM INCLUDE column %s in asynchronous maintenance", indexInfo.Name, include)
+			}
+		}
 	}
 
 	indexDefs := make([]*plan.IndexDef, 3, 4)

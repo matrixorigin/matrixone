@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +60,10 @@ func updateNewColumnInTableDef(
 	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
+		return false, err
+	}
+
+	if err := checkEnumCollationAlter(ctx, &oCol.Typ, &nTy); err != nil {
 		return false, err
 	}
 
@@ -434,4 +439,72 @@ func DefaultValueIsNull(Default *plan.Default) bool {
 		return false
 	}
 	return false
+}
+
+const enumAlterProofBudget = 32 << 20
+
+// checkEnumCollationAlter proves that the existing COPY assignment preserves
+// every legal ordinal when only the identity changes. Otherwise reject before
+// publishing a schema whose new lookup would silently canonicalize stored data.
+func checkEnumCollationAlter(ctx context.Context, old, target *plan.Type) error {
+	if old.Id != int32(types.T_enum) || target.Id != int32(types.T_enum) ||
+		old.Enumvalues != target.Enumvalues || old.EnumCollation == target.EnumCollation {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if target.EnumCollation == types.EnumCollationLegacy {
+		return moerr.NewNotSupported(ctx, "changing an ENUM collation to legacy lookup requires an explicit table rebuild")
+	}
+	if len(target.Enumvalues) > enumAlterProofBudget {
+		return moerr.NewNotSupported(ctx, "ENUM collation change proof exceeds its 32 MiB memory budget")
+	}
+	count := strings.Count(target.Enumvalues, ",") + 1
+	if count > types.MaxEnumLen {
+		return moerr.NewInvalidInput(ctx, "invalid ENUM member count")
+	}
+	var domain collation.Domain
+	switch target.EnumCollation {
+	case types.EnumCollationUTF8Bin:
+		domain = collation.Raw
+	case types.EnumCollationGeneralCI:
+		domain = collation.UTF8MB4GeneralCI
+	case types.EnumCollationUTF8MB4UnicodeCI:
+		domain = collation.UTF8MB4UnicodeCI
+	default:
+		return types.ValidateEnumCollation(target.EnumCollation)
+	}
+	upper, err := domain.KeySizeUpperBound(len(target.Enumvalues))
+	if err != nil {
+		return err
+	}
+	// Charge retained and temporary weight/string copies, two maps and member
+	// descriptors before constructing the existing index. This is an ALTER proof
+	// budget, not a limit on authored or stored ENUM payload size.
+	cost := int64(len(target.Enumvalues)) + 4*int64(upper) + 256*int64(count)
+	if cost > enumAlterProofBudget {
+		return moerr.NewNotSupported(ctx, "ENUM collation change proof exceeds its 32 MiB memory budget")
+	}
+	members := strings.Split(target.Enumvalues, ",")
+	index, err := types.NewEnumCollatedIndex(members, target.EnumCollation)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for i, member := range members {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ordinal, truncated, err := index.Parse(member)
+		if err != nil {
+			return err
+		}
+		if truncated || ordinal != types.Enum(i+1) {
+			return moerr.NewNotSupported(ctx, "ENUM collation change would remap a stored member; rebuild with an explicit domain conversion")
+		}
+	}
+	return nil
 }

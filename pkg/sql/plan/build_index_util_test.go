@@ -256,11 +256,15 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 		require.Equal(t, int32(100), got.Width)
 	})
 
-	t.Run("enum preserves enumvalues", func(t *testing.T) {
-		col := &ColDef{Typ: Type{Id: int32(types.T_enum), Enumvalues: "new,paid,shipped"}}
-		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("e", 0), collation.KeyFormatLegacy)
-		require.Equal(t, int32(types.T_enum), got.Id)
-		require.Equal(t, "new,paid,shipped", got.Enumvalues)
+	t.Run("enum preserves physical domain", func(t *testing.T) {
+		for _, identity := range []uint32{types.EnumCollationLegacy, types.EnumCollationUTF8Bin, types.EnumCollationGeneralCI, types.EnumCollationUTF8MB4UnicodeCI} {
+			col := &ColDef{Typ: Type{Id: int32(types.T_enum), Enumvalues: "a,A,", EnumCollation: identity, AutoIncr: true}}
+			got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("e", 0), collation.KeyFormatLegacy)
+			require.Equal(t, int32(types.T_enum), got.Id)
+			require.Equal(t, col.Typ.Enumvalues, got.Enumvalues)
+			require.Equal(t, identity, got.EnumCollation)
+			require.False(t, got.AutoIncr)
+		}
 	})
 
 	// SET columns are rejected for UNIQUE indexes (checkIndexColumnSupportability),

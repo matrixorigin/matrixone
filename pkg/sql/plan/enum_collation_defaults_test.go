@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -271,4 +272,59 @@ func TestSystemBootstrapServerAliasDoesNotRequireEnumProtocolGate(t *testing.T) 
 	mock.ctxt.SetContext(context.Background())
 	_, err = buildTestCreateTableStmt(mock, "create table mo_catalog.user_system_table(i int)")
 	require.NoError(t, err)
+}
+
+func TestEnumCollationAlterPreservesEveryOrdinal(t *testing.T) {
+	for _, tc := range []struct {
+		name, members string
+		identity      uint32
+		safe          bool
+	}{
+		{"binary_case", "A,a,", types.EnumCollationUTF8Bin, true},
+		{"general_collision", "A,a,", types.EnumCollationGeneralCI, false},
+		{"unicode_ignorable", "a,a\u0301", types.EnumCollationUTF8MB4UnicodeCI, false},
+		{"raw_padded_member", "a,a ", types.EnumCollationUTF8Bin, true},
+		{"numeric_labels", "2,x", types.EnumCollationGeneralCI, true},
+		{"empty_and_numeric", ",2,x", types.EnumCollationUTF8MB4UnicodeCI, true},
+		{"distinct_general", "X,Y,", types.EnumCollationGeneralCI, true},
+		{"legacy_target", "x,y", types.EnumCollationLegacy, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := planpb.Type{Id: int32(types.T_enum), Enumvalues: tc.members, EnumCollation: types.EnumCollationUTF8Bin}
+			if tc.identity == types.EnumCollationUTF8Bin {
+				old.EnumCollation = types.EnumCollationLegacy
+			}
+			target := old
+			target.EnumCollation = tc.identity
+			err := checkEnumCollationAlter(context.Background(), &old, &target)
+			if tc.safe {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			if tc.identity != 0 {
+				for i, member := range strings.Split(tc.members, ",") {
+					ordinal, truncated, e := types.ParseEnumCollatedAssignment(tc.members, member, tc.identity)
+					require.NoError(t, e)
+					if tc.safe {
+						require.False(t, truncated)
+						require.Equal(t, types.Enum(i+1), ordinal)
+					}
+				}
+			}
+		})
+	}
+	old := planpb.Type{Id: int32(types.T_enum), Enumvalues: strings.Repeat("x", 70<<10) + ",y"}
+	target := old
+	target.EnumCollation = types.EnumCollationUTF8MB4UnicodeCI
+	require.NoError(t, checkEnumCollationAlter(context.Background(), &old, &target), ">64KiB is not the proof budget")
+	old.Enumvalues = strings.Repeat("x", 2<<20)
+	target = old
+	target.EnumCollation = types.EnumCollationGeneralCI
+	require.ErrorContains(t, checkEnumCollationAlter(context.Background(), &old, &target), "memory budget")
+	old.Enumvalues = "x,y"
+	target.Enumvalues = "x,y"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, checkEnumCollationAlter(ctx, &old, &target), context.Canceled)
 }
