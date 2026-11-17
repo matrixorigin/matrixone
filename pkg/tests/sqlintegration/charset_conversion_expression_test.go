@@ -38,13 +38,17 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists conversion_expressions")
-		exec := func(statement string) {
+		statementFailed := false
+		exec := func(t *testing.T, statement string) {
 			t.Helper()
 			_, err := conn.ExecContext(ctx, statement)
+			if err != nil {
+				statementFailed = true
+			}
 			require.NoError(t, err, statement)
 		}
-		exec("create database conversion_expressions")
-		exec("use conversion_expressions")
+		exec(t, "create database conversion_expressions")
+		exec(t, "use conversion_expressions")
 		for _, tc := range []struct {
 			name, alter, collation string
 			precision              int
@@ -61,9 +65,9 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 			{"authored_collate", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v collate utf8mb4_bin='a',a/b)", "A"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				exec("set div_precision_increment=10")
-				exec("create table " + tc.name + "(v varchar(8), a decimal(10,2), b decimal(10,2), g varchar(64) generated always as(" + tc.expression + ") stored) collate utf8mb4_bin")
-				exec(fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
+				exec(t, "set div_precision_increment=10")
+				exec(t, "create table "+tc.name+"(v varchar(8), a decimal(10,2), b decimal(10,2), g varchar(64) generated always as("+tc.expression+") stored) collate utf8mb4_bin")
+				exec(t, fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
 				read := func() string {
 					t.Helper()
 					var value string
@@ -78,13 +82,13 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 					expected = "0" + expected
 				}
 				require.Equal(t, expected, before)
-				exec(fmt.Sprintf("set div_precision_increment=%d", tc.precision))
-				exec("alter table " + tc.name + " " + tc.alter)
+				exec(t, fmt.Sprintf("set div_precision_increment=%d", tc.precision))
+				exec(t, "alter table "+tc.name+" "+tc.alter)
 				require.Equal(t, before, read(), "DDL must not re-author unaffected arithmetic")
 				var collation string
 				require.NoError(t, conn.QueryRowContext(ctx, "select collation_name from information_schema.columns where table_schema='conversion_expressions' and table_name=? and column_name='g'", tc.name).Scan(&collation))
 				require.Equal(t, tc.collation, collation)
-				exec(fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
+				exec(t, fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
 				var mismatches int
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.name+" where g<>?", before).Scan(&mismatches))
 				require.Zero(t, mismatches, "future writes must retain the persisted expression as well")
@@ -92,6 +96,11 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.name).Scan(&rows))
 				require.Equal(t, 2, rows, "the future-write oracle must observe both inserted rows")
 			})
+			// A statement error can have an unknown durable outcome. Let cleanup
+			// and fixture quarantine finish before any later scenario is admitted.
+			if statementFailed {
+				return
+			}
 		}
 	})
 }

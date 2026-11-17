@@ -62,6 +62,36 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	require.True(t, dict.IsNull(3))
 	require.True(t, dict.gsp.Contains(0))
 	require.True(t, dict.gsp.Contains(2))
+	self, err := NewDictionaryVector(base, rows, mp, state.selection)
+	require.NoError(t, err)
+	t.Cleanup(func() { self.Free(mp) })
+	require.NoError(t, self.UnionOne(self, 1, mp))
+	require.Equal(t, 5, self.Length())
+	require.Equal(t, int64(10), GetFixedAtNoTypeCheck[int64](self, 4))
+	require.True(t, self.IsNull(3))
+	require.True(t, self.GetGrouping().Contains(0))
+	for _, operation := range []string{"selection", "batch"} {
+		func() {
+			target, err := NewDictionaryVector(base, rows, mp, state.selection)
+			require.NoError(t, err)
+			defer target.Free(mp)
+			if operation == "selection" {
+				require.NoError(t, target.Union(target, []int64{3, 0}, mp))
+			} else {
+				require.NoError(t, target.UnionBatch(target, 2, 2, nil, mp))
+			}
+			require.Equal(t, 6, target.Length())
+			if operation == "selection" {
+				require.True(t, target.IsNull(4))
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 5))
+				require.True(t, target.GetGrouping().Contains(5))
+			} else {
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 4))
+				require.True(t, target.GetGrouping().Contains(4))
+				require.True(t, target.IsNull(5))
+			}
+		}()
+	}
 	require.Panics(t, func() { _ = MustFixedColNoTypeCheck[int64](dict) })
 	require.Panics(t, func() { _ = dict.GetData() })
 	require.Panics(t, func() { dict.SetNulls(nil) }, "clearing validity requires writable payload")
@@ -264,6 +294,44 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	require.True(t, source.IsPreparedJSONComparisonParam())
 	source.Free(mp)
 	require.Equal(t, values[1], dict.GetStringAt(2))
+	for _, operation := range []string{"one", "multi", "copy"} {
+		func() {
+			target := NewVec(types.T_varchar.ToType())
+			defer target.Free(mp)
+			if operation == "copy" {
+				for range 4 {
+					require.NoError(t, AppendBytes(target, nil, true, mp))
+				}
+			}
+			repeat := 1
+			if operation == "multi" {
+				repeat = 2
+			}
+			expected := []string{values[1], values[0], values[1], ""}
+			kinds := []PrepareParamKind{PrepareParamDecimal, PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}
+			sources := []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceLiteral}
+			for logical, value := range expected {
+				switch operation {
+				case "one":
+					require.NoError(t, target.UnionOne(dict, int64(logical), mp))
+				case "multi":
+					require.NoError(t, target.UnionMulti(dict, int64(logical), repeat, mp))
+				case "copy":
+					require.NoError(t, target.Copy(dict, int64(logical), int64(logical), mp))
+				}
+				for duplicate := 0; duplicate < repeat; duplicate++ {
+					row := logical*repeat + duplicate
+					require.Equal(t, logical == 3, target.IsNull(uint64(row)))
+					if logical != 3 {
+						require.Equal(t, value, target.GetStringAt(row))
+					}
+					require.Equal(t, kinds[logical], target.GetPrepareParamKindAt(row))
+					require.Equal(t, sources[logical], target.GetStringSourceAt(row))
+					require.Equal(t, logical == 0 || logical == 2, target.GetIsBinaryStringAt(row))
+				}
+			}
+		}()
+	}
 	require.NoError(t, dict.EnsureWritable(mp))
 	require.Equal(t, values[1], dict.GetStringAt(0))
 	require.Equal(t, values[0], dict.GetStringAt(1))

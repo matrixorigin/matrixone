@@ -52,6 +52,9 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 		},
 	}
 	filterExpr := func(column int32, op string, lower, upper int32) *plan.Expr {
+		if op == "in" {
+			return MakeInExprForTest(MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name), []int32{lower, upper}, types.T_int32, mp)
+		}
 		args := []*plan.Expr{MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name)}
 		for _, bound := range []int32{lower, upper} {
 			args = append(args, &plan.Expr{
@@ -132,6 +135,8 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 				upper  int32
 				want   []uint16
 			}{
+				{name: "in", op: "in", column: 1, lower: 100, upper: 150, want: layout.want},
+				{name: "outside_object_in", op: "in", column: 1, lower: 300, upper: 400},
 				{name: "between", op: "between", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "in_range", op: "in_range", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "outside_object", op: "between", column: 1, lower: 300, upper: 400},
@@ -181,7 +186,7 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 
 	t.Run("unknown_block_statistics", func(t *testing.T) {
 		meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
-		for _, op := range []string{"between", "in_range"} {
+		for _, op := range []string{"between", "in_range", "in"} {
 			t.Run(op, func(t *testing.T) {
 				_, _, _, block, _, ok, _ := CompileFilterExpr(filterExpr(1, op, 100, 150), tableDef, nil)
 				require.True(t, ok)

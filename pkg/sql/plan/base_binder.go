@@ -1376,6 +1376,25 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if b.numericParamType != nil &&
+		(astExpr.Op == tree.PLUS || astExpr.Op == tree.MINUS) &&
+		(isSyntacticIntervalOperand(astExpr.Left) || isSyntacticIntervalOperand(astExpr.Right)) {
+		// `x +/- INTERVAL n unit` is temporal arithmetic rewriting into
+		// DATE_ADD/DATE_SUB: like that function's own argument boundary, its
+		// operands must keep their source domains even when an enclosing
+		// numeric expression has already installed a numeric context here.
+		// The inherited context is restored on every exit path, so the
+		// temporal result is still typed normally for the remaining outer
+		// numeric consumers.
+		inheritedParamType := b.numericParamType
+		inheritedSubqueryTarget := b.numericSubqueryTarget
+		b.numericParamType = nil
+		b.numericSubqueryTarget = nil
+		defer func() {
+			b.numericParamType = inheritedParamType
+			b.numericSubqueryTarget = inheritedSubqueryTarget
+		}()
+	}
 	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
 		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
@@ -1740,6 +1759,22 @@ func (b *baseBinder) numericAstTypesInternal(
 	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
 }
 
+// isSyntacticIntervalOperand reports whether expr is the parser's
+// `INTERVAL <expr> <unit>` production, optionally parenthesized: the grammar
+// reduces that production to a two-argument function named interval whose
+// second argument is the time unit, and the interval rewrite binds exactly
+// this shape to the INTERVAL type. A function that merely shares the
+// spelling but carries another arity or argument shape is an ordinary
+// function call, not syntactic INTERVAL.
+func isSyntacticIntervalOperand(expr tree.Expr) bool {
+	funcExpr, ok := unwrapParenExpr(expr).(*tree.FuncExpr)
+	if !ok || len(funcExpr.Exprs) != 2 {
+		return false
+	}
+	_, secondIsUnit := funcExpr.Exprs[1].(*tree.TimeUnitExpr)
+	return secondIsUnit && numericAstFunctionName(funcExpr) == "interval"
+}
+
 func (b *baseBinder) numericAstTypesInternalWithHint(
 	astExpr tree.Expr,
 	depth int32,
@@ -1796,6 +1831,18 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
+			return numericAstTypeScan{}, nil
+		}
+		// `x +/- INTERVAL n unit` is the operator spelling of DATE_ADD/
+		// DATE_SUB, not numeric arithmetic. Both operands must reach the
+		// operator binding with their own domains - date-like text, user
+		// variables, prepared markers, temporal columns - so the existing
+		// temporal rewrite can consume the source values. Establishing the
+		// default numeric context over the whole subtree here would
+		// prefix-convert date text to DOUBLE before that rewrite and fail
+		// the dispatch.
+		if (expr.Op == tree.PLUS || expr.Op == tree.MINUS) &&
+			(isSyntacticIntervalOperand(expr.Left) || isSyntacticIntervalOperand(expr.Right)) {
 			return numericAstTypeScan{}, nil
 		}
 		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
@@ -7880,6 +7927,20 @@ func bindFuncExprImplByPlanExpr(
 				return nil, err
 			}
 		}
+	}
+	if strings.EqualFold(name, "crc32") && len(args) == 1 && args[0] != nil &&
+		types.T(args[0].Typ.Id) == types.T_json {
+		// New JSON bindings hash the visible JSON document. Keep CRC32's
+		// original execution identity so old persisted calls still hash their
+		// original binary argument. An explicit TEXT cast preserves JSON string
+		// quoting and does not impose VARCHAR's expression-width limit.
+		target := types.T_text.ToType()
+		cast, castErr := appendExplicitCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+		if castErr != nil {
+			return nil, castErr
+		}
+		args = append([]*Expr(nil), args...)
+		args[0] = cast
 	}
 	if name == "between" && len(args) == 3 &&
 		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
