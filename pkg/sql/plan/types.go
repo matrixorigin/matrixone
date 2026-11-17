@@ -536,9 +536,12 @@ type QueryBuilder struct {
 	// synthetic bindings must not make arbitrary carried estimates authoritative.
 	syntheticNDVCols map[[2]int32]struct{}
 
-	nextBindTag      int32
-	nextMsgTag       int32
-	nextSQLUdfCallID uint64
+	nextBindTag                 int32
+	nextMsgTag                  int32
+	nextSQLUdfCallID            uint64
+	udfResolutionCount          uint64
+	udfExpansionDepth           uint32
+	zeroScalarRewriteGeneration uint64
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32
@@ -1139,6 +1142,11 @@ type BindContext struct {
 	// names for its $n parameters; resolving those markers from a child query
 	// block turns the argument's column references into correlated references.
 	sqlUdfArgs map[string]*plan.Expr
+	// zeroScalarRootSourceSafe is set only after the original AST and the
+	// complete binding pass prove the narrow LIMIT 0 source has no hidden
+	// dependency or UDF expansion.
+	zeroScalarRootSourceSafe bool
+	zeroScalarRootCandidate  bool
 
 	// for join tables
 	bindingTree *BindingTreeNode

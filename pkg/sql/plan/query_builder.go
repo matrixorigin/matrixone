@@ -4434,6 +4434,20 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	return childNodeID
 }
 
+func (builder *QueryBuilder) appendWindowValidationScans() {
+	if builder.qry == nil {
+		return
+	}
+	for _, scan := range builder.windowValidationScans {
+		if scan == nil {
+			continue
+		}
+		scan.NodeId = int32(len(builder.qry.Nodes))
+		scan.ExtraOptions = windowValidationPrivilegeCarrierExtraOptions
+		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
 		return nil, err
@@ -4448,7 +4462,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	}
 	builder.finalizeCTEIdentity()
 	if builder.qry.Correlation != nil {
-		return builder.createDependentQuery()
+		query, err := builder.createDependentQuery()
+		if err != nil {
+			return nil, err
+		}
+		builder.appendWindowValidationScans()
+		return query, nil
 	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
@@ -4746,13 +4765,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 	builder.hintQueryType()
-	for _, scan := range builder.windowValidationScans {
-		if scan == nil {
-			continue
-		}
-		scan.NodeId = int32(len(builder.qry.Nodes))
-		builder.qry.Nodes = append(builder.qry.Nodes, scan)
-	}
+	builder.appendWindowValidationScans()
 	// Empty BlockFilterList can mean either a stats choice or an explicit
 	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
 	// compilation cannot backfill a block predicate for a later binding.

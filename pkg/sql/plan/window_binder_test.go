@@ -1004,6 +1004,73 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 	})
 }
 
+func TestDependentPlanRetainsNamedWindowValidationPrivilegeCarriers(t *testing.T) {
+	queryPlan, err := buildNamedWindowPlan(t, `
+		SELECT n.n_nationkey,
+		       (SELECT n.n_regionkey FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey LIMIT 0)
+		  FROM nation n
+		 WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))`)
+	require.NoError(t, err)
+	query := queryPlan.GetQuery()
+	require.NotNil(t, query.GetCorrelation(), "the correlated LIMIT 0 query uses the dependent-plan path")
+	require.False(t, queryHasReachableTable(query, "customer"), "the unused window source must remain non-executable")
+	var retained bool
+	for _, node := range query.GetNodes() {
+		if node.GetNodeType() == planpb.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == "customer" {
+			retained = true
+			break
+		}
+	}
+	require.True(t, retained, "authorization must see the validation-only source carrier")
+}
+
+func TestOptimizerRetainsNamedWindowValidationPrivilegeCarriers(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		dependent bool
+	}{
+		{
+			name: "ordinary plan",
+			sql:  "SELECT n.n_nationkey FROM nation n WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))",
+		},
+		{
+			name: "dependent plan",
+			sql: `SELECT n.n_nationkey,
+			       (SELECT n.n_regionkey FROM region r
+			         WHERE r.r_regionkey > n.n_regionkey LIMIT 0)
+			  FROM nation n
+			 WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))`,
+			dependent: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+			if test.dependent {
+				require.NotNil(t, query.GetCorrelation())
+			} else {
+				require.Nil(t, query.GetCorrelation())
+			}
+			require.False(t, queryHasReachableTable(query, "customer"), "validation-only source must not execute")
+			var carrier *planpb.Node
+			for _, node := range query.GetNodes() {
+				if node.GetNodeType() == planpb.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == "customer" {
+					carrier = node
+					break
+				}
+			}
+			require.NotNil(t, carrier, "optimizer must retain the authorization carrier")
+			require.Equal(t, windowValidationPrivilegeCarrierExtraOptions, carrier.GetExtraOptions())
+		})
+	}
+}
+
 func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T) {
 	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)

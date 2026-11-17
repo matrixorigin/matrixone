@@ -114,6 +114,24 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 	}
 }
 
+func appendWindowValidationPrivilegeCarriers(oldNodes []*plan.Node, nodes *[]*plan.Node) {
+	seen := make(map[*plan.Node]struct{}, len(*nodes))
+	for _, node := range *nodes {
+		seen[node] = struct{}{}
+	}
+	for _, node := range oldNodes {
+		if !isWindowValidationPrivilegeCarrier(node) {
+			continue
+		}
+		if _, exists := seen[node]; exists {
+			continue
+		}
+		node.NodeId = int32(len(*nodes))
+		*nodes = append(*nodes, node)
+		seen[node] = struct{}{}
+	}
+}
+
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 	oldNodes := qry.Nodes
 	newSteps := make([]int32, 0, len(qry.Steps))
@@ -123,6 +141,7 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
 	}
 
+	appendWindowValidationPrivilegeCarriers(oldNodes, &newNodes)
 	qry.Steps = newSteps
 	qry.Nodes = newNodes
 	remapLocalRuntimeFilterDomains(qry, oldNodes)

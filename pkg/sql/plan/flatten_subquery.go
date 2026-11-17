@@ -475,7 +475,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	} else {
 		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
 	}
+	rootZeroDependent := false
+	if !dependent {
+		rootZeroDependent = builder.scalarRootZeroNeedsDependent(subquery)
+		dependent = rootZeroDependent
+	}
 	if dependent {
+		if rootZeroDependent {
+			builder.zeroScalarRewriteGeneration++
+		}
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
 			// The left operand has the same demand as the comparison. Hoisting
 			// it into a JOIN would evaluate even an unselected CASE branch.

@@ -752,6 +752,12 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 // to a query step. They are compact ownership metadata, never executable plan
 // roots: keeping a complete TableDef here would make a legal 127-window query
 // retain a copy of each wide schema it happens to validate.
+const windowValidationPrivilegeCarrierExtraOptions = "mo:window-validation-privilege-carrier"
+
+func isWindowValidationPrivilegeCarrier(node *plan.Node) bool {
+	return node != nil && node.ExtraOptions == windowValidationPrivilegeCarrierExtraOptions
+}
+
 func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuilder) {
 	seen := make(map[string]struct{})
 	for _, node := range validationBuilder.qry.Nodes {
