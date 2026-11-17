@@ -129,11 +129,10 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		if tableScan.ctr.domainEmpty {
 			return vm.CancelResult, nil
 		}
-	}
-
-	if !tableScan.ctr.membershipPrepared {
-		tableScan.prepareReaderMembership(proc)
-		tableScan.ctr.membershipPrepared = true
+		if !tableScan.ctr.membershipPrepared {
+			tableScan.prepareReaderMembership(proc)
+			tableScan.ctr.membershipPrepared = true
+		}
 	}
 
 	for {

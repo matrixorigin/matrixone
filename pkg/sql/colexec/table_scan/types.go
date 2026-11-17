@@ -49,12 +49,10 @@ type container struct {
 	filterRows                []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
-	filterActiveDuration      time.Duration
-	readerFilter              *engine.ReaderFilterRequest
 	membershipPrepared        bool
 	membershipApplied         bool
-	membershipInputRows       int64
-	membershipOutputRows      int64
+	filterActiveDuration      time.Duration
+	readerFilter              *engine.ReaderFilterRequest
 	readerWorkspace           []*vector.Vector
 	readerHeaders             []*vector.Vector
 	readerSnapshots           []*vector.DictionaryVectorSlot

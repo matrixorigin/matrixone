@@ -158,6 +158,7 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		if !active {
 			// Reuse the existing low-rejection bypass. Once it fires, future
 			// blocks return to the original eager/late column schedule.
+			tableScan.recordReaderMembershipStats()
 			tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 			tableScan.ctr.readerFilter.Membership = nil
 			tableScan.configureLateMaterialization()
@@ -296,23 +297,31 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 			return engine.ReaderFilterResult{}, err
 		}
 		tableScan.ctr.membershipApplied = true
-		tableScan.ctr.membershipInputRows += int64(bat.RowCount())
+		request.Membership.InputRows += int64(bat.RowCount())
 		if all {
-			tableScan.ctr.membershipOutputRows += int64(bat.RowCount())
+			request.Membership.OutputRows += int64(bat.RowCount())
 		} else {
-			tableScan.ctr.membershipOutputRows += int64(len(rows))
+			request.Membership.OutputRows += int64(len(rows))
 		}
 		return engine.ReaderFilterResult{Sels: rows, All: all}, nil
 	}
 }
 
-func (tableScan *TableScan) releaseLocalDomains() {
-	if tableScan.OpAnalyzer != nil && tableScan.ctr.membershipInputRows > 0 {
-		stats := tableScan.OpAnalyzer.GetOpStats()
-		stats.AddExtraStat("RuntimeDomainReaderInputRows", tableScan.ctr.membershipInputRows)
-		stats.AddExtraStat("RuntimeDomainReaderSurvivingRows", tableScan.ctr.membershipOutputRows)
+func (tableScan *TableScan) recordReaderMembershipStats() {
+	request := tableScan.ctr.readerFilter
+	if request == nil || request.Membership == nil || request.Membership.InputRows == 0 {
+		return
 	}
-	tableScan.ctr.membershipInputRows, tableScan.ctr.membershipOutputRows = 0, 0
+	if tableScan.OpAnalyzer != nil {
+		stats := tableScan.OpAnalyzer.GetOpStats()
+		stats.AddExtraStat("RuntimeDomainReaderInputRows", request.Membership.InputRows)
+		stats.AddExtraStat("RuntimeDomainReaderSurvivingRows", request.Membership.OutputRows)
+	}
+	request.Membership.InputRows, request.Membership.OutputRows = 0, 0
+}
+
+func (tableScan *TableScan) releaseLocalDomains() {
+	tableScan.recordReaderMembershipStats()
 	for _, source := range tableScan.ctr.domainSources {
 		source.producer.Complete(true)
 		if tableScan.OpAnalyzer != nil {

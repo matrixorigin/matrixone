@@ -1369,9 +1369,10 @@ type ReaderFilterRequest struct {
 // ReaderMembershipFilter is allocated only by a scan with an admitted ready
 // domain. Ordinary reader requests carry only a nil optional pointer.
 type ReaderMembershipFilter struct {
-	Columns []int
-	Select  ReaderSelection
-	scratch *ReaderMembershipScratch
+	Columns               []int
+	Select                ReaderSelection
+	InputRows, OutputRows int64
+	scratch               *ReaderMembershipScratch
 }
 
 // ReaderMembershipScratch belongs to the sequential prepared scan, never to a
