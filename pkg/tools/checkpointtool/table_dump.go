@@ -997,44 +997,44 @@ func checkpointEnumCollationName(id uint32) (string, bool) {
 // without changing ENUM assignment or the table default for future columns.
 func ValidateEnumReplaySchema(schema *TableSchema) error {
 	if schema == nil {
-		return fmt.Errorf("missing checkpoint table schema")
+		return moerr.NewInvalidInputNoCtxf("missing checkpoint table schema")
 	}
 	if schema.enumDefaultDecodeError != "" {
-		return fmt.Errorf("invalid checkpoint table ENUM default: %s", schema.enumDefaultDecodeError)
+		return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM default: %s", schema.enumDefaultDecodeError)
 	}
 	if schema.DefaultCharset != types.EnumCollationLegacy {
 		if _, ok := checkpointEnumCollationName(schema.DefaultCharset); !ok || schema.EnumUnsupportedDefault != "" {
-			return fmt.Errorf("invalid checkpoint table ENUM default %d", schema.DefaultCharset)
+			return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM default %d", schema.DefaultCharset)
 		}
 	}
 	if marker := schema.EnumUnsupportedDefault; marker != "" {
 		if !isPrintableSQLText(marker) || strings.EqualFold(marker, "utf8mb4_bin") || strings.EqualFold(marker, "utf8mb4_general_ci") {
-			return fmt.Errorf("invalid checkpoint table ENUM collation marker")
+			return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM collation marker")
 		}
 	}
 	for _, col := range schema.Columns {
 		if !strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") {
 			if col.EnumCollation != types.EnumCollationLegacy {
-				return fmt.Errorf("ENUM identity on non-ENUM column %q", col.Name)
+				return moerr.NewInvalidInputNoCtxf("ENUM identity on non-ENUM column %q", col.Name)
 			}
 			continue
 		}
 		if col.enumDomainUnverified {
-			return fmt.Errorf("cannot verify checkpoint ENUM metadata on column %q", col.Name)
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM metadata on column %q", col.Name)
 		}
 		if col.enumDefaultError != "" {
-			return fmt.Errorf("cannot verify checkpoint ENUM default on column %q: %s", col.Name, col.enumDefaultError)
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM default on column %q: %s", col.Name, col.enumDefaultError)
 		}
 		if err := types.ValidateEnumCollation(col.EnumCollation); err != nil {
-			return fmt.Errorf("invalid ENUM identity on column %q: %w", col.Name, err)
+			return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM identity on column %q", col.Name), err)
 		}
 		if col.EnumValuesAreRaw {
 			if _, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding); err != nil {
-				return fmt.Errorf("invalid ENUM domain on column %q: %w", col.Name, err)
+				return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM domain on column %q", col.Name), err)
 			}
 		}
 		if col.EnumCollation == types.EnumCollationLegacy && (schema.DefaultCharset != types.EnumCollationLegacy || schema.EnumUnsupportedDefault != "") {
-			return fmt.Errorf("cannot replay legacy ENUM column %q under a table collation", col.Name)
+			return moerr.NewInvalidInputNoCtxf("cannot replay legacy ENUM column %q under a table collation", col.Name)
 		}
 	}
 	return nil
@@ -1052,11 +1052,11 @@ func ValidateEnumLoadReplay(schema *TableSchema) error {
 			continue
 		}
 		if !col.EnumValuesAreRaw {
-			return fmt.Errorf("cannot verify checkpoint ENUM domain on column %q", col.Name)
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM domain on column %q", col.Name)
 		}
 		members, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding)
 		if err != nil {
-			return fmt.Errorf("invalid ENUM domain on column %q: %w", col.Name, err)
+			return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM domain on column %q", col.Name), err)
 		}
 		digitWeights := make(map[string]byte, 10)
 		if col.EnumCollation == types.EnumCollationGeneralCI {
@@ -1066,7 +1066,7 @@ func ValidateEnumLoadReplay(schema *TableSchema) error {
 					return keyErr
 				}
 				if prior, ok := digitWeights[key]; ok && prior != digit {
-					return fmt.Errorf("ambiguous ENUM numeric collation on column %q", col.Name)
+					return moerr.NewInvalidInputNoCtxf("ambiguous ENUM numeric collation on column %q", col.Name)
 				}
 				digitWeights[key] = digit
 			}
@@ -1119,7 +1119,7 @@ func ValidateEnumLoadReplay(schema *TableSchema) error {
 			}
 			seen[ordinal] = true
 			if ordinal != i+1 {
-				return fmt.Errorf("cannot replay checkpoint ENUM column %q: decimal ordinal %d matches member %d", col.Name, ordinal, i+1)
+				return moerr.NewInvalidInputNoCtxf("cannot replay checkpoint ENUM column %q: decimal ordinal %d matches member %d", col.Name, ordinal, i+1)
 			}
 		}
 	}
@@ -4579,7 +4579,7 @@ func (r *CheckpointReader) ShowCreateTable(
 	if moTablesView != nil {
 		schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, moColumnsView)
 		if err := ValidateEnumReplaySchema(schema); err != nil {
-			return "", fmt.Errorf("cannot replay checkpoint table %d: %w", tableID, err)
+			return "", errors.Join(moerr.NewInvalidInputNoCtxf("cannot replay checkpoint table %d", tableID), err)
 		}
 	}
 	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView, partitionMetadataView); ddl != "" {

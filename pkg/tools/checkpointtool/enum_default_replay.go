@@ -16,10 +16,10 @@ package checkpointtool
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -94,7 +94,7 @@ func proveCheckpointEnumDefault(col *TableColumn, def *plan.Default) error {
 	ctx := context.Background()
 	stmts, err := mysql.ParseWithSQLMode(ctx, "SELECT "+origin, 1, "")
 	if err != nil {
-		return fmt.Errorf("cannot parse persisted default")
+		return moerr.NewInvalidInputNoCtx("cannot parse persisted default")
 	}
 	defer func() {
 		for _, stmt := range stmts {
@@ -102,27 +102,27 @@ func proveCheckpointEnumDefault(col *TableColumn, def *plan.Default) error {
 		}
 	}()
 	if len(stmts) != 1 {
-		return fmt.Errorf("default is not a single literal")
+		return moerr.NewInvalidInputNoCtx("default is not a single literal")
 	}
 	sel, ok := stmts[0].(*tree.Select)
 	if !ok || sel.IsPerform || sel.With != nil || sel.RewriteOption != nil || sel.TimeWindow != nil || len(sel.OrderBy) != 0 || sel.Limit != nil || sel.RankOption != nil || sel.Ep != nil || sel.SelectLockInfo != nil {
-		return fmt.Errorf("default has unsupported statement syntax")
+		return moerr.NewInvalidInputNoCtx("default has unsupported statement syntax")
 	}
 	clause, ok := sel.Select.(*tree.SelectClause)
 	if !ok || clause.Distinct || clause.Option != 0 || len(clause.Exprs) != 1 || (clause.Exprs[0].As != nil && !clause.Exprs[0].As.Empty()) || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || clause.From == nil || len(clause.From.Tables) != 1 {
-		return fmt.Errorf("default has unsupported SELECT syntax")
+		return moerr.NewInvalidInputNoCtx("default has unsupported SELECT syntax")
 	}
 	alias, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
 	if !ok || alias.As.Alias != "" || len(alias.As.Cols) != 0 || len(alias.IndexHints) != 0 {
-		return fmt.Errorf("default references a table")
+		return moerr.NewInvalidInputNoCtx("default references a table")
 	}
 	table, ok := alias.Expr.(*tree.TableName)
 	if !ok || table.ObjectName != "" || table.ExplicitSchema || table.ExplicitCatalog || table.AtTsExpr != nil || table.IcebergRef != nil {
-		return fmt.Errorf("default references a table")
+		return moerr.NewInvalidInputNoCtx("default references a table")
 	}
 	expr := clause.Exprs[0].Expr
 	if tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString()) != origin {
-		return fmt.Errorf("default has noncanonical or trailing SQL")
+		return moerr.NewInvalidInputNoCtx("default has noncanonical or trailing SQL")
 	}
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
@@ -133,34 +133,34 @@ func proveCheckpointEnumDefault(col *TableColumn, def *plan.Default) error {
 	}
 	literal, ok := expr.(*tree.NumVal)
 	if !ok {
-		return fmt.Errorf("default is not a supported literal")
+		return moerr.NewInvalidInputNoCtx("default is not a supported literal")
 	}
 	switch literal.ValType {
 	case tree.P_char, tree.P_int64, tree.P_uint64:
 	case tree.P_null:
 		if col.NotNull {
-			return fmt.Errorf("NULL default is incompatible with NOT NULL")
+			return moerr.NewInvalidInputNoCtx("NULL default is incompatible with NOT NULL")
 		}
 	default:
-		return fmt.Errorf("unsupported default literal")
+		return moerr.NewInvalidInputNoCtx("unsupported default literal")
 	}
 	members, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding)
 	if err != nil {
-		return fmt.Errorf("invalid ENUM domain")
+		return moerr.NewInvalidInputNoCtx("invalid ENUM domain")
 	}
 	payload, encoding, err := types.EncodeEnumMembers(members)
 	if err != nil {
-		return fmt.Errorf("cannot reconstruct ENUM domain")
+		return moerr.NewInvalidInputNoCtx("cannot reconstruct ENUM domain")
 	}
 	target := plan.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding, EnumCollation: col.EnumCollation}
 	binder := sqlplan.NewDefaultBinder(ctx, nil, nil, target, nil)
 	bound, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
-		return fmt.Errorf("cannot bind persisted default")
+		return moerr.NewInvalidInputNoCtx("cannot bind persisted default")
 	}
 	rebuilt, err := sqlplan.MakePlan2AssignmentCastExpr(ctx, bound, target)
 	if err != nil || !proto.Equal(def.Expr, rebuilt) {
-		return fmt.Errorf("persisted default differs from reconstructed typed expression")
+		return moerr.NewInvalidInputNoCtx("persisted default differs from reconstructed typed expression")
 	}
 	return nil
 }
