@@ -747,6 +747,10 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
+	if hashJoin.IsInner() && hashJoin.NonEqCond == nil && !ctr.probeHashOnPK &&
+		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil {
+		return ctr.probeInnerPayload(hashJoin, proc, result)
+	}
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
 	batchUnique := ctr.probeHashOnPK && hashJoin.NonEqCond == nil &&
@@ -1939,6 +1943,13 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 			}
 		}
 	}
+	return ctr.appendBuildPayloadRows(hashJoin, proc, rightRows[:matched], leftRows[:matched])
+}
+
+// appendBuildPayloadRows gathers at most one scratch chunk, preserving tuple
+// order across physical build batches. It may reuse both ordinal slices.
+func (ctr *container) appendBuildPayloadRows(hashJoin *HashJoin, proc *process.Process, rightRows, leftRows []int64) (int, error) {
+	matched := len(rightRows)
 	// A bounded gather amortizes per-row projection across physical batches.
 	// Decide per column: one out-of-line string must not disable fixed-width
 	// or inline-string copies for the rest of the build tuple.
