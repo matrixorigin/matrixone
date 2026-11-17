@@ -1658,10 +1658,16 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
+		if leaf, ok := leafByTag[exprImpl.Col.RelPos]; ok {
+			hyperEdge[leaf] = true
+		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
