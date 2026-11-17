@@ -399,35 +399,39 @@ func indexReferencesColumn(table *planpb.TableDef, index *planpb.IndexDef, colum
 
 // rejectUnsafeEnumIdentityDowngrade blocks ENUM identity changes whose target
 // still represents a previously physical ENUM domain as a legacy ENUM key.
-func rejectUnsafeEnumIdentityDowngrade(oldTable, newTable *planpb.TableDef) error {
-	if oldTable == nil || newTable == nil {
+// columnSources is the same source mapping used to build ALTER COPY's INSERT.
+func rejectUnsafeEnumIdentityDowngrade(
+	oldTable, newTable *planpb.TableDef,
+	columnSources map[string]selectExpr,
+) error {
+	if oldTable == nil || newTable == nil || columnSources == nil {
 		return moerr.NewInvalidInputNoCtx("cannot validate ALTER ENUM index transition")
 	}
 	for _, oldCol := range oldTable.Cols {
 		if oldCol == nil || oldCol.Typ.Id != int32(types.T_enum) || oldCol.Typ.EnumCollation == 0 {
 			continue
 		}
-		// CHANGE COLUMN preserves ColId through renames, while DROP/ADD gets a
-		// new ID. Name-only matching misses renamed downgrades and can mistake a
-		// replacement column for the original physical ENUM values.
-		newCol := (*planpb.ColDef)(nil)
-		var sameID *planpb.ColDef
-		sameIDCount := 0
-		for _, candidate := range newTable.Cols {
-			if candidate == nil || candidate.ColId != oldCol.ColId {
+		// Resolve identity through ALTER COPY's source expression, not ColId:
+		// ALTER can leave different columns with the same ColId. Seqnum must
+		// remain stable for a direct source-column copy.
+		var newCol *planpb.ColDef
+		for targetName, source := range columnSources {
+			if source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, oldCol.Name) {
 				continue
 			}
-			sameID = candidate
-			sameIDCount++
-			if strings.EqualFold(candidate.Name, oldCol.Name) {
-				newCol = candidate
+			var candidate *planpb.ColDef
+			for _, col := range newTable.Cols {
+				if col != nil && strings.EqualFold(col.Name, targetName) {
+					if candidate != nil {
+						return moerr.NewInvalidInputNoCtx("ambiguous ALTER ENUM target column")
+					}
+					candidate = col
+				}
 			}
-		}
-		if newCol == nil {
-			if sameIDCount > 1 {
-				return moerr.NewInvalidInputNoCtx("ambiguous ALTER ENUM column identity")
+			if candidate == nil || candidate.Seqnum != oldCol.Seqnum || newCol != nil {
+				return moerr.NewInvalidInputNoCtx("ambiguous ALTER ENUM source column")
 			}
-			newCol = sameID
+			newCol = candidate
 		}
 		if newCol == nil || newCol.Typ.Id != int32(types.T_enum) || newCol.Typ.EnumCollation != 0 {
 			continue

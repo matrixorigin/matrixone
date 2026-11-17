@@ -134,29 +134,58 @@ func TestNewEnumIndexRejectsUnverifiedAlgorithms(t *testing.T) {
 	require.NoError(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "ordinary proven indexes remain supported")
 }
 
+func enumColumnSourceMap(table *planpb.TableDef) map[string]selectExpr {
+	sources := make(map[string]selectExpr, len(table.Cols))
+	for _, col := range table.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		sources[col.Name] = selectExpr{sexprType: exprColumnName, sexprStr: col.Name}
+	}
+	return sources
+}
+
+func TestRemapAlterColumnSourceTracksOriginalSource(t *testing.T) {
+	ctx := &AlterTableContext{alterColMap: map[string]selectExpr{
+		"e": {sexprType: exprColumnName, sexprStr: "e"},
+	}}
+	remapAlterColumnSource(ctx, "e", "f")
+	remapAlterColumnSource(ctx, "f", "g")
+	require.Equal(t, selectExpr{sexprType: exprColumnName, sexprStr: "e"}, ctx.alterColMap["g"])
+	require.NotContains(t, ctx.alterColMap, "f")
+
+	ctx.alterColMap["added"] = selectExpr{sexprType: exprConstValue, sexprStr: "NULL"}
+	remapAlterColumnSource(ctx, "added", "renamed_added")
+	require.Equal(t, selectExpr{sexprType: exprConstValue, sexprStr: "NULL"}, ctx.alterColMap["renamed_added"])
+
+	remapAlterColumnSource(ctx, "missing", "new")
+	require.NotContains(t, ctx.alterColMap, "new")
+}
+
 func TestRejectUnsafeEnumIdentityDowngrade(t *testing.T) {
 	spec := enumIndexTestSpec()
 	oldTable := proto.Clone(spec.Source).(*planpb.TableDef)
 	oldIndex := proto.Clone(spec.Index).(*planpb.IndexDef)
 	oldTable.Indexes = []*planpb.IndexDef{oldIndex}
+	sources := enumColumnSourceMap(oldTable)
 
 	newTable := proto.Clone(oldTable).(*planpb.TableDef)
 	newTable.Cols[1].Typ.EnumCollation = 0
-	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable, sources), "legacy ENUM")
 
 	varcharTable := proto.Clone(newTable).(*planpb.TableDef)
 	varcharTable.Cols[1].Typ.Id = int32(types.T_varchar)
-	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, varcharTable), "ENUM to VARCHAR is a distinct conversion")
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, varcharTable, sources), "ENUM to VARCHAR is a distinct conversion")
 
 	withoutIndex := proto.Clone(newTable).(*planpb.TableDef)
 	withoutIndex.Indexes = nil
-	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, withoutIndex), "removing the affected index avoids a downgrade")
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, withoutIndex, sources), "removing the affected index avoids a downgrade")
 
 	unrelatedIndex := proto.Clone(oldTable).(*planpb.TableDef)
 	unrelatedIndex.Indexes[0].Parts = []string{"other"}
 	unrelatedTarget := proto.Clone(unrelatedIndex).(*planpb.TableDef)
 	unrelatedTarget.Cols[1].Typ.EnumCollation = 0
-	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(unrelatedIndex, unrelatedTarget), "an unrelated legacy-only index remains eligible")
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(unrelatedIndex, unrelatedTarget, enumColumnSourceMap(unrelatedIndex)), "an unrelated legacy-only index remains eligible")
 
 	depends, err := indexReferencesColumn(oldTable, oldIndex, "new_column")
 	require.NoError(t, err)
@@ -172,22 +201,42 @@ func TestRejectUnsafeEnumIdentityDowngrade(t *testing.T) {
 	generated.Indexes[0].Parts = []string{"generated"}
 	generatedTarget := proto.Clone(generated).(*planpb.TableDef)
 	generatedTarget.Cols[1].Typ.EnumCollation = 0
-	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(generated, generatedTarget), "legacy ENUM")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(generated, generatedTarget, enumColumnSourceMap(generated)), "legacy ENUM")
 
 	primaryOnly := proto.Clone(oldTable).(*planpb.TableDef)
 	primaryOnly.Indexes = nil
 	primaryOnly.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "e", Names: []string{"e"}}
 	primaryTarget := proto.Clone(primaryOnly).(*planpb.TableDef)
 	primaryTarget.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
-	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(primaryOnly, primaryTarget), "legacy ENUM")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(primaryOnly, primaryTarget, enumColumnSourceMap(primaryOnly)), "legacy ENUM")
+}
+
+func TestAlterCopyDowngradeRejectsDuplicateColIDAndNameReuse(t *testing.T) {
+	mock := newMySQLSpecialOrderMock()
+	table := mock.ctxt.tables["enum_order_t"]
+	for i, col := range table.Cols {
+		col.ColId = 77
+		col.Seqnum = uint32(i)
+	}
+	table.Cols[1].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	table.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+	table.Indexes = []*planpb.IndexDef{{
+		IndexName: "ix_e", Parts: []string{"e", "id"},
+	}}
+	_, err := runOneStmt(mock, t,
+		"alter table enum_order_t change column e f enum('low','mid','high'), change column v e varchar(32)")
+	require.ErrorContains(t, err, "ALTER from ENUM collation identity to legacy ENUM with a dependent index")
 }
 
 func TestRejectUnsafeEnumIdentityDowngradeAfterRename(t *testing.T) {
 	spec := enumIndexTestSpec()
 	oldTable := proto.Clone(spec.Source).(*planpb.TableDef)
-	oldTable.Cols[0].ColId = 1
-	oldTable.Cols[1].ColId = 2
-	oldTable.Cols[2].ColId = 3
+	for i, col := range oldTable.Cols {
+		col.Seqnum = uint32(i)
+	}
+	oldTable.Cols[0].ColId = 7
+	oldTable.Cols[1].ColId = 7
+	oldTable.Cols[2].ColId = 7
 	oldIndex := proto.Clone(spec.Index).(*planpb.IndexDef)
 	oldIndex.IndexName = "e_idx"
 	oldTable.Indexes = []*planpb.IndexDef{oldIndex}
@@ -196,19 +245,38 @@ func TestRejectUnsafeEnumIdentityDowngradeAfterRename(t *testing.T) {
 	newTable.Cols[1].Name = "f"
 	newTable.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
 	newTable.Indexes[0].Parts = []string{"f"}
-	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+	ctx := &AlterTableContext{alterColMap: enumColumnSourceMap(oldTable)}
+	remapAlterColumnSource(ctx, "e", "f")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable, ctx.alterColMap), "legacy ENUM")
 
-	// Mapping by the stable column ID handles multiple renames in one ALTER.
+	// Two sequential renames must retain the original COPY source.
 	newTable.Cols[1].Name = "g"
 	newTable.Indexes[0].Parts = []string{"g"}
-	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+	remapAlterColumnSource(ctx, "f", "g")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable, ctx.alterColMap), "legacy ENUM")
 
-	// Dropping and re-adding the same name creates a new column identity. The
-	// replacement index is built for that new column, not the old ENUM value.
+	// Reusing the old name for a different column must not hide the renamed,
+	// downgraded ENUM still referenced by the existing index.
+	oldTable.Cols[2].Typ.Id = int32(types.T_varchar)
+	oldTable.Cols[2].Typ.Enumvalues = ""
+	newTable = proto.Clone(oldTable).(*planpb.TableDef)
+	newTable.Cols[1].Name = "f"
+	newTable.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
+	newTable.Cols[2].Name = "e"
+	newTable.Indexes[0].Parts = []string{"f"}
+	ctx = &AlterTableContext{alterColMap: enumColumnSourceMap(oldTable)}
+	remapAlterColumnSource(ctx, "e", "f")
+	remapAlterColumnSource(ctx, "other", "e")
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable, ctx.alterColMap), "legacy ENUM")
+
+	// Dropping and re-adding the same name has no source-column mapping.
 	replacement := proto.Clone(oldTable).(*planpb.TableDef)
 	replacement.Cols[1].ColId = 99
 	replacement.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
-	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, replacement))
+	replacementSources := enumColumnSourceMap(oldTable)
+	delete(replacementSources, "e")
+	replacementSources["e"] = selectExpr{sexprType: exprConstValue, sexprStr: "NULL"}
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, replacement, replacementSources))
 }
 
 func TestDropAlterCopyUniqueDedupForAffectedIndexes(t *testing.T) {

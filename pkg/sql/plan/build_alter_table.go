@@ -233,7 +233,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err := validateNewEnumIndexSafety(copyTableDef, copyTableDef.Indexes); err != nil {
 		return nil, err
 	}
-	if err := rejectUnsafeEnumIdentityDowngrade(tableDef, copyTableDef); err != nil {
+	if err := rejectUnsafeEnumIdentityDowngrade(tableDef, copyTableDef, alterTableCtx.alterColMap); err != nil {
 		return nil, err
 	}
 
@@ -433,6 +433,32 @@ const (
 type selectExpr struct {
 	sexprType exprType
 	sexprStr  string
+}
+
+// remapAlterColumnSource carries a target column's original-table source
+// through repeated CHANGE/RENAME/MODIFY operations. A missing source stays
+// missing, which distinguishes a newly added column from a renamed old one.
+func remapAlterColumnSource(alterCtx *AlterTableContext, oldName, newName string) {
+	if alterCtx == nil {
+		return
+	}
+	source, found := alterCtx.alterColMap[oldName]
+	if !found {
+		for name, candidate := range alterCtx.alterColMap {
+			if strings.EqualFold(name, oldName) {
+				source, found = candidate, true
+				break
+			}
+		}
+	}
+	for name := range alterCtx.alterColMap {
+		if strings.EqualFold(name, oldName) || strings.EqualFold(name, newName) {
+			delete(alterCtx.alterColMap, name)
+		}
+	}
+	if found {
+		alterCtx.alterColMap[newName] = source
+	}
 }
 
 func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, schemaName string) *AlterTableContext {
