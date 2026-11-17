@@ -365,6 +365,11 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 			return nil // Retry failures at the configured cadence, not the fast bootstrap cadence.
 		}
 	case pb.HAKeeperBootstrapCommandsReceived:
+		if term != 0 && term != l.bootstrapCheckTerm {
+			l.startBootstrapCheckBudget()
+			l.bootstrapCheckTerm = term
+			l.bootstrapMgr = nil
+		}
 		if err := l.checkBootstrap(state); err != nil {
 			return nil
 		}
@@ -509,6 +514,7 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) error {
 		// of polls. Each check performs synchronous raft and checker work, so a
 		// poll-count budget would stretch when that work is slow.
 		l.startBootstrapCheckBudget()
+		l.bootstrapCheckTerm = term
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
 		if l.bootstrapCommandsAdded != nil {
