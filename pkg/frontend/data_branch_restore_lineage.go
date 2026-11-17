@@ -485,7 +485,7 @@ func reconcileRestoredBranchLineage(
 			receipt.dstTableID)
 	}
 
-	var metadataInserts []databranchutils.DataBranchMetadata
+	metadataInserts := make([]databranchutils.DataBranchMetadata, 0, len(ancestors))
 	for _, ancestor := range ancestors {
 		rows := current[ancestor.tableID]
 		if len(rows) > 1 {
@@ -519,7 +519,7 @@ func reconcileRestoredBranchLineage(
 		})
 	}
 
-	var protectionInserts []restoredBranchProtectionInsert
+	protectionInserts := make([]restoredBranchProtectionInsert, 0, len(ancestors)+1)
 	if directProtection != nil {
 		currentProtection, err := loadRestoredBranchProtectionRow(
 			ctx, bh, currentRestoredBranchProtectionSQL(receipt.dstTableID), receipt.dstTableID,
