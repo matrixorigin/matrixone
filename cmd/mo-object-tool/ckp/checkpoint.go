@@ -659,6 +659,16 @@ Examples:
 						return err
 					}
 				}
+				var scriptTables []checkpointtool.TableCatalogEntry
+				var scriptData map[uint64]*checkpointtool.TableDumpData
+				var skippedSystemTables int
+				if loadScript {
+					scriptTables, skippedSystemTables = filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
+					scriptData = dumpDataByTableID(dumpPlans)
+					if err := preflightRestoreTables(ctx, reader, scriptTables, scriptData, snapshotTS, !noLoad); err != nil {
+						return err
+					}
+				}
 				if !noLoad {
 					if jobs < 1 {
 						jobs = 1
@@ -672,8 +682,7 @@ Examples:
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(dumpPlans), outputDir)
 				}
 				if loadScript {
-					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
-					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, scriptData, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
 					}
@@ -698,12 +707,17 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
 				}
+				scriptTables := []checkpointtool.TableCatalogEntry{tableEntry}
+				scriptData := map[uint64]*checkpointtool.TableDumpData{tableEntry.TableID: dumpData}
+				if err := preflightRestoreTables(ctx, reader, scriptTables, scriptData, snapshotTS, !noLoad); err != nil {
+					return err
+				}
 				if !noLoad {
 					if err := dumpOneTable(ctx, reader, dumpOut, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
 						return err
 					}
 				}
-				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, map[uint64]*checkpointtool.TableDumpData{tableEntry.TableID: dumpData}, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, scriptData, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 				if err != nil {
 					return err
 				}
@@ -852,6 +866,62 @@ func resolveTableByID(
 	return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %d not found in checkpoint catalog", tableID)
 }
 
+// preflightRestoreTables performs the same new replay checks as script
+// construction before any CSV is opened. This preserves an earlier export if a
+// later table is rejected by an ENUM or view-context check.
+func preflightRestoreTables(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	tables []checkpointtool.TableCatalogEntry,
+	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
+	snapshotTS types.TS,
+	includeLoad bool,
+) error {
+	order := buildRestoreTableOrder(tables, dumpDataByTable)
+	for _, table := range order.tables {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if table.DatabaseName == "" {
+			return fmt.Errorf("table %d has empty database name in checkpoint catalog", table.TableID)
+		}
+		_, _, err := prepareCheckpointRestoreTable(ctx, reader, table, dumpDataByTable[table.TableID], snapshotTS, includeLoad, order.cyclicFKTables[table.TableID])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prepareCheckpointRestoreTable is shared by preflight and final construction so
+// both use the same prepared schema, view context and numeric LOAD admission.
+func prepareCheckpointRestoreTable(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	table checkpointtool.TableCatalogEntry,
+	dumpData *checkpointtool.TableDumpData,
+	snapshotTS types.TS,
+	includeLoad, omitForeignKeys bool,
+) (*checkpointViewRestore, string, error) {
+	if shouldWriteLoadData(includeLoad, table) {
+		if dumpData == nil {
+			return nil, "", fmt.Errorf("restore script table %d (%s.%s): missing prepared dump data", table.TableID, table.DatabaseName, table.TableName)
+		}
+		if err := checkpointtool.ValidateEnumLoadReplay(dumpData.Schema); err != nil {
+			return nil, "", fmt.Errorf("restore script table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
+		}
+	}
+	if isViewRelation(table) {
+		view, err := prepareCheckpointViewRestore(ctx, table, dumpData)
+		if err != nil {
+			return nil, "", err
+		}
+		return view, view.ddl, nil
+	}
+	ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{omitForeignKeys: omitForeignKeys})
+	return nil, ddl, err
+}
+
 func writeRestoreScript(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
@@ -920,25 +990,7 @@ func writeRestoreScript(
 
 		omitForeignKeys := restoreOrder.cyclicFKTables[table.TableID]
 		dumpData := dumpDataByTable[table.TableID]
-		if shouldWriteLoadData(includeLoad, table) && dumpData == nil {
-			return "", fmt.Errorf("restore script table %d (%s.%s): missing prepared dump data", table.TableID, table.DatabaseName, table.TableName)
-		}
-		if shouldWriteLoadData(includeLoad, table) {
-			if err := checkpointtool.ValidateEnumLoadReplay(dumpData.Schema); err != nil {
-				return "", fmt.Errorf("restore script table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
-			}
-		}
-		var view *checkpointViewRestore
-		var ddl string
-		var err error
-		if isViewRelation(table) {
-			view, err = prepareCheckpointViewRestore(ctx, table, dumpData)
-			if err == nil {
-				ddl = view.ddl
-			}
-		} else {
-			ddl, err = restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{omitForeignKeys: omitForeignKeys})
-		}
+		view, ddl, err := prepareCheckpointRestoreTable(ctx, reader, table, dumpData, snapshotTS, includeLoad, omitForeignKeys)
 		if err != nil {
 			return "", err
 		}
