@@ -557,16 +557,18 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 }
 
 // joinQueued waits until the read can join the prefetcher's download of the object of
-// vector, when it is one the read would join: any for a column read, one of the whole
-// object for a read that may download it, and reports whether there was one. A download
-// still waiting moves to the live queue. The reads of a download join none.
+// vector, when it is one the read would join: one of the whole object for a read that may
+// download it, and for a column read also one of ranges holding bytes it reads; it
+// reports whether there was one. A download still waiting moves to the live queue. The
+// reads of a download join none.
 func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 	columns := vector.Policy.Any(ColumnPrefetch)
 	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
 		return false
 	}
-	// A column read also joins the download of its whole object.
-	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return columns || len(req.Ranges) == 0 })
+	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool {
+		return len(req.Ranges) == 0 || columns && rangesHoldNeeded(req.Ranges, vector)
+	})
 	if !ok {
 		return false
 	}
@@ -576,6 +578,23 @@ func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 	case <-ctx.Done():
 	}
 	return true
+}
+
+// rangesHoldNeeded reports whether a range of ranges holds bytes of an entry of vector not
+// done.
+func rangesHoldNeeded(ranges []PrefetchRange, vector *IOVector) bool {
+	for i := range vector.Entries {
+		e := &vector.Entries[i]
+		if e.done {
+			continue
+		}
+		for _, r := range ranges {
+			if (e.Size < 0 || r.Offset < e.Offset+e.Size) && e.Offset < r.Offset+r.Size {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // firstNeeded returns the least offset of the entries of vector not done.
@@ -994,6 +1013,9 @@ read_disk_cache:
 	// A read the caches do not hold waits to join a queued download of its object, then
 	// reads what that download put in the disk cache.
 	if s.prefetcher != nil && s.joinQueued(ctx, vector) && s.diskCache != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}

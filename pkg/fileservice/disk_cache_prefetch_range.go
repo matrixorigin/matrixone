@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 )
 
@@ -561,12 +562,18 @@ func (d *DiskCache) runFlight(
 	fl.release()
 }
 
+// errPrefetchClosed is the error of a prefetch the disk cache closed on before it read all
+// its ranges.
+var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache closed during a prefetch")
+
 // readRanges reads the ranges of the object at filePath through open as flights, which
 // reads of their bytes join, caches each, and returns once they end or ctx is done, with
 // the error of a flight that did not cache its range. A range a flight already reads is
 // waited for, not read again. Ranges that would pass the bytes of the flights under way
-// wait until they fit, or no flight is under way. It reports false, reading
-// nothing, when the cache is closed.
+// wait until they fit, or no flight is under way; a range cached meanwhile is not read.
+// The download counts as started once every range is under way. It reports false,
+// reading nothing, when the cache is closed before a range is under way, and
+// errPrefetchClosed when it closes after.
 func (d *DiskCache) readRanges(
 	ctx context.Context,
 	filePath string,
@@ -575,21 +582,20 @@ func (d *DiskCache) readRanges(
 	open rangeOpener,
 ) (bool, error) {
 	diskPath := d.pathForFile(filePath)
+	key := d.rangeObjectKey(filePath)
 	f := &d.prefetchObjects
 	budget := d.flightBytes()
-	var (
-		objects []prefetchObject
-		started bool
-	)
-	for len(ranges) > 0 {
+	var objects []prefetchObject
+	for waited := false; len(ranges) > 0; waited = true {
 		f.mu.Lock()
 		closing, ok := f.openLocked()
 		if !ok {
 			f.mu.Unlock()
-			if started {
-				break
+			if len(objects) == 0 {
+				return false, nil
 			}
-			return false, nil
+			_ = waitFlights(ctx, objects)
+			return true, errPrefetchClosed
 		}
 		now := time.Now()
 		var (
@@ -597,6 +603,11 @@ func (d *DiskCache) readRanges(
 			rest    []PrefetchRange
 		)
 		for _, r := range ranges {
+			if waited && key != "" {
+				if _, cached := d.ranges.covering(key, r.Offset, r.Size); cached {
+					continue
+				}
+			}
 			if fl := f.fastestLocked(diskPath, r.Offset, r.Offset+r.Size, now, d.downloadMaxExtraWait, true); fl != nil {
 				objects = append(objects, fl)
 				continue
@@ -622,10 +633,6 @@ func (d *DiskCache) readRanges(
 		for _, fl := range flights {
 			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing)
 		}
-		if len(objects) > 0 && !started {
-			started = true
-			downloadStarted(ctx)
-		}
 		ranges = rest
 		if len(rest) == 0 {
 			break
@@ -637,6 +644,7 @@ func (d *DiskCache) readRanges(
 		}
 		budget = d.flightBytes()
 	}
+	downloadStarted(ctx)
 	if err := waitFlights(ctx, objects); err != nil {
 		return true, err
 	}
