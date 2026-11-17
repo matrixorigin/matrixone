@@ -1388,6 +1388,9 @@ type ReaderMembershipScratch struct {
 	Sources, Views    []*vector.Vector
 	Predicates        []int
 	Keys, Overlap     []int
+	// Separate non-owning operands stay stable while nested key/publication
+	// reads reuse the ordinary request scratch inside the predicate I/O scope.
+	PredicateRead ReaderSelectionScratch
 }
 
 func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {

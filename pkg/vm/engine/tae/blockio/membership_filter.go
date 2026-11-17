@@ -158,6 +158,31 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 			s.Keys = append(s.Keys, column)
 		}
 	}
+	defer func() {
+		clear(s.Sources)
+		clear(s.Views)
+		s.Predicates = s.Predicates[:0]
+		s.Keys = s.Keys[:0]
+		s.Overlap = s.Overlap[:0]
+	}()
+	var readRows []int64
+	if !identity {
+		readRows = physical
+	}
+	if identity && len(predicates) > 0 && len(s.Overlap) == 0 && scopedOwnedColumns(request, len(columns)) {
+		return withScopedMembershipPredicates(ctx, info, columns, typs, early, predicates, physical, logical, policy, output, mp, fs, request, s)
+	}
+	if err := loadMembershipColumns(ctx, info, columns, typs, predicates, readRows, policy, output, mp, fs, request); err != nil {
+		return err
+	}
+	return finishPredicateMembership(ctx, info, columns, typs, early, predicates, physical, logical, identity, policy, output, mp, fs, request, s, nil)
+}
+
+func finishPredicateMembership(ctx context.Context, info *objectio.BlockInfo,
+	columns []uint16, typs []types.Type, early, predicates []int, physical, logical []int64, identity bool,
+	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
+	request *engine.ReaderFilterRequest, s *engine.ReaderMembershipScratch, scoped *scopedMembershipPredicates) error {
+	live := len(physical)
 	bound := false
 	restore := func() {
 		if bound {
@@ -168,22 +193,7 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 			bound = false
 		}
 	}
-	defer func() {
-		restore()
-		clear(s.Sources)
-		clear(s.Views)
-		s.Predicates = s.Predicates[:0]
-		s.Keys = s.Keys[:0]
-		s.Overlap = s.Overlap[:0]
-	}()
-	live := len(physical)
-	var readRows []int64
-	if !identity {
-		readRows = physical
-	}
-	if err := loadMembershipColumns(ctx, info, columns, typs, predicates, readRows, policy, output, mp, fs, request); err != nil {
-		return err
-	}
+	defer restore()
 	output.SetRowCount(live)
 	residual, err := request.Select(output, predicates)
 	if err != nil {
@@ -197,6 +207,9 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 		return err
 	}
 	if count == 0 {
+		if scoped != nil {
+			scoped.restore(output)
+		}
 		output.CleanOnlyData()
 		return nil
 	}
@@ -211,7 +224,7 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 		physical[row] = physical[original]
 	}
 	physical, logical = physical[:count], logical[:count]
-	readRows = nil
+	var readRows []int64
 	if !identity || !residual.All {
 		readRows = physical
 	}
@@ -263,6 +276,9 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 	}
 	restore()
 	if selected == 0 {
+		if scoped != nil {
+			scoped.restore(output)
+		}
 		output.CleanOnlyData()
 		return nil
 	}
@@ -273,7 +289,11 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 		}
 		logical, physical = logical[:selected], physical[:selected]
 	}
-	if (!residual.All || !member.All) && len(s.Predicates) > 0 {
+	if scoped != nil {
+		if err := scoped.gather(output, logical, residual.All && member.All, request, mp); err != nil {
+			return err
+		}
+	} else if (!residual.All || !member.All) && len(s.Predicates) > 0 {
 		output.SetRowCount(live)
 		if err := publishReaderSelection(output, s.Predicates, logical, request, mp); err != nil {
 			return err
@@ -330,4 +350,75 @@ func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, column
 		}
 	}
 	return nil
+}
+
+// scopedMembershipPredicates borrows no ownership. Its cached inputs remain
+// protected by WithColumnsDataInto until final selected gathering completes.
+type scopedMembershipPredicates struct {
+	columns      []int
+	destinations []*vector.Vector
+	marked       []bool
+}
+
+func (p *scopedMembershipPredicates) restore(output *batch.Batch) {
+	for i, column := range p.columns {
+		output.Vecs[column] = p.destinations[i]
+	}
+}
+func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, all bool, request *engine.ReaderFilterRequest, mp *mpool.MPool) error {
+	for i, column := range p.columns {
+		source, destination := output.Vecs[column], p.destinations[i]
+		if request.ColumnUse(column, len(output.Vecs)) == engine.ReaderColumnUnused {
+			destination.CleanOnlyData()
+			output.Vecs[column] = destination
+			continue
+		}
+		if p.marked[i] {
+			var err error
+			if all {
+				err = destination.UnionBatch(source, 0, len(rows), nil, mp)
+			} else {
+				err = destination.Union(source, rows, mp)
+			}
+			if err != nil {
+				return err
+			}
+			source.CopyExpressionMetadataTo(destination)
+		} else if !all {
+			if err := destination.Shrink(rows, false, mp); err != nil {
+				return err
+			}
+		}
+		output.Vecs[column] = destination
+	}
+	if request.ObserveSelection != nil {
+		request.ObserveSelection(len(rows), 0, 0)
+	}
+	return nil
+}
+func withScopedMembershipPredicates(ctx context.Context, info *objectio.BlockInfo, columns []uint16, typs []types.Type,
+	early, predicates []int, physical, logical []int64, policy fileservice.Policy, output *batch.Batch,
+	mp *mpool.MPool, fs fileservice.FileService, request *engine.ReaderFilterRequest, s *engine.ReaderMembershipScratch) error {
+	read := &s.PredicateRead
+	read.Clear()
+	defer read.Clear()
+	for _, column := range predicates {
+		read.Seqnums = append(read.Seqnums, columns[column])
+		read.Types = append(read.Types, typs[column])
+		read.Sources = append(read.Sources, output.Vecs[column])
+	}
+	_, err := ioutil.WithColumnsDataInto(ctx, read.Seqnums, read.Types, fs, info.MetaLocation(), read.Sources, request.ColumnScope(), mp, policy, func(inputs []*vector.Vector, marked []bool) error {
+		borrowed := scopedMembershipPredicates{columns: predicates, destinations: read.Sources, marked: marked}
+		for i, column := range predicates {
+			output.Vecs[column] = inputs[i]
+		}
+		defer borrowed.restore(output)
+		for _, input := range inputs {
+			if input.Length() != len(physical) {
+				return moerr.NewInvalidInputNoCtx("scoped membership predicate row mismatch")
+			}
+		}
+		return finishPredicateMembership(ctx, info, columns, typs, early, predicates, physical, logical, true, policy, output, mp, fs, request, s, &borrowed)
+	})
+	return err
 }

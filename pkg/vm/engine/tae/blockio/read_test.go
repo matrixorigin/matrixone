@@ -771,11 +771,16 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		memberInput, want                                   []int32
 		storage                                             []int64
 		predicatePayload, textPredicate                     bool
+		scoped, unusedPredicate                             bool
 		memberError, residualError, refusal, exact, keyOnly bool
 	}{
 		{name: "predicates then membership then late payload", residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
 		{name: "predicate payload stays in original domain", predicatePayload: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
 		{name: "membership-only key loads after predicates", textPredicate: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "scoped cached predicates survive membership", textPredicate: true, scoped: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "scoped unused predicate stays empty", textPredicate: true, scoped: true, unusedPredicate: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "scoped predicate error restores owned headers", textPredicate: true, scoped: true, residualError: true},
+		{name: "scoped membership error restores owned headers", textPredicate: true, scoped: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, memberInput: []int32{1, 4, 6}, memberError: true},
 		{name: "empty predicate skips membership and payload", residual: engine.ReaderFilterResult{}},
 		{name: "empty membership skips payload", residual: engine.ReaderFilterResult{All: true}, member: engine.ReaderFilterResult{}, memberInput: []int32{0, 1, 2, 4, 5, 6, 7}},
 		{name: "identity membership preserves physical mapping", residual: engine.ReaderFilterResult{Sels: []int64{3, 5}}, member: engine.ReaderFilterResult{All: true}, memberInput: []int32{4, 6}, want: []int32{4, 6}},
@@ -821,8 +826,11 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				early = []int{0, 1}
 			}
 			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, PredicateColumns: predicates}}
-			if tc.refusal {
+			if tc.refusal || tc.scoped {
 				request.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
+			}
+			if tc.unusedPredicate {
+				request.ColumnUses[1] = engine.ReaderColumnUnused
 			}
 			if tc.exact {
 				request.Exact = objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: colTypes[0], Op: objectio.ExactScanGE, Value: 4}}))
@@ -845,6 +853,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					output.Vecs[column] = vector.NewOffHeapVecWithType(colTypes[column])
 				}
 			})
+			originalHeaders := append([]*vector.Vector(nil), output.Vecs...)
+
 			memberCalls, residualCalls, applyCalls := 0, 0, 0
 			failure := moerr.NewInvalidInputNoCtx("ordered membership fixture error")
 			request.Apply = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
@@ -860,7 +870,15 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				bat.SetRowCount(2)
 				return engine.ReaderFilterResult{Sels: []int64{1, 2}}, nil
 			}
+			caseDS := ds
 			visible := []int32{0, 1, 2, 4, 5, 6, 7}
+			if tc.scoped {
+				caseDS = &blockReadTestDataSource{}
+				visible = []int32{0, 1, 2, 3, 4, 5, 6, 7}
+				if !tc.residualError {
+					tc.residual.Sels = []int64{1, 4, 6}
+				}
+			}
 			if tc.storage != nil {
 				visible = []int32{0, 2, 5, 7}
 			}
@@ -870,6 +888,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				require.Zero(t, memberCalls, "ordinary predicates must run before membership")
 				require.Equal(t, predicates, loaded)
 				require.Equal(t, len(visible), bat.RowCount())
+				if tc.scoped {
+					require.NotSame(t, originalHeaders[1], bat.Vecs[1], "cached predicate input must be lent synchronously")
+				}
 				if tc.textPredicate {
 					require.Zero(t, bat.Vecs[0].Length(), "membership-only keys must remain unloaded")
 				} else {
@@ -877,7 +898,11 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				}
 				if tc.predicatePayload || tc.textPredicate {
 					require.Equal(t, len(visible), bat.Vecs[1].Length())
-					require.Equal(t, "payload-4", string(bat.Vecs[1].GetBytesAt(3)))
+					index := 3
+					if tc.scoped {
+						index = 4
+					}
+					require.Equal(t, "payload-4", string(bat.Vecs[1].GetBytesAt(index)))
 				} else {
 					require.Zero(t, bat.Vecs[1].Length())
 				}
@@ -913,17 +938,25 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				require.True(t, handled)
 				err = readErr
 			} else {
-				_, err = BlockDataReadWithFilter(ctx, &info, ds, readColumns, readTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "predicate-membership-read", output, cacheVectors, queryMP, fs, early, request)
+				_, err = BlockDataReadWithFilter(ctx, &info, caseDS, readColumns, readTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "predicate-membership-read", output, cacheVectors, queryMP, fs, early, request)
 			}
 			if tc.memberError || tc.residualError {
 				require.ErrorIs(t, err, failure)
 				require.False(t, output.Vecs[0].IsDictionary())
+				if tc.scoped {
+					require.Same(t, originalHeaders[1], output.Vecs[1])
+					require.False(t, output.Vecs[1].HasBorrowedBacking())
+				}
 				if tc.residualError {
 					require.Zero(t, memberCalls)
 				}
 				return
 			}
 			require.NoError(t, err)
+			if tc.scoped {
+				require.Same(t, originalHeaders[1], output.Vecs[1])
+				require.False(t, output.Vecs[1].HasBorrowedBacking())
+			}
 			wantMember := 0
 			if tc.exact || tc.memberInput != nil {
 				wantMember = 1
@@ -942,9 +975,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, len(tc.want), output.RowCount())
 			for row, want := range tc.want {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], row))
-				if !tc.keyOnly {
+				if !tc.keyOnly && !tc.unusedPredicate {
 					require.Equal(t, "payload-"+string(rune('0'+want)), string(output.Vecs[1].GetBytesAt(row)))
 				}
+			}
+			if tc.unusedPredicate {
+				require.Zero(t, output.Vecs[1].Length())
 			}
 		})
 	}
