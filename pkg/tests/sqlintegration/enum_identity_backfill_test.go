@@ -68,6 +68,7 @@ func TestEnumIdentityPopulatedIndexBackfill(t *testing.T) {
 		exec(t, "use enum_identity_backfill")
 		t.Run("index_storage_parity", func(t *testing.T) { testEnumIndexStorageParity(t, ctx, db) })
 		t.Run("serial_storage_contract", func(t *testing.T) { testMySQLSpecialSerialContract(t, ctx, db) })
+		t.Run("authored_display_contract", func(t *testing.T) { testAuthoredMySQLSpecialDisplay(t, ctx, db) })
 		t.Run("unique", func(t *testing.T) {
 			exec(t, "create table u(id int primary key,e enum('a','A','') collate utf8mb4_bin)")
 			exec(t, "insert into u values(1,2),(2,1),(3,3),(4,NULL)")
@@ -160,6 +161,22 @@ func TestEnumIdentityPopulatedIndexBackfill(t *testing.T) {
 			exec(t, "drop index ai_idx on ai")
 			exec(t, "alter table ai modify e enum('a','A') collate utf8mb4_bin")
 		})
+		t.Run("legacy_ignored_ordinals", func(t *testing.T) {
+			exec(t, "create table ignored_legacy(e enum('a','A','') collate __mo_enum_legacy_main_v1 primary key,v vecf32(2))")
+			exec(t, "insert into ignored_legacy values(1,'[1,1]'),(2,'[100000,1]'),(3,'[200000,1]')")
+			exec(t, "insert ignore into ignored_legacy values('invalid','[300000,1]')")
+			exec(t, "create index il using ivfflat on ignored_legacy(v) lists=1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5")
+			ignored := hidden(t, "ignored_legacy", "il", "ignored")
+			q := "select cast(__mo_index_pk+0 as char) from " + ignored + " order by __mo_index_pk+0"
+			require.Equal(t, []string{"0", "2", "3"}, values(t, q), "error zero, duplicate display and empty member retain distinct ordinals")
+			exec(t, "update ignored_legacy set v='[2,2]' where e+0=2")
+			require.Equal(t, []string{"0", "3"}, values(t, q))
+			exec(t, "delete from ignored_legacy where e+0=0")
+			require.Equal(t, []string{"3"}, values(t, q), "deleting error zero cannot remove the empty member")
+			exec(t, "update ignored_legacy set v='[400000,1]' where e+0=2")
+			require.Equal(t, []string{"2", "3"}, values(t, q))
+		})
+
 		t.Run("legacy_pk_and_final_schema", func(t *testing.T) {
 			exec(t, "create table lp(e enum('a','A') collate __mo_enum_legacy_main_v1 primary key,v vecf32(2))")
 			exec(t, "insert into lp values(1,'[1,2]'),(2,'[3,4]')")

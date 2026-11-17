@@ -237,3 +237,25 @@ func testMySQLSpecialSerialContract(t *testing.T, ctx context.Context, db *sql.D
 		})
 	}
 }
+
+// These helpers are authored text conversions. Their nested ordinal domain
+// deliberately disagrees with the output labels, exposing structural unwrapping.
+func testAuthoredMySQLSpecialDisplay(t *testing.T, ctx context.Context, db *sql.DB) {
+	execSQLRequire(t, ctx, db, "create table authored_display(id int primary key,e enum('y','z') collate utf8mb4_bin)")
+	helper := "cast_index_to_value('x,y',cast_value_to_index('a,b','b'))"
+	execSQLRequire(t, ctx, db, "insert into authored_display values(1,"+helper+")")
+	execSQLRequire(t, ctx, db, "insert into authored_display select 2,v from (select "+helper+" v) d")
+	execSQLRequire(t, ctx, db, "insert into authored_display values(3,'z')")
+	execSQLRequire(t, ctx, db, "update authored_display set e="+helper+" where id=3")
+	require.Equal(t, []string{"1:y:1", "2:y:1", "3:y:1"}, queryEnumStorageRows(t, ctx, db, "select concat(id,':',e,':',e+0) from authored_display order by id"))
+	for _, expression := range []string{helper, "cast_index_to_set_value('x,y',2)"} {
+		for _, serializer := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+			require.Equal(t, []string{"46017900"}, queryEnumStorageRows(t, ctx, db, "select hex("+serializer+"("+expression+"))"), "serialize the authored y text")
+		}
+	}
+	execSQLRequire(t, ctx, db, "prepare authored_display_insert from 'insert into authored_display values(?,cast_index_to_value(''x,y'',cast_value_to_index(''a,b'',?)))'")
+	defer execSQLRequire(t, ctx, db, "deallocate prepare authored_display_insert")
+	execSQLRequire(t, ctx, db, "set @display_id=4,@display_value='b'")
+	execSQLRequire(t, ctx, db, "execute authored_display_insert using @display_id,@display_value")
+	require.Equal(t, []string{"y:1"}, queryEnumStorageRows(t, ctx, db, "select concat(e,':',e+0) from authored_display where id=4"))
+}

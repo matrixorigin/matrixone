@@ -349,6 +349,9 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		if !objectRefEqual(av.F.Func, bv.F.Func) {
 			return false
 		}
+		if isExplicitMySQLSpecialTypeDisplayFunction(av.F) != isExplicitMySQLSpecialTypeDisplayFunction(bv.F) {
+			return false
+		}
 		if len(av.F.Args) != len(bv.F.Args) {
 			return false
 		}

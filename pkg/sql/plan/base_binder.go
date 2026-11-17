@@ -148,6 +148,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.FuncExpr:
 		expr, err = b.bindFuncExpr(exprImpl, depth, isRoot)
+		if ref, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName); err == nil && ok && expr != nil {
+			name := strings.ToLower(ref.ColName())
+			if (name == moEnumCastIndexToValueFun || name == moSetCastIndexToValueFun) && isEnumOrSetDisplayValueExpr(expr) {
+				// An explicit display call is text chosen by the SQL author. Retain that
+				// boundary with existing conversion provenance, without inserting
+				// a runtime cast or changing the native result declaration.
+				expr.GetF().SyntaxExplicitCast = true
+			}
+		}
 
 	case *tree.RangeCond:
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
@@ -13072,7 +13081,7 @@ func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
 		return expr, false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
 		return expr, false
 	}
 	return DeepCopyExpr(fn.Args[1]), true
@@ -13359,7 +13368,7 @@ func isSetDisplayValueExpr(expr *Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+	return fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && fn.Func.ObjName == moSetCastIndexToValueFun
 }
 
 func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
@@ -13370,7 +13379,24 @@ func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+	return fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func isExplicitMySQLSpecialTypeDisplayFunction(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || !fn.SyntaxExplicitCast {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	return id == function.CAST_INDEX_TO_VALUE || id == function.CAST_INDEX_TO_SET_VALUE
+}
+
+// Rebinding a helper may update its arguments, but cannot turn an authored
+// text conversion into an implicit adapter. A different overload owns new semantics.
+func preserveExplicitMySQLSpecialTypeDisplayMetadata(original, rebound *plan.Function) {
+	if isExplicitMySQLSpecialTypeDisplayFunction(original) && rebound != nil && rebound.Func != nil &&
+		original.Func.Obj == rebound.Func.Obj {
+		rebound.SyntaxExplicitCast = true
+	}
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {

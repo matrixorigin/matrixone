@@ -574,7 +574,7 @@ func preparedExprNeedsNumericPrefixSpecialization(
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		explicitCast := isExplicitPreparedCast(expr)
+		explicitCast := isExplicitPreparedValueBoundary(expr)
 		if !explicitCast {
 			if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) &&
 				preparedExprHasRuntimeDecimalParam(expr, positions) {
@@ -879,7 +879,7 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 		}
 		hasConcretePeer = true
 		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() &&
-			(!preparedExprContainsParam(arg) || isExplicitPreparedCast(source) ||
+			(!preparedExprContainsParam(arg) || isExplicitPreparedValueBoundary(source) ||
 				preparedExprHasFixedDecimalSource(source))
 	}
 	return hasParam && hasDecimalPeer
@@ -2793,7 +2793,7 @@ func preparedExecutionExprType(
 		return types.Type{}, false, false, nil
 	}
 	preparedType := makeTypeByPlan2Expr(expr)
-	if isExplicitPreparedCast(expr) {
+	if isExplicitPreparedValueBoundary(expr) {
 		return preparedType, false, false, nil
 	}
 	if isImplicitPreparedParamCast(expr) {
@@ -2916,7 +2916,7 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 }
 
 func preparedRegexpMarkerOperand(expr *Expr) bool {
-	if expr == nil || isExplicitPreparedCast(expr) {
+	if expr == nil || isExplicitPreparedValueBoundary(expr) {
 		return false
 	}
 	if _, marker := preparedParamPosition(expr); marker {
@@ -3115,7 +3115,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// LIMIT inside a generated vector-index overfetch budget) is not a
 			// provisional comparison operand; keep that consumer's domain.
 			variadicSource := false
-			if hasParamPos && !isExplicitPreparedCast(arg) &&
+			if hasParamPos && !isExplicitPreparedValueBoundary(arg) &&
 				!(fixedDecimalCommonValue && rule.numericPrefixParamPositions[paramPos]) &&
 				(implicitParamCast || types.T(arg.Typ.Id).IsMySQLString() || types.T(arg.Typ.Id) == types.T_any) &&
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
@@ -3221,7 +3221,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				numericTemporalArg = i == 1
 			}
 			numericTemporalSource := false
-			if numericTemporalArg && hasParamPos && !isExplicitPreparedCast(arg) &&
+			if numericTemporalArg && hasParamPos && !isExplicitPreparedValueBoundary(arg) &&
 				paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
 					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
@@ -3262,7 +3262,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 				rule.specialized = true
-			} else if hasParamPos && !isExplicitPreparedCast(arg) && functionName == "tmrank" && i == 1 &&
+			} else if hasParamPos && !isExplicitPreparedValueBoundary(arg) && functionName == "tmrank" && i == 1 &&
 				len(originalArgs) == 3 {
 				// tmrank's retained width marker (issue #29947, decision D19):
 				// SQL EXECUTE transports most markers as TEXT, which would
@@ -3286,7 +3286,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, err
 					}
 				}
-			} else if hasParamPos && !isExplicitPreparedCast(arg) &&
+			} else if hasParamPos && !isExplicitPreparedValueBoundary(arg) &&
 				((functionName == "json_arrayagg" && i == 0) ||
 					(functionName == "json_objectagg" && i == 1)) {
 				// JSON aggregate values preserve the source SQL domain. The
@@ -3992,10 +3992,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
-			if numericPrefixDependent && !isExplicitPreparedCast(e) {
+			if numericPrefixDependent && !isExplicitPreparedValueBoundary(e) {
 				rule.markNumericPrefixDependent(e, rewritten)
 			}
-			if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
+			if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedValueBoundary(e) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
 			return rewritten, nil
@@ -4008,10 +4008,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.specialized = true
 			return restored, nil
 		}
-		if numericPrefixDependent && !isExplicitPreparedCast(e) {
+		if numericPrefixDependent && !isExplicitPreparedValueBoundary(e) {
 			rule.markNumericPrefixDependent(e)
 		}
-		if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
+		if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedValueBoundary(e) {
 			rule.markSQLExecuteNumericDependent(e)
 		}
 		return e, nil
@@ -4975,6 +4975,12 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 	return overload != 0 || fn.GetSyntaxExplicitCast()
 }
 
+// These expressions declare their output domain while their arguments remain
+// eligible for execute-time hydration. CAST-specific rebuilders stay separate.
+func isExplicitPreparedValueBoundary(expr *plan.Expr) bool {
+	return isExplicitPreparedCast(expr) || isExplicitMySQLSpecialTypeDisplayFunction(expr.GetF())
+}
+
 func windowHasNumericPrefixDependency(
 	window *plan.WindowSpec,
 	dependent func(*plan.Expr) bool,
@@ -5389,6 +5395,7 @@ func preserveReboundFunctionMetadata(original, rebound *plan.Function) {
 	}
 	rebound.AggConfig = bytes.Clone(original.AggConfig)
 	rebound.AggConfigType = original.AggConfigType
+	preserveExplicitMySQLSpecialTypeDisplayMetadata(original, rebound)
 	if original.Func != nil && rebound.Func != nil {
 		// DISTINCT is encoded in the high bit of the function object ID, not in
 		// the aggregate config. Binding from a name recreates only the base

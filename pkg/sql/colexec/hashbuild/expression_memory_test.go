@@ -23,6 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -258,6 +261,39 @@ func TestExpressionRecoveryStringCastBound(t *testing.T) {
 				want, err := expressionTypePeak(expr.Typ, 8192)
 				require.NoError(t, err)
 				require.Equal(t, want, fallback)
+			}
+		})
+	}
+}
+
+// A display conversion is text provenance, not an allocation-sized LONGTEXT
+// declaration. Exercise the real binder, reservation gate and executor together.
+func TestExplicitDisplayFitsBoundedRecovery(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{{"short", "hello"}, {"long", strings.Repeat("x", 70000)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSpillTestHarness(t, 32<<20)
+			t.Cleanup(func() {
+				h.op.ctr.freeSpillExprExecs()
+				require.NoError(t, h.op.releaseRecoveryCapacity(h.account, false))
+				h.close(t)
+			})
+			stmt, err := parsers.ParseOne(h.proc.Ctx, dialect.MYSQL, "select cast_index_to_set_value('"+tc.value+"',1)", 1)
+			require.NoError(t, err)
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			key, err := plan2.NewDefaultBinder(h.proc.Ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, true)
+			require.NoError(t, err)
+			stmt.Free()
+			conditions := []*plan.Expr{key}
+			require.NoError(t, h.op.installRecoveryCapacity(h.generation))
+			require.NoError(t, h.op.ctr.ensureRecoveryCapacity(h.proc, conditions, recoveryBatchProjection{maxRows: 8}, nil), "eight display values must fit the finite recovery budget")
+			execs, err := h.op.ctr.initSpillExprExecs(h.proc, conditions)
+			require.NoError(t, err)
+			input := batch.NewWithSize(0)
+			input.SetRowCount(8)
+			result, err := execs[0].Eval(h.proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			for i := 0; i < 8; i++ {
+				require.Equal(t, tc.value, result.GetStringAt(i))
 			}
 		})
 	}

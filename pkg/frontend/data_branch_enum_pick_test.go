@@ -100,6 +100,9 @@ func TestPickEnumRejectsAmbiguousDisplaySubquery(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+			display.GetF().SyntaxExplicitCast = true
+			require.NoError(t, validatePickEnumSubquery(query, tbl), "authored display calls deliberately request text")
+			display.GetF().SyntaxExplicitCast = false
 			// An explicit cast is an intentional text/ordinal boundary, rather
 			// than a bare display projection.
 			query.Nodes[0].ProjectList[0] = &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{

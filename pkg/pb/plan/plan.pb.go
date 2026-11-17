@@ -3287,9 +3287,9 @@ type Function struct {
 	Args          []*Expr             `protobuf:"bytes,2,rep,name=args,proto3" json:"args,omitempty"`
 	AggConfig     []byte              `protobuf:"bytes,3,opt,name=agg_config,json=aggConfig,proto3" json:"agg_config,omitempty"`
 	AggConfigType AggregateConfigType `protobuf:"varint,4,opt,name=agg_config_type,json=aggConfigType,proto3,enum=plan.AggregateConfigType" json:"agg_config_type,omitempty"`
-	// Planner provenance only. Explicit CAST syntax can share the legacy CAST
-	// overload while optimizers still distinguish it from an implicit cast.
-	// Older CNs safely ignore this unknown field and execute the legacy overload.
+	// Planner provenance for SQL-authored CAST or ENUM/SET display conversions,
+	// distinguishing them from implicit adapters without changing the overload.
+	// Older executors ignore this field and execute the native overload.
 	SyntaxExplicitCast   bool     `protobuf:"varint,5,opt,name=syntax_explicit_cast,json=syntaxExplicitCast,proto3" json:"syntax_explicit_cast,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

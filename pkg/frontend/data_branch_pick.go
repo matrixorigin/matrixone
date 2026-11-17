@@ -849,7 +849,7 @@ func validatePickEnumSubquery(query *pbplan.Query, tbl tableStuff) error {
 				continue
 			}
 			fn := expr.GetF()
-			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 && fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
+			if fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 && fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
 				return moerr.NewInvalidInputNoCtx("KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it")
 			}
 		}

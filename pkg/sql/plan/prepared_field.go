@@ -162,11 +162,11 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	if source := preparedFieldPrivateCastSource(expr, 3); source != nil {
 		return r.expr(source)
 	}
-	if isExplicitPreparedCast(expr) {
+	if isExplicitPreparedValueBoundary(expr) {
 		return result
 	}
 	if lit := expr.GetLit(); lit != nil {
-		if lit.Src != nil && isExplicitPreparedCast(lit.Src) {
+		if lit.Src != nil && isExplicitPreparedValueBoundary(lit.Src) {
 			return result
 		}
 		if lit.Isnull {

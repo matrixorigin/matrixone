@@ -165,7 +165,7 @@ func transparentOutputSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
 		return nil, false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
 		return nil, false
 	}
 

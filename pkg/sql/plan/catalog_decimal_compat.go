@@ -243,6 +243,7 @@ func normalizeCatalogDecimalExpr(ctx context.Context, expr *plan.Expr) (*plan.Ex
 	owned.Typ, owned.Expr = rebound.Typ, rebound.Expr
 	if newFn := owned.GetF(); newFn != nil {
 		newFn.AggConfig, newFn.AggConfigType = fn.AggConfig, fn.AggConfigType
+		preserveExplicitMySQLSpecialTypeDisplayMetadata(fn, newFn)
 	}
 	return &owned, true, nil
 }
