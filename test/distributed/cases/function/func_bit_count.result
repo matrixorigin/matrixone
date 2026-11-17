@@ -224,6 +224,170 @@ EXECUTE bit_count_marker USING @bit_count_value;
 bit_count(?)
 null
 DEALLOCATE PREPARE bit_count_marker;
+PREPARE bit_count_signed_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SET @bit_count_value = 64;
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SET @bit_count_value = '1e2';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+3
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+2
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '1.9x';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '1.9x'
+SET @bit_count_value = 'abc';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+SET @bit_count_value = '9223372036854775808';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+63
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '9223372036854775808'
+SET @bit_count_value = NULL;
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+null
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+DEALLOCATE PREPARE bit_count_signed_marker;
+PREPARE bit_count_unsigned_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SET @bit_count_value = CAST(64 AS UNSIGNED);
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SET @bit_count_value = '-1';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+64
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '18446744073709551615';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+63
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '18446744073709551615'
+SET @bit_count_value = '18446744073709551616';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+63
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '18446744073709551616'
+DEALLOCATE PREPARE bit_count_unsigned_marker;
+PREPARE bit_count_double_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SET @bit_count_value = CAST(64 AS DOUBLE);
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '1e20';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+64
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '1e309';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+64
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '1e309'
+SET @bit_count_value = '-1e309';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '-1e309'
+SET @bit_count_value = '1e-4000';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+DEALLOCATE PREPARE bit_count_double_marker;
+PREPARE bit_count_decimal_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SET @bit_count_value = CAST(64 AS DECIMAL(10,1));
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+1
+SET @bit_count_value = '1e2';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+3
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+2
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET @bit_count_value = '2024-01-01';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'
+SET @bit_count_value = _binary '2024-01-01';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+7
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'
+SET @bit_count_value = 'abc';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+➤ BIT_COUNT(?)[-5,64,0]  𝄀
+0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+DEALLOCATE PREPARE bit_count_decimal_marker;
 DROP TABLE IF EXISTS t_bit_count_special;
 CREATE TABLE t_bit_count_special(id INT PRIMARY KEY, e ENUM('zero','one','two','three','8'), s SET('a','b','c','d'));
 INSERT INTO t_bit_count_special VALUES (1,'one','a,c'),(2,'two','b,d'),(3,'three',''),(4,NULL,NULL),(5,'8','a,b,d'),(6,'zero','d'),(7,'zero','a');
