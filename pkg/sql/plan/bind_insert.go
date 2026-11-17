@@ -3981,7 +3981,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
 			}
 
-			builder.markDedupTargetScan(scanNodeID)
 			dedupJoinNode := &plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{scanNodeID, lastNodeID},
@@ -4386,7 +4385,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				dedupColName = idxDef.IndexName
 			}
 
-			builder.markDedupTargetScan(idxTableNodeID)
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{idxTableNodeID, lastNodeID},

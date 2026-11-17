@@ -32,9 +32,9 @@ import (
 var (
 	connectTimeout      = time.Second * 5
 	readWriteTimeout    = time.Second * 20
-	maxIdleConns        = 128
-	maxIdleConnsPerHost = 128
-	maxConnsPerHost     = 128
+	maxIdleConns        = 100
+	maxIdleConnsPerHost = 100
+	maxConnsPerHost     = 100
 	idleConnTimeout     = 10 * time.Second
 )
 

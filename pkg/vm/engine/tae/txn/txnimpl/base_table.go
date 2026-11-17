@@ -244,7 +244,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 					nil,
 					tbl.txnTable.store.rt.Fs,
 					loc,
-					fileservice.ExactColumnsRead,
+					fileservice.Policy(0),
 					false,
 					nil,
 				)

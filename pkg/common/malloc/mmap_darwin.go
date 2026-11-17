@@ -25,6 +25,8 @@ const (
 	madv_FREE_REUSE    = 0x8
 )
 
+func adviseLargeMpoolMapping(_ []byte) {}
+
 func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
 	if err := unix.Madvise(
 		unsafe.Slice((*byte)(ptr), f.size),
