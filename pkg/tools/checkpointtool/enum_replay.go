@@ -66,12 +66,16 @@ func RestoreTableCollation(ctx context.Context, schema *TableSchema, readOnlyExt
 	if extra.EnumUnsupportedDefault != "" {
 		return reject("the table has an unsupported ENUM default collation")
 	}
-	if readOnlyExternal {
-		for _, col := range schema.Columns {
-			if col.NativeType == nil {
-				return reject("an external column has no validated native type")
-			}
+	for _, col := range schema.Columns {
+		if col.NativeType == nil {
+			return reject("a column has no validated native type")
 		}
+		if !col.expressionReplayProved || (col.HasDefault && col.NotNull) ||
+			col.Default != "" || col.OnUpdate != "" || col.Generated != "" {
+			return reject("stored expression replay is not proved")
+		}
+	}
+	if readOnlyExternal {
 		return "", nil
 	}
 	var name string
@@ -107,10 +111,6 @@ func RestoreTableCollation(ctx context.Context, schema *TableSchema, readOnlyExt
 		if err := typ.ValidateCollation(); err != nil {
 			return "", err
 		}
-		if (col.HasDefault && (!col.implicitNullableDefault || col.NotNull)) ||
-			col.Default != "" || col.OnUpdate != "" || col.Generated != "" {
-			return reject("stored expression replay is not proved")
-		}
 		if col.EnumValues != "" {
 			return reject("special-domain replay is not proved")
 		}
@@ -145,34 +145,44 @@ func uniqueCatalogColumnIndex(view *LogicalTableView, name string) int {
 	return found
 }
 
-// Prove all presence flags used by the newly admitted implicit-NULL case;
-// display decoders alone can turn malformed expression bytes into empty text.
-func provedImplicitNullableDefaultFlags(view *LogicalTableView, row []string) bool {
-	for _, flag := range []struct {
-		name string
-		want bool
-	}{
-		{catalog.SystemColAttr_NullAbility, false},
-		{catalog.SystemColAttr_HasExpr, true},
-		{catalog.SystemColAttr_HasUpdate, false},
-		{catalog.SystemColAttr_HasGenerated, false},
+// Display decoders alone can turn malformed expression bytes into empty text.
+// Prove absence of stored expressions, or the one admitted typed implicit NULL,
+// from unique catalog fields before treating that text as safe SQL metadata.
+func provedColumnExpressionReplay(view *LogicalTableView, row []string, implicitNullable bool) bool {
+	var flags [4]bool
+	for i, name := range [...]string{
+		catalog.SystemColAttr_NullAbility,
+		catalog.SystemColAttr_HasExpr,
+		catalog.SystemColAttr_HasUpdate,
+		catalog.SystemColAttr_HasGenerated,
 	} {
-		index := uniqueCatalogColumnIndex(view, flag.name)
+		index := uniqueCatalogColumnIndex(view, name)
 		if index < 0 || index >= len(row) {
 			return false
 		}
 		switch row[index] {
 		case "0", "false":
-			if flag.want {
-				return false
-			}
 		case "1", "true":
-			if !flag.want {
-				return false
-			}
+			flags[i] = true
 		default:
 			return false
 		}
 	}
-	return true
+	if flags[2] || flags[3] {
+		return false
+	}
+	for _, name := range [...]string{catalog.SystemColAttr_Update, catalog.SystemColAttr_Generated} {
+		index := uniqueCatalogColumnIndex(view, name)
+		if index < 0 || index >= len(row) || row[index] != "" {
+			return false
+		}
+	}
+	index := uniqueCatalogColumnIndex(view, catalog.SystemColAttr_DefaultExpr)
+	if index < 0 || index >= len(row) {
+		return false
+	}
+	if flags[1] {
+		return !flags[0] && implicitNullable
+	}
+	return row[index] == ""
 }

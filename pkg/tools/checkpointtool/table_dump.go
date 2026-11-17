@@ -119,19 +119,19 @@ type TableColumn struct {
 	Unsigned         bool
 	// Zerofill is the SECOND numeric attribute bit of a DECIMAL column
 	// (catalog mask 3). It renders only with Unsigned and only on DECIMAL.
-	Zerofill                bool
-	NotNull                 bool
-	Default                 string
-	HasDefault              bool
-	implicitNullableDefault bool // proved once from typed catalog metadata
-	OnUpdate                string
-	Generated               string
-	GeneratedStored         bool
-	Comment                 string
-	ConstraintType          string
-	AutoIncrement           bool
-	ClusterBy               bool
-	EnumValues              string
+	Zerofill               bool
+	NotNull                bool
+	Default                string
+	HasDefault             bool
+	expressionReplayProved bool // proved once from typed catalog flags and expression bytes
+	OnUpdate               string
+	Generated              string
+	GeneratedStored        bool
+	Comment                string
+	ConstraintType         string
+	AutoIncrement          bool
+	ClusterBy              bool
+	EnumValues             string
 }
 
 type TableUniqueKey struct {
@@ -1651,7 +1651,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				ClusterBy:        col.ClusterBy,
 				EnumValues:       strings.Clone(col.EnumValues),
 			}
-			clone.Columns[i].implicitNullableDefault = col.implicitNullableDefault
+			clone.Columns[i].expressionReplayProved = col.expressionReplayProved
 			if col.NativeType != nil {
 				typ := *col.NativeType
 				clone.Columns[i].NativeType = &typ
@@ -4013,9 +4013,9 @@ func buildColumnsFromMoColumnsRowsAt(
 		if defaultCol >= 0 && defaultCol < len(row) {
 			var implicitNullable bool
 			col.Default, implicitNullable = decodeMoColumnDefault(row[defaultCol])
-			col.implicitNullableDefault = implicitNullable && col.NativeType != nil &&
+			col.expressionReplayProved = col.NativeType != nil &&
 				defaultCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_DefaultExpr) &&
-				provedImplicitNullableDefaultFlags(view, row)
+				provedColumnExpressionReplay(view, row, implicitNullable)
 		}
 		if constraintCol >= 0 && constraintCol < len(row) {
 			col.ConstraintType = row[constraintCol]

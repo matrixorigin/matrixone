@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -183,7 +184,7 @@ func TestRestoreCreateTableDDLUsesExternalCreateSQL(t *testing.T) {
 		Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 			TableName: "stale_name",
 			CreateSQL: string(paramJSON),
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+			Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 		},
 	}
 
@@ -203,10 +204,10 @@ func TestRestoreCreateTableDDLAcceptsUnicodeColumnComment(t *testing.T) {
 		Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 			TableName:    table.TableName,
 			DatabaseName: table.DatabaseName,
-			Columns: []checkpointtool.TableColumn{
+			Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{
 				{Name: "md5_id", SQLType: "VARCHAR(255)", NativeType: &types.Type{Oid: types.T_varchar, Width: 255, Charset: types.CharsetUTF8}, NotNull: true},
 				{Name: "question_vector", SQLType: "VECF64(1024)", NativeType: &types.Type{Oid: types.T_array_float64, Width: 1024}, Comment: "摘要的向量集"},
-			},
+			}),
 			PrimaryKey: []string{"md5_id"},
 		},
 	}
@@ -232,7 +233,7 @@ func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
 	dumpData := &checkpointtool.TableDumpData{
 		Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 			TableName: "ext_csv_local",
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+			Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 		},
 	}
 
@@ -286,7 +287,7 @@ func TestRestoreCreateTableDDLUsesViewCreateSQL(t *testing.T) {
 		Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 			TableName: "stale_name",
 			CreateSQL: "CREATE VIEW `old_db`.`old_view` AS SELECT id, name FROM `ckp_tables`.`t_normal`",
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+			Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 		},
 	}
 
@@ -305,7 +306,7 @@ func TestRestoreCreateTableDDLViewRequiresCreateViewSQL(t *testing.T) {
 		Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 			TableName: "v_normal",
 			CreateSQL: "CREATE TABLE `v_normal` (`id` INT)",
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+			Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 		},
 	}
 
@@ -642,10 +643,10 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	scriptDir := filepath.Join(t.TempDir(), "scripts")
 	parent := checkpointtool.TableCatalogEntry{DatabaseName: "parent_db", TableName: "parent", TableID: 1}
 	child := checkpointtool.TableCatalogEntry{DatabaseName: "child_db", TableName: "child", TableID: 2}
-	columns := []checkpointtool.TableColumn{
+	columns := restoreCatalogColumns(t, []checkpointtool.TableColumn{
 		{Name: "id", SQLType: "BIGINT", NativeType: &types.Type{Oid: types.T_int64}, Position: 1},
 		{Name: "other_id", SQLType: "BIGINT", NativeType: &types.Type{Oid: types.T_int64}, Position: 2},
-	}
+	})
 	dumpDataByTable := map[uint64]*checkpointtool.TableDumpData{
 		parent.TableID: {
 			TableID: parent.TableID,
@@ -809,9 +810,9 @@ func TestWriteRestoreScriptForExternalTablePackagesSource(t *testing.T) {
 			Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 				TableName: "old_ext",
 				CreateSQL: string(paramJSON),
-				Columns: []checkpointtool.TableColumn{
+				Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{
 					{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1},
-				},
+				}),
 			},
 		},
 	}
@@ -877,7 +878,7 @@ func TestWriteRestoreScriptForS3ExternalTableKeepsURLSource(t *testing.T) {
 				Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 					TableName: "old_ext",
 					CreateSQL: string(paramJSON),
-					Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+					Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 				},
 			},
 		},
@@ -924,7 +925,7 @@ func TestWriteRestoreScriptNoLoadKeepsLocalExternalSourceWithoutPackaging(t *tes
 			Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 				TableName: "old_ext",
 				CreateSQL: string(paramJSON),
-				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+				Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 			},
 		},
 	}
@@ -1003,10 +1004,10 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 				Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 					TableName:    "old_t",
 					DatabaseName: "old_db",
-					Columns: []checkpointtool.TableColumn{
+					Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{
 						{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1},
 						{Name: "parent_id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 2},
-					},
+					}),
 					ForeignKeys: []checkpointtool.TableForeignKey{
 						{
 							Name:          "fk_child_parent",
@@ -1049,7 +1050,7 @@ func TestWriteRestoreScriptUsesPreparedIndexesForBatchTables(t *testing.T) {
 			TableID: table.TableID,
 			Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 				TableName: table.TableName,
-				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+				Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 			},
 			IndexDDLs: []string{
 				fmt.Sprintf("ALTER TABLE %s ADD KEY %s(id);", quoteSQLIdent(table.TableName), quoteSQLIdent("idx_"+table.TableName)),
@@ -1164,9 +1165,9 @@ func TestDumpOneTableAndConcurrentDumpUsePreparedData(t *testing.T) {
 			Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 				TableName:    "t",
 				DatabaseName: "db",
-				Columns: []checkpointtool.TableColumn{
+				Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{
 					{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1, PhysicalPosition: 0},
-				},
+				}),
 			},
 		},
 	}
@@ -1238,7 +1239,7 @@ func TestWriteRestoreScriptForView(t *testing.T) {
 			Schema: &checkpointtool.TableSchema{SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
 				TableName: "old_v",
 				CreateSQL: "CREATE VIEW old_v AS SELECT 1 AS id",
-				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}},
+				Columns:   restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}, Position: 1}}),
 			},
 		},
 	}
@@ -2003,8 +2004,8 @@ func TestRestoreScriptPreflightPreservesExistingExport(t *testing.T) {
 	intType := types.T_int32.ToType()
 	enumType := types.NewWithCharset(types.T_enum, 0, 0, uint8(types.EnumCollationUTF8Bin))
 	schemas := map[uint64]*checkpointtool.TableDumpData{
-		1: {Schema: &checkpointtool.TableSchema{TableName: "good", DatabaseName: "d", SchemaExtra: &api.SchemaExtra{DefaultCharset: 3}, Columns: []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &intType}}}},
-		2: {Schema: &checkpointtool.TableSchema{TableName: "bad", DatabaseName: "d", SchemaExtra: &api.SchemaExtra{DefaultCharset: 3}, Columns: []checkpointtool.TableColumn{{Name: "e", SQLType: "ENUM", NativeType: &enumType}}}},
+		1: {Schema: &checkpointtool.TableSchema{TableName: "good", DatabaseName: "d", SchemaExtra: &api.SchemaExtra{DefaultCharset: 3}, Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &intType}})}},
+		2: {Schema: &checkpointtool.TableSchema{TableName: "bad", DatabaseName: "d", SchemaExtra: &api.SchemaExtra{DefaultCharset: 3}, Columns: restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "e", SQLType: "ENUM", NativeType: &enumType}})}},
 	}
 	for _, data := range schemas {
 		data.IndexesPrepared = true
@@ -2030,6 +2031,44 @@ func TestRestoreScriptPreflightPreservesExistingExport(t *testing.T) {
 		require.NoError(t, readErr)
 		require.Equal(t, oldScript, got)
 	}
+	externalJSON, err := json.Marshal(&tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{"filepath", "/tmp/input.csv", "format", "csv"}}})
+	require.NoError(t, err)
+	schemas[2].Schema.CreateSQL = string(externalJSON)
+	for _, flag := range []string{catalog.SystemColAttr_HasUpdate, catalog.SystemColAttr_HasGenerated} {
+		schemas[2].Schema.Columns = restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", NativeType: &intType}}, func(v *checkpointtool.LogicalTableView) {
+			for i, header := range v.Headers {
+				if header == flag {
+					v.Rows[0][i] = "1"
+				}
+				if (flag == catalog.SystemColAttr_HasUpdate && header == catalog.SystemColAttr_Update) ||
+					(flag == catalog.SystemColAttr_HasGenerated && header == catalog.SystemColAttr_Generated) {
+					v.Rows[0][i] = "\xff"
+				}
+			}
+		})
+		require.Empty(t, schemas[2].Schema.Columns[0].OnUpdate)
+		require.Empty(t, schemas[2].Schema.Columns[0].Generated)
+		for _, kind := range []string{"r", "e"} {
+			tables[1].RelKind = kind
+			for _, selected := range [][]checkpointtool.TableCatalogEntry{tables, tables[1:]} {
+				require.ErrorContains(t, preflightRestoreScript(ctx, &checkpointtool.CheckpointReader{}, selected, schemas, types.BuildTS(1, 0)), "stored expression replay")
+			}
+			for _, load := range []bool{false, true} {
+				_, err := writeRestoreScript(ctx, &checkpointtool.CheckpointReader{}, &dumpOutput{}, tables, schemas, types.BuildTS(1, 0), root, root, loadDataPathResolver{}, load, true)
+				require.ErrorContains(t, err, "stored expression replay")
+				got, err := os.ReadFile(scriptPath)
+				require.NoError(t, err)
+				require.Equal(t, oldScript, got)
+				got, err = os.ReadFile(csvPath)
+				require.NoError(t, err)
+				require.Equal(t, oldCSV, got)
+			}
+		}
+		var raw bytes.Buffer
+		require.NoError(t, checkpointtool.WriteCSV(&raw, schemas[2].Schema, &checkpointtool.LogicalTableView{Headers: []string{"id"}, Rows: [][]string{{"7"}}}))
+		require.Contains(t, raw.String(), "7", "raw CSV salvage has no SQL expression replay contract")
+	}
+
 	require.NoError(t, preflightRestoreScript(ctx, &checkpointtool.CheckpointReader{}, tables[:1], schemas, types.BuildTS(1, 0)))
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -2052,7 +2091,7 @@ func TestRestoreCreateTableDDLTableOptionOrder(t *testing.T) {
 			schema := &checkpointtool.TableSchema{
 				TableName:   "table_options",
 				SchemaExtra: &api.SchemaExtra{DefaultCharset: uint32(types.CharsetUTF8)},
-				Columns:     []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}}},
+				Columns:     restoreCatalogColumns(t, []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", NativeType: &types.Type{Oid: types.T_int32}}}),
 				Partition:   tc.partition,
 				ClusterBy:   tc.cluster,
 			}
@@ -2073,4 +2112,50 @@ func TestRestoreCreateTableDDLTableOptionOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+// restoreCatalogColumns keeps script-formatting tests at the real catalog
+// provenance boundary. Expression bytes and presence flags are never inferred
+// from their decoded display strings.
+func restoreCatalogColumns(t *testing.T, columns []checkpointtool.TableColumn, changes ...func(*checkpointtool.LogicalTableView)) []checkpointtool.TableColumn {
+	t.Helper()
+	view := &checkpointtool.LogicalTableView{Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)}
+	for i, col := range columns {
+		require.NotNil(t, col.NativeType)
+		row := make([]string, len(view.Headers))
+		set := func(name, value string) {
+			for j, header := range view.Headers {
+				if header == name {
+					row[j] = value
+					return
+				}
+			}
+			t.Fatalf("missing catalog header %s", name)
+		}
+		b, err := types.Encode(col.NativeType)
+		require.NoError(t, err)
+		set(catalog.SystemColAttr_RelID, "42")
+		set(catalog.SystemColAttr_Name, col.Name)
+		set(catalog.SystemColAttr_Type, string(b))
+		set(catalog.SystemColAttr_Num, strconv.Itoa(i+1))
+		set(catalog.SystemColAttr_Seqnum, strconv.Itoa(col.PhysicalPosition))
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_NullAbility, strconv.FormatBool(col.NotNull))
+		set(catalog.SystemColAttr_HasExpr, "0")
+		set(catalog.SystemColAttr_HasUpdate, "0")
+		set(catalog.SystemColAttr_HasGenerated, "0")
+		set(catalog.SystemColAttr_Comment, col.Comment)
+		view.Rows = append(view.Rows, row)
+	}
+	for _, change := range changes {
+		change(view)
+	}
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, id uint64) (*checkpointtool.LogicalTableView, error) {
+		if id == catalog.MO_COLUMNS_ID {
+			return view, nil
+		}
+		return &checkpointtool.LogicalTableView{}, nil
+	})
+	return reader.ReadTableSchema(t.Context(), 42, types.TS{}, nil).Columns
 }
