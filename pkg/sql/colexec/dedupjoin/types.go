@@ -329,12 +329,15 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction         plan.Node_OnDuplicateAction
-	DedupBuildKeepLast        bool
-	DedupColName              string
-	SpillThreshold            int64
-	DedupColTypes             []plan.Type
-	DedupKeyExprs             []*plan.Expr
+	OnDuplicateAction  plan.Node_OnDuplicateAction
+	DedupBuildKeepLast bool
+	DedupColName       string
+	SpillThreshold     int64
+	DedupColTypes      []plan.Type
+	DedupKeyExprs      []*plan.Expr
+	// WarningSuppressNullColIdx is a one-based build-side column index.
+	// Zero disables suppression; a NULL value marks an internal arbitration row.
+	WarningSuppressNullColIdx int32
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32

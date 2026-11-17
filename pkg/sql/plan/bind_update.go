@@ -3932,12 +3932,13 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if !idxDef.Unique {
 			continue
 		}
-		indexUpdated := false
-		for _, rawPart := range idxDef.Parts {
-			if _, assigned := updatedCols[catalog.ResolveAlias(rawPart)]; assigned {
-				indexUpdated = true
-				break
-			}
+		// A generated key is affected when any transitive input is assigned.
+		// Candidate generation above has already recomputed it over the last
+		// accepted image, so the UNIQUE check must not be skipped merely because
+		// the generated column itself does not appear in the SET list.
+		indexUpdated, err := irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+		if err != nil {
+			return 0, nil, err
 		}
 		if !indexUpdated {
 			continue
@@ -4251,10 +4252,13 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			DedupColName:      dedupName,
 			DedupColTypes:     dedupTypes,
 			DedupKeyExprs:     diagnosticExprs,
-			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{
-				{RelPos: projectTag, ColPos: oldKeyPos},
-				{RelPos: projectTag, ColPos: releaseMarkerPos},
-			}},
+			DedupJoinCtx: &plan.DedupJoinCtx{
+				OldColList: []plan.ColRef{
+					{RelPos: projectTag, ColPos: oldKeyPos},
+					{RelPos: projectTag, ColPos: releaseMarkerPos},
+				},
+				WarningSuppressNullCol: &plan.ColRef{RelPos: projectTag, ColPos: rowIDPos},
+			},
 		}, bindCtx)
 		candidateRowID := &plan.Expr{
 			Typ:  projectNode.ProjectList[rowIDPos].Typ,

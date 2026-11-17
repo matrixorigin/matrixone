@@ -124,6 +124,52 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 		}
 		intTable := "(id int primary key, k int unique, v int not null)"
 
+		t.Run("collation diagnostics only include rejected candidates", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("u", "(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, n int, unique key uk_named(s))",
+				"(1,'Alpha',7),(2,NULL,9),(3,'Beta',8)")
+			result := c.exec("update ignore u a join u b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'")
+			require.Equal(t, int64(0), c.affected(result))
+			warnings, err := c.cn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer warnings.Close()
+			count := 0
+			for warnings.Next() {
+				var level, message string
+				var code int
+				require.NoError(t, warnings.Scan(&level, &code, &message))
+				require.Equal(t, "Warning", level)
+				require.Equal(t, 1062, code)
+				require.Equal(t, "Duplicate entry 'ALPHA' for key 'uk_named'", message)
+				count++
+			}
+			require.NoError(t, warnings.Err())
+			require.NoError(t, warnings.Close())
+			require.Equal(t, 2, count)
+			require.Equal(t, []string{"Alpha"}, c.stringRows("select s from u where id=1"))
+			require.Equal(t, []string{"Beta"}, c.stringRows("select s from u where id=3"))
+		})
+
+		t.Run("generated unique key rejects conflicting alias", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("g", "(id int primary key, u int, v int, x int, gv int generated always as (u+v) stored, unique key uk_gv(gv))", "")
+			c.exec("insert into g (id,u,v,x) values (1,1,1,0),(2,2,2,0)")
+			result := c.exec("update ignore g a join g b on a.id=b.id set a.u=2,b.v=2 where a.id=1")
+			require.Equal(t, int64(1), c.affected(result))
+			require.Equal(t, [][]int64{{1, 2, 1, 0, 3}, {2, 2, 2, 0, 4}},
+				c.intRows("select id,u,v,x,gv from g order by id", 5))
+		})
+
+		t.Run("generated unique key allows non-conflicting aliases", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("g", "(id int primary key, u int, v int, x int, gv int generated always as (u+v) stored, unique key uk_gv(gv))", "")
+			c.exec("insert into g (id,u,v,x) values (1,1,1,0),(2,3,3,0)")
+			result := c.exec("update ignore g a join g b on a.id=b.id set a.u=2,b.v=2 where a.id=1")
+			require.Equal(t, int64(2), c.affected(result))
+			require.Equal(t, [][]int64{{1, 2, 2, 0, 4}, {2, 3, 3, 0, 6}},
+				c.intRows("select id,u,v,x,gv from g order by id", 5))
+		})
+
 		t.Run("first target wins cross-row same new key", func(t *testing.T) {
 			c := newConn(t)
 			c.resetTable("t", intTable, "(1,10,100),(2,20,200)")
