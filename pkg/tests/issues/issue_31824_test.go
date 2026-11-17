@@ -197,6 +197,37 @@ func TestIssue31824SelfJoinMultiTargetUpdateUnique(t *testing.T) {
 			})
 		}
 
+		t.Run("one target matches multiple rows", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, "insert into t values (3,1,30,300)")
+			_, err := conn.ExecContext(ctx, `update t as x join t as y on x.id=1 and y.id in (2,3)
+				set x.v=x.v+1, y.k=40`)
+			requireIssue31824Duplicate(t, err)
+			require.Equal(t, []string{"1,1,10,100", "2,1,20,200", "3,1,30,300"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			require.Empty(t, queryIssue31824Rows(t, ctx, conn,
+				"select id,g,k,v from t force index(uk_k) where k=40 order by id"))
+
+			mustExec(t, ctx, conn, `update t as x join t as y on x.id=1 and y.id in (2,3)
+				set x.v=x.v+1, y.k=y.k+100`)
+			require.Equal(t, []string{"1,1,10,101", "2,1,120,200", "3,1,130,300"},
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+		})
+
+		t.Run("conflict rolls back another physical target", func(t *testing.T) {
+			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
+			mustExec(t, ctx, conn, "create table aux (id int primary key, v int not null)")
+			mustExec(t, ctx, conn, "insert into aux values (1,500)")
+			_, err := conn.ExecContext(ctx, `update t as x join t as y on x.id=1 and y.id=2
+				join aux as z on z.id=x.id set x.v=x.v+1, y.k=10, z.v=z.v+1`)
+			requireIssue31824Duplicate(t, err)
+			require.Equal(t, originalRows,
+				queryIssue31824Rows(t, ctx, conn, "select id,g,k,v from t order by id"))
+			var auxValue int
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from aux where id=1").Scan(&auxValue))
+			require.Equal(t, 500, auxValue)
+		})
+
 		t.Run("same physical row self exemption", func(t *testing.T) {
 			createIssue31824Table(t, ctx, conn, "unique key uk_k(k)")
 			mustExec(t, ctx, conn, `update t as x join t as y on x.id=y.id and x.id=1
