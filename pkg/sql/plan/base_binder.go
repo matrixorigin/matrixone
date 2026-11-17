@@ -622,6 +622,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, b.ctx)
+	udfResolutionCount := uint64(0)
+	udfExpansionDepth := uint32(0)
+	if b.builder != nil {
+		udfResolutionCount = b.builder.udfResolutionCount
+		udfExpansionDepth = b.builder.udfExpansionDepth
+	}
 	if b.numericSubqueryTarget != nil && !astExpr.Exists {
 		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
 	}
@@ -652,6 +659,11 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+
+	if b.builder != nil {
+		subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
+			b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -2590,6 +2602,10 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	depth int32,
 	repeatedLeft, repeatedRight bool,
 ) (*plan.Expr, error) {
+	zeroScalarRewriteGeneration := uint64(0)
+	if b.builder != nil {
+		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
+	}
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -2844,6 +2860,12 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 		return nil, err
 	}
 
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration {
+		// This branch cannot reliably prove which sources survive SQL UDF
+		// expansion across independent set-operation bind contexts, so keep
+		// every such call fail-closed rather than risk dropping an auth source.
+		return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
+	}
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
@@ -2876,6 +2898,83 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
+// A UDF may ignore or rewrite one of its already-bound arguments. Do not
+// allow a subquery optimization selected while binding such an argument to
+// rely on the argument's original source surviving SQL UDF expansion.
+func markSubquerySourcesUnsafe(builder *QueryBuilder, args []*plan.Expr) bool {
+	if builder == nil {
+		return false
+	}
+	containsZeroScalarRewrite := false
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		_ = visitPlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub != nil && sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
+				if ctx := builder.ctxByNode[sub.NodeId]; ctx != nil {
+					containsZeroScalarRewrite = containsZeroScalarRewrite || ctx.zeroScalarRewriteInPlan
+					ctx.zeroScalarRootSourceSafe = false
+				}
+			}
+			return nil
+		})
+	}
+	return containsZeroScalarRewrite
+}
+
+func visitPlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if window := expr.GetW(); window != nil {
+			if window.Frame != nil {
+				if window.Frame.End != nil {
+					pending = append(pending, window.Frame.End.Val)
+				}
+				if window.Frame.Start != nil {
+					pending = append(pending, window.Frame.Start.Val)
+				}
+			}
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+		if literal := expr.GetLit(); literal != nil {
+			pending = append(pending, literal.Src)
+		}
+	}
+	return nil
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -2886,6 +2985,14 @@ func bindFuncExprImplUdf(
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
+	}
+	if markSubquerySourcesUnsafe(b.builder, boundArgs) {
+		return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
+	}
+	if b.builder != nil {
+		b.builder.udfResolutionCount++
+		b.builder.udfExpansionDepth++
+		defer func() { b.builder.udfExpansionDepth-- }()
 	}
 
 	switch udf.Language {

@@ -17,6 +17,11 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -443,4 +448,165 @@ func TestCorrelatedPaginationZeroRetainsTableScan(t *testing.T) {
 		visit(root)
 	}
 	require.True(t, found, "the empty subquery must retain its table scan for authorization and prepare metadata")
+}
+
+func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"filtered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
+		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			q := result.GetQuery()
+			require.NotNil(t, q)
+			require.NotEmpty(t, q.Steps)
+			visited := make(map[int32]bool)
+			found := false
+			var visit func(int32)
+			visit = func(id int32) {
+				if visited[id] {
+					return
+				}
+				visited[id] = true
+				node := q.Nodes[id]
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.GetName() == "region" {
+					found = true
+				}
+				for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.BlockFilterList} {
+					for _, expr := range exprs {
+						require.False(t, hasCorrCol(expr), "reachable plans must not leave a correlated column for the executor")
+					}
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range q.Steps {
+				visit(root)
+			}
+			require.True(t, found, "the inner scan must remain reachable for authorization and metadata")
+		})
+	}
+}
+
+func TestZeroLimitScalarSourceSafety(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		safe  bool
+		remap bool
+	}{
+		{name: "direct table", sql: "select a from t2 limit 0", safe: true},
+		{name: "projection alias", sql: "select a as x from t2 limit 0", safe: true},
+		{name: "filtered correlated shape", sql: "select a from t2 where d > a limit 0", safe: true},
+		{name: "audited value expression", sql: "select cast(concat(a, char(120)) as signed) from t2 limit 0", safe: true},
+		{name: "parenthesized projection", sql: "select (a) from t2 limit 0", safe: true},
+		{name: "binary value operation", sql: "select a + 1 from t2 limit 0", safe: true},
+		{name: "unary value operation", sql: "select -a from t2 limit 0", safe: true},
+		{name: "coalesce value function", sql: "select coalesce(a, 1) from t2 limit 0", safe: true},
+		{name: "ifnull value function", sql: "select ifnull(a, 1) from t2 limit 0", safe: true},
+		{name: "compound null predicate", sql: "select a from t2 where (d > a) and (a is not null) limit 0", safe: true},
+		{name: "disjunction predicate", sql: "select a from t2 where d > 1 or a is null limit 0", safe: true},
+		{name: "safe order key", sql: "select a from t2 order by d limit 0", safe: true},
+		{name: "unsafe order key", sql: "select a from t2 order by random_bytes(4) limit 0"},
+		{name: "aggregate projection", sql: "select sum(a) from t2 limit 0"},
+		{name: "predicate parameter retained", sql: "select a from t2 where d > ? limit 0", safe: true},
+		{name: "random function", sql: "select random_bytes(4) from t2 limit 0"},
+		{name: "UDF with hidden nested argument", sql: "select r32869_keep_second((select s from secret limit 1), a) from t2 limit 0"},
+		{name: "CTE", sql: "with q as (select a from t2) select a from q limit 0"},
+		{name: "index hint", sql: "select a from t2 use index (idx) limit 0"},
+		{name: "dynamic offset", sql: "select a from t2 limit 0 offset ?"},
+		{name: "join", sql: "select t2.a from t2 join t3 on t2.a = t3.a limit 0"},
+		{name: "inherited rewrite", sql: "select a from t2 limit 0", remap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok, "unexpected parser result %T", stmt)
+			ctx := &BindContext{}
+			if tc.remap {
+				ctx.remapOption = &tree.RewriteOption{}
+			}
+			require.Equal(t, tc.safe, zeroLimitScalarSourceSafe(selectStmt, ctx))
+		})
+	}
+}
+
+func TestEmptyCorrelatedScalarScanChecksIntermediateProjectionSafety(t *testing.T) {
+	inputType := plan.Type{Id: int32(types.T_int64)}
+	resultType := plan.Type{Id: int32(types.T_date)}
+	correlated := &plan.Expr{
+		Typ:  inputType,
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{Depth: 1}},
+	}
+	projection := &plan.Expr{
+		Typ: resultType,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(int32(function.CAST), 0), ObjName: "cast"},
+			Args: []*plan.Expr{
+				correlated,
+				{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+			},
+		}},
+	}
+	require.True(t, emptyCorrelatedScalarResultSafe(projection))
+	require.False(t, emptyCorrelatedScalarExpressionSafe(projection))
+
+	ctx := &BindContext{
+		zeroScalarRootSourceSafe: true,
+		results:                  []*plan.Expr{{Typ: resultType}},
+		projects:                 []*plan.Expr{projection},
+	}
+	scan := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{1},
+		TableDef:    &plan.TableDef{TableType: catalog.SystemOrdinaryRel},
+		ObjRef:      &plan.ObjectRef{},
+	}
+	intermediate := &plan.Node{
+		NodeId:      1,
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{0},
+		BindingTags: []int32{2},
+		ProjectList: []*plan.Expr{projection},
+	}
+	root := &plan.Node{
+		NodeId:      2,
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{1},
+		BindingTags: []int32{3},
+		ProjectList: []*plan.Expr{projection},
+		Limit:       makePlan2Uint64ConstExprWithType(0),
+	}
+	builder := &QueryBuilder{
+		qry:       &Query{Nodes: []*plan.Node{scan, intermediate, root}},
+		ctxByNode: []*BindContext{ctx, ctx, ctx},
+	}
+	_, ok := builder.emptyCorrelatedScalarScan(2, &plan.SubqueryRef{
+		Typ:    plan.SubqueryRef_SCALAR,
+		NodeId: 2,
+	}, ctx)
+	require.False(t, ok, "an intermediate projection must use the stricter expression proof")
+}
+
+func TestUDFResolutionInvalidatesSubqueryArgumentSource(t *testing.T) {
+	ctx := &BindContext{zeroScalarRootSourceSafe: true}
+	builder := &QueryBuilder{ctxByNode: []*BindContext{ctx}}
+	arg := &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{NodeId: 0}}}
+	require.False(t, markSubquerySourcesUnsafe(builder, []*plan.Expr{arg}))
+	require.False(t, ctx.zeroScalarRootSourceSafe)
+
+	ctx.zeroScalarRootSourceSafe = true
+	ctx.zeroScalarRewriteInPlan = true
+	require.True(t, markSubquerySourcesUnsafe(builder, []*plan.Expr{arg}))
+	require.False(t, ctx.zeroScalarRootSourceSafe)
 }

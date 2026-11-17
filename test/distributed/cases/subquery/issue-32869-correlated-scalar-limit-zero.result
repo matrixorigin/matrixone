@@ -1,0 +1,87 @@
+drop user if exists issue_32869_reader;
+drop role if exists issue_32869_role;
+drop database if exists test_issue_32869;
+create database test_issue_32869;
+use test_issue_32869;
+create table outer_rows (a int);
+create table inner_rows (d int);
+insert into outer_rows values (1), (1), (11), (null);
+insert into inner_rows values (4), (99);
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0) as filtered_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  filtered_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  unfiltered_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  offset_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select cast(concat(o.a, char(120)) as signed) from inner_rows limit 0) as value_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  value_zero[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a as alias_value from inner_rows i where i.d > o.a order by i.d limit 0) as alias_order_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  alias_order_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  positive_limit[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+11  ¦  11
+select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
+➤ nested_count[-5,64,0]  𝄀
+0
+create table secret_rows (s int);
+insert into secret_rows values (5);
+create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
+create role issue_32869_role;
+create user issue_32869_reader identified by '111' default role issue_32869_role;
+grant connect on account * to issue_32869_role;
+grant select on table test_issue_32869.outer_rows to issue_32869_role;
+grant select on table test_issue_32869.inner_rows to issue_32869_role;
+use test_issue_32869;
+select a from outer_rows order by a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+1  𝄀
+11
+select issue_32869_keep_second(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o limit 1),
+a
+) from test_issue_32869.outer_rows;
+SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument is not yet implemented
+select issue_32869_keep_second(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o
+union all select 5 limit 1),
+a
+) from test_issue_32869.outer_rows;
+SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument is not yet implemented
+select s from test_issue_32869.secret_rows;
+internal error: do not have privilege to execute the statement
+drop user issue_32869_reader;
+drop role issue_32869_role;
+drop database test_issue_32869;

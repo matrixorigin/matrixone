@@ -189,6 +189,8 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 			Body:     "select n_regionkey from nation where n_nationkey = $1",
 			Language: string(tree.SQL),
 		}, nil
+	case "f_keep_second":
+		return &function.Udf{Body: "$2", Language: string(tree.SQL)}, nil
 	case "f_ansi_quotes":
 		mode := "ANSI_QUOTES"
 		return &function.Udf{
@@ -239,6 +241,21 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	query := built.GetQuery()
 	require.NotNil(t, query)
 	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestBindSQLUDFRejectsDiscardedSetOperationZeroLimitSource(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+		"select f_keep_second((select (select o.r_regionkey from region i where i.r_regionkey > o.r_regionkey limit 0) from region o union all select 5 limit 1), n.n_nationkey) from nation n", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	_, err = BuildPlan(ctx, stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pre-flattened correlated scalar LIMIT 0 argument")
 }
 
 func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
@@ -357,6 +374,37 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
 		})
 	}
+}
+
+func TestVisitPlanExprTreeTraversesNestedExpressionSources(t *testing.T) {
+	leaf := func() *plan.Expr { return &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{}}} }
+	windowFunc, partition, order, start, end := leaf(), leaf(), leaf(), leaf(), leaf()
+	child, listItem, literalSource := leaf(), leaf(), leaf()
+	root := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			WindowFunc:  windowFunc,
+			PartitionBy: []*plan.Expr{partition},
+			OrderBy:     []*plan.OrderBySpec{{Expr: order}},
+			Frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Val: start},
+				End:   &plan.FrameBound{Val: end},
+			},
+		}}},
+		{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Child: child}}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{listItem}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: literalSource}}},
+	}}}}
+	visited := make(map[*plan.Expr]int)
+	err := visitPlanExprTree(root, func(expr *plan.Expr) error {
+		visited[expr]++
+		return nil
+	})
+	require.NoError(t, err)
+	for _, expr := range []*plan.Expr{root, windowFunc, partition, order, start, end, child, listItem, literalSource} {
+		require.Equal(t, 1, visited[expr])
+	}
+	stop := fmt.Errorf("stop expression walk")
+	require.ErrorIs(t, visitPlanExprTree(root, func(*plan.Expr) error { return stop }), stop)
 }
 
 func TestCorrelateSQLUdfArgumentTraversesNestedExpressions(t *testing.T) {
