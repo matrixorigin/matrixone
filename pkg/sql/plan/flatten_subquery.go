@@ -17,7 +17,9 @@ package plan
 import (
 	"bytes"
 	"math"
+	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,12 +58,32 @@ var (
 	}
 )
 
+type flattenedScalarSubquery struct {
+	expr               *plan.Expr
+	ctx                *BindContext
+	nullResultRejected bool
+	selective          bool
+	rowSize            int32
+	op                 string
+	generation         uint64
+	visibleAtNodeID    int32
+}
+
+type subqueryFlattenScope struct {
+	scalars             map[int32]flattenedScalarSubquery
+	generation          uint64
+	lastSubqueryNodeID  int32
+	hasLastSubqueryNode bool
+}
+
 func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
-	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, false)
+	scope := &subqueryFlattenScope{}
+	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, false, false, scope)
 }
 
 func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
-	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
+	scope := &subqueryFlattenScope{}
+	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true, false, scope)
 }
 
 func (builder *QueryBuilder) flattenSubqueriesWithContext(
@@ -69,24 +91,270 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	expr *plan.Expr,
 	ctx *BindContext,
 	nullResultRejected bool,
+	selective bool,
+	scope *subqueryFlattenScope,
 ) (int32, *plan.Expr, error) {
+	if expr == nil {
+		return nodeID, nil, nil
+	}
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		functionID, _ := function.DecodeOverloadID(exprImpl.F.Func.Obj)
 		for i, arg := range exprImpl.F.Args {
-			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueriesWithContext(nodeID, arg, ctx, childNullResultRejected)
+			childSelective := selective || (i > 0 && (functionID == function.IFF || functionID == function.CASE || functionID == function.COALESCE))
+			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueriesWithContext(nodeID, arg, ctx, childNullResultRejected, childSelective, scope)
 			if err != nil {
 				return 0, nil, err
 			}
 		}
 
 	case *plan.Expr_Sub:
-		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
+		ref := exprImpl.Sub
+		entryGeneration := uint64(0)
+		if scope != nil {
+			if scope.hasLastSubqueryNode && scope.lastSubqueryNodeID != ref.NodeId {
+				scope.generation++
+			}
+			scope.lastSubqueryNodeID = ref.NodeId
+			scope.hasLastSubqueryNode = true
+			entryGeneration = scope.generation
+		}
+		if ref.Typ == plan.SubqueryRef_SCALAR && ref.Child == nil && scope != nil {
+			if cached, ok := scope.scalars[ref.NodeId]; ok {
+				if cached.expr == nil || cached.ctx != ctx || cached.nullResultRejected != nullResultRejected ||
+					cached.selective || selective || cached.rowSize != ref.RowSize || cached.op != ref.Op ||
+					cached.generation != entryGeneration || cached.visibleAtNodeID != nodeID {
+					return 0, nil, moerr.NewNYI(builder.GetContext(), "repeated scalar subquery in incompatible evaluation contexts")
+				}
+				return nodeID, DeepCopyExpr(cached.expr), nil
+			}
+		}
+
+		nodeID, expr, err = builder.flattenSubquery(nodeID, ref, ctx, nullResultRejected, selective, scope)
+		if err == nil && expr != nil && ref.Typ == plan.SubqueryRef_SCALAR && ref.Child == nil && scope != nil {
+			if scope.scalars == nil {
+				scope.scalars = make(map[int32]flattenedScalarSubquery)
+			}
+			entry := flattenedScalarSubquery{
+				ctx:                ctx,
+				nullResultRejected: nullResultRejected,
+				selective:          selective,
+				rowSize:            ref.RowSize,
+				op:                 ref.Op,
+				generation:         entryGeneration,
+				visibleAtNodeID:    nodeID,
+			}
+			if !selective && !scalarResultMayChangeWhenRepeated(expr) {
+				entry.expr = DeepCopyExpr(expr)
+			}
+			scope.scalars[ref.NodeId] = entry
+		}
 	}
 
 	return nodeID, expr, err
+}
+
+// expressionHasVaryingScalarSubquery checks scalar shapes that an expression
+// expander binds more than once. It shares the correlated projection
+// normalizer's eligibility proof and fails closed when the relevant plan can
+// select a different result on each binding.
+func (builder *QueryBuilder) expressionHasVaryingScalarSubquery(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	var visit func(*plan.Expr) bool
+	visit = func(current *plan.Expr) bool {
+		if current == nil {
+			return false
+		}
+		switch item := current.Expr.(type) {
+		case *plan.Expr_Sub:
+			if item.Sub == nil || item.Sub.Typ != plan.SubqueryRef_SCALAR || item.Sub.Child != nil {
+				return false
+			}
+			subID := item.Sub.NodeId
+			if builder.qry == nil || subID < 0 || int(subID) >= len(builder.qry.Nodes) ||
+				int(subID) >= len(builder.ctxByNode) || builder.ctxByNode[subID] == nil {
+				return true
+			}
+			ctx := builder.ctxByNode[subID]
+			if !ctx.isCorrelated || builder.noFromSubqueryProject(subID) != nil {
+				return false
+			}
+			candidate := builder.analyzeCorrelatedScalarProjection(subID, ctx)
+			if candidate == nil || candidate.direct || !candidate.mixed {
+				return false
+			}
+			return builder.scalarSubqueryPlanMayVary(subID)
+		case *plan.Expr_F:
+			if item.F == nil {
+				return true
+			}
+			for _, arg := range item.F.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		case *plan.Expr_Lit:
+			return item.Lit != nil && visit(item.Lit.Src)
+		case *plan.Expr_List:
+			if item.List == nil {
+				return true
+			}
+			for _, arg := range item.List.List {
+				if visit(arg) {
+					return true
+				}
+			}
+		case *plan.Expr_W:
+			return true
+		}
+		return false
+	}
+	return visit(expr)
+}
+
+// scalarResultMayChangeWhenRepeated is stricter than the general optimizer
+// predicate: only expression forms with a clear row-stability contract may
+// be cached as the result of a flattened scalar subquery.
+func scalarResultMayChangeWhenRepeated(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return item.Col == nil
+	case *plan.Expr_Corr:
+		return item.Corr == nil
+	case *plan.Expr_Raw:
+		return item.Raw == nil
+	case *plan.Expr_P:
+		return item.P == nil
+	case *plan.Expr_T:
+		return item.T == nil
+	case *plan.Expr_Lit:
+		return item.Lit == nil || (item.Lit.Src != nil && scalarResultMayChangeWhenRepeated(item.Lit.Src))
+	case *plan.Expr_List:
+		if item.List == nil {
+			return true
+		}
+		for _, arg := range item.List.List {
+			if scalarResultMayChangeWhenRepeated(arg) {
+				return true
+			}
+		}
+		return false
+	case *plan.Expr_F:
+		if item.F == nil || item.F.Func == nil || exprMayChangeWhenRepeated(expr) {
+			return true
+		}
+		functionID, _ := function.DecodeOverloadID(item.F.Func.Obj)
+		if functionID == function.RANDOM_BYTES || strings.EqualFold(item.F.Func.ObjName, "random_bytes") {
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(item.F.Func.Obj)
+		if !ok || overload.IsRealTimeRelated() {
+			return true
+		}
+		for _, arg := range item.F.Args {
+			if scalarResultMayChangeWhenRepeated(arg) {
+				return true
+			}
+		}
+		return false
+	default:
+		// Subqueries, variables, windows, vectors and unknown plan forms need
+		// an explicit evaluation contract before they can be reused.
+		return true
+	}
+}
+
+func (builder *QueryBuilder) scalarSubqueryPlanMayVary(rootID int32) bool {
+	if builder.qry == nil {
+		return true
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return true
+		}
+		if _, ok := visited[nodeID]; ok {
+			return false
+		}
+		visited[nodeID] = struct{}{}
+		node := builder.qry.Nodes[nodeID]
+		if node == nil || node.RankOption != nil || node.Offset != nil || node.SampleFunc != nil || node.ExternScan != nil {
+			return true
+		}
+		if node.Limit != nil {
+			limit, ok := getLiteralUint64(node.Limit)
+			if !ok || limit == 1 {
+				return true
+			}
+		}
+		switch node.NodeType {
+		case plan.Node_VALUE_SCAN, plan.Node_TABLE_SCAN, plan.Node_PROJECT, plan.Node_FILTER,
+			plan.Node_JOIN, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_UNION, plan.Node_UNION_ALL:
+		default:
+			// Aggregates, windows, table functions and future node kinds need an
+			// explicit proof before this expanded scalar can be rebound.
+			return true
+		}
+
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList,
+			node.WinSpecList, node.TblFuncExprList, node.BlockFilterList, node.FillVal,
+			node.OnUpdateExprs, node.TimeWindowPartitionBy,
+			{node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp, node.WEnd},
+		} {
+			for _, expr := range exprs {
+				if expr != nil && scalarResultMayChangeWhenRepeated(expr) {
+					return true
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if order == nil || scalarResultMayChangeWhenRepeated(order.Expr) {
+				return true
+			}
+		}
+		if node.IndexReaderParam != nil {
+			if node.IndexReaderParam.Limit != nil {
+				return true
+			}
+			for _, order := range node.IndexReaderParam.OrderBy {
+				if order == nil || scalarResultMayChangeWhenRepeated(order.Expr) {
+					return true
+				}
+			}
+		}
+		for _, filter := range node.RuntimeFilterProbeList {
+			if filter == nil || scalarResultMayChangeWhenRepeated(filter.Expr) {
+				return true
+			}
+		}
+		for _, filter := range node.RuntimeFilterBuildList {
+			if filter == nil || scalarResultMayChangeWhenRepeated(filter.Expr) || scalarResultMayChangeWhenRepeated(filter.BuildExpr) {
+				return true
+			}
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		for _, sourceID := range node.SourceStep {
+			if visit(sourceID) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(rootID)
 }
 
 func (builder *QueryBuilder) flattenSubquery(
@@ -94,6 +362,8 @@ func (builder *QueryBuilder) flattenSubquery(
 	subquery *plan.SubqueryRef,
 	ctx *BindContext,
 	nullResultRejected bool,
+	selective bool,
+	scope *subqueryFlattenScope,
 ) (int32, *plan.Expr, error) {
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
 		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
@@ -104,6 +374,8 @@ func (builder *QueryBuilder) flattenSubquery(
 	var scalarMatch *plan.Expr
 	var scalarOuterResult *plan.Expr
 	var scalarExistential bool
+	var scalarMixed bool
+	var err error
 
 	rootLimitIsZero := builder.subqueryRootLimitIsZero(subID)
 	if rootLimitIsZero && (subquery.Typ == plan.SubqueryRef_IN || subquery.Typ == plan.SubqueryRef_NOT_IN ||
@@ -118,10 +390,8 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	// Strip unnecessary subqueries which have no FROM clause
-	subNode := builder.qry.Nodes[subID]
-	if subNode.NodeType == plan.Node_PROJECT &&
-		builder.qry.Nodes[subNode.Children[0]].NodeType == plan.Node_VALUE_SCAN &&
-		builder.qry.Nodes[subNode.Children[0]].TableDef == nil && subNode.RankOption == nil {
+	subNode := builder.noFromSubqueryProject(subID)
+	if subNode != nil && subNode.RankOption == nil {
 		// A SELECT without FROM produces one row before pagination. Do not
 		// replace it with that row when LIMIT/OFFSET make the result empty.
 		empty, knownBounds := false, true
@@ -195,8 +465,14 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
-		subID, scalarMatch, scalarOuterResult, scalarExistential =
-			builder.normalizeDirectCorrelatedScalarProjection(subID, subCtx)
+		if len(subCtx.projects) > 0 && subCtx.projects[0].GetCorr() == nil && hasCorrCol(subCtx.projects[0]) {
+			scalarMixed = exprHasColRef(subCtx.projects[0])
+		}
+		subID, scalarMatch, scalarOuterResult, scalarExistential, err =
+			builder.normalizeCorrelatedScalarProjection(subID, subCtx, selective)
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	var emptyScalarMarker *plan.Expr
@@ -220,6 +496,11 @@ func (builder *QueryBuilder) flattenSubquery(
 	if err != nil {
 		return 0, nil, err
 	}
+	if pagination != nil && scalarMixed && scalarOuterResult != nil {
+		// The normalized root projection already supplies a non-NULL match
+		// marker. Avoid exporting a second physical Row_ID through the join.
+		pagination.marker = nil
+	}
 	if subquery.Typ == plan.SubqueryRef_SCALAR && byteKeyBoundary < 0 && preserveBoundary < 0 {
 		rewritten, err := builder.rewriteScalarPaginationExtremum(nodeID, subID, ctx, subCtx, pagination != nil)
 		if err != nil {
@@ -234,7 +515,12 @@ func (builder *QueryBuilder) flattenSubquery(
 		return 0, nil, err
 	}
 	if pagination != nil {
-		return builder.flattenPostJoinPagination(nodeID, subID, subCtx, preds, ctx, pagination)
+		var lifted *plan.Expr
+		if scalarMixed && scalarOuterResult != nil {
+			pagination.marker = scalarMatch
+			lifted = scalarOuterResult
+		}
+		return builder.flattenPostJoinPagination(nodeID, subID, subCtx, preds, ctx, pagination, lifted)
 	}
 
 	// When a scalar aggregate subquery has non-equality correlated predicates,
@@ -316,6 +602,10 @@ func (builder *QueryBuilder) flattenSubquery(
 				scalarOuterResult,
 				makePlan2NullConstExprWithType(),
 			})
+			if err == nil {
+				retExpr.Typ = scalarOuterResult.Typ
+				retExpr.Typ.NotNullable = false
+			}
 			return nodeID, retExpr, err
 		}
 
@@ -369,6 +659,8 @@ func (builder *QueryBuilder) flattenSubquery(
 			if err != nil {
 				return 0, nil, err
 			}
+			retExpr.Typ = scalarOuterResult.Typ
+			retExpr.Typ.NotNullable = false
 		}
 		if !finalizeProjection && rewriteCount {
 			argsType := make([]types.Type, 1)
@@ -512,25 +804,56 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 }
 
-// normalizeDirectCorrelatedScalarProjection handles a scalar subquery whose
-// only result is a direct reference to the outer row. Rim projections, sorting,
-// DISTINCT, and literal positive LIMITs do not change that value. Removing them
-// before pulling up predicates keeps join-key references on the real projection
-// instead of leaving correlated expressions in executable wrapper nodes.
-func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
-	subID int32,
-	ctx *BindContext,
-) (int32, *plan.Expr, *plan.Expr, bool) {
+// noFromSubqueryProject identifies the singleton input used by SELECT without
+// a table. Callers must separately check row-changing operators and SQL context.
+func (builder *QueryBuilder) noFromSubqueryProject(nodeID int32) *plan.Node {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+		return nil
+	}
+	childID := node.Children[0]
+	if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	child := builder.qry.Nodes[childID]
+	if child == nil || child.NodeType != plan.Node_VALUE_SCAN || child.TableDef != nil {
+		return nil
+	}
+	return node
+}
+
+type correlatedScalarProjection struct {
+	nodeID      int32
+	project     *plan.Expr
+	direct      bool
+	mixed       bool
+	existential bool
+}
+
+// analyzeCorrelatedScalarProjection performs the normalizer's eligibility
+// checks without changing the query. Expansion owners use the same decision.
+func (builder *QueryBuilder) analyzeCorrelatedScalarProjection(subID int32, ctx *BindContext) *correlatedScalarProjection {
 	if len(ctx.results) != 1 || len(ctx.projects) == 0 {
-		return subID, nil, nil, false
+		return nil
 	}
 
-	projectCorr := ctx.projects[0].GetCorr()
-	if projectCorr == nil || projectCorr.Depth != 1 {
-		return subID, nil, nil, false
+	project := ctx.projects[0]
+	projectCorr := project.GetCorr()
+	direct := projectCorr != nil
+	if direct {
+		if projectCorr.Depth != 1 {
+			return nil
+		}
+	} else if !hasCorrCol(project) ||
+		len(ctx.groups) != 0 || len(ctx.aggregates) != 0 || !scalarProjectionLiftable(project) {
+		return nil
 	}
+	mixed := !direct && exprHasColRef(project)
 	if !builder.casePreservesType(ctx.projects[0]) {
-		return subID, nil, nil, false
+		return nil
 	}
 
 	nodeID := subID
@@ -539,13 +862,13 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 	for {
 		node := builder.qry.Nodes[nodeID]
 		if node.Offset != nil || node.RankOption != nil {
-			return subID, nil, nil, false
+			return nil
 		}
 		if node.Limit != nil {
 			removesBoundary = true
 			limit, ok := getLiteralUint64(node.Limit)
 			if !ok || limit == 0 {
-				return subID, nil, nil, false
+				return nil
 			}
 			if limit == 1 {
 				existential = true
@@ -555,27 +878,44 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
 			// An aggregate may produce a row for empty input; do not turn
 			// such a subtree into an ordinary inner-row existence check.
-			if removesBoundary && !builder.paginationSubtreeExpressionsSafe(subID, false) {
-				return subID, nil, nil, false
-			}
 			if len(node.ProjectList) == 0 {
-				return subID, nil, nil, false
+				return nil
 			}
-			corr := node.ProjectList[0].GetCorr()
-			if corr == nil || corr.RelPos != projectCorr.RelPos || corr.ColPos != projectCorr.ColPos || corr.Depth != projectCorr.Depth {
-				return subID, nil, nil, false
+			if direct {
+				corr := node.ProjectList[0].GetCorr()
+				if corr == nil || corr.RelPos != projectCorr.RelPos || corr.ColPos != projectCorr.ColPos || corr.Depth != projectCorr.Depth {
+					return nil
+				}
+			} else if !proto.Equal(node.ProjectList[0], project) {
+				return nil
+			}
+			if mixed {
+				// Until inner-dependent ordering and DISTINCT have a separate
+				// proof, preserve only an unwrapped, unordered root LIMIT 1.
+				if nodeID != subID || len(node.OrderBy) != 0 ||
+					(node.Limit != nil && (!existential || builder.isPrepareStatement || builder.qry.StmtType != plan.Query_SELECT)) ||
+					(node.Limit == nil && !paginationExpressionSafeWithLiteralCasts(project, true)) {
+					return nil
+				}
+			} else if removesBoundary {
+				var safe bool
+				if direct {
+					safe = builder.paginationSubtreeExpressionsSafe(subID, false)
+				} else {
+					// The wrapped projection is evaluated after the join, so it is
+					// not among the expressions discarded with this boundary.
+					safe = builder.paginationSubtreeExpressionsSafeExceptProjection(subID, false, nodeID)
+				}
+				if !safe {
+					return nil
+				}
 			}
 
-			outerResult, _ := decreaseDepth(DeepCopyExpr(ctx.projects[0]))
-			marker := DeepCopyExpr(constTrue)
-			node.ProjectList = []*plan.Expr{marker}
-			ctx.projects = []*plan.Expr{marker}
-			node.Limit = nil
-			return nodeID, GetColExpr(marker.Typ, ctx.projectTag, 0), outerResult, existential
+			return &correlatedScalarProjection{nodeID: nodeID, project: project, direct: direct, mixed: mixed, existential: existential}
 		}
 
 		if len(node.Children) != 1 {
-			return subID, nil, nil, false
+			return nil
 		}
 		switch node.NodeType {
 		case plan.Node_PROJECT:
@@ -585,9 +925,153 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 			existential = true
 			removesBoundary = true
 		default:
-			return subID, nil, nil, false
+			return nil
 		}
 		nodeID = node.Children[0]
+	}
+}
+
+// normalizeCorrelatedScalarProjection moves a proven scalar projection above
+// its decorrelation join. The marker distinguishes an absent inner row.
+func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
+	subID int32,
+	ctx *BindContext,
+	selective bool,
+) (int32, *plan.Expr, *plan.Expr, bool, error) {
+	candidate := builder.analyzeCorrelatedScalarProjection(subID, ctx)
+	if candidate == nil {
+		return subID, nil, nil, false, nil
+	}
+	if selective && !candidate.direct {
+		return subID, nil, nil, false, moerr.NewNYI(builder.GetContext(), "conditional correlated scalar projection")
+	}
+	node := builder.qry.Nodes[candidate.nodeID]
+	outerResult := builder.liftCorrelatedScalarProjection(ctx, node, candidate.project)
+	marker := DeepCopyExpr(constTrue)
+	node.ProjectList[0] = marker
+	ctx.projects[0] = marker
+	if !candidate.mixed {
+		node.Limit = nil
+	}
+	return candidate.nodeID, GetColExpr(marker.Typ, ctx.projectTag, 0), outerResult, candidate.existential && !candidate.mixed, nil
+}
+
+// liftCorrelatedScalarProjection exports only inner column leaves. Evaluating
+// an inner function below the join could raise an error for a row that was not
+// selected by the correlated subquery.
+func (builder *QueryBuilder) liftCorrelatedScalarProjection(ctx *BindContext, node *plan.Node, expr *plan.Expr) *plan.Expr {
+	var originals, projected []*plan.Expr
+	var lift func(*plan.Expr) *plan.Expr
+	lift = func(value *plan.Expr) *plan.Expr {
+		switch item := value.Expr.(type) {
+		case *plan.Expr_Corr:
+			value.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: item.Corr.RelPos, ColPos: item.Corr.ColPos}}
+		case *plan.Expr_Col:
+			for i, original := range originals {
+				if proto.Equal(value, original) {
+					return DeepCopyExpr(projected[i])
+				}
+			}
+			originals = append(originals, DeepCopyExpr(value))
+			column := builder.pullupThroughProj(ctx, node, ctx.projectTag, value)
+			projected = append(projected, column)
+			return DeepCopyExpr(column)
+		case *plan.Expr_F:
+			for i, arg := range item.F.Args {
+				item.F.Args[i] = lift(arg)
+			}
+		}
+		return value
+	}
+	return lift(DeepCopyExpr(expr))
+}
+
+// scalarProjectionLiftable accepts only expression variants that the existing
+// depth rewrite traverses and whose value is stable across repeated evaluation.
+func scalarProjectionLiftable(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Corr:
+		return item.Corr != nil && item.Corr.Depth == 1
+	case *plan.Expr_Col:
+		return item.Col != nil
+	case *plan.Expr_Lit:
+		return item.Lit != nil && item.Lit.Src == nil
+	case *plan.Expr_P:
+		return item.P != nil
+	case *plan.Expr_T:
+		return item.T != nil
+	case *plan.Expr_F:
+		if item.F == nil || item.F.Func == nil {
+			return false
+		}
+		id, overloadIndex := function.DecodeOverloadID(item.F.Func.Obj)
+		if id == function.RANDOM_BYTES {
+			return false
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(item.F.Func.Obj)
+		if !ok || (overload.CannotFold() || overload.IsRealTimeRelated()) && !scalarSpecialValueConversion(expr, id, overloadIndex) {
+			return false
+		}
+		for _, arg := range item.F.Args {
+			if !scalarProjectionLiftable(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// These non-foldable conversions depend on the current statement's IGNORE
+// mode. A verified literal domain and the mode remain unchanged across the
+// join; the scalar match marker still guards their evaluation.
+func scalarSpecialValueConversion(expr *plan.Expr, id, overloadIndex int32) bool {
+	f := expr.GetF()
+	if f == nil || len(f.Args) < 2 || f.Args[0] == nil || f.Args[1] == nil ||
+		types.T(f.Args[0].Typ.Id) != types.T_varchar || types.T(f.Args[1].Typ.Id) != types.T_varchar {
+		return false
+	}
+	domain := f.Args[0].GetLit()
+	if domain == nil || domain.Isnull || domain.Src != nil {
+		return false
+	}
+	value, ok := domain.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+	switch id {
+	case function.CAST_VALUE_TO_INDEX:
+		var encoding uint32
+		switch {
+		case overloadIndex == 0 && len(f.Args) == 2:
+		case overloadIndex == 1 && len(f.Args) == 3 && f.Args[2] != nil && types.T(f.Args[2].Typ.Id) == types.T_int64:
+			tag := f.Args[2].GetLit()
+			if tag == nil || tag.Isnull || tag.Src != nil {
+				return false
+			}
+			v, valid := tag.Value.(*plan.Literal_I64Val)
+			if !valid || v.I64Val < 0 || v.I64Val > int64(types.EnumEncodingFramed) {
+				return false
+			}
+			encoding = uint32(v.I64Val)
+		default:
+			return false
+		}
+		return types.T(expr.Typ.Id) == types.T_enum && expr.Typ.Enumvalues == value.Sval &&
+			expr.Typ.EnumEncoding == encoding && mysqlSpecialOrderTypeReversible(&expr.Typ)
+	case function.CAST_SET_VALUE_TO_INDEX:
+		if overloadIndex != 0 || len(f.Args) != 2 || types.T(expr.Typ.Id) != types.T_uint64 ||
+			expr.Typ.Enumvalues != "" || expr.Typ.EnumEncoding != 0 {
+			return false
+		}
+		domainType := plan.Type{Id: int32(types.T_uint64), Enumvalues: value.Sval}
+		return mysqlSpecialOrderTypeReversible(&domainType)
+	default:
+		return false
 	}
 }
 

@@ -169,7 +169,7 @@ func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 		return nil, err
 	}
 
-	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+	if hasCorrCol(expr) {
 		return nil, moerr.NewNYI(b.GetContext(), "correlated columns in GROUP BY clause")
 	}
 

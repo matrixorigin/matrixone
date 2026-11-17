@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -64,6 +65,10 @@ func TestGroupedMySQLSpecialNumericContexts(t *testing.T) {
 		{"numeric in", "select e in (1,2) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
 		{"numeric in null", "select e in (1,null) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
 		{"numeric not in null", "select s not in (1,null) from enum_order_t group by s", moSetCastValueToIndexFun, true},
+		{"numeric no-FROM enum scalar", "select (select e)+0 from enum_order_t group by e", moEnumCastValueToIndexFun, true},
+		{"numeric no-FROM set scalar", "select (select s)+0 from enum_order_t group by s", moSetCastValueToIndexFun, true},
+		{"cast no-FROM enum scalar", "select cast((select e) as signed) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
+		{"lexical no-FROM enum scalar", "select concat((select e), '') from enum_order_t group by e", moEnumCastValueToIndexFun, false},
 		{"correlated enum", "select (select e+0) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
 		{"correlated set", "select (select s+0) from enum_order_t group by s", moSetCastValueToIndexFun, true},
 		{"nested correlated enum", "select (select (select e+0)) from enum_order_t group by e", moEnumCastValueToIndexFun, true},
@@ -96,6 +101,104 @@ func TestGroupedMySQLSpecialNumericContexts(t *testing.T) {
 				require.Len(t, found[0].GetF().Args, 2)
 			}
 		})
+	}
+}
+
+func TestNoFromSpecialScalarInUsesOneRecovery(t *testing.T) {
+	for _, op := range []string{"in", "not in"} {
+		t.Run(op, func(t *testing.T) {
+			query := "select (select e) " + op + " (1,null) from enum_order_t group by e"
+			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.Len(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun), 1)
+
+			query = "select (select e) " + op + " (1.5,2,null) from enum_order_t group by e"
+			_, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.ErrorContains(t, err, "numeric scalar IN list needs a proven lossless shared type")
+		})
+	}
+}
+
+func TestCorrelatedSpecialInRejectsUnprovedContracts(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{"select (select o.e in (2,'x') from enum_order_t i where i.id=o.id) from enum_order_t o group by o.id,o.e", "correlated special IN comparison requires a proven numeric contract"},
+		{"select (select 1 in (o.e,3) from enum_order_t i where i.id=o.id) from enum_order_t o group by o.id,o.e", "correlated special IN comparison requires a proven numeric contract"},
+		{"select 2 in ((select o.e),3) from enum_order_t o group by o.e", "numeric scalar IN list needs a proven lossless shared type"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			_, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.query)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestNoFromSpecialScalarTupleInRecovery(t *testing.T) {
+	for _, op := range []string{"in", "not in"} {
+		t.Run(op, func(t *testing.T) {
+			query := "select ((select e), id) " + op + " ((1,1),(2,2)) from enum_order_t group by e,id"
+			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.NotEmpty(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun))
+
+			for _, wrapped := range []string{"cast((select e) as signed)", "(select e)+0", "0+(select e)"} {
+				query = "select (" + wrapped + ", id) " + op + " ((1,1),(2,2)) from enum_order_t group by e,id"
+				p, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+				require.NoError(t, err)
+				require.NotEmpty(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun))
+			}
+
+			query = "select ((select e), id) " + op + " ((1,1)) from enum_order_t group by e,id"
+			p, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.NotEmpty(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun))
+
+			query = "select ((select e), id) " + op + " (('low',1),('mid',2)) from enum_order_t group by e,id"
+			p, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.Empty(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun))
+
+			query = "select ((select e), id) " + op + " ((1,1),(2,2)) from enum_order_t"
+			p, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.Empty(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun))
+
+			// Each right tuple is written once and must keep its own recovery.
+			query = "select (id,0) " + op + " ((1,(select e)+0),(2,0)) from enum_order_t group by e,id"
+			p, err = runOneStmt(newMySQLSpecialOrderMock(), t, query)
+			require.NoError(t, err)
+			require.Len(t, groupedNumericFunctions(p, moEnumCastValueToIndexFun), 1)
+		})
+	}
+}
+
+func TestSpecialColumnDisplayPreservesCorrelationDepth(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	columns := []string{"e", "s"}
+	typesForColumns := []*planpb.Type{
+		{Id: int32(types.T_enum), Enumvalues: "low,high"},
+		{Id: int32(types.T_uint64), Enumvalues: "red,green"},
+	}
+	binding := NewBinding(9, 0, "", "t", 0, columns, nil, typesForColumns, false, nil)
+	for _, name := range columns {
+		ctx.bindingByCol[name] = binding
+	}
+	binder := NewProjectionBinder(builder, ctx, NewHavingBinder(builder, ctx))
+	for pos, name := range columns {
+		for _, depth := range []int32{0, 1, 2} {
+			expr, err := binder.baseBindColRef(tree.NewUnresolvedColName(name), depth, false)
+			require.NoError(t, err)
+			require.NotNil(t, expr.GetF())
+			value := expr.GetF().Args[1]
+			if depth == 0 {
+				require.NotNil(t, value.GetCol())
+				require.Equal(t, int32(9), value.GetCol().RelPos)
+				require.Equal(t, int32(pos), value.GetCol().ColPos)
+			} else {
+				require.NotNil(t, value.GetCorr())
+				require.Equal(t, &planpb.CorrColRef{RelPos: 9, ColPos: int32(pos), Depth: depth}, value.GetCorr())
+			}
+		}
 	}
 }
 

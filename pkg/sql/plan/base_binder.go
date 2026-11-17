@@ -182,6 +182,19 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// numeric cast is, however, a numeric operand contract in MySQL and
 		// must start from the stored ordinal/bitmap instead of that string.
 		if makeTypeByPlan2Type(typ).IsNumeric() {
+			if exposed := b.noFromSpecialScalarProjection(exprImpl.Expr, expr); exposed != nil {
+				expr = exposed
+				if _, raw := storedMySQLSpecialTypeExpr(expr); !raw {
+					if special := b.ctx.mysqlSpecialNumericTypeForExpr(expr); special != nil {
+						if !mysqlSpecialOrderTypeReversible(special) {
+							return nil, moerr.NewNYI(b.GetContext(), "numeric scalar with non-reversible ENUM/SET display")
+						}
+					}
+				}
+			}
+			if err = rejectNonReversibleCorrelatedNumeric(b.GetContext(), b.ctx, expr); err != nil {
+				return nil, err
+			}
 			expr, _, err = storedMySQLSpecialNumericExpr(b.GetContext(), b.ctx, expr)
 			if err != nil {
 				return nil, err
@@ -514,30 +527,12 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	// ENUM and SET have distinct storage and display representations. Keep their
-	// display value by default. Numeric and bitwise expression binders explicitly
-	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
-		if err != nil {
-			errutil.ReportError(b.GetContext(), err)
-			return
-		}
-		indexToValueFun, _, _, funErr := mysqlSpecialTypeFuncNames(typ)
-		if funErr != nil {
-			return nil, funErr
-		}
-		storageExpr := &Expr{
-			Typ: *typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: relPos, ColPos: colPos, Name: col,
-			}},
-		}
-		args := mysqlSpecialTypeArgs(typ, storageExpr)
-		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
-	}
-
 	if colPos != NotFound {
-		b.boundCols = append(b.boundCols, table+"."+col)
+		// Display-wrapped special columns historically do not participate in
+		// this binder's bare-column accounting.
+		if b.bindRawMySQLSpecialType || !isEnumOrSetPlanType(typ) {
+			b.boundCols = append(b.boundCols, table+"."+col)
+		}
 
 		expr = &plan.Expr{
 			Typ: *typ,
@@ -559,6 +554,11 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 					Depth:  depth,
 				},
 			}
+		}
+		// Preserve the column's correlation depth inside its display wrapper.
+		// Numeric contexts use the raw storage value instead.
+		if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
+			expr, err = makeEnumOrSetDisplayValue(b.GetContext(), expr)
 		}
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -710,12 +710,28 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
 			newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
 			newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
-			return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+			left, err := b.bindComparisonExprWithRepeatedOperands(newLeftExpr, depth, isRoot, true, false)
+			if err != nil {
+				return nil, err
+			}
+			right, err := b.bindComparisonExprWithRepeatedOperands(newRightExpr, depth, isRoot, true, false)
+			if err != nil {
+				return nil, err
+			}
+			return BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{left, right})
 		} else {
 			if _, ok := astExpr.Left.(*tree.Tuple); ok {
 				newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
 				newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
-				return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+				left, err := b.bindComparisonExprWithRepeatedOperands(newLeftExpr, depth, isRoot, true, false)
+				if err != nil {
+					return nil, err
+				}
+				right, err := b.bindComparisonExprWithRepeatedOperands(newRightExpr, depth, isRoot, true, false)
+				if err != nil {
+					return nil, err
+				}
+				return BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{left, right})
 			}
 
 			return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
@@ -1824,9 +1840,27 @@ func bindingColumnType(binding *Binding, col string) (Type, bool) {
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
+	return b.bindComparisonExprWithRepeatedOperands(astExpr, depth, isRoot, false, false)
+}
+
+func (b *baseBinder) bindComparisonExprWithRepeatedOperands(
+	astExpr *tree.ComparisonExpr,
+	depth int32,
+	isRoot bool,
+	repeatedLeft, repeatedRight bool,
+) (*Expr, error) {
 	var op string
 	leftAst := unwrapParenExpr(astExpr.Left)
 	rightAst := unwrapParenExpr(astExpr.Right)
+	bindPair := func(name string, left, right tree.Expr, repeatedComponent bool) (*plan.Expr, error) {
+		return b.bindFuncExprImplByAstExprWithRepeatedOperands(
+			name,
+			[]tree.Expr{left, right},
+			depth,
+			repeatedLeft || repeatedComponent,
+			repeatedRight || repeatedComponent,
+		)
+	}
 
 	switch astExpr.Op {
 	case tree.EQUAL:
@@ -1840,12 +1874,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := 1; i < len(leftexpr.Exprs); i++ {
 						if i == 1 {
-							expr1, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
+							expr1, err = bindPair("=", leftexpr.Exprs[0], rightexpr.Exprs[0], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("=", leftexpr.Exprs[i], rightexpr.Exprs[i], false)
 						if err != nil {
 							return nil, err
 						}
@@ -1872,12 +1906,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := 1; i < len(leftexpr.Exprs); i++ {
 						if i == 1 {
-							expr1, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
+							expr1, err = bindPair(op, leftexpr.Exprs[0], rightexpr.Exprs[0], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair(op, leftexpr.Exprs[i], rightexpr.Exprs[i], false)
 						if err != nil {
 							return nil, err
 						}
@@ -1903,12 +1937,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
 						if i == len(leftexpr.Exprs)-2 {
-							expr1, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							expr1, err = bindPair("<", leftexpr.Exprs[i+1], rightexpr.Exprs[i+1], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("=", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -1916,7 +1950,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 						if err != nil {
 							return nil, err
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("<", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -1943,12 +1977,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
 						if i == len(leftexpr.Exprs)-2 {
-							expr1, err = b.bindFuncExprImplByAstExpr("<=", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							expr1, err = bindPair("<=", leftexpr.Exprs[i+1], rightexpr.Exprs[i+1], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("=", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -1956,7 +1990,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 						if err != nil {
 							return nil, err
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("<", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -1983,12 +2017,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
 						if i == len(leftexpr.Exprs)-2 {
-							expr1, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							expr1, err = bindPair(">", leftexpr.Exprs[i+1], rightexpr.Exprs[i+1], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("=", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -1996,7 +2030,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 						if err != nil {
 							return nil, err
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair(">", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -2023,12 +2057,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
 						if i == len(leftexpr.Exprs)-2 {
-							expr1, err = b.bindFuncExprImplByAstExpr(">=", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							expr1, err = bindPair(">=", leftexpr.Exprs[i+1], rightexpr.Exprs[i+1], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("=", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -2036,7 +2070,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 						if err != nil {
 							return nil, err
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair(">", leftexpr.Exprs[i], rightexpr.Exprs[i], true)
 						if err != nil {
 							return nil, err
 						}
@@ -2063,12 +2097,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					var err error
 					for i := 1; i < len(leftexpr.Exprs); i++ {
 						if i == 1 {
-							expr1, err = b.bindFuncExprImplByAstExpr("<>", []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
+							expr1, err = bindPair("<>", leftexpr.Exprs[0], rightexpr.Exprs[0], false)
 							if err != nil {
 								return nil, err
 							}
 						}
-						expr2, err = b.bindFuncExprImplByAstExpr("<>", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						expr2, err = bindPair("<>", leftexpr.Exprs[i], rightexpr.Exprs[i], false)
 						if err != nil {
 							return nil, err
 						}
@@ -2090,7 +2124,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.NOT_LIKE:
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
 		newExpr.Escape = astExpr.Escape
-		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
+		return b.bindFuncExprImplByAstExprWithRepeatedOperands("not", []tree.Expr{newExpr}, depth, repeatedLeft, repeatedRight)
 
 	case tree.ILIKE:
 		op = "ilike"
@@ -2098,7 +2132,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.NOT_ILIKE:
 		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
 		newExpr.Escape = astExpr.Escape
-		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
+		return b.bindFuncExprImplByAstExprWithRepeatedOperands("not", []tree.Expr{newExpr}, depth, repeatedLeft, repeatedRight)
 
 	case tree.IN:
 		if leftTuple, ok := leftAst.(*tree.Tuple); ok {
@@ -2227,6 +2261,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		if err != nil {
 			return nil, err
 		}
+		if b.builder != nil && repeatedLeft && b.builder.expressionHasVaryingScalarSubquery(child) {
+			return nil, moerr.NewNYI(b.GetContext(), "repeated correlated scalar operand may vary")
+		}
 
 		if subquery := expr.GetSub(); subquery != nil {
 			if list := child.GetList(); list != nil {
@@ -2271,10 +2308,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 	if b.mysqlSpecialTypeNumericComparison(astExpr.Left, astExpr.Right) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
-			return b.bindFuncExprImplByAstExpr(op, args, depth)
+			return b.bindFuncExprImplByAstExprWithRepeatedOperands(op, args, depth, repeatedLeft, repeatedRight)
 		})
 	}
-	return b.bindFuncExprImplByAstExpr(op, args, depth)
+	return b.bindFuncExprImplByAstExprWithRepeatedOperands(op, args, depth, repeatedLeft, repeatedRight)
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2395,7 +2432,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 
 		equalities := make([]*plan.Expr, 0, len(leftTuple.Exprs))
 		for i := 0; i < len(leftTuple.Exprs); i++ {
-			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
+			eqExpr, err := b.bindFuncExprImplByAstExprWithRepeatedLeft("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth, len(rightTuple.Exprs) > 1)
 			if err != nil {
 				return nil, err
 			}
@@ -2540,6 +2577,19 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	return b.bindFuncExprImplByAstExprWithRepeatedOperands(name, astArgs, depth, false, false)
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedLeft(name string, astArgs []tree.Expr, depth int32, repeatedLeft bool) (*plan.Expr, error) {
+	return b.bindFuncExprImplByAstExprWithRepeatedOperands(name, astArgs, depth, repeatedLeft, false)
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+	repeatedLeft, repeatedRight bool,
+) (*plan.Expr, error) {
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -2700,16 +2750,24 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 
 			args[idx] = expr
+			if b.builder != nil && ((idx == 0 && repeatedLeft) || (idx == 1 && repeatedRight)) &&
+				b.builder.expressionHasVaryingScalarSubquery(expr) {
+				return nil, moerr.NewNYI(b.GetContext(), "repeated correlated scalar operand may vary")
+			}
 		}
 	}
+	var err error
+	args, err = b.useStoredNoFromSpecialScalarArgs(name, astArgs, args)
+	if err != nil {
+		return nil, err
+	}
 	if b.numericParamType != nil {
-		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
 		if err != nil {
 			return nil, err
 		}
 	}
-	args, err := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(b.GetContext(), name, args)
+	args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(b.GetContext(), name, args)
 	if err != nil {
 		return nil, err
 	}
@@ -3495,7 +3553,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if stringPlusConcatenates(args) {
 			name = "concat"
 		}
 		if err != nil {
@@ -4788,16 +4846,8 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	// expression.  In particular, resolving a raw ENUM against a string can
 	// itself select a numeric comparison rule, so do not use the raw overload
 	// to decide whether the caller asked for numeric semantics.
-	displayTypes := make([]types.Type, len(args))
-	for i, arg := range args {
-		displayTypes[i] = makeTypeByPlan2Expr(arg)
-	}
-	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
-	if err != nil {
-		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
-	}
-	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-	if !shouldCast || len(targets) != len(rawArgs) {
+	targets, shouldCast := mysqlSpecialNumericFunctionTargets(ctx, name, args)
+	if !shouldCast {
 		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
 	}
 	result := args
@@ -4812,6 +4862,25 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 		}
 	}
 	return result
+}
+
+// stringPlusConcatenates matches the existing varchar '+' overload decision.
+func stringPlusConcatenates(args []*Expr) bool {
+	return len(args) == 2 && args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar)
+}
+
+// Resolve from display types so that lexical comparisons remain lexical.
+func mysqlSpecialNumericFunctionTargets(ctx context.Context, name string, args []*Expr) ([]types.Type, bool) {
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return nil, false
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	return targets, shouldCast && len(targets) == len(args)
 }
 
 // An IN list is represented as a plan.ExprList and is not assigned one scalar
@@ -4872,6 +4941,26 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(
 	}
 	projectList := node.ProjectList[:rowSize]
 
+	// A dynamically typed operand may be numeric at execution even when the
+	// prepared plan currently exposes it as text. Do not bind that comparison
+	// to a correlated display value without a proven contract.
+	leftItems := []*Expr{left}
+	if list := left.GetList(); list != nil {
+		leftItems = list.List
+	}
+	if len(leftItems) == len(projectList) {
+		for i, item := range leftItems {
+			project := projectList[i]
+			if item == nil || project == nil {
+				continue
+			}
+			if (!makeTypeByPlan2Expr(project).IsNumeric() && containsDynamicParam(project) && correlatedMySQLSpecialDisplay(b.ctx, item)) ||
+				(!makeTypeByPlan2Expr(item).IsNumeric() && containsDynamicParam(item) && correlatedMySQLSpecialDisplay(subCtx, project)) {
+				return nil, moerr.NewNYI(b.GetContext(), "dynamic quantified comparison with correlated ENUM/SET display")
+			}
+		}
+	}
+
 	// Decide each side from the original bound pair. Do not let rewriting one
 	// side make the other side newly eligible for numeric recovery.
 	var rewrittenLeft *Expr
@@ -4883,6 +4972,9 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(
 		for i, item := range list.List {
 			if projectList[i] == nil || !makeTypeByPlan2Expr(projectList[i]).IsNumeric() {
 				continue
+			}
+			if err := rejectNonReversibleCorrelatedNumeric(b.GetContext(), b.ctx, item); err != nil {
+				return nil, err
 			}
 			recovered, changed, err := storedMySQLSpecialNumericExpr(
 				b.GetContext(), b.ctx, item,
@@ -4902,6 +4994,9 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(
 			rewrittenLeft.Expr = &plan.Expr_List{List: &plan.ExprList{List: rewrittenItems}}
 		}
 	} else if len(projectList) == 1 && projectList[0] != nil && makeTypeByPlan2Expr(projectList[0]).IsNumeric() {
+		if err := rejectNonReversibleCorrelatedNumeric(b.GetContext(), b.ctx, left); err != nil {
+			return nil, err
+		}
 		recovered, changed, err := storedMySQLSpecialNumericExpr(
 			b.GetContext(), b.ctx, left,
 		)
@@ -4917,6 +5012,9 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(
 	for i, project := range projectList {
 		if project == nil || !numericSubqueryOperandAt(left, i) {
 			continue
+		}
+		if err := rejectNonReversibleCorrelatedNumeric(b.GetContext(), subCtx, project); err != nil {
+			return nil, err
 		}
 		recovered, changed, err := storedMySQLSpecialNumericProject(
 			b.GetContext(), subCtx, project, int32(i),

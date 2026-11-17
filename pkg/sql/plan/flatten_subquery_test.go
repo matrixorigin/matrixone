@@ -15,14 +15,156 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestScalarProjectionLiftableSpecialDomains(t *testing.T) {
+	display := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 9, Depth: 1}},
+	}
+	framed, encoding, err := types.EncodeEnumMembers([]string{"a,b", "c"})
+	require.NoError(t, err)
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "a,b"},
+		{Id: int32(types.T_enum), Enumvalues: framed, EnumEncoding: encoding},
+		{Id: int32(types.T_uint64), Enumvalues: "x,y"},
+	} {
+		expr, err := makeMySQLSpecialNumericValue(context.Background(), display, &typ)
+		require.NoError(t, err)
+		require.True(t, scalarProjectionLiftable(expr), "%v", typ)
+	}
+
+	base, err := makeMySQLSpecialNumericValue(context.Background(), display, &plan.Type{
+		Id: int32(types.T_enum), Enumvalues: "a,b",
+	})
+	require.NoError(t, err)
+	findConversion := func(expr *plan.Expr) *plan.Expr {
+		var found *plan.Expr
+		walkPlanExpr(expr, func(e *plan.Expr) {
+			if f := e.GetF(); f != nil && f.Func != nil && f.Func.ObjName == moEnumCastValueToIndexFun {
+				found = e
+			}
+		})
+		return found
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.Expr)
+	}{
+		{"overload out of range", func(e *plan.Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(function.CAST_VALUE_TO_INDEX, 12345) }},
+		{"overload arity", func(e *plan.Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(function.CAST_VALUE_TO_INDEX, 1) }},
+		{"domain type", func(e *plan.Expr) { e.GetF().Args[0] = makePlan2Int64ConstExprWithType(1) }},
+		{"domain mismatch", func(e *plan.Expr) { e.GetF().Args[0].GetLit().Value = &plan.Literal_Sval{Sval: "b,a"} }},
+		{"literal source", func(e *plan.Expr) { e.GetF().Args[0].GetLit().Src = DeepCopyExpr(display) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := DeepCopyExpr(base)
+			conversion := findConversion(expr)
+			require.NotNil(t, conversion)
+			tc.mutate(conversion)
+			require.False(t, scalarProjectionLiftable(expr))
+		})
+	}
+	require.False(t, scalarProjectionLiftable(&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{display}}}}))
+}
+
+func TestLiftCorrelatedScalarProjectionReusesInnerColumn(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := &BindContext{projectTag: 10}
+	inner := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 20, ColPos: 1}}}
+	outer := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 30, ColPos: 2, Depth: 1}}}
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{inner, DeepCopyExpr(inner), outer}}}}
+	node := &plan.Node{ProjectList: []*plan.Expr{DeepCopyExpr(expr)}}
+	lifted := builder.liftCorrelatedScalarProjection(ctx, node, expr)
+	require.Len(t, node.ProjectList, 2)
+	args := lifted.GetF().Args
+	require.Equal(t, int32(10), args[0].GetCol().RelPos)
+	require.Equal(t, int32(1), args[0].GetCol().ColPos)
+	require.Equal(t, args[0].GetCol(), args[1].GetCol())
+	require.Equal(t, int32(30), args[2].GetCol().RelPos)
+	require.NotNil(t, expr.GetF().Args[2].GetCorr(), "the source expression must remain unchanged")
+}
+
+func TestFlattenSubqueryReusesOnlyStableCompatibleScalar(t *testing.T) {
+	newFixture := func(project *plan.Expr) (*QueryBuilder, *BindContext, *plan.Expr) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		subCtx := &BindContext{
+			projects: []*plan.Expr{DeepCopyExpr(project)},
+			results:  []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)}}},
+		}
+		builder.qry = &plan.Query{Nodes: []*plan.Node{
+			{NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{DeepCopyExpr(project)}},
+			{NodeType: plan.Node_VALUE_SCAN},
+			{NodeType: plan.Node_PROJECT},
+		}}
+		builder.ctxByNode = []*BindContext{subCtx}
+		ref := func() *plan.Expr {
+			return &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+					NodeId: 0, RowSize: 1, Typ: plan.SubqueryRef_SCALAR,
+				}},
+			}
+		}
+		return builder, subCtx, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.AND, 0)},
+			Args: []*plan.Expr{ref(), ref()},
+		}}}
+	}
+
+	t.Run("same unconditional scalar is deep-copied", func(t *testing.T) {
+		project := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+				RelPos: 9, ColPos: 4, Depth: 1,
+			}},
+		}
+		builder, _, expr := newFixture(project)
+		_, flattened, err := builder.flattenSubqueries(2, expr, &BindContext{})
+		require.NoError(t, err)
+		first, second := flattened.GetF().Args[0], flattened.GetF().Args[1]
+		require.Equal(t, first.GetCol(), second.GetCol())
+		require.NotSame(t, first, second)
+		first.GetCol().ColPos = 99
+		require.Equal(t, int32(4), second.GetCol().ColPos)
+	})
+
+	t.Run("volatile result leaves a rejection tombstone", func(t *testing.T) {
+		project := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj: function.EncodeOverloadID(function.RANDOM, 0), ObjName: "rand",
+				},
+			}},
+		}
+		builder, _, expr := newFixture(project)
+		_, _, err := builder.flattenSubqueries(2, expr, &BindContext{})
+		require.ErrorContains(t, err, "repeated scalar subquery in incompatible evaluation contexts")
+	})
+
+	t.Run("selective reuse is rejected", func(t *testing.T) {
+		project := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+				RelPos: 9, ColPos: 4, Depth: 1,
+			}},
+		}
+		builder, _, expr := newFixture(project)
+		expr.GetF().Func.Obj = function.EncodeOverloadID(function.CASE, 0)
+		_, _, err := builder.flattenSubqueries(2, expr, &BindContext{})
+		require.ErrorContains(t, err, "repeated scalar subquery in incompatible evaluation contexts")
+	})
+}
 
 func TestCanPullupDeepCorrelatedPredicates(t *testing.T) {
 	for _, tc := range []struct {
@@ -719,6 +861,63 @@ func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
 	}
 }
 
+func TestRepeatedMixedCorrelatedScalarFailsClosedWhenItCanVary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		query   string
+		wantErr bool
+	}{
+		{
+			name: "tuple IN with varying inner filter",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND RAND() < 0.5), 0)
+				IN ((1,0),(100,0)) FROM NATION o`,
+			wantErr: true,
+		},
+		{
+			name: "NOT BETWEEN with varying inner filter",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND RAND() < 0.5), 0)
+				NOT BETWEEN (1,0) AND (100,0) FROM NATION o`,
+			wantErr: true,
+		},
+		{
+			name: "tuple ordering repeats an earlier component",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND RAND() < 0.5), o.N_NATIONKEY)
+				< (1,0) FROM NATION o`,
+			wantErr: true,
+		},
+		{
+			name: "single tuple candidate",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND RAND() < 2), 0)
+				IN ((1,0)) FROM NATION o`,
+		},
+		{
+			name: "stable multi-candidate tuple IN",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND i.N_NATIONKEY = 5), 0)
+				IN ((1,0),(100,0)) FROM NATION o`,
+		},
+		{
+			name: "stable tuple ordering",
+			query: `SELECT ((SELECT CASE WHEN i.N_NATIONKEY = 5 THEN o.N_NATIONKEY ELSE 100 END
+				FROM NATION i WHERE i.N_REGIONKEY = o.N_REGIONKEY AND i.N_NATIONKEY = 5), o.N_NATIONKEY)
+				< (1,0) FROM NATION o`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, tc.query)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "repeated correlated scalar operand may vary")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1284,6 +1483,16 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	}
 }
 
+func TestNullExtendScalarValuePreservesSetDomain(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	typ := plan.Type{Id: int32(types.T_uint64), NotNullable: true, Enumvalues: "x,y"}
+	value := GetColExpr(typ, 9, 0)
+	result, err := builder.nullExtendScalarValue(DeepCopyExpr(constTrue), value)
+	require.NoError(t, err)
+	typ.NotNullable = false
+	require.Equal(t, typ, result.Typ)
+}
+
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
@@ -1431,8 +1640,9 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential :=
-				builder.normalizeDirectCorrelatedScalarProjection(tt.subID, ctx)
+			nodeID, match, outerResult, existential, err :=
+				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx, false)
+			require.NoError(t, err)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)

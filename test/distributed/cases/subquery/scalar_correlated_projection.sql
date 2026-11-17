@@ -10,6 +10,10 @@ create table parent_agg (id int primary key, corr_key int);
 create table child_agg (corr_key int, v int);
 insert into parent_agg values (1, 10), (2, 20), (3, 30), (4, 30);
 insert into child_agg values (10, 5), (10, 7), (20, null);
+create table repeat_outer (id int primary key, corr_key int);
+create table repeat_inner (corr_key int, v int);
+insert into repeat_outer values (1, 1);
+insert into repeat_inner values (1, 5), (1, 7);
 create table `Author` (`id` int primary key, `name` varchar(32));
 create table `Post` (`id` int primary key, `title` varchar(32), `authorId` int);
 insert into `Author` values (1, 'Zero'), (2, 'One'), (3, 'Many');
@@ -35,6 +39,87 @@ insert into t2 values (5), (100);
 select t1.*, (select t1.a from t2 where t2.d > t1.a order by t2.d limit 1) as x from t1 order by t1.a;
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 11;
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
+
+-- @case
+-- @desc: wrapped correlated scalar projections preserve cardinality and NULL extension
+-- @label:bvt
+select a,
+    (select a + 1 from t2 where d > a limit 1),
+    (select cast(a as signed) from t2 where d > a limit 1),
+    (select coalesce(a, 0) from t2 where d > a limit 1),
+    (select if(a > 0, a, 0) from t2 where d > a limit 1),
+    (select case when a > 0 then a else 0 end from t2 where d > a limit 1)
+from t1 order by a;
+select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1)
+from t1 order by a;
+
+-- BETWEEN fallback duplicates one bound scalar reference. Keep its flattened
+-- result shared and preserve NULL when the inner query has no matching row.
+select p.id, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+       between p.id - 1 and p.id + 1 as in_range
+from parent_agg p where p.id in (2,3) order by p.id;
+
+-- The right input of a SINGLE JOIN may contain another join. A missing inner
+-- row must not turn the projected match marker into a constant TRUE.
+select p.id, (select coalesce(p.id, 99) from child_agg c
+    join child_agg d on d.corr_key = c.corr_key and d.v > 100
+    where c.corr_key = p.corr_key)
+from parent_agg p order by p.id;
+select p.id, (select distinct p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+from parent_agg p order by p.id;
+select (select p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+from parent_agg p where p.id = 1;
+
+-- A conditional consumer must not turn an unselected scalar into an eager
+-- multi-row error. The planner rejects the unproved lazy-join shape.
+-- @regex("conditional correlated scalar projection",true)
+select case when p.id = 1 then 42 else
+    (select p.id + 0 from child_agg c where c.corr_key = p.corr_key) end
+from parent_agg p where p.id = 1;
+-- @regex("conditional correlated scalar projection",true)
+select if(p.id = 1, 42, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key))
+from parent_agg p where p.id = 1;
+-- @regex("conditional correlated scalar projection",true)
+select coalesce(p.id, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key))
+from parent_agg p where p.id = 1;
+select case when (select p.id + 0 from child_agg c where c.corr_key = p.corr_key limit 1) > 0
+    then 42 else 0 end from parent_agg p where p.id = 1;
+
+-- Tuple IN expands the left AST once per candidate. A mixed correlated scalar
+-- whose inner row selection can vary must fail closed before it is rebound.
+-- @regex("repeated correlated scalar operand may vary",true)
+select ((select case when i.v = 5 then o.id else 100 end
+           from repeat_inner i where i.corr_key = o.corr_key and rand() < 0.5), 0)
+       in ((1,0),(100,0)) as matched
+from repeat_outer o where o.id = 1;
+-- @regex("repeated correlated scalar operand may vary",true)
+select ((select case when i.v = 5 then o.id else 100 end
+           from repeat_inner i where i.corr_key = o.corr_key and rand() < 0.5), 0)
+       not between (1,0) and (100,0) as matched
+from repeat_outer o where o.id = 1;
+-- A single candidate has no repeated binding and remains supported.
+select ((select case when i.v = 5 then o.id else 100 end
+           from repeat_inner i where i.corr_key = o.corr_key and i.v = 5 and rand() < 2), 0)
+       in ((1,0)) as matched
+from repeat_outer o where o.id = 1;
+-- Stable repeated values retain ordinary tuple-IN and NOT BETWEEN behavior.
+select ((select case when i.v = 5 then o.id else 100 end
+           from repeat_inner i where i.corr_key = o.corr_key and i.v = 5), 0)
+       in ((1,0),(100,0)) as matched
+from repeat_outer o where o.id = 1;
+select ((select case when i.v = 5 then o.id else 100 end
+           from repeat_inner i where i.corr_key = o.corr_key and i.v = 5), 0)
+       not between (1,0) and (1,0) as matched
+from repeat_outer o where o.id = 1;
+
+-- An unmatched scalar must not evaluate its outer expression. With multiple
+-- matches the scalar cardinality error takes precedence over that expression.
+create table scalar_cast_outer (id int, val varchar(8));
+insert into scalar_cast_outer values (1, '10'), (2, 'bad');
+select o.id, (select cast(o.val as signed) from t2 where d = o.id + 4)
+from scalar_cast_outer o order by o.id;
+select (select cast(o.val as signed) from t2 where d > o.id)
+from scalar_cast_outer o where o.id = 2;
 
 -- @case
 -- @desc:issue #25959 - evaluate the final scalar aggregate projection after LEFT JOIN null extension
