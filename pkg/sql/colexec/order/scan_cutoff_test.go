@@ -512,9 +512,10 @@ func TestScanCutoffNullableWitnessOracle(t *testing.T) {
 	for trial := range 600 {
 		keyDesc = trial%2 == 0
 		nullsLead = trial%4 < 2
-		var blocks []nblock
+		numBlocks := 1 + rng.Intn(6)
+		blocks := make([]nblock, 0, numBlocks)
 		rows := 0
-		for b := range 1 + rng.Intn(6) {
+		for b := range numBlocks {
 			size := 1 + rng.Intn(9)
 			blk := nblock{rows: make([]nrow, 0, size)}
 			for range size {
