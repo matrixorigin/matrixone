@@ -5624,14 +5624,11 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	var orderBy []*plan.OrderBySpec
 	if priorityColPosition >= 0 {
 		priorityExpr := childColExpr(priorityColPosition)
-		partitionPriorityOrder := &plan.OrderBySpec{
+		// The physical partition must contain every tuple for the same row.
+		// Priority orders candidates within that partition; it is not a group key.
+		orderBy = []*plan.OrderBySpec{{
 			Expr: priorityExpr,
 			Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_INTERNAL,
-		}
-		partitionBy = append(partitionBy, partitionPriorityOrder)
-		orderBy = []*plan.OrderBySpec{{
-			Expr: DeepCopyExpr(priorityExpr),
-			Flag: partitionPriorityOrder.Flag,
 		}}
 	}
 	lastNodeID = builder.appendNode(&plan.Node{
