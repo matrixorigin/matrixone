@@ -39,8 +39,8 @@ and fulltext return exactly one `index` row; fulltext never enumerates vocabular
 terms. All summary rows have a NULL `object_id`. For IVF, only the current metadata version is read,
 and empty buckets are included. Relational reads and physical-object visibility
 use the statement's transaction snapshot. Async job status is observed in a fresh system transaction, independently of that snapshot. The engine's
-size estimate can include asynchronously published statistics. Nothing is
-persisted, and CREATE INDEX, REINDEX, and DML acquire no new diagnostic writes.
+size estimate can include asynchronously published statistics. Diagnostic results are not persisted. IVF CREATE/REINDEX may publish optional
+build metadata as described in [index health](mo-index-health.md).
 
 The public schema contains only algorithm-independent columns. Each algorithm
 defines its own metric payload and detail row kinds. Adding diagnostics for
@@ -101,8 +101,8 @@ Empty buckets omit geometric metrics; a NULL placeholder center has `untrained`
 status. Missing index vectors produce
 `incomplete_vectors` rather than a misleading geometric score. This is a scan
 and computation operation, not a constant-time metadata lookup. Output filters
-and LIMIT do not eliminate the diagnostic scan. No historical baseline or
-automatic rebuild threshold is provided. A newly registered async index that
+and LIMIT do not eliminate the diagnostic scan. Health measurements, optional build metadata and explicit deep analysis are
+defined separately in [index health](mo-index-health.md). A newly registered async index that
 has not initialized its metadata returns an index summary with a NULL
 `index_version` and `index_not_initialized` status.
 
@@ -250,3 +250,6 @@ of the numeric metrics are omitted. Rebuild decisions require validating a fixed
 query set against exact top-k and measuring latency. Positive mismatch or unequal
 bucket sizes alone do not establish a recall or performance regression; no
 unvalidated rebuild threshold is supplied.
+
+The health extension and its versioned build-metadata, resource, suggestion and
+compatibility contracts are specified in [Index health](mo-index-health.md).
