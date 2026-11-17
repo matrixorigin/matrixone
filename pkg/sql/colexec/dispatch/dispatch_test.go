@@ -106,6 +106,125 @@ func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	return vm.NewCallResult(), nil
 }
 
+func TestDispatchRecursiveCTEMemberForwardsEmptyRoundMarker(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	marker := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+		bat.SetRowCount(1)
+		bat.SetLast()
+		return bat
+	}
+	emptyRound := marker()
+	productiveRound := marker()
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	data.SetRowCount(1)
+	t.Cleanup(func() {
+		emptyRound.Clean(proc.Mp())
+		productiveRound.Clean(proc.Mp())
+		data.Clean(proc.Mp())
+	})
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	defer d.Release()
+	d.RecCTE = true
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{emptyRound, data, productiveRound}))
+
+	for _, want := range []*batch.Batch{emptyRound, data, productiveRound} {
+		result, err := d.Call(proc)
+		require.NoError(t, err)
+		require.Same(t, want, result.Batch)
+		require.Equal(t, vm.ExecNext, result.Status)
+	}
+	require.Equal(t, []*batch.Batch{emptyRound, data, productiveRound}, sent)
+	require.Equal(t, int32(1), emptyRound.Recursive,
+		"a member with no rows in this round must stay live for later frontiers")
+	require.Equal(t, int32(1), productiveRound.Recursive)
+}
+
+func TestDispatchIntermediateForwardsRecursiveRoundMarker(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	marker := batch.NewWithSize(1)
+	marker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	marker.SetRowCount(1)
+	marker.SetLast()
+	t.Cleanup(func() { marker.Clean(proc.Mp()) })
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	defer d.Release()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{marker}))
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Same(t, marker, result.Batch)
+	require.Equal(t, int32(1), marker.Recursive)
+	require.Equal(t, []*batch.Batch{marker}, sent)
+}
+
+func TestDispatchRecursiveSinkStopsOnlyAfterEmptyGlobalFrontier(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	data.SetRowCount(1)
+	productiveMarker := batch.NewWithSize(1)
+	productiveMarker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	productiveMarker.SetRowCount(1)
+	productiveMarker.SetLast()
+	emptyMarker := batch.NewWithSize(1)
+	emptyMarker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	emptyMarker.SetRowCount(1)
+	emptyMarker.SetLast()
+	t.Cleanup(func() {
+		data.Clean(proc.Mp())
+		productiveMarker.Clean(proc.Mp())
+		emptyMarker.Clean(proc.Mp())
+	})
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	defer d.Release()
+	d.RecSink = true
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{data, productiveMarker, emptyMarker}))
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.True(t, d.ctr.hasData)
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, int32(1), productiveMarker.Recursive)
+	require.False(t, d.ctr.hasData)
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, int32(2), emptyMarker.Recursive)
+	require.Equal(t, []*batch.Batch{data, productiveMarker, emptyMarker}, sent)
+}
+
 // unknownServiceLockService supplies only the service identity needed by
 // Process.GetService. The embedded interface keeps this test independent of
 // lock-service behavior that is unrelated to protocol capability lookup.

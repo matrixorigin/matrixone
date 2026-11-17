@@ -29,7 +29,8 @@ import (
 )
 
 type failingConntrackClient struct {
-	closed bool
+	closed  bool
+	workers uint8
 }
 
 func (c *failingConntrackClient) Close() error {
@@ -37,7 +38,8 @@ func (c *failingConntrackClient) Close() error {
 	return nil
 }
 
-func (*failingConntrackClient) Listen(chan<- conntrack.Event, uint8, []netfilter.NetlinkGroup) (chan error, error) {
+func (c *failingConntrackClient) Listen(_ chan<- conntrack.Event, workers uint8, _ []netfilter.NetlinkGroup) (chan error, error) {
+	c.workers = workers
 	return nil, errors.New("listen failed")
 }
 
@@ -57,6 +59,11 @@ func TestStartConnectionTrackingClosesOnListenFailure(t *testing.T) {
 	}
 	if !client.closed {
 		t.Fatal("expected conntrack client to be closed after Listen failure")
+	}
+	// Concurrent listeners can deliver DESTROY before NEW and leave the
+	// destroyed flow in activeConns. Pin the ordering contract at startup.
+	if client.workers != 1 {
+		t.Fatalf("expected one ordered conntrack listener, got %d workers", client.workers)
 	}
 }
 
