@@ -282,6 +282,44 @@ func TestFilterInPlaceOrderedMatchesFilter(t *testing.T) {
 	}
 }
 
+func TestOrderedFilterSparseTail(t *testing.T) {
+	for _, mode := range []string{"slice", "mask", "offset"} {
+		for _, negate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/negate=%t", mode, negate), func(t *testing.T) {
+				source := Build(3, 0, 2)
+				legacy := source.Clone()
+				inPlace := source.Clone()
+				inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+				var offset uint64
+				if mode == "offset" {
+					offset = 1
+				}
+				sels := make([]int64, 65)
+				var mask bitmap.Bitmap
+				mask.InitWithSize(66)
+				for i := range sels {
+					sels[i] = int64(i) + int64(offset)
+					mask.Add(uint64(i))
+				}
+				Filter(legacy, sels, negate)
+				if mode == "slice" {
+					FilterInPlaceOrdered(inPlace, sels, negate)
+				} else {
+					FilterByMaskInPlaceWithOffset(inPlace, &mask, negate, offset)
+				}
+				require.Equal(t, legacy.ToArray(), inPlace.ToArray())
+				require.Equal(t, legacy.Count(), inPlace.Count())
+				for row := uint64(0); row < 67; row++ {
+					require.Equal(t, legacy.Contains(row), inPlace.Contains(row), "row %d", row)
+				}
+				require.True(t, inPlace.GetBitmap().HasExternalStorage())
+				require.Equal(t, 1, inPlace.GetBitmap().ExternalStorageCapacity())
+				require.NoError(t, inPlace.GetBitmap().Validate())
+			})
+		}
+	}
+}
+
 func TestFilterByMaskInPlaceMatchesFilter(t *testing.T) {
 	source := Build(130, 0, 2, 63, 64, 65, 128, 129)
 	for _, negate := range []bool{false, true} {
