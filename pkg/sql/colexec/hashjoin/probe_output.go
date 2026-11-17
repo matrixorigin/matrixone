@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,15 +34,27 @@ type identityProbeOutput struct {
 
 func (hashJoin *HashJoin) canForwardProbe() bool {
 	ctr := &hashJoin.ctr
-	if !ctr.dictionaryBoundary.AllowsDictionaryOutput() || ctr.dictionaryBoundary.PrefersOwnedOutput() ||
+	if !ctr.dictionaryBoundary.AllowsDictionaryOutput() ||
 		!hashJoin.dictionaryInputSupported() || ctr.spillEngine != nil || ctr.mp == nil ||
 		len(ctr.leftBat.ExtraBuf) != 0 || len(hashJoin.ResultCols) == 0 || ctr.probeTrackBuildMatches ||
 		ctr.lastIdx != 0 || ctr.leftBat.RowCount() > colexec.DefaultBatchSize {
 		return false
 	}
 	probeOutput := false
+	preferOwned := ctr.dictionaryBoundary.PrefersOwnedOutput()
 	for _, column := range hashJoin.ResultCols {
-		probeOutput = probeOutput || column.Rel == 0
+		if column.Rel == 0 {
+			probeOutput = true
+			if preferOwned {
+				source := ctr.leftBat.Vecs[column.Pos]
+				// A preference for owned input does not require a second copy
+				// of an unchanged owned flat column within its Call lifetime.
+				if source.IsConst() || source.IsDictionary() || source.HasBorrowedBacking() ||
+					!source.CanDetach(vector.BackingData) || !source.CanDetach(vector.BackingArea) {
+					return false
+				}
+			}
+		}
 		if !hashJoin.IsInner() && column.Rel != 0 {
 			return false
 		}

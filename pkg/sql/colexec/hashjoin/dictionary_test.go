@@ -37,21 +37,25 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 		views    bool
 		complete bool
 		prefix   bool
+		owned    bool
 	}{
-		{"INNER/selected", plan.Node_INNER, true, false, false, false},
-		{"INNER/flat", plan.Node_INNER, false, false, false, false},
-		{"SEMI/selected", plan.Node_SEMI, true, false, false, false},
-		{"ANTI/selected", plan.Node_ANTI, true, false, false, false},
-		{"INNER/partial-fallback", plan.Node_INNER, true, true, false, false},
-		{"SEMI/partial-fallback", plan.Node_SEMI, true, true, false, false},
-		{"ANTI/partial-fallback", plan.Node_ANTI, true, true, false, false},
-		{"INNER/identity-selected", plan.Node_INNER, true, true, true, false},
-		{"INNER/identity-flat", plan.Node_INNER, false, true, true, false},
-		{"SEMI/identity", plan.Node_SEMI, true, true, true, false},
-		{"ANTI/identity", plan.Node_ANTI, true, true, true, false},
-		{"INNER/matched-prefix", plan.Node_INNER, false, true, false, true},
-		{"SEMI/matched-prefix", plan.Node_SEMI, false, true, false, true},
-		{"ANTI/matched-prefix", plan.Node_ANTI, false, true, false, true},
+		{"INNER/selected", plan.Node_INNER, true, false, false, false, false},
+		{"INNER/flat", plan.Node_INNER, false, false, false, false, false},
+		{"SEMI/selected", plan.Node_SEMI, true, false, false, false, false},
+		{"ANTI/selected", plan.Node_ANTI, true, false, false, false, false},
+		{"INNER/partial-fallback", plan.Node_INNER, true, true, false, false, false},
+		{"SEMI/partial-fallback", plan.Node_SEMI, true, true, false, false, false},
+		{"ANTI/partial-fallback", plan.Node_ANTI, true, true, false, false, false},
+		{"INNER/identity-selected", plan.Node_INNER, true, true, true, false, false},
+		{"INNER/identity-flat", plan.Node_INNER, false, true, true, false, false},
+		{"SEMI/identity", plan.Node_SEMI, true, true, true, false, false},
+		{"ANTI/identity", plan.Node_ANTI, true, true, true, false, false},
+		{"INNER/matched-prefix", plan.Node_INNER, false, true, false, true, false},
+		{"SEMI/matched-prefix", plan.Node_SEMI, false, true, false, true, false},
+		{"ANTI/matched-prefix", plan.Node_ANTI, false, true, false, true, false},
+		{"INNER/nested-owned-identity", plan.Node_INNER, false, true, true, false, true},
+		{"INNER/nested-owned-dictionary-fallback", plan.Node_INNER, true, true, true, false, true},
+		{"INNER/nested-owned-prefix", plan.Node_INNER, false, true, false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
@@ -120,8 +124,17 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 			require.NoError(t, fixture.arg.Prepare(fixture.proc))
 			if tc.views {
 				sink := &dictionaryJoinSink{colexec.NewMockOperator()}
-				sink.AppendChild(fixture.arg)
+				if tc.owned {
+					// Exercise the real HashJoin preference propagation instead
+					// of mutating private boundary flags in the fixture.
+					parent := &HashJoin{JoinType: plan.Node_INNER, resultAllocation: fixture.arg.resultAllocation}
+					parent.AppendChild(fixture.arg)
+					sink.AppendChild(parent)
+				} else {
+					sink.AppendChild(fixture.arg)
+				}
 				vm.ConfigureDictionaryBoundaries(sink)
+				require.Equal(t, tc.owned, fixture.arg.ctr.dictionaryBoundary.PrefersOwnedOutput())
 				require.True(t, fixture.arg.ctr.dictionaryBoundary.AllowsDictionaryOutput())
 			}
 			require.True(t, fixture.arg.AcceptsDictionary(0))
@@ -139,8 +152,8 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 				if result.Batch.IsEmpty() {
 					continue
 				}
-				require.Equal(t, tc.views && tc.complete && tc.selected, result.Batch.HasDictionary())
-				if tc.views && tc.complete {
+				require.Equal(t, tc.views && tc.complete && tc.selected && !tc.owned, result.Batch.HasDictionary())
+				if tc.views && tc.complete && (!tc.owned || !tc.selected) {
 					require.Same(t, probe.Vecs[0], result.Batch.Vecs[0], "identity output must forward the existing header")
 				}
 				for row := range result.Batch.RowCount() {
