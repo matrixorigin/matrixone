@@ -358,6 +358,90 @@ func TestBitmapRemapOrdered(t *testing.T) {
 	}
 }
 
+// Sparse bitmaps represent the remaining rows of their owning vector as clear.
+// Ordered compaction cannot move a set bit beyond the original bitmap extent.
+func TestBitmapOrderedRemapSparseTail(t *testing.T) {
+	for _, length := range []int{0, 1, 63, 64, 65, 127, 128, 129} {
+		for _, external := range []bool{false, true} {
+			for _, mode := range []string{"slice", "mask", "offset"} {
+				for _, tailOnly := range []bool{false, true} {
+					t.Run(fmt.Sprintf("length=%d/external=%t/%s/tail=%t", length, external, mode, tailOnly), func(t *testing.T) {
+						value := newBm(length)
+						for row := 0; row < length; row++ {
+							if row%3 == 0 || row == length-1 {
+								value.Add(uint64(row))
+							}
+						}
+						if external {
+							value.InstallExternalStorage(make([]uint64, (length+63)/64))
+						}
+						backing := unsafe.SliceData(value.data)
+						capacity := cap(value.data)
+						original := value.Clone()
+						start := int64(0)
+						if tailOnly {
+							start = int64(length)
+						}
+						var offset uint64
+						if mode == "offset" {
+							offset = 1
+						}
+						selection := newBm(length*2 + 66)
+						sels := make([]int64, length+65)
+						want := make([]uint64, 0)
+						for i := range sels {
+							row := start + int64(i) + int64(offset)
+							sels[i] = row
+							selection.Add(uint64(row) - offset)
+							if original.Contains(uint64(row)) {
+								want = append(want, uint64(i))
+							}
+						}
+						if mode == "slice" {
+							value.RemapOrdered(sels, false)
+						} else {
+							value.RemapMaskOrderedWithOffset(selection, false, offset)
+						}
+						require.Equal(t, want, value.ToArray())
+						require.Equal(t, len(want), value.Count())
+						require.Equal(t, int64(length), value.Len())
+						for i, row := range sels {
+							require.Equal(t, original.Contains(uint64(row)), value.Contains(uint64(i)), "row %d", i)
+						}
+						require.NoError(t, value.Validate())
+						require.Equal(t, external, value.HasExternalStorage())
+						require.True(t, backing == unsafe.SliceData(value.data), "remap must retain the original backing")
+						require.Equal(t, capacity, cap(value.data))
+
+						// Repeated compaction and reuse must not resurrect discarded bits.
+						value.RemapOrdered(nil, false)
+						require.NoError(t, value.Validate())
+						value.TryExpandWithSize(length)
+						require.Zero(t, value.Count())
+						require.NoError(t, value.Validate())
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestBitmapOrderedRemapRejectsInvalidTail(t *testing.T) {
+	for _, sels := range [][]int64{{-1}, {0, 0}, {0, 2, 1}} {
+		t.Run(fmt.Sprint(sels), func(t *testing.T) {
+			value := newBm(1)
+			value.Add(0)
+			value.InstallExternalStorage(make([]uint64, 1))
+			require.PanicsWithValue(t, "bitmap ordered remap requires strictly increasing non-negative rows", func() {
+				value.RemapOrdered(sels, false)
+			})
+			require.Equal(t, int64(1), value.Len())
+			require.Equal(t, []uint64{0}, value.ToArray())
+			require.NoError(t, value.Validate())
+		})
+	}
+}
+
 func TestBitmapRemapMaskOrdered(t *testing.T) {
 	var value Bitmap
 	value.InitWithSize(130)

@@ -1084,6 +1084,30 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 			lastNodeID = builder.appendNode(selectNode, bindCtx)
 			selectNodeTag = groupActiveTag
+			for _, tableID := range physicalTableOrder {
+				targets := targetsByTableID[tableID]
+				if len(targets) < 2 {
+					continue
+				}
+				ownerIdx := targets[0]
+				rowIDPos := oldColName2Idx[dmlCtx.aliases[ownerIdx]+"."+catalog.Row_ID]
+				var groupRowNumberPos int32
+				lastNodeID, selectNode, selectNodeTag, groupRowNumberPos, err =
+					builder.appendTargetRowNumberNode(
+						bindCtx,
+						lastNodeID,
+						selectNode,
+						selectNodeTag,
+						rowIDPos,
+						physicalTargetActivePos[ownerIdx],
+					)
+				if err != nil {
+					return 0, err
+				}
+				for _, targetIdx := range targets {
+					targetRowNumberPos[targetIdx] = groupRowNumberPos
+				}
+			}
 		}
 	}
 	if !isMultiTargetUpdate && updateHasMultipleSourceTables(stmt) {
@@ -1384,6 +1408,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		aliasIdxNeedConstraintCheck[i] = append([]bool(nil), idxNeedUpdate[i]...)
 	}
 	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, idxNeedUpdate)
+	if !deferRepeatedPhysicalTargetMerge {
+		coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, aliasIdxNeedConstraintCheck)
+	}
 
 	if updatePkOrUk {
 		newProjTag := builder.genNewBindTag()
@@ -1422,7 +1449,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 			return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
 		}
-		guardTargetDedupExpr := func(targetIdx int, expr *plan.Expr) (*plan.Expr, error) {
+		uniqueDedupActivePos := targetBranchActivePos
+		if !deferRepeatedPhysicalTargetMerge {
+			uniqueDedupActivePos = physicalTargetActivePos
+		}
+		guardTargetDedupExpr := func(targetIdx int, activePositions []int32, expr *plan.Expr) (*plan.Expr, error) {
 			rowNumberExpr := &plan.Expr{
 				Typ: selectNode.ProjectList[targetRowNumberPos[targetIdx]].Typ,
 				Expr: &plan.Expr_Col{
@@ -1441,11 +1472,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 				return nil, err
 			}
 			activeExpr := &plan.Expr{
-				Typ: selectNode.ProjectList[targetBranchActivePos[targetIdx]].Typ,
+				Typ: selectNode.ProjectList[activePositions[targetIdx]].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: selectNodeTag,
-						ColPos: targetBranchActivePos[targetIdx],
+						ColPos: activePositions[targetIdx],
 					},
 				},
 			}
@@ -1506,7 +1537,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 
 					newPkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 					if isMultiTargetUpdate {
-						newPkExpr, err = guardTargetDedupExpr(i, newPkExpr)
+						newPkExpr, err = guardTargetDedupExpr(i, targetBranchActivePos, newPkExpr)
 						if err != nil {
 							return 0, err
 						}
@@ -1523,7 +1554,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 							Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: colPos},
 						},
 					}
-					pkExpr, err = guardTargetDedupExpr(i, pkExpr)
+					pkExpr, err = guardTargetDedupExpr(i, targetBranchActivePos, pkExpr)
 					if err != nil {
 						return 0, err
 					}
@@ -1687,7 +1718,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 						return 0, err
 					}
 					if isMultiTargetUpdate {
-						newUkExpr, err = guardTargetDedupExpr(i, newUkExpr)
+						newUkExpr, err = guardTargetDedupExpr(i, uniqueDedupActivePos, newUkExpr)
 						if err != nil {
 							return 0, err
 						}
@@ -1731,7 +1762,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 							}
 						}
 						if isMultiTargetUpdate {
-							newPartExpr, err = guardTargetDedupExpr(i, newPartExpr)
+							newPartExpr, err = guardTargetDedupExpr(i, uniqueDedupActivePos, newPartExpr)
 							if err != nil {
 								return 0, err
 							}
@@ -1757,7 +1788,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 							}
 							newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
 							if isMultiTargetUpdate {
-								newPartExpr, err = guardTargetDedupExpr(i, newPartExpr)
+								newPartExpr, err = guardTargetDedupExpr(i, uniqueDedupActivePos, newPartExpr)
 								if err != nil {
 									return 0, err
 								}
@@ -1777,7 +1808,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 									Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: colPos},
 								},
 							}
-							newPartExpr, err = guardTargetDedupExpr(i, newPartExpr)
+							newPartExpr, err = guardTargetDedupExpr(i, uniqueDedupActivePos, newPartExpr)
 							if err != nil {
 								return 0, err
 							}
@@ -2845,6 +2876,57 @@ func coalesceRepeatedPhysicalTargetRegularIndexes(
 			}
 		}
 		clear(idxNeedUpdate[targetIdx])
+	}
+}
+
+// coalesceRepeatedPhysicalTargetUniqueChecks makes the physical target owner
+// validate the final merged row image. Separate per-alias checks cannot detect
+// two aliases writing the same new key, and their inactive rows can incorrectly
+// release another physical row's old key from duplicate detection.
+func coalesceRepeatedPhysicalTargetUniqueChecks(
+	dmlCtx *DMLContext,
+	aliasIdxNeedConstraintCheck [][]bool,
+) {
+	ownerByTableID := make(map[uint64]int)
+	ownerIndexPos := make(map[uint64]map[string]int)
+	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) == 0 {
+			continue
+		}
+		tableID := dmlCtx.tableDefs[targetIdx].TblId
+		if _, ok := ownerByTableID[tableID]; ok {
+			continue
+		}
+		ownerByTableID[tableID] = targetIdx
+		ownerIndexPos[tableID] = make(map[string]int)
+		for indexPos, indexDef := range dmlCtx.tableDefs[targetIdx].Indexes {
+			key := indexDef.IndexName + "\x00" + indexDef.IndexTableName
+			ownerIndexPos[tableID][key] = indexPos
+		}
+	}
+	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) == 0 {
+			continue
+		}
+		tableID := dmlCtx.tableDefs[targetIdx].TblId
+		ownerIdx := ownerByTableID[tableID]
+		if targetIdx == ownerIdx {
+			continue
+		}
+		for indexPos, needsCheck := range aliasIdxNeedConstraintCheck[targetIdx] {
+			if !needsCheck {
+				continue
+			}
+			indexDef := dmlCtx.tableDefs[targetIdx].Indexes[indexPos]
+			if !indexDef.Unique {
+				continue
+			}
+			key := indexDef.IndexName + "\x00" + indexDef.IndexTableName
+			if ownerPos, ok := ownerIndexPos[tableID][key]; ok {
+				aliasIdxNeedConstraintCheck[ownerIdx][ownerPos] = true
+				aliasIdxNeedConstraintCheck[targetIdx][indexPos] = false
+			}
+		}
 	}
 }
 

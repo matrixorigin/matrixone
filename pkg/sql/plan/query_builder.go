@@ -13374,7 +13374,7 @@ func (builder *QueryBuilder) bindView(
 	}()
 	previousWarningContext := builder.compCtx.GetContext()
 	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
-		previousWarningContext, JSONMergeWarningStoredView))
+		defines.WithPersistentViewBinding(previousWarningContext), JSONMergeWarningStoredView))
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
