@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -214,6 +215,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 	if err = validateDeleteTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
 		return 0, err
+	}
+	if (IsMaterializedViewTableDef(dmlCtx.tableDefs[0]) || IsMaterializedViewStateTableDef(dmlCtx.tableDefs[0])) && !mvdefinition.CanWrite(ctx.GetContext(), dmlCtx.tableDefs[0]) {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from materialized view")
 	}
 	if stmt.HasReturning() {
 		if len(dmlCtx.tableDefs) != 1 {

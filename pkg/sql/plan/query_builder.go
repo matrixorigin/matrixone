@@ -160,7 +160,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
-			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
 		}
 	}
 	var aggSpillMem int64
@@ -760,10 +760,8 @@ func setOperationDecimalAttributes(
 
 // setOperationPureCharCommonType keeps a set operation made exclusively from
 // CHAR expressions in the fixed-width CHAR domain. The conditional-expression
-// resolver intentionally promotes CHAR with VARCHAR/TEXT to a variable string,
-// but that rule is not valid for set-operation row materialization: changing
-// CHAR to VARCHAR loses the common PAD SPACE representation and lets equal
-// values with different declared widths survive DISTINCT operations.
+// resolver may promote CHAR with VARCHAR/TEXT to a variable string, but that
+// rule is not valid for set-operation row materialization.
 func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	if len(source) == 0 {
 		return types.Type{}, false
@@ -8425,7 +8423,7 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 		}
 	}
 	for _, groupExpr := range fullGroupingSet {
-		walkGroupingSetOrderByExpr(groupExpr, func(expr tree.Expr) bool {
+		walkASTExpressions(groupExpr, func(expr tree.Expr) bool {
 			if _, subquery := expr.(*tree.Subquery); subquery {
 				return false
 			}
@@ -8444,7 +8442,7 @@ func rollupWindowGroupingAliases(selectExprs tree.SelectExprs, groupingSets []tr
 	names := make(map[string]struct{})
 	for _, list := range groupingSets {
 		for _, group := range list {
-			walkGroupingSetOrderByExpr(group, func(expr tree.Expr) bool {
+			walkASTExpressions(group, func(expr tree.Expr) bool {
 				if _, subquery := expr.(*tree.Subquery); subquery {
 					return false
 				}
@@ -9133,7 +9131,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 
 func (state *rollupWindowRewriteState) orderExprNeedsOuterAlias(expr tree.Expr) bool {
 	needsOuter := false
-	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+	walkASTExpressions(expr, func(candidate tree.Expr) bool {
 		if _, subquery := candidate.(*tree.Subquery); subquery {
 			return false
 		}
@@ -9196,7 +9194,7 @@ func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Whe
 
 func exprHasPendingAggregate(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		switch e := expr.(type) {
 		case *tree.Subquery:
 			return false
@@ -9350,7 +9348,7 @@ func resolveRollupWindowOrderSourceProbes(
 	}
 
 	for _, order := range orderBy {
-		walkGroupingSetOrderByExpr(order.Expr, func(expr tree.Expr) bool {
+		walkASTExpressions(order.Expr, func(expr tree.Expr) bool {
 			name, ok := expr.(*tree.UnresolvedName)
 			if !ok || name.Star || name.NumParts != 1 {
 				return true
@@ -11058,7 +11056,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 	}
 
 	canBind := true
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			canBind = false
 			return false
@@ -11083,7 +11081,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 func groupingSetOrderExprEqual(left, right tree.Expr) bool {
 	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
 		normalized := cloneTreeExpr(expr)
-		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
+		walkASTExpressions(normalized, func(node tree.Expr) bool {
 			name, ok := node.(*tree.UnresolvedName)
 			if !ok {
 				return true
@@ -11368,7 +11366,7 @@ func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]
 
 func containsGroupingFunction(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
+	walkASTExpressions(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
 		switch typedExpr := expr.(type) {
 		case *tree.FuncExpr:
 			if typedExpr.FuncName != nil && typedExpr.FuncName.Compare() == "grouping" {
@@ -11385,7 +11383,9 @@ func containsGroupingFunction(astExpr tree.Expr) bool {
 
 var groupingOrderFuncExprType = reflect.TypeOf(tree.FuncExpr{})
 
-func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
+// walkASTExpressions visits expression-bearing AST fields, including clauses
+// outside a projection. Func naming metadata is not an executable expression.
+func walkASTExpressions(root tree.NodeFormatter, visit func(tree.Expr) bool) {
 	visited := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -11409,8 +11409,22 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 			}
 			visited[pointer] = struct{}{}
 			if value.CanInterface() {
-				if expr, ok := value.Interface().(tree.Expr); ok && !visit(expr) {
-					return
+				if expr, ok := value.Interface().(tree.Expr); ok {
+					if !visit(expr) {
+						return
+					}
+					// SampleExpr keeps its operand list private so the generic
+					// reflection walk cannot see it. Those operands may contain
+					// subqueries or session-dependent expressions and must be
+					// subject to the same MV admission checks as every other AST
+					// expression.
+					if sample, ok := expr.(*tree.SampleExpr); ok {
+						columns, _ := sample.GetColumns()
+						for _, column := range columns {
+							walk(reflect.ValueOf(column))
+						}
+						return
+					}
 				}
 			}
 			walk(value.Elem())
@@ -11437,7 +11451,7 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 			}
 		}
 	}
-	walk(reflect.ValueOf(astExpr))
+	walk(reflect.ValueOf(root))
 }
 
 func (builder *QueryBuilder) bindOrderBy(
@@ -12785,7 +12799,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 
 	qualified := cloneTreeExpr(astExpr)
 	var bindErr error
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		function, ok := expr.(*tree.FuncExpr)
 		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
 			return true
@@ -12803,7 +12817,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 	}
 
 	fallbackNames := make(map[string]struct{})
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			return false
 		}
@@ -14030,7 +14044,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			sqlDatabase = catalogDatabase
 		}
 
-		// Preserve the existing probe; full resolution below owns error handling.
+		// Preserve the subscription probe; full resolution below owns errors.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
 		// SHOW sources retain their exact AST-bound authorization route.
@@ -14057,6 +14071,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, "", err
+		}
+		if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
 			return 0, "", err
 		}
 		// Admit the complete catalog schema before pruning unused columns or

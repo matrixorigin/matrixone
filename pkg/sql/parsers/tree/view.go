@@ -26,12 +26,43 @@ func init() {
 
 type CreateView struct {
 	statementImpl
-	Replace     bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
-	CheckOption string
+	Replace       bool
+	Name          *TableName
+	ColNames      IdentifierList
+	AsSource      *Select
+	IfNotExists   bool
+	Materialized  bool
+	CheckOption   string
+	RefreshMethod MaterializedViewRefreshMethod
+	RefreshTiming MaterializedViewRefreshTiming
+}
+
+type MaterializedViewRefreshMethod int8
+
+const (
+	MaterializedViewRefreshForce MaterializedViewRefreshMethod = iota
+	MaterializedViewRefreshFast
+	MaterializedViewRefreshComplete
+)
+
+type MaterializedViewRefreshTiming int8
+
+const (
+	MaterializedViewRefreshOnChange MaterializedViewRefreshTiming = iota
+	MaterializedViewRefreshOnDemand
+)
+
+func NewCreateMaterializedView(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+	node := NewCreateView(false, name, colNames, asSource, ifNotExists, "")
+	node.Materialized = true
+	return node
+}
+
+func NewCreateMaterializedViewWithRefresh(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, method MaterializedViewRefreshMethod, timing MaterializedViewRefreshTiming) *CreateView {
+	node := NewCreateMaterializedView(name, colNames, asSource, ifNotExists)
+	node.RefreshMethod = method
+	node.RefreshTiming = timing
+	return node
 }
 
 func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, checkOption string) *CreateView {
@@ -56,6 +87,9 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 		ctx.WriteString("or replace ")
 	}
 
+	if node.Materialized {
+		ctx.WriteString("materialized ")
+	}
 	ctx.WriteString("view ")
 
 	if node.IfNotExists {
@@ -67,6 +101,23 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 		ctx.WriteString(" (")
 		node.ColNames.Format(ctx)
 		ctx.WriteByte(')')
+	}
+	if node.Materialized && (node.RefreshMethod != MaterializedViewRefreshForce || node.RefreshTiming != MaterializedViewRefreshOnChange) {
+		ctx.WriteString(" refresh ")
+		switch node.RefreshMethod {
+		case MaterializedViewRefreshFast:
+			ctx.WriteString("fast")
+		case MaterializedViewRefreshComplete:
+			ctx.WriteString("complete")
+		default:
+			ctx.WriteString("force")
+		}
+		ctx.WriteString(" on ")
+		if node.RefreshTiming == MaterializedViewRefreshOnDemand {
+			ctx.WriteString("demand")
+		} else {
+			ctx.WriteString("change")
+		}
 	}
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
@@ -92,39 +143,37 @@ func (node CreateView) TypeName() string { return "tree.CreateView" }
 func (node *CreateView) GetStatementType() string { return "Create View" }
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }
 
-// WithViewColumnNames returns an AST copy that exposes the explicit column
-// names from CREATE/ALTER VIEW through a derived-table column list. The
-// original SELECT remains the inner query, so aliases referenced by ORDER BY,
-// HAVING, or other clauses keep their original scope and meaning. The outer
-// projection is explicit rather than a wildcard so a previously expanded
-// SELECT remains frozen. The wrapper also covers UNION output and does not
-// mutate any of the input AST nodes.
+type RefreshMaterializedView struct {
+	statementImpl
+	Name *TableName
+}
+
+func NewRefreshMaterializedView(name *TableName) *RefreshMaterializedView {
+	return &RefreshMaterializedView{Name: name}
+}
+
+func (node *RefreshMaterializedView) Format(ctx *FmtCtx) {
+	ctx.WriteString("refresh materialized view ")
+	node.Name.Format(ctx)
+}
+
+func (node *RefreshMaterializedView) Free()                    {}
+func (node RefreshMaterializedView) TypeName() string          { return "tree.RefreshMaterializedView" }
+func (node *RefreshMaterializedView) GetStatementType() string { return "Refresh Materialized View" }
+
 func WithViewColumnNames(stmt *Select, colNames IdentifierList) *Select {
 	if stmt == nil || len(colNames) == 0 {
 		return stmt
 	}
 	inner := NewSubquery(stmt, false)
-	derived := NewAliasedTableExpr(
-		NewParenTableExpr(inner),
-		"__mo_view_definition",
-		colNames,
-	)
+	derived := NewAliasedTableExpr(NewParenTableExpr(inner), "__mo_view_definition", colNames)
 	exprs := make(SelectExprs, len(colNames))
 	for i, colName := range colNames {
 		exprs[i] = SelectExpr{
-			Expr: NewUnresolvedName(
-				NewCStr("__mo_view_definition", 0),
-				NewCStr(string(colName), 0),
-			),
-			As: NewCStr(string(colName), 0),
+			Expr: NewUnresolvedName(NewCStr("__mo_view_definition", 0), NewCStr(string(colName), 0)),
+			As:   NewCStr(string(colName), 0),
 		}
 	}
-	return NewSelect(
-		&SelectClause{
-			Exprs: exprs,
-			From:  NewFrom(TableExprs{derived}),
-		},
-		nil,
-		nil,
-	)
+	return NewSelect(&SelectClause{Exprs: exprs, From: NewFrom(TableExprs{derived})}, nil, nil)
 }
+func (node *RefreshMaterializedView) GetQueryType() string { return QueryTypeDDL }

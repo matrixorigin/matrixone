@@ -15,6 +15,9 @@
 package iscp
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -29,12 +32,18 @@ func NewConsumer(
 	info *ConsumerInfo,
 ) (Consumer, error) {
 
+	if info == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing ISCP consumer specification")
+	}
 	if info.ConsumerType == int8(ConsumerType_CNConsumer) {
 		return NewInteralSqlConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, jobID, info)
 	}
 	if info.ConsumerType == int8(ConsumerType_IndexSync) {
 		return NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, jobID, info)
 	}
-	panic("todo")
+	if info.ConsumerType == int8(ConsumerType_MaterializedView) {
+		return NewMaterializedViewConsumer(cnUUID, cnEngine, cnTxnClient, jobID, info)
+	}
+	return nil, moerr.NewNotSupportedf(context.Background(), "unsupported ISCP consumer type %d", info.ConsumerType)
 
 }
