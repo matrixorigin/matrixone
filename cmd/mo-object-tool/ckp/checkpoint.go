@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -370,8 +371,9 @@ func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions, 
 }
 
 type dumpOutput struct {
-	fs     fileservice.FileService
-	remote bool
+	fs        fileservice.FileService
+	remote    bool
+	exclusive bool
 }
 
 func openDumpOutput(ctx context.Context, storage toolfs.StorageOptions) (*dumpOutput, error) {
@@ -399,8 +401,31 @@ func (o *dumpOutput) MkdirAll(dir string) error {
 	return nil
 }
 
+func (o *dumpOutput) ensureNewRestoreScript(ctx context.Context, dir string) error {
+	filePath := outputPathJoin(dir, "restore.sql")
+	var err error
+	if o != nil && o.remote {
+		_, err = o.fs.StatFile(ctx, cleanObjectPath(filePath))
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil
+		}
+	} else {
+		_, err = os.Lstat(filePath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("check restore script %s: %w", filePath, err)
+	}
+	return fmt.Errorf("restore script %s already exists; use a fresh output directory", filePath)
+}
+
 func (o *dumpOutput) Create(ctx context.Context, filePath string) (io.WriteCloser, error) {
 	if o == nil || !o.remote {
+		if o != nil && o.exclusive {
+			return os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+		}
 		return os.Create(filePath)
 	}
 	return newFileServiceWriteCloser(ctx, o.fs, filePath)
@@ -603,6 +628,14 @@ Examples:
 				return fmt.Errorf("open dump output fileservice: %w", err)
 			}
 			defer dumpOut.Close(ctx)
+			// A restore script and its CSV files form one generation. Never
+			// replace an earlier generation with a partial or failed dump.
+			dumpOut.exclusive = loadScript
+			if loadScript {
+				if err := dumpOut.ensureNewRestoreScript(ctx, output); err != nil {
+					return err
+				}
+			}
 			loadPathResolver, err := newLoadDataPathResolver(outputStorage)
 			if err != nil {
 				return err
@@ -757,7 +790,7 @@ Examples:
 	cmd.Flags().IntVar(&jobs, "jobs", 5, "Concurrent table dumps for --database-id/--account-id batch dumps")
 	cmd.Flags().BoolVar(&metaComments, "meta-comments", false, "Prepend DDL and row-count comment lines (disabled by default so output can be loaded directly)")
 	cmd.Flags().BoolVar(&header, "header", false, "Include a CSV header row with column names")
-	cmd.Flags().BoolVar(&loadScript, "load-script", false, "Generate restore.sql with CREATE DATABASE, CREATE TABLE, and LOAD DATA statements; --output/-o is treated as a directory")
+	cmd.Flags().BoolVar(&loadScript, "load-script", false, "Generate restore.sql and CSV files without overwriting existing output; --output/-o is treated as a directory")
 	cmd.Flags().BoolVar(&noLoad, "no-load", false, "With --load-script, generate only DDL and skip CSV dump and LOAD DATA statements")
 	cmd.Flags().StringVar(&rowOrder, "row-order", string(checkpointtool.CSVRowOrderStorage), "CSV row order: storage (streaming, large-table friendly) or lexical (sort by visible CSV values in memory)")
 	cmd.Flags().StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to file")
@@ -1668,8 +1701,8 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if err := json.Unmarshal([]byte(schema.ViewDefinition), &data); err != nil {
 		return fail("invalid view definition JSON")
 	}
-	if data.Stmt == "" || data.DefaultDatabase == "" {
-		return fail("missing view SQL or default database")
+	if data.Stmt == "" {
+		return fail("missing view SQL")
 	}
 	mode, defaultDB, security, stmt := "PIPES_AS_CONCAT", data.DefaultDatabase, "DEFINER", data.Stmt
 	if data.SQLMode != nil {
@@ -1696,8 +1729,36 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 	if err != nil || len(stmts) != 1 {
 		return fail("view definition is not one valid CREATE VIEW")
 	}
-	if _, ok := stmts[0].(*tree.CreateView); !ok {
+	viewStmt, ok := stmts[0].(*tree.CreateView)
+	if !ok {
 		return fail("view definition is not CREATE VIEW")
+	}
+	if defaultDB == "" {
+		// A qualified view with only literal projections has no database
+		// dependencies. It can be recreated in the destination database even
+		// if the original session did not select one.
+		q := viewStmt.AsSource
+		if viewStmt.Name == nil || viewStmt.Name.SchemaName == "" || q == nil || q.With != nil || q.IsPerform || q.TimeWindow != nil || len(q.OrderBy) != 0 || q.Limit != nil || q.RankOption != nil || q.Ep != nil || q.SelectLockInfo != nil {
+			return fail("view without default database is not a self-contained literal SELECT")
+		}
+		clause, ok := q.Select.(*tree.SelectClause)
+		if !ok || clause.Distinct || clause.Option != 0 || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) == 0 {
+			return fail("view without default database is not a self-contained literal SELECT")
+		}
+		alias, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+		if !ok || alias.As.Alias != "" || len(alias.IndexHints) != 0 {
+			return fail("view without default database is not a self-contained literal SELECT")
+		}
+		from, ok := alias.Expr.(*tree.TableName)
+		if !ok || from.ObjectName != "" {
+			return fail("view without default database is not a self-contained literal SELECT")
+		}
+		for _, projection := range clause.Exprs {
+			if _, ok := projection.Expr.(*tree.NumVal); !ok {
+				return fail("view without default database is not a self-contained literal SELECT")
+			}
+		}
+		defaultDB = table.DatabaseName
 	}
 	start, end, ok := createTableNameRange(stmt)
 	if !ok {
@@ -1748,11 +1809,6 @@ func checkpointReplaySQLMode(mode string) (string, error) {
 		}
 	}
 	return strings.Join(parts, ","), nil
-}
-
-func isCreateViewSQL(ddl string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(ddl))
-	return strings.HasPrefix(upper, "CREATE VIEW ") || strings.HasPrefix(upper, "CREATE OR REPLACE VIEW ")
 }
 
 func isLocalInfileExternalTableDDL(ddl string) bool {

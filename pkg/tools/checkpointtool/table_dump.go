@@ -1032,6 +1032,11 @@ func ValidateEnumReplaySchema(schema *TableSchema) error {
 			if _, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding); err != nil {
 				return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM domain on column %q", col.Name), err)
 			}
+			// CREATE ENUM('') uses framed encoding. An old empty payload has
+			// different planner semantics and cannot be faithfully recreated.
+			if col.EnumEncoding == types.EnumEncodingLegacy && col.EnumValues == "" {
+				return moerr.NewInvalidInputNoCtxf("cannot replay legacy empty ENUM column %q", col.Name)
+			}
 		}
 		if col.EnumCollation == types.EnumCollationLegacy && (schema.DefaultCharset != types.EnumCollationLegacy || schema.EnumUnsupportedDefault != "") {
 			return moerr.NewInvalidInputNoCtxf("cannot replay legacy ENUM column %q under a table collation", col.Name)
@@ -3882,63 +3887,6 @@ func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
 		}
 	}
 	return ""
-}
-
-func findTableCommentFromMoTables(view *LogicalTableView, tableID uint64) string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
-	commentCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment)
-	if relIDCol < 0 || commentCol < 0 {
-		return ""
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || commentCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr && isPrintableSQLText(row[commentCol]) {
-			return strings.Clone(row[commentCol])
-		}
-	}
-	return ""
-}
-
-func findUniqueKeysFromMoTables(view *LogicalTableView, tableID uint64) []TableUniqueKey {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
-	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
-	if relIDCol < 0 || constraintCol < 0 {
-		return nil
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || constraintCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr {
-			return decodeUniqueKeysFromMoTablesConstraint(row[constraintCol])
-		}
-	}
-	return nil
-}
-
-func findPrimaryKeyFromMoTables(view *LogicalTableView, tableID uint64) []string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
-	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
-	if relIDCol < 0 || constraintCol < 0 {
-		return nil
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || constraintCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr {
-			return decodePrimaryKeyFromMoTablesConstraint(row[constraintCol])
-		}
-	}
-	return nil
 }
 
 func findForeignKeysFromCatalogViews(moTablesView, moColumnsView *LogicalTableView, tableID uint64) []TableForeignKey {

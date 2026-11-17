@@ -97,6 +97,39 @@ func TestAlterEnumTransferRejectsWrongStatementScope(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAlterEnumTransferReplanKeepsQualifiedSource(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	spec := alterEnumTransferTestSpec()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "insert into db.tmp (renamed,id) select e,id from db.src", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	marked, err := WithAlterEnumTransfer(ctx, stmt, spec)
+	require.NoError(t, err)
+	require.True(t, isAlterEnumTransfer(marked))
+
+	// qualifyColumnNames mutates this AST before a retry rebuilds the plan.
+	ref := stmt.(*tree.Insert).Rows.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.UnresolvedName)
+	ref.NumParts = 2
+	ref.CStrParts[1] = tree.NewCStr("src", 1)
+	retried, err := WithAlterEnumTransfer(WithoutAlterEnumTransfer(marked), stmt, spec)
+	require.NoError(t, err)
+	require.True(t, isAlterEnumTransfer(retried))
+	require.Error(t, ValidateAlterEnumTransferPlan(retried, nil), "replan must still require a proven transfer plan")
+	ref.CStrParts[1] = tree.NewCStr("other", 1)
+	retried, err = WithAlterEnumTransfer(WithoutAlterEnumTransfer(marked), stmt, spec)
+	require.NoError(t, err)
+	require.False(t, isAlterEnumTransfer(retried))
+}
+
+func TestAlterEnumColumnsUsesEqualFold(t *testing.T) {
+	col := &planpb.ColDef{Name: "K"}
+	columns, err := alterEnumColumns(&planpb.TableDef{Cols: []*planpb.ColDef{col}})
+	require.NoError(t, err)
+	require.Same(t, col, columns[enumFoldKey("k")])
+	_, err = alterEnumColumns(&planpb.TableDef{Cols: []*planpb.ColDef{col, {Name: "K"}}})
+	require.ErrorContains(t, err, "ambiguous ALTER COPY column")
+}
+
 func TestAlterEnumTransferEligibility(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	for _, tc := range []struct {

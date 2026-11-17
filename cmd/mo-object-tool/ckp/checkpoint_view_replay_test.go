@@ -70,6 +70,18 @@ func TestCheckpointViewRestoreRejectsUnverifiedMetadata(t *testing.T) {
 	}
 }
 
+func TestCheckpointViewWithoutDefaultDatabase(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{TableID: 1, DatabaseName: "db", TableName: "v", RelKind: "v"}
+	view, err := prepareCheckpointViewRestore(context.Background(), table,
+		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT 1 AS n", "", "", "DEFINER"))
+	require.NoError(t, err)
+	require.Equal(t, "db", view.defaultDB)
+	require.Equal(t, "CREATE VIEW `db`.`v` AS SELECT 1 AS n", view.ddl)
+	_, err = prepareCheckpointViewRestore(context.Background(), table,
+		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT * FROM source", "", "", "DEFINER"))
+	require.ErrorContains(t, err, "not a self-contained literal SELECT")
+}
+
 func TestCheckpointViewScriptRestoresModeAndDatabase(t *testing.T) {
 	view := checkpointtool.TableCatalogEntry{TableID: 2, DatabaseName: "view_db", TableName: "v", RelKind: "v"}
 	data := checkpointViewTestData(t, `CREATE VIEW old AS SELECT 'a\b' AS value`, "NO_BACKSLASH_ESCAPES", "source_db", "INVOKER")

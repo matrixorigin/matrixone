@@ -257,13 +257,15 @@ func TestCheckpointEnumDomainRequiresPresentNonNullCell(t *testing.T) {
 			require.Empty(t, RenderCreateTableDDLFromSchema(schema))
 		})
 	}
-	// A non-NULL empty legacy payload is a valid single empty member.
+	// A non-NULL empty payload is known metadata, but CREATE would reauthor
+	// its legacy representation as framed and change planner behavior.
 	tables, columns := enumReplayViews(t, types.EnumCollationUTF8Bin, []string{"A"}, nil)
 	idx := columns.columnDataIndex(catalog.SystemColAttr_EnumValues)
 	columns.Rows[0][logicalViewDataOffset(columns)+idx] = ""
 	schema := buildTableSchemaFromCatalogViews(101, tables, columns)
-	require.NoError(t, ValidateEnumReplaySchema(schema))
-	require.Contains(t, RenderCreateTableDDLFromSchema(schema), "ENUM('')")
+	require.False(t, schema.Columns[0].enumDomainUnverified)
+	require.ErrorContains(t, ValidateEnumReplaySchema(schema), "cannot replay legacy empty ENUM")
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
 }
 
 func TestCheckpointEnumDomainValidityFollowsBatchRows(t *testing.T) {

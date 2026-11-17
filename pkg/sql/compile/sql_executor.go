@@ -557,66 +557,43 @@ func (exec *txnExecutor) Exec(
 
 	defer c.Release()
 
-	if prepared {
-		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			if spec := statementOption.EnumIndexBackfill(); spec != nil {
-				var err error
-				ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
-				if err != nil {
-					return nil, err
-				}
-			}
-			if spec := statementOption.AlterEnumTransfer(); spec != nil {
-				var err error
-				ctx, err = plan.WithAlterEnumTransfer(plan.WithoutAlterEnumTransfer(ctx), stmts[0], spec)
-				if err != nil {
-					return nil, err
-				}
-			}
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+		if spec := statementOption.EnumIndexBackfill(); spec != nil {
+			var err error
+			ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
 			if err != nil {
-				return pn, err
+				return nil, err
 			}
-			err = normalizeInternalPreparePlan(compileContext, pn)
+		}
+		if spec := statementOption.AlterEnumTransfer(); spec != nil {
+			var err error
+			ctx, err = plan.WithAlterEnumTransfer(plan.WithoutAlterEnumTransfer(ctx), stmts[0], spec)
 			if err != nil {
+				return nil, err
+			}
+			// compilerContext.GetContext reads the process, not its ctx field.
+			// The retry's proof must be the one used and validated by planning.
+			previous := proc.GetTopContext()
+			proc.ReplaceTopCtx(ctx)
+			defer proc.ReplaceTopCtx(previous)
+		}
+		pn, err := plan.BuildPlan(
+			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+			stmts[0], prepared,
+		)
+		if err != nil {
+			return pn, err
+		}
+		if prepared {
+			if err = normalizeInternalPreparePlan(compileContext, pn); err != nil {
 				return pn, err
 			}
-			if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
-				return pn, err
-			}
-			return pn, plan.ValidateAlterEnumTransferPlan(ctx, pn)
-		})
-	} else {
-		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			if spec := statementOption.EnumIndexBackfill(); spec != nil {
-				var err error
-				ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
-				if err != nil {
-					return nil, err
-				}
-			}
-			if spec := statementOption.AlterEnumTransfer(); spec != nil {
-				var err error
-				ctx, err = plan.WithAlterEnumTransfer(plan.WithoutAlterEnumTransfer(ctx), stmts[0], spec)
-				if err != nil {
-					return nil, err
-				}
-			}
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
-			if err != nil {
-				return pn, err
-			}
-			if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
-				return pn, err
-			}
-			return pn, plan.ValidateAlterEnumTransferPlan(ctx, pn)
-		})
-	}
+		}
+		if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
+			return pn, err
+		}
+		return pn, plan.ValidateAlterEnumTransferPlan(ctx, pn)
+	})
 
 	result := executor.NewResult(exec.s.mp)
 

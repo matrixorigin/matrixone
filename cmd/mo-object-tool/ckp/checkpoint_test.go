@@ -975,6 +975,42 @@ func TestWriteRestoreScriptNoLoadKeepsLocalExternalSourceWithoutPackaging(t *tes
 	})
 }
 
+func TestRestoreOutputDoesNotOverwritePreviousGeneration(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "restore.sql")
+	csvPath := filepath.Join(dir, "data.csv")
+	out := &dumpOutput{exclusive: true}
+	require.NoError(t, out.ensureNewRestoreScript(context.Background(), dir))
+	require.NoError(t, os.WriteFile(scriptPath, []byte("old script"), 0o600))
+	require.NoError(t, os.WriteFile(csvPath, []byte("old data"), 0o600))
+	require.ErrorContains(t, out.ensureNewRestoreScript(context.Background(), dir), "already exists")
+	for _, path := range []string{scriptPath, csvPath} {
+		_, err := out.Create(context.Background(), path)
+		require.ErrorIs(t, err, os.ErrExist)
+	}
+	contents, err := os.ReadFile(csvPath)
+	require.NoError(t, err)
+	require.Equal(t, "old data", string(contents))
+	contents, err = os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	require.Equal(t, "old script", string(contents))
+}
+
+func TestRestoreOutputChecksRemoteScript(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("dump", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	out := &dumpOutput{fs: fs, remote: true, exclusive: true}
+	require.NoError(t, out.ensureNewRestoreScript(ctx, "backup"))
+	w, err := out.Create(ctx, "backup/restore.sql")
+	require.NoError(t, err)
+	_, err = w.Write([]byte("script"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.ErrorContains(t, out.ensureNewRestoreScript(ctx, "backup"), "already exists")
+}
+
 func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()

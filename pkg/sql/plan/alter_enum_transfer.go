@@ -119,20 +119,19 @@ func NeedsAlterEnumTransfer(source, target *planpb.TableDef) bool {
 	return false
 }
 
-func uniqueAlterEnumColumn(table *planpb.TableDef, name string) (*planpb.ColDef, error) {
-	var found *planpb.ColDef
+func alterEnumColumns(table *planpb.TableDef) (map[string]*planpb.ColDef, error) {
+	columns := make(map[string]*planpb.ColDef, len(table.Cols))
 	for _, col := range table.Cols {
 		if col == nil {
 			return nil, moerr.NewInvalidInputNoCtx("invalid ALTER COPY column metadata")
 		}
-		if strings.EqualFold(col.Name, name) {
-			if found != nil {
-				return nil, moerr.NewInvalidInputNoCtx("ambiguous ALTER COPY column")
-			}
-			found = col
+		name := enumFoldKey(col.Name)
+		if _, exists := columns[name]; exists {
+			return nil, moerr.NewInvalidInputNoCtx("ambiguous ALTER COPY column")
 		}
+		columns[name] = col
 	}
-	return found, nil
+	return columns, nil
 }
 
 func alterEnumDirectTable(expr tree.TableExpr, database, name string, allowSnapshot bool) (*tree.TableName, error) {
@@ -185,6 +184,14 @@ func WithAlterEnumTransfer(ctx context.Context, stmt tree.Statement, spec *execu
 	if err != nil {
 		return nil, err
 	}
+	sourceColumns, err := alterEnumColumns(spec.Source)
+	if err != nil {
+		return nil, err
+	}
+	targetColumns, err := alterEnumColumns(spec.Target)
+	if err != nil {
+		return nil, err
+	}
 	state := &alterEnumTransferBinding{spec: spec, insert: ins, rows: rows, sourceNode: sourceNode, columns: make(map[string]alterEnumTransferColumn)}
 	seenTargets := make(map[string]bool, len(ins.Columns))
 	for i, targetName := range ins.Columns {
@@ -193,21 +200,19 @@ func WithAlterEnumTransfer(ctx context.Context, stmt tree.Statement, spec *execu
 			return nil, invalid()
 		}
 		seenTargets[name] = true
-		target, err := uniqueAlterEnumColumn(spec.Target, name)
-		if err != nil {
-			return nil, err
-		}
+		target := targetColumns[enumFoldKey(name)]
 		if target == nil || target.Hidden || target.GeneratedCol != nil || !isEnumPlanType(&target.Typ) {
 			continue
 		}
 		ref, direct := selectClause.Exprs[i].Expr.(*tree.UnresolvedName)
-		if !direct || ref.Star || ref.NumParts != 1 || (selectClause.Exprs[i].As != nil && !selectClause.Exprs[i].As.Empty()) {
+		// Binding qualifies an originally bare column with the only source
+		// table. A retry reparses the proof from that same, mutated AST.
+		if !direct || ref.Star || ref.NumParts < 1 || ref.NumParts > 2 ||
+			(ref.NumParts == 2 && !strings.EqualFold(ref.TblName(), spec.Source.Name)) ||
+			(selectClause.Exprs[i].As != nil && !selectClause.Exprs[i].As.Empty()) {
 			continue
 		}
-		source, err := uniqueAlterEnumColumn(spec.Source, ref.ColName())
-		if err != nil {
-			return nil, err
-		}
+		source := sourceColumns[enumFoldKey(ref.ColName())]
 		if source == nil || source.Hidden || !isEnumPlanType(&source.Typ) {
 			continue
 		}
@@ -450,9 +455,13 @@ func validateAlterEnumTarget(ctx context.Context, stmt *tree.Insert, def *planpb
 	if def == nil || obj == nil || def.TblId != state.spec.TargetID || uint64(obj.Obj) != state.spec.TargetID || !strings.EqualFold(def.Name, state.spec.Target.Name) {
 		return moerr.NewInvalidInputNoCtx("ALTER ENUM target changed")
 	}
-	for name, pair := range state.columns {
-		actual, err := uniqueAlterEnumColumn(def, name)
-		if err != nil || actual == nil || actual.Hidden || actual.GeneratedCol != nil || !sameEnumIndexDomain(&actual.Typ, &pair.target.Typ) {
+	columns, err := alterEnumColumns(def)
+	if err != nil {
+		return err
+	}
+	for _, pair := range state.columns {
+		actual := columns[enumFoldKey(pair.target.Name)]
+		if actual == nil || actual.Hidden || actual.GeneratedCol != nil || !sameEnumIndexDomain(&actual.Typ, &pair.target.Typ) {
 			return moerr.NewInvalidInputNoCtx("ALTER ENUM target schema changed")
 		}
 	}
@@ -468,9 +477,13 @@ func validateAlterEnumSource(ctx context.Context, node *tree.TableName, def *pla
 	if def == nil || obj == nil || def.TblId != state.spec.SourceID || uint64(obj.Obj) != state.spec.SourceID || !strings.EqualFold(def.Name, state.spec.Source.Name) {
 		return moerr.NewInvalidInputNoCtx("ALTER ENUM source changed")
 	}
+	columns, err := alterEnumColumns(def)
+	if err != nil {
+		return err
+	}
 	for _, pair := range state.columns {
-		actual, err := uniqueAlterEnumColumn(def, pair.source.Name)
-		if err != nil || actual == nil || actual.Hidden || actual.Seqnum != pair.source.Seqnum || !sameEnumIndexDomain(&actual.Typ, &pair.source.Typ) {
+		actual := columns[enumFoldKey(pair.source.Name)]
+		if actual == nil || actual.Hidden || actual.Seqnum != pair.source.Seqnum || !sameEnumIndexDomain(&actual.Typ, &pair.source.Typ) {
 			return moerr.NewInvalidInputNoCtx("ALTER ENUM source schema changed")
 		}
 	}
