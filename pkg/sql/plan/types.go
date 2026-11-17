@@ -466,10 +466,15 @@ type QueryBuilder struct {
 	// this the SORT-anchored entry point would claim the classic
 	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
 	// column information and with it the index-only scan.
-	projectAnchoredSorts        map[int32]struct{}
-	setBitmapByDisplayNode      map[[2]int32]int32
-	indexHintsByScan            map[int32]*indexHintSet
-	indexHintOwnerByNode        map[int32]int32
+	projectAnchoredSorts   map[int32]struct{}
+	setBitmapByDisplayNode map[[2]int32]int32
+	indexHintsByScan       map[int32]*indexHintSet
+	indexHintOwnerByNode   map[int32]int32
+	// normalizedForcedJoins records INNER joins whose forced table was moved
+	// from build to probe before physical distribution planning. The marker is
+	// statement-local so applyIndicesForJoins can retain generic hint fallback
+	// only for joins whose orientation this rewrite changed.
+	normalizedForcedJoins       map[int32]struct{}
 	preserveSinkProjection      map[int32]struct{}
 	preserveLockProjection      map[int32]struct{}
 	preserveFilterProjection    map[int32]struct{}
