@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -3550,6 +3551,33 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileRecursiveProbeJoinUsesUnshuffledBroadcast(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 1},
+		{Addr: "cn2:6001", Mcpu: 1},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+
+	node := newShuffleJoinTestNode(1)
+	node.Stats.HashmapStats.Shuffle = false
+	node.Stats.HashmapStats.ShuffleColIdx = -1
+	left := &plan.Node{Stats: &plan.Stats{Outcnt: 10}}
+	right := &plan.Node{Stats: &plan.Stats{Outcnt: 20}}
+
+	probe := newShuffleJoinTestScope(t, nodes[0], 1)
+	probe.setRootOperator(mergerecursive.NewArgument())
+	build := newShuffleJoinTestScope(t, nodes[1], 1)
+
+	result := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+	t.Cleanup(func() { ReleaseScopes(result) })
+
+	require.Len(t, result, 1)
+	require.Same(t, probe, result[0], "broadcast join keeps the recursive probe scope")
+	require.True(t, scopesContainOperator(result, vm.MergeRecursive))
+	require.False(t, scopesContainOperator(result, vm.Shuffle))
 }
 
 func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {

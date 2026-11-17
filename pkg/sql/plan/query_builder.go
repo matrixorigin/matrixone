@@ -4569,6 +4569,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if builder.reuseGroupedMeasures(rootID) {
 			ReCalcNodeStats(rootID, builder, true, false, true)
 		}
+		if builder.restrictAggregateMembership(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		// Compare unique filtering joins against ANTI on their original fact-key
 		// domain after the legacy existence-pushdown pass has finished.
 		if !builder.outerAntiPlanningDisabled() &&
@@ -13368,7 +13371,7 @@ func (builder *QueryBuilder) bindView(
 	}()
 	previousWarningContext := builder.compCtx.GetContext()
 	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
-		previousWarningContext, JSONMergeWarningStoredView))
+		defines.WithPersistentViewBinding(previousWarningContext), JSONMergeWarningStoredView))
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
