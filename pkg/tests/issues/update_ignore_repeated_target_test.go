@@ -150,8 +150,26 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 			result := c.exec("update ignore u a join u b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'")
 			require.Equal(t, int64(0), c.affected(result))
 			require.Equal(t, []string{"1062 Duplicate entry 'ALPHA' for key 'uk_named'"}, c.warnings())
-			require.Equal(t, []string{"Alpha"}, c.stringRows("select s from u where id=1"))
-			require.Equal(t, []string{"Beta"}, c.stringRows("select s from u where id=3"))
+			for _, query := range []string{
+				"select s from u where id in (1,3) order by id",
+				"select s from u force index(uk_named) where id in (1,3) order by id",
+			} {
+				require.Equal(t, []string{"Alpha", "Beta"}, c.stringRows(query))
+			}
+		})
+
+		t.Run("two real conflicts produce two warnings", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("t", intTable, "(1,10,100),(2,20,200),(3,30,300)")
+			result := c.exec("update ignore t a join t b on a.id=1 and b.id in(2,3) set a.k=10,b.k=10")
+			require.Equal(t, int64(0), c.affected(result))
+			require.Equal(t, []string{
+				"1062 Duplicate entry '10' for key 'k'",
+				"1062 Duplicate entry '10' for key 'k'",
+			}, c.warnings())
+			want := [][]int64{{1, 10, 100}, {2, 20, 200}, {3, 30, 300}}
+			require.Equal(t, want, c.intRows("select id,k,v from t order by id", 3))
+			require.Equal(t, want, c.intRows("select id,k,v from t force index(k) order by id", 3))
 		})
 
 		for _, ownerID := range []int{1, 2} {
