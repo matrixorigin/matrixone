@@ -3445,6 +3445,9 @@ func TestPreparedBitCountStateAdvancesAlongsideOtherNumericOverloads(t *testing.
 	prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(preparePlan)
 	require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
 	require.Equal(t, []int32{1}, prepareStmt.bitCountOverloadParamPositions)
+	prepareStmt.refreshGenerateSeriesParamMetadata(preparePlan)
+	require.Equal(t, []int32{0, 1}, prepareStmt.temporalRuntimeParamPositions,
+		"separate fallback ownership must retain both native temporal packet domains")
 
 	install := func(absValue, bitCountValue string, bitCountType defines.MysqlType) *vector.Vector {
 		params := vector.NewVec(types.T_text.ToType())

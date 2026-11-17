@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -59,7 +58,9 @@ func startConnectionTracking() (err error) {
 	}
 
 	events := make(chan conntrack.Event, 65536)
-	errorChan, err := c.Listen(events, uint8(max(runtime.NumCPU(), 16)), []netfilter.NetlinkGroup{
+	// Keep receive, decode and delivery ordered. Concurrent conntrack workers
+	// can deliver DESTROY before NEW, leaving a destroyed flow in activeConns.
+	errorChan, err := c.Listen(events, 1, []netfilter.NetlinkGroup{
 		netfilter.GroupCTNew,
 		netfilter.GroupCTDestroy,
 	})

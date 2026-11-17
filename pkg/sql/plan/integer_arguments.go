@@ -497,6 +497,10 @@ func appendSourceDependentIntegerArgument(ctx context.Context, source *Expr, nam
 		typ := target.ToType()
 		return appendCastBeforeExprWithOverload(ctx, source, makePlan2Type(&typ), function.TextIntegerBitsCastOverload)
 	}
+	if function.IntegerArgumentUsesTemporalIntegerCast(name, position, types.T(source.Typ.Id)) {
+		typ := target.ToType()
+		return appendCastBeforeExprWithOverload(ctx, source, makePlan2Type(&typ), function.TemporalIntegerArgumentCastOverload)
+	}
 	return appendIntegerArgument(ctx, source, target, false)
 }
 

@@ -827,7 +827,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			dedupJoinCtx.OldColList = replaceDedupOldColList(oldPkPos)
 		}
 
-		builder.markDedupTargetScan(scanNodeID)
 		dedupJoinNode := &plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{scanNodeID, lastNodeID},
@@ -913,7 +912,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName]
 
-		builder.markDedupTargetScan(idxTableNodeID)
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{idxTableNodeID, lastNodeID},
