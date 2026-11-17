@@ -85,9 +85,6 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
-	if features.EnumCollation {
-		required = max(required, defines.MORPCVersion135)
-	}
 	if features.FloatConversionSemantics {
 		required = max(required, defines.MORPCVersion132)
 	}

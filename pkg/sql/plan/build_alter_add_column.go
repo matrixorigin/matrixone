@@ -56,9 +56,6 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
-	if err = requireEnumCollationMetadataProtocol(ctx.GetContext(), ctx.GetProcess(), &plan.ColDef{Typ: colType}, true); err != nil {
-		return false, err
-	}
 	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {
 		return false, err
 	}

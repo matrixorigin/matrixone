@@ -14066,10 +14066,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if err = plan.RequireLegacyCollations(tableDef); err != nil {
 			return 0, "", err
 		}
-		if err = requireEnumCollationMetadataProtocol(builder.GetContext(), builder.compCtx.GetProcess(), tableDef, false); err != nil {
-			return 0, "", err
-		}
-
 		// Empty-result rewrites can remove scans, not semantic dependencies.
 		// Capture evidence before optimization, including intermediate Views,
 		// snapshots, and ordinary tables that may later be replaced by Views.

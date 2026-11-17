@@ -2525,14 +2525,14 @@ func prepareFSForDiffAsFile(
 			var openErr error
 			etlFS, cleanupPath, openErr = fileservice.GetForETL(cleanupCtx, nil, fullFilePath)
 			if openErr != nil {
-				return fmt.Errorf("open file service for incomplete DATA BRANCH SQL output cleanup: %w", openErr)
+				return moerr.NewInternalErrorNoCtxf("open file service for incomplete DATA BRANCH SQL output cleanup: %v", openErr)
 			}
 			defer etlFS.Close(cleanupCtx)
 			cleanupFS = etlFS
 		}
 		if deleteErr := cleanupFS.Delete(cleanupCtx, cleanupPath); deleteErr != nil &&
 			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
-			return fmt.Errorf("remove incomplete DATA BRANCH SQL output: %w", deleteErr)
+			return moerr.NewInternalErrorNoCtxf("remove incomplete DATA BRANCH SQL output: %v", deleteErr)
 		}
 		return nil
 	}

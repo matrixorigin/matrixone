@@ -39,9 +39,6 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.EnumCollation, defines.MORPCVersion135,
-			"ENUM collation metadata requires a versioned remote destination",
-			"remote destination does not support ENUM collation metadata (MORPC protocol version %d)"},
 		{features.FloatConversionSemantics, defines.MORPCVersion132,
 			"corrected float conversions require a versioned remote destination",
 			"remote destination does not support corrected float conversions (MORPC version %d)"},

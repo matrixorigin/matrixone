@@ -54,9 +54,6 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
-	if err = requireEnumCollationMetadataProtocol(ctx, cctx.GetProcess(), &plan.ColDef{Typ: nTy}, true); err != nil {
-		return false, err
-	}
 	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
 		return false, err
 	}

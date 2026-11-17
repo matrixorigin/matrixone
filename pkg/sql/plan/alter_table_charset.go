@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -87,11 +86,6 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 		return err
 	}
 	marker := enumUnsupportedTableDefault(ctx, defaults, false)
-	if marker != "" || table.EnumUnsupportedDefault != "" {
-		if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion135); err != nil {
-			return err
-		}
-	}
 	table.DefaultCharset = identity
 	table.EnumUnsupportedDefault = marker
 	table.CollationVersion = uint32(types.CollationVersionLegacy)

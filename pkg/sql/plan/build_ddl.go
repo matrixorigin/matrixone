@@ -3136,9 +3136,6 @@ func buildCreateTable(
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
 		return nil, err
 	}
-	if err = requireEnumCollationMetadataProtocol(ctx.GetContext(), ctx.GetProcess(), createTable.TableDef, true); err != nil {
-		return nil, err
-	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
 	// Old CNs can deserialize that metadata but do not enforce the narrower write
 	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.

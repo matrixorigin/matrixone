@@ -233,9 +233,9 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, "utf8mb4_unicode_ci", showCollation.String)
 
 		// Keep the complete SHOW FULL COLUMNS metadata contract aligned with
-		// information_schema.COLUMNS. String columns expose their collation,
-		// while numeric/ENUM columns remain NULL; ENUM literal case must survive
-		// the metadata formatting path unchanged.
+		// information_schema.COLUMNS. String and ENUM columns expose their
+		// supported collation identity, while numeric columns remain NULL.
+		// ENUM literal case must survive the metadata formatting path unchanged.
 		exec("create table show_full_columns_meta_probe(id int primary key,name varchar(100),amount decimal(10,2),choice enum('MiXeD','ABC'))")
 		_, metaCollation := queryColumnCollation("show_full_columns_meta_probe", "name")
 		showCollation = queryShowColumnCollation("show_full_columns_meta_probe", "name")
@@ -243,7 +243,10 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, metaCollation, showCollation.String)
 		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "id").Valid)
 		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "amount").Valid)
-		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "choice").Valid)
+		enumCollation := queryShowColumnCollation("show_full_columns_meta_probe", "choice")
+		require.True(t, enumCollation.Valid)
+		_, metaEnumCollation := queryColumnCollation("show_full_columns_meta_probe", "choice")
+		require.Equal(t, metaEnumCollation, enumCollation.String)
 		require.Equal(t, "enum('MiXeD','ABC')", queryShowColumnField("show_full_columns_meta_probe", "choice", "Type").String)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native

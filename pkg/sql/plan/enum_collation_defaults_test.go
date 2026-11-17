@@ -102,7 +102,7 @@ func TestEnumCollationParticipatesInTypeAndAlterEquality(t *testing.T) {
 }
 
 func TestEnumUnsupportedTableDefaultAlter(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source, err := buildTestCreateTableStmt(mock, "create table enum_target(i int) collate=utf8mb4_0900_ai_ci")
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestEnumUnsupportedTableDefaultAlter(t *testing.T) {
 	require.Equal(t, types.EnumCollationGeneralCI, FindColumn(target.Cols, "e").Typ.EnumCollation)
 }
 
-func TestEnumUnsupportedTableDefaultRequiresAuthoringProtocol(t *testing.T) {
+func TestEnumUnsupportedTableDefaultUsesExistingProtocol(t *testing.T) {
 	databaseDefaultsProtocol(t, defines.MORPCVersion134)
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source, err := buildTestCreateTableStmt(mock, "create table enum_target(i int) collate=utf8mb4_bin")
@@ -137,15 +137,18 @@ func TestEnumUnsupportedTableDefaultRequiresAuthoringProtocol(t *testing.T) {
 
 	_, err = buildSingleStmt(mock, t, "alter table enum_target default collate=utf8mb4_general_ci")
 	require.NoError(t, err, "existing table defaults remain usable at the old protocol")
-	_, err = buildSingleStmt(mock, t, "alter table enum_target default collate=utf8mb4_0900_ai_ci")
-	require.ErrorContains(t, err, "version 135")
+	p, err := buildSingleStmt(mock, t, "alter table enum_target default collate=utf8mb4_0900_ai_ci")
+	require.NoError(t, err)
+	target := p.GetDdl().GetAlterTable().CopyTableDef
+	require.NotNil(t, target)
+	require.Equal(t, "utf8mb4_0900_ai_ci", target.EnumUnsupportedDefault)
 	after, err := source.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, before, after, "rejected authoring must not mutate the source schema")
+	require.Equal(t, before, after, "planning must not mutate the source schema")
 }
 
 func TestLegacyEnumShowReplayAndLike(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source, err := buildTestCreateTableStmt(mock, "create table enum_source(e enum('A','a') collate __mo_enum_legacy_main_v1, v varchar(8) collate utf8mb4_general_ci) collate=__mo_table_legacy_main_v1")
 	require.NoError(t, err)
@@ -179,7 +182,7 @@ func TestLegacyEnumShowReplayAndLike(t *testing.T) {
 }
 
 func TestEnumRejectsEmptyCollation(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, sql := range []string{
 		"create table t(e enum('a') collate '')",
@@ -194,7 +197,7 @@ func TestEnumRejectsEmptyCollation(t *testing.T) {
 	}
 }
 
-func TestEnumCollationProtocolFloor(t *testing.T) {
+func TestEnumCollationProtocolCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -208,21 +211,17 @@ func TestEnumCollationProtocolFloor(t *testing.T) {
 	for _, owner := range []any{current, marker, fn} {
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion135, version)
+		require.Zero(t, version)
 	}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion134)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, legacy))
-	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, current), "version 135")
-	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, marker), "version 135")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion135)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, current))
 	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, marker))
 }
 
-func TestBuiltinEnumSchemasAtClosedAuthoringFloor(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+func TestBuiltinEnumSchemasWithoutEnumProtocolGate(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	setPlanTestGlobalVariable(t, "", moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, tc := range []struct {
@@ -242,11 +241,11 @@ func TestBuiltinEnumSchemasAtClosedAuthoringFloor(t *testing.T) {
 		})
 	}
 	_, err := buildTestCreateTableStmt(mock, "create table user_enum(e enum('a','A') collate utf8mb4_bin)")
-	require.ErrorContains(t, err, "version 135", "the system DDL exception must not open the authoring gate")
+	require.NoError(t, err)
 }
 
-func TestSystemBootstrapServerAliasDoesNotOpenEnumAuthoring(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+func TestSystemBootstrapServerAliasDoesNotRequireEnumProtocolGate(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	setPlanTestGlobalVariable(t, "", moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.SetContext(defines.AttachInternalExecutor(mock.ctxt.GetContext()))
@@ -261,13 +260,15 @@ func TestSystemBootstrapServerAliasDoesNotOpenEnumAuthoring(t *testing.T) {
 	table, err := buildTestCreateTableStmt(mock, "create table mo_catalog.bootstrap_test(i int)")
 	require.NoError(t, err)
 	require.Empty(t, table.EnumUnsupportedDefault)
-	_, err = buildTestCreateTableStmt(mock, "create table mo_catalog.explicit_marker(i int) collate=utf8mb4_0900_ai_ci")
-	require.ErrorContains(t, err, "version 135")
-	_, err = buildTestCreateTableStmt(mock, "create table mo_catalog.explicit_enum(e enum('a') collate utf8mb4_bin)")
-	require.ErrorContains(t, err, "version 135")
+	marked, err := buildTestCreateTableStmt(mock, "create table mo_catalog.explicit_marker(i int) collate=utf8mb4_0900_ai_ci")
+	require.NoError(t, err)
+	require.Equal(t, "utf8mb4_0900_ai_ci", marked.EnumUnsupportedDefault)
+	explicitEnum, err := buildTestCreateTableStmt(mock, "create table mo_catalog.explicit_enum(e enum('a') collate utf8mb4_bin)")
+	require.NoError(t, err)
+	require.Equal(t, types.EnumCollationUTF8Bin, FindColumn(explicitEnum.Cols, "e").Typ.EnumCollation)
 	_, err = buildTestCreateTableStmt(mock, "create table tpch.internal_user_table(i int)")
-	require.ErrorContains(t, err, "version 135", "internal user-database DDL retains the server marker")
+	require.NoError(t, err)
 	mock.ctxt.SetContext(context.Background())
 	_, err = buildTestCreateTableStmt(mock, "create table mo_catalog.user_system_table(i int)")
-	require.ErrorContains(t, err, "version 135", "ordinary statements do not inherit the internal system-DDL exception")
+	require.NoError(t, err)
 }

@@ -15,16 +15,12 @@
 package plan
 
 import (
-	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // These names carry historical metadata in MatrixOne SQL replay. They are
@@ -53,29 +49,6 @@ func hasLegacyTableReplayOption(options []tree.TableOption) bool {
 		}
 	}
 	return false
-}
-
-func requireEnumCollationMetadataProtocol(ctx context.Context, proc *process.Process, owner any, authoring bool) error {
-	if proc != nil {
-		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil && persistedProtocolRuntimeAllows(rt, defines.MORPCVersion135) {
-			if !authoring {
-				return nil
-			}
-			floor, present := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-			version, valid := floor.(int64)
-			if !present || valid && version >= defines.MORPCVersion135 {
-				return nil
-			}
-		}
-	}
-	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
-	if err != nil || !features.EnumCollation {
-		return err
-	}
-	if authoring {
-		return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion135)
-	}
-	return RequirePersistedProtocolVersion(ctx, proc, defines.MORPCVersion135)
 }
 
 // Generic string DDL intentionally admits some compatibility aliases (notably

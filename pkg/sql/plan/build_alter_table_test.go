@@ -133,7 +133,7 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 
 func TestAlterTableCharsetAdmission(t *testing.T) {
 	// utf8/utf8mb3 defaults now preserve an ENUM-incompatible default marker.
-	databaseDefaultsProtocol(t, defines.MORPCVersion135)
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	for _, tc := range []struct {
 		option string
 		err    string

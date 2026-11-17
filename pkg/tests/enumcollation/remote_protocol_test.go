@@ -154,12 +154,9 @@ func TestRemoteEnumCollationProtocol(t *testing.T) {
 	peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion-1)
 	beforeOldRead := remoteReceipts.Load()
 	got, err = read()
-	if err != nil {
-		require.ErrorContains(t, err, "protocol version")
-	} else {
-		require.Equal(t, [][2]int64{{1, 1}, {2, 2}, {3, 1}, {4, 2}}, got)
-	}
-	require.Equal(t, beforeOldRead, remoteReceipts.Load(), "an old worker must not receive the ENUM pipeline")
+	require.NoError(t, err)
+	require.Equal(t, [][2]int64{{1, 1}, {2, 2}, {3, 1}, {4, 2}}, got)
+	require.Greater(t, remoteReceipts.Load(), beforeOldRead, "the existing-protocol worker must receive the ENUM pipeline")
 	restore()
 	got, err = read()
 	require.NoError(t, err)
