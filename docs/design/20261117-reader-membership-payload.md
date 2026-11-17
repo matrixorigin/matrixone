@@ -81,3 +81,23 @@ reachability and Q10 component work improvement before isolated all22 timing.
 Keep CPU-only local SF10 memory/disk and SF100 disk with one process/open, six
 suites (first excluded), all existing resource/acceptance gates and draft status
 until actual acceptance. No new public flag, type, wire contract or cache layer.
+
+## Approved revision 3: local stream and scoped cached predicates
+
+The requester authorized the remaining native closure design before code.
+Admit a connector source only when its exact existing local WaitRegister reaches
+an independently scheduled Merge -> HashBuild receiver with that source as its
+only prerequisite, one local receiver, no probe/filter wait, remote/lazy edge or
+cycle. Preserve all original pure-source checks; do not whitelist arbitrary
+connectors. Source EOF completes its domain before terminal cleanup. A bounded
+receiver drains independently while the probe waits; cancellation/error/early
+receiver stop retain the existing typed terminal/spool cleanup protocol.
+
+Restore the baseline WithColumnsDataInto borrowed-flat predicate scope for the
+generic scoped-owned case. Keep its IOVector live through predicates, membership
+and the final owned gather; skip unused predicate copies and restore original
+headers on every exit. Begin with identity storage rows, owned/unused output
+columns and membership-only keys; overlap, tombstone and retained-output shapes
+keep the established accounted route. No borrowed header or cached bytes escape,
+and no cache policy/kernel changes. Prove native Q19 activation and Q10 copied
+work/instructions before another full qualification.
