@@ -113,3 +113,24 @@ and output boundaries. Keep lookup/join placement and residual/outer/single-row
 error modes unchanged; spill remains on its established route. No new dictionary
 constructor, multi-base vector, allocation state or hash/routing kernel. Require
 component instructions/copy benefit and native Q9 activation before all22 timing.
+
+## Approved revision 5: copied destination ownership
+
+Requester approved this design with “go on” before implementation. All earlier scope and validation contracts remain except the explicitly revised scheduling/copy admission below.
+
+### Proposed bounded fix
+
+Make copy admission use the same destination-selection rule as allocation:
+
+- Explicit BatchSet.outputAllocation: preserve current behavior exactly.
+- Otherwise, nonnil source batch account: compare the destination batch/vector accounts to that existing source batch destination account, and require the same schema. Incoming aliased vector accounts do not define newly copied ownership.
+- Otherwise, preserve strict per-column source provenance matching.
+
+Apply this same copy-only match in Extend, getOrCreateBatch, Union and ReadyDeltaFor so queue reservations, reusable buffers and actual tail growth agree. Union/ReadyDeltaFor/getOrCreateBatch already share matchesDestination; use that method in the nil-explicit-account Extend copy checks too. Do not change Push's ownership-transfer guard, any allocated vector's account, account equality/capacity classes, leases, credits, routing/hash kernels, cache, or public APIs. A different batch destination account/generation/schema must still seal/refuse/reallocate as appropriate. Do not select an arbitrary first producer's account.
+
+## Proof and qualification
+
+Extend the existing accounted BatchSet fixture with mixed borrowed source-vector accounts and one stable batch destination account. Repeated partial appends must reuse/fill the same destination, preserve values and row order, leave source/foreign accounts intact, and drain all accounting. Include a changed batch account and nil batch account as strict controls. Cover queue ReadyDeltaFor versus actual ready publication and the existing refusal/error cleanup paths.
+
+Use a deterministic mixed-provenance component counter for allocations and batches, plus ordinary flat controls, before another full comparison. Require the repeated tail/header cost to disappear without changing copy or resource admission semantics. Reuse unchanged join continuation, shuffle ownership/race evidence; rerun the affected owning packages. Keep all recorded scores. Then qualify against fresh main with the agreed one-process six-suite all22 local protocol. No push/readiness while an introduced resource regression remains.
+
