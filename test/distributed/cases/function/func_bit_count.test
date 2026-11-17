@@ -168,6 +168,93 @@ SET @bit_count_value = NULL;
 EXECUTE bit_count_marker USING @bit_count_value;
 DEALLOCATE PREPARE bit_count_marker;
 
+# Once a numeric parameter domain is latched, later text uses that domain's
+# numeric-prefix conversion and warning ownership instead of strict CAST errors.
+PREPARE bit_count_signed_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SET @bit_count_value = 64;
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SET @bit_count_value = '1e2';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '1.9x';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = 'abc';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '9223372036854775808';
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = NULL;
+EXECUTE bit_count_signed_marker USING @bit_count_value;
+SHOW WARNINGS;
+DEALLOCATE PREPARE bit_count_signed_marker;
+
+PREPARE bit_count_unsigned_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+SET @bit_count_value = CAST(64 AS UNSIGNED);
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+SET @bit_count_value = '-1';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '18446744073709551615';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '18446744073709551616';
+EXECUTE bit_count_unsigned_marker USING @bit_count_value;
+SHOW WARNINGS;
+DEALLOCATE PREPARE bit_count_unsigned_marker;
+
+PREPARE bit_count_double_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SET @bit_count_value = CAST(64 AS DOUBLE);
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '1e20';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '1e309';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '-1e309';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '1e-4000';
+EXECUTE bit_count_double_marker USING @bit_count_value;
+SHOW WARNINGS;
+DEALLOCATE PREPARE bit_count_double_marker;
+
+PREPARE bit_count_decimal_marker FROM 'SELECT BIT_COUNT(?)';
+SET @bit_count_value = '64';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SET @bit_count_value = CAST(64 AS DECIMAL(10,1));
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SET @bit_count_value = '1e2';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '2.5';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = '2024-01-01';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = _binary '2024-01-01';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SHOW WARNINGS;
+SET @bit_count_value = 'abc';
+EXECUTE bit_count_decimal_marker USING @bit_count_value;
+SHOW WARNINGS;
+DEALLOCATE PREPARE bit_count_decimal_marker;
+
 # Issue #30241: identity-preserving ENUM/SET operands use ordinals/bitmaps.
 # The numeric label distinguishes storage from numeric-looking display text.
 DROP TABLE IF EXISTS t_bit_count_special;

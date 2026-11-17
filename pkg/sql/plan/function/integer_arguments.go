@@ -27,6 +27,9 @@ const (
 	integerBitPatternParameter
 	// HEX has distinct string/array behavior; only numeric sources are integers.
 	numericOnlyIntegerParameter
+	// Bitwise consumers coerce only native temporal sources here; every other
+	// source keeps its existing signed, unsigned, string, or binary overload.
+	temporalOnlyIntegerParameter
 )
 
 type integerParameter struct {
@@ -56,6 +59,12 @@ func integerParameterForPosition(name string, position int) (integerParameter, b
 }
 
 func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (types.T, bool) {
+	if p.mode == temporalOnlyIntegerParameter {
+		if integerArgumentTemporalSource(source) {
+			return types.T_int64, true
+		}
+		return 0, false
+	}
 	if p.mode == integerBitPatternParameter {
 		return IntegerBitSourceTarget(source, binaryLiteral), true
 	}
@@ -83,6 +92,11 @@ func IntegerBitSourceTarget(source types.T, binaryLiteral bool) types.T {
 func IntegerArgumentUsesBitSources(name string, position int) bool {
 	parameter, ok := integerParameterForPosition(name, position)
 	return ok && parameter.mode == integerBitPatternParameter
+}
+
+func IntegerArgumentUsesTemporalIntegerCast(name string, position int, source types.T) bool {
+	parameter, ok := integerParameterForPosition(name, position)
+	return ok && parameter.mode == temporalOnlyIntegerParameter && integerArgumentTemporalSource(source)
 }
 
 func IntegerArgumentSourceDependent(name string, position int) bool {
