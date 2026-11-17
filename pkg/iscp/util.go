@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unsafe"
 
 	"go.uber.org/zap"
 
@@ -366,14 +365,14 @@ func convertColIntoSql(
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		value, err := arraySQLText[float32](ctx, data)
+		value, err := arraySQLText[float32](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
 		typstr := typ.DescString()
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typstr))
 	case types.T_array_float64:
-		value, err := arraySQLText[float64](ctx, data)
+		value, err := arraySQLText[float64](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
@@ -385,13 +384,13 @@ func convertColIntoSql(
 		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
 		// the ivfflat entry projection expects (matches the synchronous build,
 		// which reads the base column directly in SQL).
-		value, err := arraySQLText[types.Float16](ctx, data)
+		value, err := arraySQLText[types.Float16](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_array_bf16:
-		value, err := arraySQLText[types.BF16](ctx, data)
+		value, err := arraySQLText[types.BF16](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
@@ -405,13 +404,13 @@ func convertColIntoSql(
 		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", text, typ.DescString()))
 	case types.T_array_int8:
-		value, err := arraySQLText[int8](ctx, data)
+		value, err := arraySQLText[int8](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_array_uint8:
-		value, err := arraySQLText[uint8](ctx, data)
+		value, err := arraySQLText[uint8](ctx, data, typ.GetArrayElementSize())
 		if err != nil {
 			return nil, err
 		}
@@ -543,13 +542,12 @@ func convertColIntoSql(
 	return sqlBuff, nil
 }
 
-func arraySQLText[T types.ArrayElement](ctx context.Context, data any) (string, error) {
+func arraySQLText[T types.ArrayElement](ctx context.Context, data any, elementSize int) (string, error) {
 	switch value := data.(type) {
 	case []T:
 		return types.ArrayToString(value), nil
 	case []byte:
-		var element T
-		if len(value)%int(unsafe.Sizeof(element)) != 0 {
+		if len(value)%elementSize != 0 {
 			return "", moerr.NewInternalErrorf(ctx, "invalid binary array length %d", len(value))
 		}
 		return types.ArrayToString(types.BytesToArray[T](value)), nil
