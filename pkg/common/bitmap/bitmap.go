@@ -469,7 +469,9 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 // source row, one cached source word is sufficient to avoid allocating a
 // second data-scaled bitmap. Selection rows beyond the bitmap's logical
 // length are valid and read as clear: a null bitmap may be shorter than its
-// owning vector when the vector's trailing rows are all non-null.
+// owning vector when the vector's trailing rows are all non-null. The result
+// keeps that implicit clear tail rather than growing to the selection length:
+// ordered compaction cannot move a set bit beyond the original bitmap extent.
 func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 	if n == nil {
 		return
@@ -482,7 +484,7 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 		}
 		previous = sel
 	}
-	logicalLength := int64(len(sels))
+	logicalLength := min(oldLength, int64(len(sels)))
 	if negate {
 		logicalLength = oldLength
 	}
@@ -513,7 +515,7 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 
 	output := int64(0)
 	if !negate {
-		for _, sel := range sels {
+		for _, sel := range sels[:logicalLength] {
 			writeDestination(output, readSource(sel))
 			output++
 		}
@@ -544,7 +546,7 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 		return
 	}
 	oldLength := n.logicalLen()
-	logicalLength := int64(sels.Count())
+	logicalLength := min(oldLength, int64(sels.Count()))
 	if negate {
 		logicalLength = oldLength
 	}
@@ -575,7 +577,7 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 	output := int64(0)
 	iterator := sels.Iterator()
 	if !negate {
-		for iterator.HasNext() {
+		for output < logicalLength && iterator.HasNext() {
 			source := int64(iterator.Next() + offset)
 			writeDestination(output, readSource(source))
 			output++
