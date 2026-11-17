@@ -1318,4 +1318,155 @@ select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g 
 ➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
 null  ¦  10  𝄀
 1  ¦  10
+create table enum_distinct_src(k enum('b','a','c'));
+insert into enum_distinct_src values('a'),('b'),('a'),(null);
+select distinct k from enum_distinct_src group by k with rollup order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select distinct k from enum_distinct_src group by k with rollup;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select distinct k from enum_distinct_src group by grouping sets ((k),()) order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select distinct k from enum_distinct_src group by k order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+➤ k[12,-1,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  1  𝄀
+a  ¦  0  𝄀
+b  ¦  0
+select distinct k,grouping(k) flag from enum_distinct_src group by k with rollup order by k,flag;
+➤ k[12,-1,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  1  𝄀
+a  ¦  0  𝄀
+b  ¦  0
+create table enum_distinct_result as select distinct k from enum_distinct_src group by k with rollup order by k;
+select * from enum_distinct_result order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from enum_distinct_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  ¦  null_rows[-5,64,0]  𝄀
+3  ¦  2  ¦  1
+create table set_distinct_src(k set('b','a','c'));
+insert into set_distinct_src values('a'),('b'),('a,b'),(null);
+select distinct k from set_distinct_src group by k with rollup order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b  𝄀
+b,a
+select distinct k from set_distinct_src group by k with rollup;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b  𝄀
+b,a
+select distinct k from set_distinct_src group by grouping sets ((k),()) order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b  𝄀
+b,a
+select distinct k,grouping(k) flag from set_distinct_src group by k with rollup order by k,flag;
+➤ k[12,-1,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  1  𝄀
+a  ¦  0  𝄀
+b  ¦  0  𝄀
+b,a  ¦  0
+create table set_distinct_result as select distinct k from set_distinct_src group by k with rollup;
+select * from set_distinct_result order by k;
+➤ k[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+b  𝄀
+b,a
+select count(*) total_rows,count(k) non_null_rows,count(*)-count(k) null_rows from set_distinct_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  ¦  null_rows[-5,64,0]  𝄀
+4  ¦  3  ¦  1
+create table wide_distinct_src(k bigint,b varbinary(16));
+insert into wide_distinct_src values(1,'a'),(1,'a'),(1,'b'),(null,null);
+select distinct k from wide_distinct_src group by k with rollup order by k;
+➤ k[-5,64,0]  𝄀
+null  𝄀
+1
+select distinct b from wide_distinct_src group by b with rollup order by b;
+➤ b[12,48,0]  𝄀
+null  𝄀
+a  𝄀
+b
+select distinct k,b from wide_distinct_src group by grouping sets ((k,b),()) order by k,b;
+➤ k[-5,64,0]  ¦  b[12,48,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  a  𝄀
+1  ¦  b
+create table wide_distinct_result as select distinct b from wide_distinct_src group by b with rollup;
+select hex(b) from wide_distinct_result order by b;
+➤ hex(b)[12,-1,0]  𝄀
+null  𝄀
+61  𝄀
+62
+select table_name,column_name,data_type,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name in ('enum_distinct_result','set_distinct_result','wide_distinct_result')
+and column_name in ('k','b') order by table_name,ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+enum_distinct_result  ¦  k  ¦  VARCHAR  ¦  YES  𝄀
+set_distinct_result  ¦  k  ¦  VARCHAR  ¦  YES  𝄀
+wide_distinct_result  ¦  b  ¦  VARBINARY  ¦  YES
+create table stored_float(x float(8,2));
+insert into stored_float values(999999.99),(null);
+select x from stored_float order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+select distinct x from stored_float group by x with rollup order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+create table stored_float_result as select distinct x from stored_float group by x with rollup;
+select * from stored_float_result order by x;
+➤ x[7,8,2]  𝄀
+null  𝄀
+1000000.0
+select count(*) total_rows,count(x) non_null_rows from stored_float_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  𝄀
+2  ¦  1
+create table stored_geometry(g geometry);
+insert into stored_geometry values(st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)')),(null);
+set @saved_grouping_max_points = @@session.max_points_in_geometry;
+set session max_points_in_geometry = 3;
+select st_astext(g) wkt from stored_geometry order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+select st_astext(g) wkt from (select distinct g from stored_geometry group by g with rollup) t order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+create table stored_geometry_result as select distinct g from stored_geometry group by g with rollup;
+select st_astext(g) wkt from stored_geometry_result order by wkt;
+➤ wkt[12,-1,0]  𝄀
+null  𝄀
+LINESTRING(0 0,1 1,2 2,3 3)
+select count(*) total_rows,count(g) non_null_rows from stored_geometry_result;
+➤ total_rows[-5,64,0]  ¦  non_null_rows[-5,64,0]  𝄀
+2  ¦  1
+set session max_points_in_geometry = @saved_grouping_max_points;
+select @@session.max_points_in_geometry = @saved_grouping_max_points as restored_geometry_limit;
+➤ restored_geometry_limit[-7,1,0]  𝄀
+1
 drop database grouping_ctas_test;

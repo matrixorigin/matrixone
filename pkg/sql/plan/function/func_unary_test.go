@@ -3853,6 +3853,55 @@ func TestValues(t *testing.T) {
 	}
 }
 
+func TestValuesMaterializesSQLValues(t *testing.T) {
+	for _, shape := range []string{"flat", "constant", "constant_null", "subtotal", "empty"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			typ := types.New(types.T_varchar, 64, 0)
+			var input *vector.Vector
+			switch shape {
+			case "flat":
+				input = testutil.MakeVarcharVector([]string{"", "", strings.Repeat("a", 40)}, []uint64{0, 1}, proc.Mp())
+				input.GetGrouping().Add(1)
+			case "constant":
+				var err error
+				input, err = vector.NewConstBytes(typ, []byte("stored"), 3, proc.Mp())
+				require.NoError(t, err)
+			case "constant_null":
+				input = vector.NewConstNull(typ, 3, proc.Mp())
+				input.GetGrouping().Add(1)
+			case "subtotal":
+				input = vector.NewRollupConst(typ, 3, proc.Mp())
+			case "empty":
+				input = vector.NewVec(typ)
+			}
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+			input.SetType(typ)
+			hadGrouping := input.HasGrouping()
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			t.Cleanup(result.Free)
+			for i := 0; i < 2; i++ {
+				require.NoError(t, result.PreExtendAndReset(input.Length()))
+				require.NoError(t, Values([]*vector.Vector{input}, result, proc, input.Length(), nil))
+				output := result.GetResultVector()
+				require.NotSame(t, input, output)
+				require.Equal(t, input.Length(), output.Length())
+				require.Equal(t, input.GetType(), output.GetType())
+				require.False(t, output.HasGrouping())
+				require.Equal(t, hadGrouping, input.HasGrouping(), "input remains borrowed and unchanged")
+				for row := 0; row < input.Length(); row++ {
+					isNull := input.IsConstNull() || input.GetNulls().Contains(uint64(row))
+					require.Equal(t, isNull, output.GetNulls().Contains(uint64(row)))
+					if !isNull {
+						require.Equal(t, input.GetBytesAt(row), output.GetBytesAt(row))
+					}
+				}
+			}
+		})
+	}
+}
+
 func initHourTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
 	d2, _ := types.ParseTimestamp(time.Local, "2004-08-03 01:01:37", 6)

@@ -168,6 +168,8 @@ select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select max(b) from bool_aggregate;
+-- 元数据边界必须精确，不能把裁剪用的保守上界作为最大值。
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
 select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 select count(1), min(b), max(b) from bool_aggregate;
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
@@ -175,6 +177,7 @@ truncate table bool_aggregate;
 insert into bool_aggregate values (false),(null);
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
 select min(b), max(b) from bool_aggregate;
 select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
@@ -182,12 +185,14 @@ truncate table bool_aggregate;
 insert into bool_aggregate values (true),(true);
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
 select min(b), max(b) from bool_aggregate;
 select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 truncate table bool_aggregate;
 insert into bool_aggregate values (false),(true),(null);
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
 select min(b), max(b) from bool_aggregate;
 select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
@@ -195,6 +200,7 @@ truncate table bool_aggregate;
 insert into bool_aggregate values (null),(null);
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select hex(`min`) as min_hex, hex(`max`) as max_hex from metadata_scan('non_primary_zonemap.bool_aggregate', 'b') g;
 select min(b), max(b) from bool_aggregate;
 select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as min_length, length(mo_table_col_max('non_primary_zonemap','bool_aggregate','b')) as max_length;
 
