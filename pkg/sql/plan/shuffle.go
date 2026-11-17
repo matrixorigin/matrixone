@@ -960,6 +960,14 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+	// Recursive members exchange a complete frontier each round. A shuffle
+	// dispatch can forward its Last marker while partial bucket batches are
+	// still buffered, letting a member completion overtake its rows. Keep the
+	// recursive subtree on the join's broadcast path so the round marker remains
+	// ordered after all frontier data.
+	if builder.hasRecursiveScan(node) {
+		return
+	}
 
 	switch node.JoinType {
 	case plan.Node_DEDUP:

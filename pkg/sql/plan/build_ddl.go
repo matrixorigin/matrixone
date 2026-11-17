@@ -226,6 +226,13 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
+	if !forAuthoring {
+		// Description and regeneration rebind a stored definition, not the
+		// caller's SQL namespace. Authoring must still reject temporary sources.
+		previous := ctx.GetContext()
+		ctx.SetContext(defines.WithPersistentViewBinding(previous))
+		defer ctx.SetContext(previous)
+	}
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
