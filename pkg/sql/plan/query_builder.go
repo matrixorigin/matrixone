@@ -4569,6 +4569,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if builder.reuseGroupedMeasures(rootID) {
 			ReCalcNodeStats(rootID, builder, true, false, true)
 		}
+		if builder.restrictAggregateMembership(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		// Compare unique filtering joins against ANTI on their original fact-key
 		// domain after the legacy existence-pushdown pass has finished.
 		if !builder.outerAntiPlanningDisabled() &&
