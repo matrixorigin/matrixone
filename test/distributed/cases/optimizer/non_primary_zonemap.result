@@ -362,6 +362,17 @@ select period,total from period_snapshot order by period;
 ➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
 2024.12  ¦  30.0000000  𝄀
 2025.12  ¦  70.0000000
+create table domain_snapshot as select k from clustered where k in (0,1,100,150) and k not in (1,100);
+select k from domain_snapshot order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+150
+insert into domain_snapshot select k from clustered where k in (0,150) and k not in (0);
+select k from domain_snapshot order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+150  𝄀
+150
 create table float_in_values (id int primary key, f float, d double);
 insert into float_in_values values (1,100,100),(2,200,200);
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.float_in_values');
@@ -635,7 +646,7 @@ Project  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on non_primary_zonemap.period_values  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=211 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=218 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
               Filter Cond: period_values.period in ([2024.12 2025.12])
 select id from bool_values where enabled = true order by id;
 ➤ id[4,32,0]  𝄀

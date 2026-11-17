@@ -88,10 +88,12 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 		}
 	}
 	// 域改写和 List/Vec 折叠完成后再去重，避免 reader 重复执行相同谓词。
-	n.BlockFilterList = deduplicateFinalBlockFilters(n.BlockFilterList)
+	n.BlockFilterList = DeduplicateFinalBlockFilters(n.BlockFilterList)
 }
 
-func deduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
+// DeduplicateFinalBlockFilters 原地压缩当前可执行的稳定过滤列表。
+// 调用方若需保留缓存列表及 Fold 槽位，必须传入独立切片。
+func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	if len(filters) < 2 {
 		return filters
 	}

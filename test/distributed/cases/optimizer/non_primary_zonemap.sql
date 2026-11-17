@@ -118,6 +118,12 @@ with raw_data as (select period, sum(amount) as total from period_values where p
 select row_number() over () as row_no, period, total from raw_data limit 2;
 select period,total from period_snapshot order by period;
 
+-- CTAS 的内部 INSERT 也必须消费最终块过滤，域改写不能改变物化结果。
+create table domain_snapshot as select k from clustered where k in (0,1,100,150) and k not in (1,100);
+select k from domain_snapshot order by k;
+insert into domain_snapshot select k from clustered where k in (0,150) and k not in (0);
+select k from domain_snapshot order by k;
+
 -- 浮点 IN 含 NaN 时不具备二分查找的单调性，常量与参数均须保留命中行。
 create table float_in_values (id int primary key, f float, d double);
 insert into float_in_values values (1,100,100),(2,200,200);
