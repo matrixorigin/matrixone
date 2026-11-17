@@ -21,6 +21,7 @@ import (
 	"io"
 	"math/rand"
 	"sync"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -966,6 +967,7 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		logutil.IsExpectedConnectionCloseError(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF)

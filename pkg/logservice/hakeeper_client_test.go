@@ -16,10 +16,15 @@ package logservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -856,142 +861,229 @@ func TestNewManagedHAKeeperClientNormalizesInitialConnectionError(t *testing.T) 
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 }
 
-func TestHAKeeperClientRetryableEOFError(t *testing.T) {
+func TestHAKeeperClientRetryableError(t *testing.T) {
 	c := &managedHAKeeperClient{}
-	ctx := context.Background()
-
-	require.True(t, c.isRetryableError(io.EOF))
-	require.True(t, c.isRetryableError(io.ErrUnexpectedEOF))
-	require.True(t, c.isRetryableError(moerr.NewUnexpectedEOF(ctx, io.EOF.Error())))
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"eof", io.EOF, true},
+		{"unexpected_eof", io.ErrUnexpectedEOF, true},
+		{"typed_unexpected_eof", moerr.NewUnexpectedEOF(context.Background(), io.EOF.Error()), true},
+		{"native_reset", syscall.ECONNRESET, true},
+		{"wrapped_reset", fmt.Errorf("transport: %w", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}), true},
+		{"reset_text", errors.New("connection reset by peer"), false},
+		{"broken_pipe", &net.OpError{Op: "write", Net: "tcp4", Err: syscall.EPIPE}, false},
+		{"canceled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+		{"application", moerr.NewInvalidInputNoCtx("permanent error"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, c.isRetryableError(tc.err))
+		})
+	}
 }
 
 func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
-	originalNew := newHAKeeperClientFunc
-	originalSend := sendCNAllocateIDFunc
-	defer func() {
-		newHAKeeperClientFunc = originalNew
-		sendCNAllocateIDFunc = originalSend
-	}()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"closed", net.ErrClosed},
+		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: syscall.ECONNRESET}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalNew := newHAKeeperClientFunc
+			originalSend := sendCNAllocateIDFunc
+			defer func() {
+				newHAKeeperClientFunc = originalNew
+				sendCNAllocateIDFunc = originalSend
+			}()
 
-	attempts := 0
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		attempts++
-		if attempts == 1 {
-			return nil, net.ErrClosed
-		}
-		return &hakeeperClient{}, nil
-	}
+			attempts := 0
+			newHAKeeperClientFunc = func(
+				context.Context,
+				string,
+				HAKeeperClientConfig,
+			) (*hakeeperClient, error) {
+				attempts++
+				if attempts == 1 {
+					return nil, tc.err
+				}
+				return &hakeeperClient{}, nil
+			}
 
-	sendCalls := 0
-	sendCNAllocateIDFunc = func(
-		_ *hakeeperClient,
-		_ context.Context,
-		key string,
-		batch uint64,
-	) (uint64, error) {
-		sendCalls++
-		require.Empty(t, key)
-		require.Equal(t, uint64(2), batch)
-		return 42, nil
-	}
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				_ *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Empty(t, key)
+				require.Equal(t, uint64(2), batch)
+				return 42, nil
+			}
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			firstID, err := c.AllocateID(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint64(42), firstID)
+			require.Equal(t, 2, attempts)
+			require.Equal(t, 1, sendCalls)
+		})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	firstID, err := c.AllocateID(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(42), firstID)
-	require.Equal(t, 2, attempts)
-	require.Equal(t, 1, sendCalls)
 }
 
 func TestAllocateIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
-	originalNew := newHAKeeperClientFunc
-	originalRetryInterval := hakeeperClientRetryInterval
-	defer func() {
-		newHAKeeperClientFunc = originalNew
-		hakeeperClientRetryInterval = originalRetryInterval
-	}()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"closed", net.ErrClosed},
+		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: syscall.ECONNRESET}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				originalNew := newHAKeeperClientFunc
+				originalRetryInterval := hakeeperClientRetryInterval
+				defer func() {
+					newHAKeeperClientFunc = originalNew
+					hakeeperClientRetryInterval = originalRetryInterval
+				}()
 
-	attempts := 0
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		attempts++
-		return nil, net.ErrClosed
+				attempts := 0
+				newHAKeeperClientFunc = func(
+					context.Context,
+					string,
+					HAKeeperClientConfig,
+				) (*hakeeperClient, error) {
+					attempts++
+					return nil, tc.err
+				}
+				hakeeperClientRetryInterval = 20 * time.Millisecond
+
+				c := &managedHAKeeperClient{
+					cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+				defer cancel()
+
+				_, err := c.AllocateID(ctx)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Equal(t, 3, attempts)
+			})
+		})
 	}
-	hakeeperClientRetryInterval = 20 * time.Millisecond
-
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
-	defer cancel()
-
-	_, err := c.AllocateID(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.GreaterOrEqual(t, attempts, 2)
-	require.Less(t, attempts, 10)
 }
 
-func TestAllocateIDRetriesEOFSendError(t *testing.T) {
-	originalNew := newHAKeeperClientFunc
-	originalSend := sendCNAllocateIDFunc
-	originalRetryInterval := hakeeperClientRetryInterval
-	defer func() {
-		newHAKeeperClientFunc = originalNew
-		sendCNAllocateIDFunc = originalSend
-		hakeeperClientRetryInterval = originalRetryInterval
-	}()
+func TestAllocateIDRetriesTransportSendError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"eof", io.EOF},
+		{"native_reset", syscall.ECONNRESET},
+		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalNew := newHAKeeperClientFunc
+			originalSend := sendCNAllocateIDFunc
+			originalRetryInterval := hakeeperClientRetryInterval
+			defer func() {
+				newHAKeeperClientFunc = originalNew
+				sendCNAllocateIDFunc = originalSend
+				hakeeperClientRetryInterval = originalRetryInterval
+			}()
 
-	hakeeperClientRetryInterval = 0
-	attempts := 0
-	clients := []*hakeeperClient{{}, {}}
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		client := clients[attempts]
-		attempts++
-		return client, nil
-	}
+			hakeeperClientRetryInterval = 0
+			attempts := 0
+			clients := []*hakeeperClient{{}, {}}
+			newHAKeeperClientFunc = func(
+				context.Context,
+				string,
+				HAKeeperClientConfig,
+			) (*hakeeperClient, error) {
+				client := clients[attempts]
+				attempts++
+				return client, nil
+			}
 
-	sendCalls := 0
-	sendCNAllocateIDFunc = func(
-		client *hakeeperClient,
-		_ context.Context,
-		key string,
-		batch uint64,
-	) (uint64, error) {
-		sendCalls++
-		require.Empty(t, key)
-		require.Equal(t, uint64(2), batch)
-		require.Same(t, clients[sendCalls-1], client)
-		if sendCalls == 1 {
-			return 0, io.EOF
-		}
-		return 42, nil
-	}
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				client *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Empty(t, key)
+				require.Equal(t, uint64(2), batch)
+				require.Same(t, clients[sendCalls-1], client)
+				if sendCalls == 1 {
+					return 0, tc.err
+				}
+				return 42, nil
+			}
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			firstID, err := c.AllocateID(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint64(42), firstID)
+			require.Equal(t, 2, attempts)
+			require.Equal(t, 2, sendCalls)
+		})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	firstID, err := c.AllocateID(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(42), firstID)
-	require.Equal(t, 2, attempts)
-	require.Equal(t, 2, sendCalls)
+}
+
+func TestAllocateIDResetStopsOnCancellation(t *testing.T) {
+	for _, phase := range []string{"during_send", "canceled_entry", "expired_entry"} {
+		t.Run(phase, func(t *testing.T) {
+			originalNew, originalSend, originalInterval := newHAKeeperClientFunc, sendCNAllocateIDFunc, hakeeperClientRetryInterval
+			defer func() {
+				newHAKeeperClientFunc, sendCNAllocateIDFunc, hakeeperClientRetryInterval = originalNew, originalSend, originalInterval
+			}()
+			deadline := time.Now().Add(time.Second)
+			if phase == "expired_entry" {
+				deadline = time.Unix(1, 0)
+			}
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
+			defer cancel()
+			if phase == "canceled_entry" {
+				cancel()
+			}
+			hakeeperClientRetryInterval = time.Hour
+			created, sent := 0, 0
+			newHAKeeperClientFunc = func(context.Context, string, HAKeeperClientConfig) (*hakeeperClient, error) {
+				created++
+				return &hakeeperClient{}, nil
+			}
+			sendCNAllocateIDFunc = func(_ *hakeeperClient, _ context.Context, _ string, _ uint64) (uint64, error) {
+				sent++
+				if phase == "during_send" {
+					cancel()
+				}
+				return 0, &net.OpError{Op: "read", Net: "tcp4", Err: syscall.ECONNRESET}
+			}
+			c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{AllocateIDBatch: 2}}
+			_, err := c.AllocateID(ctx)
+			require.ErrorIs(t, err, ctx.Err())
+			require.Equal(t, 1, created)
+			require.Equal(t, 1, sent)
+			require.Nil(t, c.mu.client)
+		})
+	}
 }
 
 func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {
@@ -1246,57 +1338,68 @@ func TestAllocateBatchIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) 
 	require.Less(t, attempts, 10)
 }
 
-func TestAllocateBatchIDRetriesEOFSendError(t *testing.T) {
-	originalNew := newHAKeeperClientFunc
-	originalSend := sendCNAllocateIDFunc
-	originalRetryInterval := hakeeperClientRetryInterval
-	defer func() {
-		newHAKeeperClientFunc = originalNew
-		sendCNAllocateIDFunc = originalSend
-		hakeeperClientRetryInterval = originalRetryInterval
-	}()
+func TestAllocateBatchIDRetriesTransportSendError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"eof", io.EOF},
+		{"native_reset", syscall.ECONNRESET},
+		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalNew := newHAKeeperClientFunc
+			originalSend := sendCNAllocateIDFunc
+			originalRetryInterval := hakeeperClientRetryInterval
+			defer func() {
+				newHAKeeperClientFunc = originalNew
+				sendCNAllocateIDFunc = originalSend
+				hakeeperClientRetryInterval = originalRetryInterval
+			}()
 
-	hakeeperClientRetryInterval = 0
-	attempts := 0
-	clients := []*hakeeperClient{{}, {}}
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		client := clients[attempts]
-		attempts++
-		return client, nil
-	}
+			hakeeperClientRetryInterval = 0
+			attempts := 0
+			clients := []*hakeeperClient{{}, {}}
+			newHAKeeperClientFunc = func(
+				context.Context,
+				string,
+				HAKeeperClientConfig,
+			) (*hakeeperClient, error) {
+				client := clients[attempts]
+				attempts++
+				return client, nil
+			}
 
-	sendCalls := 0
-	sendCNAllocateIDFunc = func(
-		client *hakeeperClient,
-		_ context.Context,
-		key string,
-		batch uint64,
-	) (uint64, error) {
-		sendCalls++
-		require.Equal(t, "x", key)
-		require.Equal(t, uint64(2), batch)
-		require.Same(t, clients[sendCalls-1], client)
-		if sendCalls == 1 {
-			return 0, io.EOF
-		}
-		return 100, nil
-	}
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				client *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Equal(t, "x", key)
+				require.Equal(t, uint64(2), batch)
+				require.Same(t, clients[sendCalls-1], client)
+				if sendCalls == 1 {
+					return 0, tc.err
+				}
+				return 100, nil
+			}
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			c.mu.allocIDByKey = make(map[string]*allocID)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+			require.NoError(t, err)
+			require.Equal(t, uint64(100), firstID)
+			require.Equal(t, 2, attempts)
+			require.Equal(t, 2, sendCalls)
+		})
 	}
-	c.mu.allocIDByKey = make(map[string]*allocID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
-	require.NoError(t, err)
-	require.Equal(t, uint64(100), firstID)
-	require.Equal(t, 2, attempts)
-	require.Equal(t, 2, sendCalls)
 }
 
 func TestAllocateBatchIDKeepsClientOnContextError(t *testing.T) {
