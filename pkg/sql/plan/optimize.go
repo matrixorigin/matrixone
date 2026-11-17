@@ -42,8 +42,9 @@ func NewBaseOptimizer(ctx CompilerContext) *BaseOptimizer {
 
 func NewPrepareOptimizer(ctx CompilerContext) *BaseOptimizer {
 	return &BaseOptimizer{
-		ctx:   ctx,
-		rules: prepareRules,
+		ctx:              ctx,
+		rules:            prepareRules,
+		skipLocalDomains: true,
 	}
 }
 
@@ -61,6 +62,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool, inpu
 		panic(moerr.NewInternalError(opt.ctx.GetContext(), pn.String()))
 	}
 	opt.qry = qry.Query
+	opt.skipLocalDomains = isPrepareStmt
 	return opt.optimize()
 }
 
@@ -92,6 +94,9 @@ func (opt *BaseOptimizer) optimize() (*Query, error) {
 	}
 
 	opt.pruneUsedNodes(opt.qry)
+	if !opt.skipLocalDomains && opt.qry.StmtType == plan.Query_SELECT {
+		opt.qry.LocalRuntimeFilterDomains = deriveFoldedLocalDomains(opt.qry, opt.ctx)
+	}
 
 	return opt.qry, nil
 }

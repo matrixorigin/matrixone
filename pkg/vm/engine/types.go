@@ -1336,7 +1336,8 @@ func (s *ReaderSelectionScratch) Clear() {
 
 type ReaderFilterRequest struct {
 	// Membership is an optional necessary predicate over its key Columns.
-	// It is read-only and runs after storage visibility, before residual Select.
+	// It is read-only and runs after storage visibility. Generic filtered reads
+	// run it on residual survivors; native exact reads retain their own order.
 	// Its sorted unique mapping is consumed before another callback. Readers
 	// without staged support ignore it and preserve the ordinary Apply path.
 	Membership *ReaderMembershipFilter
@@ -1369,7 +1370,10 @@ type ReaderFilterRequest struct {
 // ReaderMembershipFilter is allocated only by a scan with an admitted ready
 // domain. Ordinary reader requests carry only a nil optional pointer.
 type ReaderMembershipFilter struct {
-	Columns               []int
+	Columns []int
+	// PredicateColumns is the original ordered chain's required input set.
+	// Nil retains early-column behavior for callers without staged metadata.
+	PredicateColumns      []int
 	Select                ReaderSelection
 	InputRows, OutputRows int64
 	scratch               *ReaderMembershipScratch
@@ -1383,6 +1387,7 @@ type ReaderMembershipScratch struct {
 	Scope             vector.DictionarySelectionScope
 	Sources, Views    []*vector.Vector
 	Predicates        []int
+	Keys, Overlap     []int
 }
 
 func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {
@@ -1390,6 +1395,7 @@ func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScr
 		r.Membership.scratch = &ReaderMembershipScratch{
 			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
 			Predicates: make([]int, 0, width),
+			Keys:       make([]int, 0, width), Overlap: make([]int, 0, width),
 		}
 	}
 	s := r.Membership.scratch

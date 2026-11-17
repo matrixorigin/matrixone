@@ -86,7 +86,7 @@ func (p *localDomainProof) output(nodeID, pos int32, depth int) (localDomainColu
 	if n.NodeType != planpb.Node_JOIN && n.NodeType != planpb.Node_PROJECT && n.NodeType != planpb.Node_FILTER {
 		return localDomainColumn{}, false
 	}
-	if !areTruncationSafePredicates(n.FilterList) {
+	if !localDomainPredicatesAreTotal(n.FilterList) {
 		return localDomainColumn{}, false
 	}
 	if n.NodeType == planpb.Node_PROJECT {
@@ -130,7 +130,7 @@ func newLocalDomainProof(q *planpb.Query) *localDomainProof {
 		if n.NodeType != planpb.Node_JOIN {
 			continue
 		}
-		if !areTruncationSafePredicates(n.OnList) || !areTruncationSafePredicates(n.FilterList) {
+		if !localDomainPredicatesAreTotal(n.OnList) || !localDomainPredicatesAreTotal(n.FilterList) {
 			return nil
 		}
 		for _, expr := range n.OnList {
@@ -185,8 +185,41 @@ func (p *localDomainProof) source(col localDomainColumn) bool {
 // Source predicates execute in full, so they may report their normal errors,
 // but must not wait on another query branch or external user code. LIKE is a
 // bounded built-in source predicate, not a rule for skipping it on a probe.
+// localDomainPredicateIsTotal adds the valid variadic Boolean shape without
+// changing the Aggregate/LIMIT truncation proof used by other optimizations.
+func localDomainPredicateIsTotal(expr *planpb.Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_bool {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		id, _ := function.DecodeOverloadID(fn.Func.Obj)
+		if id == function.AND || id == function.OR {
+			overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+			if !ok || overload.CannotFold() || overload.IsRealTimeRelated() || len(fn.Args) < 2 {
+				return false
+			}
+			for _, arg := range fn.Args {
+				if !localDomainPredicateIsTotal(arg) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return isTruncationSafePredicateExpr(expr)
+}
+
+func localDomainPredicatesAreTotal(exprs []*planpb.Expr) bool {
+	for _, expr := range exprs {
+		if !localDomainPredicateIsTotal(expr) {
+			return false
+		}
+	}
+	return true
+}
+
 func localDomainSourcePredicate(expr *planpb.Expr) bool {
-	if isTruncationSafePredicateExpr(expr) {
+	if localDomainPredicateIsTotal(expr) {
 		return true
 	}
 	fn := expr.GetF()
@@ -198,7 +231,15 @@ func localDomainSourcePredicate(expr *planpb.Expr) bool {
 	case function.LIKE:
 		return len(fn.Args) == 2 && fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil
 	case function.AND, function.OR:
-		return len(fn.Args) == 2 && localDomainSourcePredicate(fn.Args[0]) && localDomainSourcePredicate(fn.Args[1])
+		if len(fn.Args) < 2 {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if !localDomainSourcePredicate(arg) {
+				return false
+			}
+		}
+		return true
 	case function.NOT:
 		return len(fn.Args) == 1 && localDomainSourcePredicate(fn.Args[0])
 	}
@@ -242,7 +283,7 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 		sourceNode := q.Nodes[source.scan]
 		unsafe := false
 		for _, id := range p.tree.order {
-			if id != source.scan && !areTruncationSafePredicates(q.Nodes[id].FilterList) {
+			if id != source.scan && !localDomainPredicatesAreTotal(q.Nodes[id].FilterList) {
 				unsafe = true
 				break
 			}
@@ -255,7 +296,7 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 		for _, col := range columns {
 			n := q.Nodes[col.scan]
 			if col.scan == source.scan || n.Stats == nil || n.Stats.Outcnt <= 0 ||
-				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || !areTruncationSafePredicates(n.BlockFilterList) {
+				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || !localDomainPredicatesAreTotal(n.BlockFilterList) {
 				// Reader composition preserves native filtering and can reject
 				// impossible keys before safe residual/payload construction.
 				// Source completion and truncation safety are proved above.
@@ -384,4 +425,37 @@ func remapLocalRuntimeFilterDomains(q *planpb.Query, oldNodes []*planpb.Node) {
 	}
 	q.LocalRuntimeFilterDomains = remapped
 	q.LocalRuntimeFilterDomains = ValidLocalRuntimeFilterDomains(q)
+}
+
+// deriveFoldedLocalDomains runs after the existing fold/compaction passes. It
+// observes their literals and final node ids without evaluating expressions or
+// altering join order. Direct BuildPlan keeps its earlier conservative hints.
+func deriveFoldedLocalDomains(q *planpb.Query, ctx CompilerContext) []*planpb.LocalRuntimeFilterDomain {
+	if ctx == nil || q == nil || q.Correlation != nil || len(q.Steps) != 1 {
+		return nil
+	}
+	if !slices.ContainsFunc(q.Nodes, func(n *planpb.Node) bool { return n != nil && n.NodeType == planpb.Node_JOIN }) {
+		return nil
+	}
+	runtimeFilter := 0
+	visitResolvedOptimizerHints(ctx, func(hint string) {
+		key, value, ok := splitOptimizerHint(hint)
+		if ok && key == "runtimeFilter" {
+			runtimeFilter = value
+		}
+	})
+	if runtimeFilter != 0 {
+		return nil
+	}
+	cache := ctx.GetStatsCache()
+	if cache == nil {
+		return nil
+	}
+	return LocalRuntimeFilterDomains(q, func(scan *planpb.Node, column string) float64 {
+		stats := cache.Get(scan.TableDef.TblId)
+		if !stats.Exists() || stats.GetStats() == nil {
+			return -1
+		}
+		return stats.GetStats().NdvMap[column]
+	})
 }

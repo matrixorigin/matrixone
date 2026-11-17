@@ -267,6 +267,12 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 			}
 		}
 	}
+	predicateColumns := make([]int, 0, len(tableScan.Types))
+	for column, used := range needed {
+		if used {
+			predicateColumns = append(predicateColumns, column)
+		}
+	}
 	var membershipColumns []int
 	for _, probe := range tableScan.ctr.domainProbes {
 		if !probe.pass {
@@ -278,7 +284,7 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 		return
 	}
 	slices.Sort(membershipColumns)
-	request.Membership = &engine.ReaderMembershipFilter{Columns: slices.Compact(membershipColumns)}
+	request.Membership = &engine.ReaderMembershipFilter{Columns: slices.Compact(membershipColumns), PredicateColumns: predicateColumns}
 	tableScan.ctr.earlyColumns = tableScan.ctr.earlyColumns[:0]
 	tableScan.ctr.lateColumns = tableScan.ctr.lateColumns[:0]
 	for column := range needed {
@@ -291,7 +297,11 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 	request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 		started := time.Now()
 		defer func() { tableScan.ctr.filterActiveDuration += time.Since(started) }()
-		tableScan.recordFilterInput(bat, loaded)
+		if request.Exact != nil {
+			tableScan.recordFilterInput(bat, loaded)
+		} else {
+			tableScan.recordMembershipKeyInput(bat, loaded, request.Membership.PredicateColumns)
+		}
 		rows, all, err := tableScan.selectLocalDomains(proc, bat)
 		if err != nil {
 			return engine.ReaderFilterResult{}, err

@@ -2528,19 +2528,19 @@ func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
-func (builder *QueryBuilder) parseOptimizeHints() {
+func visitResolvedOptimizerHints(ctx CompilerContext, apply func(string)) {
 	applyHints := func(str string) {
 		if len(str) == 0 {
 			return
 		}
 		kvs := strings.Split(str, ",")
 		for i := range kvs {
-			handleOptimizerHints(kvs[i], builder)
+			apply(kvs[i])
 		}
 	}
 	// The session value includes the global default captured when the connection was
 	// created. CN runtime variables are shared by unrelated sessions and tenants.
-	if v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false); err == nil {
+	if v, err := ctx.ResolveVariable("optimizer_hints", true, false); err == nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
@@ -2549,11 +2549,15 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
 	// AFTER the session so a statement can override it -- e.g. the fulltext2 json probe's fallback/
 	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
-	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+	if v := ctx.GetContext().Value(defines.OptimizerHints{}); v != nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
 	}
+}
+
+func (builder *QueryBuilder) parseOptimizeHints() {
+	visitResolvedOptimizerHints(builder.compCtx, func(hint string) { handleOptimizerHints(hint, builder) })
 }
 
 // sortRollupMode is retained as an internal compatibility adapter. New code

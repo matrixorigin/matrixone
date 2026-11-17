@@ -211,6 +211,25 @@ func (tableScan *TableScan) recordFilterInput(bat *batch.Batch, loadedColumns []
 	tableScan.ctr.filterReadMetrics = true
 }
 
+// Generic membership follows the original predicates. Count only key columns
+// not already read by that stage, without adding the same rows or block twice.
+func (tableScan *TableScan) recordMembershipKeyInput(bat *batch.Batch, loaded, predicates []int) {
+	if tableScan.ctr.metricView == nil {
+		tableScan.ctr.metricView = batch.NewWithSize(len(tableScan.Types))
+	}
+	view := tableScan.ctr.metricView
+	view.Vecs = view.Vecs[:0]
+	for _, column := range loaded {
+		if !slices.Contains(predicates, column) {
+			view.Vecs = append(view.Vecs, bat.Vecs[column])
+		}
+	}
+	view.SetRowCount(0)
+	tableScan.OpAnalyzer.Input(view)
+	tableScan.OpAnalyzer.ScanBytes(view)
+	tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, bat.Size())
+}
+
 func (tableScan *TableScan) recordLateInput(bat *batch.Batch) {
 	// The rows were already counted when the early columns were filtered. A
 	// zero-row view adds only the bytes materialized for surviving rows.

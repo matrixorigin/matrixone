@@ -766,26 +766,26 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name                                string
-		predicatePayload                    bool
-		member, residual                    engine.ReaderFilterResult
-		residualInput, want                 []int32
-		storage                             []int64
-		memberError, residualError, refusal bool
-		exact                               bool
-		keyOnly                             bool
+		name                                                string
+		member, residual                                    engine.ReaderFilterResult
+		memberInput, want                                   []int32
+		storage                                             []int64
+		predicatePayload, textPredicate                     bool
+		memberError, residualError, refusal, exact, keyOnly bool
 	}{
-		{name: "membership then late payload", member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, residualInput: []int32{1, 4, 6}, want: []int32{4, 6}},
-		{name: "membership then residual column", predicatePayload: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, residualInput: []int32{1, 4, 6}, want: []int32{4, 6}},
-		{name: "empty membership skips residual and payload", member: engine.ReaderFilterResult{}},
-		{name: "identity membership preserves physical mapping", member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{Sels: []int64{3, 5}}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{4, 6}},
-		{name: "identity membership and residual", member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{All: true}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{0, 1, 2, 4, 5, 6, 7}},
-		{name: "native rows compose before membership", storage: []int64{0, 2, 5, 7}, member: engine.ReaderFilterResult{Sels: []int64{1, 3}}, residual: engine.ReaderFilterResult{Sels: []int64{1}}, residualInput: []int32{2, 7}, want: []int32{7}},
+		{name: "predicates then membership then late payload", residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "predicate payload stays in original domain", predicatePayload: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "membership-only key loads after predicates", textPredicate: true, residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
+		{name: "empty predicate skips membership and payload", residual: engine.ReaderFilterResult{}},
+		{name: "empty membership skips payload", residual: engine.ReaderFilterResult{All: true}, member: engine.ReaderFilterResult{}, memberInput: []int32{0, 1, 2, 4, 5, 6, 7}},
+		{name: "identity membership preserves physical mapping", residual: engine.ReaderFilterResult{Sels: []int64{3, 5}}, member: engine.ReaderFilterResult{All: true}, memberInput: []int32{4, 6}, want: []int32{4, 6}},
+		{name: "identity predicate and membership", residual: engine.ReaderFilterResult{All: true}, member: engine.ReaderFilterResult{All: true}, memberInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{0, 1, 2, 4, 5, 6, 7}},
+		{name: "native physical rows compose both maps", storage: []int64{0, 2, 5, 7}, residual: engine.ReaderFilterResult{Sels: []int64{1, 3}}, member: engine.ReaderFilterResult{Sels: []int64{1}}, memberInput: []int32{2, 7}, want: []int32{7}},
 		{name: "membership narrows exact fallback", exact: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, want: []int32{4, 6}},
 		{name: "membership narrows native exact program", exact: true, keyOnly: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, want: []int32{4, 6}},
-		{name: "membership error precedes residual", memberError: true},
-		{name: "residual error restores scoped headers", member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residualInput: []int32{1, 4, 6}, residualError: true},
-		{name: "scratch refusal preserves ordinary read", refusal: true, member: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, residual: engine.ReaderFilterResult{Sels: []int64{3}}, residualInput: []int32{0, 1, 2, 4, 5, 6, 7}, want: []int32{4}},
+		{name: "predicate error precedes membership", residualError: true},
+		{name: "membership error restores scoped headers", residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, memberInput: []int32{1, 4, 6}, memberError: true},
+		{name: "scratch refusal preserves ordinary read", refusal: true, residual: engine.ReaderFilterResult{Sels: []int64{3}}, want: []int32{4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
@@ -806,11 +806,21 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			output = batch.NewOffHeapWithSize(len(readTypes))
 			require.NoError(t, output.SetAllocationAccount(allocation))
 			for column := range readTypes {
-				output.Vecs[column], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[column], allocation)
+				output.Vecs[column], err = vector.NewOffHeapVecWithTypeAndAllocation(readTypes[column], allocation)
 				require.NoError(t, err)
 			}
 			workspace := make([]*vector.Vector, len(readTypes))
-			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}}}
+			predicates := []int{0}
+			early := []int{0}
+			if tc.predicatePayload {
+				predicates = []int{0, 1}
+				early = []int{0, 1}
+			}
+			if tc.textPredicate {
+				predicates = []int{1}
+				early = []int{0, 1}
+			}
+			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Workspace: workspace, Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, PredicateColumns: predicates}}
 			if tc.refusal {
 				request.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
 			}
@@ -835,9 +845,10 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					output.Vecs[column] = vector.NewOffHeapVecWithType(colTypes[column])
 				}
 			})
-			membershipCalls, residualCalls := 0, 0
+			memberCalls, residualCalls, applyCalls := 0, 0, 0
 			failure := moerr.NewInvalidInputNoCtx("ordered membership fixture error")
 			request.Apply = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				applyCalls++
 				if !tc.exact || tc.keyOnly {
 					t.Fatal("staged read must not reevaluate through Apply")
 				}
@@ -849,37 +860,24 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				bat.SetRowCount(2)
 				return engine.ReaderFilterResult{Sels: []int64{1, 2}}, nil
 			}
-			request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-				membershipCalls++
-				require.Equal(t, []int{0}, loaded)
-				if !tc.keyOnly {
-					require.Zero(t, bat.Vecs[1].Length(), "membership must precede non-key reads")
-				}
-				want := []int32{0, 1, 2, 4, 5, 6, 7}
-				if tc.storage != nil {
-					want = []int32{0, 2, 5, 7}
-				}
-				require.Equal(t, len(want), bat.RowCount())
-				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
-				if tc.memberError {
-					return engine.ReaderFilterResult{}, failure
-				}
-				return tc.member, nil
-			}
-			early := []int{0}
-			if tc.predicatePayload {
-				early = []int{0, 1}
+			visible := []int32{0, 1, 2, 4, 5, 6, 7}
+			if tc.storage != nil {
+				visible = []int32{0, 2, 5, 7}
 			}
 			request.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 				residualCalls++
-				require.Equal(t, early, loaded)
-				require.Equal(t, len(tc.residualInput), bat.RowCount())
-				for row, want := range tc.residualInput {
-					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row))
+				require.False(t, tc.exact)
+				require.Zero(t, memberCalls, "ordinary predicates must run before membership")
+				require.Equal(t, predicates, loaded)
+				require.Equal(t, len(visible), bat.RowCount())
+				if tc.textPredicate {
+					require.Zero(t, bat.Vecs[0].Length(), "membership-only keys must remain unloaded")
+				} else {
+					require.Equal(t, visible, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
 				}
-				if tc.predicatePayload {
-					require.Equal(t, 3, bat.Vecs[1].Length())
-					require.Equal(t, "payload-4", string(bat.Vecs[1].GetBytesAt(1)))
+				if tc.predicatePayload || tc.textPredicate {
+					require.Equal(t, len(visible), bat.Vecs[1].Length())
+					require.Equal(t, "payload-4", string(bat.Vecs[1].GetBytesAt(3)))
 				} else {
 					require.Zero(t, bat.Vecs[1].Length())
 				}
@@ -888,30 +886,59 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				}
 				return tc.residual, nil
 			}
+			request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				memberCalls++
+				require.Equal(t, []int{0}, loaded)
+				want := tc.memberInput
+				if tc.exact {
+					want = visible
+					require.Zero(t, residualCalls)
+					if !tc.keyOnly {
+						require.Zero(t, bat.Vecs[1].Length())
+					}
+				} else {
+					require.Equal(t, 1, residualCalls)
+				}
+				require.Equal(t, len(want), bat.RowCount())
+				for row, value := range want {
+					require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row))
+				}
+				if tc.memberError {
+					return engine.ReaderFilterResult{}, failure
+				}
+				return tc.member, nil
+			}
 			if tc.storage != nil {
-				handled, readErr := blockDataReadMembership(ctx, &info, ds, []uint16{0, 1}, colTypes, tc.storage, early, fileservice.Policy(0), output, queryMP, fs, request, nil)
+				handled, readErr := blockDataReadMembership(ctx, &info, ds, readColumns, readTypes, tc.storage, early, fileservice.Policy(0), output, queryMP, fs, request, nil)
 				require.True(t, handled)
 				err = readErr
 			} else {
-				_, err = BlockDataReadWithFilter(ctx, &info, ds, readColumns, readTypes, -1, timestamp.Timestamp{}, nil, nil,
-					objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "membership-late-read", output, cacheVectors, queryMP, fs, early, request)
+				_, err = BlockDataReadWithFilter(ctx, &info, ds, readColumns, readTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "predicate-membership-read", output, cacheVectors, queryMP, fs, early, request)
 			}
 			if tc.memberError || tc.residualError {
 				require.ErrorIs(t, err, failure)
-				require.False(t, output.Vecs[0].IsDictionary(), "callback failure must retire scoped aliases")
+				require.False(t, output.Vecs[0].IsDictionary())
+				if tc.residualError {
+					require.Zero(t, memberCalls)
+				}
 				return
 			}
 			require.NoError(t, err)
-			wantMembershipCalls := 1
-			if tc.refusal {
-				wantMembershipCalls = 0
+			wantMember := 0
+			if tc.exact || tc.memberInput != nil {
+				wantMember = 1
 			}
-			require.Equal(t, wantMembershipCalls, membershipCalls)
-			wantResidualCalls := 0
-			if tc.residualInput != nil {
-				wantResidualCalls = 1
+			require.Equal(t, wantMember, memberCalls)
+			wantResidual := 1
+			if tc.exact {
+				wantResidual = 0
 			}
-			require.Equal(t, wantResidualCalls, residualCalls)
+			require.Equal(t, wantResidual, residualCalls)
+			wantApply := 0
+			if tc.exact && !tc.keyOnly {
+				wantApply = 1
+			}
+			require.Equal(t, wantApply, applyCalls)
 			require.Equal(t, len(tc.want), output.RowCount())
 			for row, want := range tc.want {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], row))
