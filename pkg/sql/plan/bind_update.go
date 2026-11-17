@@ -1004,6 +1004,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		return 0, err
 	}
 
+	// These post-UNION selectors are needed by early checks. They are replaced
+	// by physical-target selectors after the deferred merge.
+	admissionRankStart := int32(len(selectNode.ProjectList))
 	if isMultiTargetUpdate {
 		for i, alias := range dmlCtx.aliases {
 			if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -1031,6 +1034,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 		}
 	}
+	admissionRankEnd := int32(len(selectNode.ProjectList))
 	if isMultiTargetUpdate && !deferRepeatedPhysicalTargetMerge {
 		targetsByTableID := make(map[uint64][]int)
 		physicalTableOrder := make([]uint64, 0, len(dmlCtx.tableDefs))
@@ -1645,7 +1649,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			idxScanNodes[i] = make([]*plan.Node, len(tableDef.Indexes))
 
 			for j, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique || !aliasIdxNeedConstraintCheck[i][j] {
+				// Repeated targets are checked by the accepted-image owner below;
+				// do not build keys used only by the skipped early DEDUP join.
+				if !idxDef.Unique || !aliasIdxNeedConstraintCheck[i][j] || greedyUniqueTables[tableDef.TblId] > 1 {
 					continue
 				}
 
@@ -1814,12 +1820,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					}
 				}
 
-				// The greedy owner validates repeated targets against their last
-				// accepted image. Keep the key projections for index maintenance,
-				// but leave validation and diagnostics to that owner.
-				if greedyUniqueTables[tableDef.TblId] > 1 {
-					continue
-				}
 				idxTag := builder.genNewBindTag()
 				builder.addNameByColRef(idxTag, idxTableDef)
 				idxTableNodeID := builder.appendNode(&plan.Node{
@@ -1910,16 +1910,55 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 	}
 
 	if deferRepeatedPhysicalTargetMerge {
+		// All early consumers have been bound. Drop their selectors before the
+		// physical merge; final selectors are built again from the merged rows.
+		inputWidth := int32(len(selectNode.ProjectList))
+		if admissionRankStart < 0 || admissionRankEnd < admissionRankStart || admissionRankEnd > inputWidth {
+			return 0, moerr.NewInternalError(builder.GetContext(), "invalid update admission selector layout")
+		}
+		translatePos := func(pos int32) (int32, error) {
+			if pos < 0 || pos >= inputWidth || pos >= admissionRankStart && pos < admissionRankEnd {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "invalid live update column position %d", pos)
+			}
+			if pos >= admissionRankEnd {
+				pos -= admissionRankEnd - admissionRankStart
+			}
+			return pos, nil
+		}
+		for _, positions := range []map[string]int32{
+			oldColName2Idx, newColName2Idx, changedRowsOldColName2Idx, changedRowsNewColName2Idx,
+		} {
+			for name, pos := range positions {
+				newPos, translateErr := translatePos(pos)
+				if translateErr != nil {
+					return 0, translateErr
+				}
+				positions[name] = newPos
+			}
+		}
+		for i, pos := range targetBranchActivePos {
+			if pos < 0 {
+				continue
+			}
+			newPos, translateErr := translatePos(pos)
+			if translateErr != nil {
+				return 0, translateErr
+			}
+			targetBranchActivePos[i] = newPos
+		}
 		mergeInputTag := builder.genNewBindTag()
-		mergeInputProject := make([]*plan.Expr, len(selectNode.ProjectList))
+		mergeInputProject := make([]*plan.Expr, 0, int(inputWidth-admissionRankEnd+admissionRankStart))
 		for pos, expr := range selectNode.ProjectList {
-			mergeInputProject[pos] = &plan.Expr{
+			if int32(pos) >= admissionRankStart && int32(pos) < admissionRankEnd {
+				continue
+			}
+			mergeInputProject = append(mergeInputProject, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: selectNodeTag,
 					ColPos: int32(pos),
 				}},
-			}
+			})
 		}
 		selectNode = &plan.Node{
 			NodeType:    plan.Node_PROJECT,

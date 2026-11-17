@@ -862,7 +862,7 @@ SELECT id,k,v FROM multi_update_ignore_reservation ORDER BY id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  ¦  200  𝄀
 2  ¦  30  ¦  100
-SELECT id,k FROM multi_update_ignore_reservation FORCE INDEX(uk) ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation FORCE INDEX(uk) WHERE k IS NOT NULL ORDER BY id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  30
@@ -909,7 +909,7 @@ SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  30  ¦  100  ¦  1  𝄀
 2  ¦  20  ¦  1  ¦  1
-SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) WHERE k IS NOT NULL ORDER BY id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
 1  ¦  30  𝄀
 2  ¦  20

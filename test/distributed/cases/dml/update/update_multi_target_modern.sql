@@ -708,7 +708,7 @@ JOIN multi_update_ignore_reservation z ON z.id=x.id
 SET x.k=30,y.k=10,z.k=10,z.v=999;
 SHOW WARNINGS;
 SELECT id,k,v FROM multi_update_ignore_reservation ORDER BY id;
-SELECT id,k FROM multi_update_ignore_reservation FORCE INDEX(uk) ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation FORCE INDEX(uk) WHERE k IS NOT NULL ORDER BY id;
 SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation;
 
 -- A legal later key and a current-key no-op must leave no stale duplicate warning.
@@ -740,7 +740,7 @@ JOIN multi_update_ignore_reservation_check y ON x.id=1 AND y.id IN(1,2)
 SET x.k=30,x.u=100,y.k=IF(y.id=1,40,30),y.v=IF(y.id=1,100,y.v);
 SHOW WARNINGS;
 SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
-SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) WHERE k IS NOT NULL ORDER BY id;
 SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation_check;
 DROP TABLE multi_update_ignore_reservation_check;
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +144,66 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 		}
 		intTable := "(id int primary key, k int unique, v int not null)"
 
+		// Verify the covering scan actually uses the physical index.
+		checkPhysicalIndex := func(c *updateIgnoreRepeatedTargetConn, table string) {
+			c.t.Helper()
+			query := "select id,k from " + table + " force index(k) where k is not null order by id"
+			plan := strings.Join(c.stringRows("explain "+query), "\n")
+			require.Contains(c.t, plan, "Index Table Scan on "+table+".k")
+			require.NotContains(c.t, plan, "Join")
+			want := [][]int64{{1, 110}, {2, 20}}
+			require.Equal(c.t, want, c.intRows(query, 2))
+			require.Equal(c.t, want, c.intRows("select id,k from "+table+" ignore index(k) where k is not null order by id", 2))
+			require.Empty(c.t, c.intRows("select id,k from "+table+" force index(k) where k=10", 2))
+			require.Equal(c.t, [][]int64{{1, 110}}, c.intRows("select id,k from "+table+" force index(k) where k=110", 2))
+		}
+
+		t.Run("auto increment and unique index retain both alias changes", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("probe_auto", "(id int primary key, seq int auto_increment, k int unique, v int)", "(1,1,10,10),(2,2,20,20)")
+			result := c.exec("update ignore probe_auto a join probe_auto b on a.id=b.id set a.seq=default,a.k=a.k+100,b.v=b.v+1 where a.id=1")
+			require.Equal(t, int64(2), c.affected(result))
+			require.Empty(t, c.warnings())
+			require.Equal(t, [][]int64{{1, 3, 110, 11}, {2, 2, 20, 20}}, c.intRows("select id,seq,k,v from probe_auto order by id", 4))
+			checkPhysicalIndex(c, "probe_auto")
+		})
+
+		t.Run("foreign key and unique index retain both alias changes", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("probe_parent", "(id int primary key)", "(1),(2)")
+			c.resetTable("probe_child", "(id int primary key,k int unique,pid int,v int,foreign key(pid) references probe_parent(id))", "(1,10,1,10),(2,20,1,20)")
+			result := c.exec("update ignore probe_child a join probe_child b on a.id=b.id set a.pid=2,a.k=a.k+100,b.v=b.v+1 where a.id=1")
+			require.Equal(t, int64(2), c.affected(result))
+			require.Empty(t, c.warnings())
+			require.Equal(t, [][]int64{{1, 110, 2, 11}, {2, 20, 1, 20}}, c.intRows("select id,k,pid,v from probe_child order by id", 4))
+			checkPhysicalIndex(c, "probe_child")
+
+			// A failed foreign-key check must roll back every alias and index write.
+			_, err := c.cn.ExecContext(c.ctx, "update ignore probe_child a join probe_child b on a.id=b.id set a.pid=99,a.k=210,b.v=b.v+1 where a.id=1")
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.Equal(t, uint16(1452), mysqlErr.Number)
+			require.Equal(t, [][]int64{{1, 110, 2, 11}, {2, 20, 1, 20}}, c.intRows("select id,k,pid,v from probe_child order by id", 4))
+			checkPhysicalIndex(c, "probe_child")
+		})
+
+		t.Run("same alias contenders have a consistent winner", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("tie_probe", "(id int primary key,k int unique,v int)", "(1,10,1),(2,20,2),(3,30,3)")
+			result := c.exec("update ignore tie_probe x join tie_probe y on x.id in (1,2) and y.id=3 set x.k=99,x.v=x.v+100,y.v=y.v+1")
+			require.Equal(t, int64(2), c.affected(result))
+			require.Equal(t, []string{"1062 Duplicate entry '99' for key 'k'"}, c.warnings())
+			rows := c.intRows("select id,k,v from tie_probe order by id", 3)
+			first := [][]int64{{1, 99, 101}, {2, 20, 2}, {3, 30, 4}}
+			second := [][]int64{{1, 10, 1}, {2, 99, 102}, {3, 30, 4}}
+			require.True(t, reflect.DeepEqual(rows, first) || reflect.DeepEqual(rows, second), "unexpected rows: %v", rows)
+			query := "select id,k from tie_probe force index(k) where k is not null order by id"
+			plan := strings.Join(c.stringRows("explain "+query), "\n")
+			require.Contains(t, plan, "Index Table Scan on tie_probe.k")
+			require.NotContains(t, plan, "Join")
+			require.Equal(t, [][]int64{{rows[0][0], rows[0][1]}, {rows[1][0], rows[1][1]}, {rows[2][0], rows[2][1]}}, c.intRows(query, 2))
+		})
+
 		t.Run("collation diagnostics only include rejected candidates", func(t *testing.T) {
 			c := newConn(t)
 			c.resetTable("u", "(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, n int, unique key uk_named(s))",
@@ -207,7 +268,11 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 			require.Equal(t, int64(1), c.affected(result))
 			require.ElementsMatch(t, []string{"3819 Check constraint 't_chk_1' is violated", "1062 Duplicate entry '30' for key 'k'"}, c.warnings())
 			require.Equal(t, [][]int64{{1, 30, 100, 1}, {2, 20, 1, 1}}, c.intRows("select id,k,u,v from t order by id", 4))
-			require.Equal(t, [][]int64{{1, 30}, {2, 20}}, c.intRows("select id,k from t force index(k) order by id", 2))
+			indexQuery := "select id,k from t force index(k) where k is not null order by id"
+			indexPlan := strings.Join(c.stringRows("explain "+indexQuery), "\n")
+			require.Contains(t, indexPlan, "Index Table Scan on t.k")
+			require.NotContains(t, indexPlan, "Join")
+			require.Equal(t, [][]int64{{1, 30}, {2, 20}}, c.intRows(indexQuery, 2))
 		})
 
 		t.Run("singleton table keeps its independent UNIQUE check", func(t *testing.T) {
