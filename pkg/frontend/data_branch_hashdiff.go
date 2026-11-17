@@ -1006,16 +1006,28 @@ func hashDiff(
 
 	defer func() {
 		if baseDataHashmap != nil {
-			baseDataHashmap.Close()
+			closeErr := baseDataHashmap.Close()
+			if tblStuff.strictHashmapCapacity {
+				err = errors.Join(err, closeErr)
+			}
 		}
 		if baseTombstoneHashmap != nil {
-			baseTombstoneHashmap.Close()
+			closeErr := baseTombstoneHashmap.Close()
+			if tblStuff.strictHashmapCapacity {
+				err = errors.Join(err, closeErr)
+			}
 		}
 		if tarDataHashmap != nil {
-			tarDataHashmap.Close()
+			closeErr := tarDataHashmap.Close()
+			if tblStuff.strictHashmapCapacity {
+				err = errors.Join(err, closeErr)
+			}
 		}
 		if tarTombstoneHashmap != nil {
-			tarTombstoneHashmap.Close()
+			closeErr := tarTombstoneHashmap.Close()
+			if tblStuff.strictHashmapCapacity {
+				err = errors.Join(err, closeErr)
+			}
 		}
 
 		fields := []zap.Field{
@@ -1052,6 +1064,12 @@ func hashDiff(
 	buildTargetCost = time.Since(buildTargetStart)
 
 	diffStart := time.Now()
+	if tblStuff.rebaseKeyConsumer != nil {
+		err = collectRebaseHashmapKeys(ctx, ses, tblStuff,
+			baseDataHashmap, baseTombstoneHashmap, tarDataHashmap, tarTombstoneHashmap)
+		diffCost = time.Since(diffStart)
+		return err
+	}
 	if !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory {
 		if err = hashDiffIfNoLCA(
 			ctx, ses, tblStuff, copt, emit,
@@ -2796,15 +2814,15 @@ func buildHashmapForTable(
 		logutil.Info("DataBranch-Hashmap-Build-Done", fields...)
 	}()
 
-	if dataHashmap, err = databranchutils.NewBranchHashmap(
-		databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
-	); err != nil {
+	options := []databranchutils.BranchHashmapOption{databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator)}
+	if tblStuff.strictHashmapCapacity {
+		options = append(options, databranchutils.WithBranchHashmapStrictCapacity())
+	}
+	if dataHashmap, err = databranchutils.NewBranchHashmap(options...); err != nil {
 		return
 	}
 
-	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(
-		databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
-	); err != nil {
+	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(options...); err != nil {
 		return
 	}
 

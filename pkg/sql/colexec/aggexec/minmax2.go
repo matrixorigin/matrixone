@@ -119,7 +119,7 @@ func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.
 	if vec.IsConst() {
 		row = 0
 	}
-	value := vector.MustFixedColNoTypeCheck[T](vec)[row]
+	value := vector.GetFixedAtNoTypeCheck[T](vec, row)
 	aggs := chunkArr[T](aggVec)
 	if aggVec.IsNull(uint64(y)) {
 		aggVec.UnsetNull(uint64(y))
@@ -181,8 +181,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	if n == 0 {
 		return nil
 	}
-	vals := vector.MustFixedColNoTypeCheck[T](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[T](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -213,9 +212,15 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		kind := vec.GetPrepareParamKindAt(inputRow)
 		source := vec.GetStringSourceAt(inputRow)
 		if isConst {
-			value = vals[0]
-			kind = vec.GetPrepareParamKindAt(0)
-			source = vec.GetStringSourceAt(0)
+			index := 0
+			if selection != nil {
+				index = int(selection[inputRow])
+			}
+			value = vals[index]
+			if vec.IsConst() {
+				kind = vec.GetPrepareParamKindAt(0)
+				source = vec.GetStringSourceAt(0)
+			}
 		} else {
 			value = vals[i+offset]
 		}

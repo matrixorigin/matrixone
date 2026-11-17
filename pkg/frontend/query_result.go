@@ -535,7 +535,7 @@ func abortPerformAttemptSavedResult(execCtx *ExecCtx) error {
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
 	if canSaveQueryResult(ctx, ses) {
 		var data *batch.Batch
-		data, ses.rs, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, mrs.Data)
+		data, ses.rs, err = convertRowsIntoBatchInLocation(ses.GetMemPool(), mrs.Columns, mrs.Data, ses.GetTimeZone())
 		defer cleanBatch(ses.GetMemPool(), data)
 		if err != nil {
 			return err

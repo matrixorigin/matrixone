@@ -52,7 +52,9 @@ func TestMultiCNShuffleJoinDrainsPersistedInputs(t *testing.T) {
 		defer func() {
 			cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
-			_, _ = setup.ExecContext(cleanupCtx, "drop database "+database)
+			if _, err := setup.ExecContext(cleanupCtx, "drop database "+database); err != nil {
+				t.Errorf("drop shuffle fixture database: %v", err)
+			}
 		}()
 		execJoinSpillSQL(t, ctx, setup, "use "+database)
 		for _, input := range []struct {

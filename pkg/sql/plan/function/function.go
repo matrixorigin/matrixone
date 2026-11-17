@@ -1364,7 +1364,10 @@ type executeRetainedBytesOfOverload func() uint64
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
-	overloadId int
+	// dictionaryInput is opt-in: every execution path must use logical reads,
+	// including specialized/native branches and parameter wrapper raw access.
+	dictionaryInput func([]*vector.Vector) bool
+	overloadId      int
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
@@ -1418,6 +1421,12 @@ type overload struct {
 	rowScopedDiagnostics bool
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
+}
+
+// DictionaryInputCapability admits only proven runtime argument shapes.
+// A nil capability requires explicit executor-owned normalization.
+func (ov *overload) DictionaryInputCapability() func([]*vector.Vector) bool {
+	return ov.dictionaryInput
 }
 
 // IsVolatile retains the legacy conservative evaluation policy. For value

@@ -17,8 +17,10 @@ package sqlintegration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,6 +116,8 @@ func runNativeRebaseAdapterBridge(t *testing.T, verify func([]byte, int64)) {
 }
 
 func TestNativeRebaseComparisonBridge(t *testing.T) {
+	groups, err := rebaseComparisonGroups(os.Getenv("MO_REBASE_COMPARISON_ORDER"))
+	require.NoError(t, err)
 	// The external client owns a ten-minute execution limit. Leave a bounded
 	// receipt/teardown margin so this observer cannot close its server first.
 	runNativeRebaseAdapterBridgeWithTimeout(t, 11*time.Minute, func(result []byte, _ int64) {
@@ -131,13 +135,42 @@ func TestNativeRebaseComparisonBridge(t *testing.T) {
 		require.Equal(t, "PASS_REAL_REBASE_SMALL_AND_W1_COMPARISON", outcome.Status)
 		require.True(t, outcome.CleanupComplete)
 		require.Len(t, outcome.Groups, 4)
-		for i, identity := range [][2]string{{"small", "legacy"}, {"small", "native"}, {"W1", "native"}, {"W1", "legacy"}} {
+		for i, identity := range groups {
 			require.Equal(t, identity[0], outcome.Groups[i].Scale)
 			require.Equal(t, identity[1], outcome.Groups[i].Mode)
 			require.Equal(t, 10, outcome.Groups[i].MeasuredOperations)
 			require.Equal(t, 1, outcome.Groups[i].WarmupOperations)
 		}
 	})
+}
+
+func rebaseComparisonGroups(order string) ([][2]string, error) {
+	switch order {
+	case "":
+		return [][2]string{{"small", "legacy"}, {"small", "native"}, {"W1", "native"}, {"W1", "legacy"}}, nil
+	case "legacy_first":
+		return [][2]string{{"small", "legacy"}, {"small", "native"}, {"W1", "legacy"}, {"W1", "native"}}, nil
+	case "native_first":
+		return [][2]string{{"small", "native"}, {"small", "legacy"}, {"W1", "native"}, {"W1", "legacy"}}, nil
+	default:
+		return nil, fmt.Errorf("unknown Rebase comparison order %q", order)
+	}
+}
+
+func TestRebaseComparisonGroups(t *testing.T) {
+	for _, tc := range []struct{ order, small, w1 string }{
+		{"", "legacy", "native"}, {"legacy_first", "legacy", "legacy"}, {"native_first", "native", "native"},
+	} {
+		groups, err := rebaseComparisonGroups(tc.order)
+		require.NoError(t, err)
+		require.Len(t, groups, 4)
+		require.Equal(t, tc.small, groups[0][1])
+		require.Equal(t, tc.w1, groups[2][1])
+		require.NotEqual(t, groups[0][1], groups[1][1])
+		require.NotEqual(t, groups[2][1], groups[3][1])
+	}
+	_, err := rebaseComparisonGroups("unknown")
+	require.Error(t, err)
 }
 
 func runNativeRebaseAdapterBridgeWithTimeout(t *testing.T, timeout time.Duration, verify func([]byte, int64)) {
@@ -150,6 +183,25 @@ func runNativeRebaseAdapterBridgeWithTimeout(t *testing.T, timeout time.Duration
 	info, err := os.Lstat(bridge)
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
+	if os.Getenv("MO_REBASE_COST_DIAGNOSTICS") == "1" {
+		file, err := os.OpenFile(filepath.Join(bridge, "rebase-phases.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		require.NoError(t, err)
+		var mu sync.Mutex
+		var writeError atomic.Bool
+		encoder := json.NewEncoder(file)
+		restore := frontend.SetRebasePhaseHookForTest(func(event frontend.RebasePhaseObservation) {
+			mu.Lock()
+			defer mu.Unlock()
+			if encoder.Encode(event) != nil {
+				writeError.Store(true)
+			}
+		})
+		defer func() {
+			restore()
+			require.NoError(t, file.Close())
+			require.False(t, writeError.Load(), "phase evidence must be complete")
+		}()
+	}
 	runRebaseHistoryIntegration(t, func(c embed.Cluster) {
 		restore := frontend.SetRebaseSourceExpectationForTest(true)
 		defer restore()

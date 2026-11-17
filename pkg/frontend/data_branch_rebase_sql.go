@@ -52,6 +52,7 @@ type rebaseTableSQL struct {
 	changes      string
 	deleteRows   string
 	insertRows   string
+	probeRows    string
 }
 
 // SQL equality can collapse distinct stored values, such as signed zeros or
@@ -82,12 +83,24 @@ func buildRebaseTableSQL(
 	columns []rebaseSQLColumn,
 	policy rebaseConflictPolicy,
 ) (rebaseTableSQL, error) {
+	return buildRebaseScopedTableSQL(ctx, table, destination, reads, columns, policy, "")
+}
+
+func buildRebaseScopedTableSQL(
+	ctx context.Context,
+	table, destination string,
+	reads [4]rebaseSQLRead,
+	columns []rebaseSQLColumn,
+	policy rebaseConflictPolicy,
+	keyFilter string,
+) (rebaseTableSQL, error) {
 	var out rebaseTableSQL
 	if policy > rebaseKeepBranch {
 		return out, moerr.NewInvalidInput(ctx, "invalid Rebase conflict policy")
 	}
 	validName := func(name string) bool { return name != "" && !strings.ContainsRune(name, 0) }
-	if !validName(table) || !validName(destination) || len(columns) == 0 {
+	invalidDestination := destination == "" && keyFilter == "" || destination != "" && !validName(destination)
+	if !validName(table) || invalidDestination || len(columns) == 0 {
 		return out, moerr.NewInvalidInput(ctx, "invalid Rebase table layout")
 	}
 	for _, read := range reads {
@@ -128,7 +141,11 @@ func buildRebaseTableSQL(
 		return "((" + absent(left) + " and " + absent(right) + ") or (" + present(left) + " and " + present(right) + " and " + strings.Join(terms, " and ") + "))"
 	}
 	relation := func(read rebaseSQLRead, alias string) string {
-		return fmt.Sprintf("%s.%s{MO_TS=%d} %s", quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table), read.timestamp, alias)
+		name := fmt.Sprintf("%s.%s{MO_TS=%d}", quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table), read.timestamp)
+		if keyFilter != "" {
+			return "(select * from " + name + " where " + keyFilter + ") " + alias
+		}
+		return name + " " + alias
 	}
 	baseJoin := relation(reads[0], "b") + " full outer join " + relation(reads[2], "x") + " on " + joinKeys("b", "x")
 	out.baseMismatch = "select count(*) from " + baseJoin + " where not " + equalRows("b", "x")
@@ -143,6 +160,17 @@ func buildRebaseTableSQL(
 	featureChanged := "not " + equalRows("b", "f")
 	upstreamChanged := "not " + equalRows("b", "u")
 	differentHeads := "not " + equalRows("f", "u")
+	if keyFilter != "" {
+		projection := []string{featureChanged, upstreamChanged, equalRows("f", "u"), present("f"), present("u")}
+		for _, column := range columns {
+			projection = append(projection, col("f", column.name))
+		}
+		for _, key := range keys {
+			projection = append(projection, "coalesce("+col("f", key.name)+", "+col("u", key.name)+")")
+		}
+		out.probeRows = "select " + strings.Join(projection, ", ") + " from " + state
+		return out, nil
+	}
 	conflict := "(" + featureChanged + " and " + upstreamChanged + " and " + differentHeads + ")"
 	apply := "(" + featureChanged + " and " + differentHeads
 	if policy == rebaseKeepUpstream {
@@ -183,11 +211,50 @@ func buildRebaseTableSQL(
 	return out, nil
 }
 
+// keyRows contains SQL literals emitted by the typed Data Branch formatter,
+// never caller-authored SQL. The row and text bounds belong to the batching
+// owner. Empty batches are rejected rather than becoming unfiltered scans.
+func buildRebaseDeltaProbeSQL(ctx context.Context, table string, reads [4]rebaseSQLRead,
+	columns []rebaseSQLColumn, keyRows [][]string) (string, error) {
+	var keys []rebaseSQLColumn
+	for _, column := range columns {
+		if column.primary {
+			keys = append(keys, column)
+		}
+	}
+	if len(keys) == 0 || len(keyRows) == 0 {
+		return "", moerr.NewInternalError(ctx, "Rebase delta probe requires keys")
+	}
+	rows := make([]string, len(keyRows))
+	for i, values := range keyRows {
+		if len(values) != len(keys) {
+			return "", moerr.NewInternalError(ctx, "Rebase delta probe key width differs")
+		}
+		parts := make([]string, len(keys))
+		for j, key := range keys {
+			if values[j] == "" {
+				return "", moerr.NewInternalError(ctx, "Rebase delta probe has an empty key literal")
+			}
+			parts[j] = dataBranchSQLKeyEqual(quoteIdentifierForSQL(key.name), values[j], key.typ)
+		}
+		rows[i] = "(" + strings.Join(parts, " and ") + ")"
+	}
+	out, err := buildRebaseScopedTableSQL(ctx, table, "", reads, columns,
+		rebaseFail, "("+strings.Join(rows, " or ")+")")
+	return out.probeRows, err
+}
+
 // No-PK tables are not replayed by R1. This exact visible-bag comparison is a
 // pre-write proof obligation for retaining an unchanged table, including NULLs
 // and duplicate multiplicities. Grouping/joins stay in the engine, not Go maps.
 func buildRebaseBagMismatchSQL(ctx context.Context, table string, left, right rebaseSQLRead, columns []rebaseSQLColumn) (string, error) {
-	if table == "" || strings.ContainsRune(table, 0) || len(columns) == 0 {
+	return buildRebaseBagsMismatchSQL(ctx, table, []rebaseSQLRead{left, right}, columns)
+}
+
+// Compare every bag with the first. Each endpoint is grouped once, while
+// independent signed counters preserve duplicate multiplicities and NULLs.
+func buildRebaseBagsMismatchSQL(ctx context.Context, table string, reads []rebaseSQLRead, columns []rebaseSQLColumn) (string, error) {
+	if table == "" || strings.ContainsRune(table, 0) || len(columns) == 0 || (len(reads) != 2 && len(reads) != 4) {
 		return "", moerr.NewInvalidInput(ctx, "invalid Rebase bag layout")
 	}
 	var grouped []string
@@ -206,20 +273,43 @@ func buildRebaseBagMismatchSQL(ctx context.Context, table string, left, right re
 		projected = append(projected, value+" as "+alias)
 		aliases = append(aliases, alias)
 	}
-	for _, read := range []rebaseSQLRead{left, right} {
+	for _, read := range reads {
 		if read.database == "" || strings.ContainsRune(read.database, 0) || read.timestamp <= 0 {
 			return "", moerr.NewInvalidInput(ctx, "Rebase bag comparison requires fixed sources")
 		}
 	}
-	bag := func(read rebaseSQLRead, sign string) string {
-		return fmt.Sprintf("select %s, %scast(count(*) as decimal(38,0)) as n from %s.%s{MO_TS=%d} group by %s",
-			strings.Join(projected, ", "), sign, quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table),
+	counters := make([]string, len(reads)-1)
+	predicates := make([]string, len(counters))
+	for i := range counters {
+		counters[i] = "n"
+		if len(counters) > 1 {
+			counters[i] = fmt.Sprintf("n%d", i)
+		}
+		predicates[i] = "sum(" + counters[i] + ") <> 0"
+	}
+	bag := func(read rebaseSQLRead, index int) string {
+		values := make([]string, len(counters))
+		for i, counter := range counters {
+			value := "cast(0 as decimal(38,0))"
+			if index == 0 {
+				value = "cast(count(*) as decimal(38,0))"
+			} else if index == i+1 {
+				value = "-cast(count(*) as decimal(38,0))"
+			}
+			values[i] = value + " as " + counter
+		}
+		return fmt.Sprintf("select %s, %s from %s.%s{MO_TS=%d} group by %s",
+			strings.Join(projected, ", "), strings.Join(values, ", "), quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table),
 			read.timestamp, strings.Join(grouped, ", "))
 	}
 	// Null-safe join predicates are not hash keys, so a full join here compares
 	// every distinct row pair. Group signed multiplicities instead; GROUP BY
 	// retains NULL equality, and the wide signed counter cannot wrap COUNT.
 	keys := strings.Join(aliases, ", ")
-	return "select count(*) from (select " + keys + " from (" + bag(left, "") + " union all " + bag(right, "-") +
-		") rebase_bags group by " + keys + " having sum(n) <> 0) rebase_differences", nil
+	bags := make([]string, len(reads))
+	for i, read := range reads {
+		bags[i] = bag(read, i)
+	}
+	return "select count(*) from (select " + keys + " from (" + strings.Join(bags, " union all ") +
+		") rebase_bags group by " + keys + " having " + strings.Join(predicates, " or ") + ") rebase_differences", nil
 }

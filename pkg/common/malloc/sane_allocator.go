@@ -292,6 +292,7 @@ func (sca *SimpleCAllocator) allocateMemory(size uint64, clearMemory bool) ([]by
 		if err != nil {
 			return nil, moerr.NewOOMNoCtx()
 		}
+		adviseLargeMpoolMapping(slice)
 		// Anonymous mappings are zero-filled by the kernel. This also satisfies
 		// Malloc's weaker contract, which does not promise non-zero contents.
 		return slice, nil

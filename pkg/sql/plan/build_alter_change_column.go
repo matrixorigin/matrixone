@@ -158,6 +158,11 @@ func buildColumnAndConstraint(
 			defaultScope[i] = col
 		}
 	}
+	for _, col := range targetTableDef.Cols {
+		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), col.GetGeneratedCol().GetExpr(), defaultScope); err != nil {
+			return nil, err
+		}
+	}
 
 	preserved, err := charsetConversionExpressions(ctx, targetTableDef.Name, newColName, colType)
 	if err != nil {
@@ -167,7 +172,18 @@ func buildColumnAndConstraint(
 		if preserved != nil && preserved.defaultExpr != nil {
 			return preserved.defaultExpr, nil
 		}
-		return buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+		unchanged, err := unchangedCRC32ColumnClauses(ctx.GetContext(), oldCol, specNewColumn, colType, ctx.GetProcess())
+		if err != nil {
+			return nil, err
+		}
+		return buildDefaultExprWithColumns(
+			ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
+			specNewColumn,
+			colType,
+			ctx.GetProcess(),
+			defaultScope,
+			unchanged,
+		)
 	}
 
 	// If the column null property is not specified, it defaults to allowing null
@@ -241,11 +257,25 @@ func buildColumnAndConstraint(
 				}
 			}
 		case *tree.AttributeGeneratedAlways:
+			if err := validateGeneratedColumnAttributes(ctx.GetContext(), specNewColumn); err != nil {
+				return nil, err
+			}
 			var generatedCol *plan.GeneratedCol
 			if preserved != nil && preserved.generated != nil {
 				generatedCol = preserved.generated
+			} else if crc32Preserved, handled, preserveErr := preserveLegacyCRC32Generated(ctx.GetContext(), oldCol, attribute, colType); handled {
+				if preserveErr != nil {
+					return nil, preserveErr
+				}
+				generatedCol = crc32Preserved
 			} else {
-				generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+				generatedCol, err = buildGeneratedExpr(
+					ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
+					specNewColumn,
+					colType,
+					targetTableDef.Cols,
+					ctx.GetProcess(),
+				)
 			}
 			if err != nil {
 				return nil, err
@@ -259,6 +289,30 @@ func buildColumnAndConstraint(
 			// Type metadata was resolved centrally before constructing the column.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
+		}
+	}
+	// Attribute parsing above finalizes AutoIncr. Preserve the early representation
+	// check before binding, but do not let COPY retain an illegal final dependency.
+	for _, col := range targetTableDef.Cols {
+		for _, owner := range []struct {
+			subject string
+			expr    *plan.Expr
+		}{
+			{"generated column", col.GetGeneratedCol().GetExpr()},
+			{"default expression", col.GetDefault().GetExpr()},
+		} {
+			expr := owner.expr
+			if !containsLegacyCRC32(expr) {
+				continue
+			}
+			if err := validateLegacyCRC32ExprInputs(ctx.GetContext(), expr, defaultScope, owner.subject); err != nil {
+				return nil, err
+			}
+			if owner.subject == "generated column" {
+				if err := checkGeneratedExprReferences(ctx.GetContext(), expr, col.GetOriginCaseName(), defaultScope, make(map[int32]bool)); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if newCol.GeneratedCol != nil {

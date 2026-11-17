@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/bits"
@@ -156,7 +157,9 @@ func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
 
 // validatedVectorBackingForScope may only be consumed synchronously by an
 // ObjectIO operation that returns owned data or scalar/row-offset results. The
-// returned slice, and any Vector bound to it, must never escape to a caller.
+// returned slice, and any plain Vector bound to it, must never escape. The
+// retained read-only API below may publish leased headers only after
+// acquiring the cache owner and admitting its full physical pin.
 func (d *validatedVectorCacheData) validatedVectorBackingForScope() []byte {
 	return d.data.Bytes()
 }
@@ -181,32 +184,36 @@ func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return
-			}
-		}
-		if algo == compress.Lz4Chunked {
-			return decodeChunkedColumn(ctx, data, allocator)
-		}
+		return constructCacheData(ctx, reader, data, allocator, size, algo)
+	}
+}
 
-		// no compress
-		if algo == compress.None {
-			cacheData = allocator.CopyToCacheData(ctx, data)
-			return cacheData, nil
-		}
-
-		// lz4 compress
-		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
-		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+func constructCacheData(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator, size int64, algo uint8) (cacheData fscache.Data, err error) {
+	if len(data) == 0 {
+		data, err = io.ReadAll(reader)
 		if err != nil {
-			decompressedData.Release()
 			return
 		}
-		decompressedData = decompressedData.Slice(len(bs))
-		return decompressedData, nil
 	}
+	if algo == compress.Lz4Chunked {
+		return decodeChunkedColumn(ctx, data, allocator)
+	}
+
+	// no compress
+	if algo == compress.None {
+		cacheData = allocator.CopyToCacheData(ctx, data)
+		return cacheData, nil
+	}
+
+	// lz4 compress
+	decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+	bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+	if err != nil {
+		decompressedData.Release()
+		return
+	}
+	decompressedData = decompressedData.Slice(len(bs))
+	return decompressedData, nil
 }
 
 // DecompressColumnExtent materializes one serialized object column from its
@@ -240,14 +247,13 @@ func DecompressColumnExtent(
 // vectors stay unmarked because they do not perform the per-value scan, and
 // copying their payload would make the common empty-bitmap path O(bytes).
 func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
-	construct := constructorFactory(size, algo)
 	return func(
 		ctx context.Context,
 		reader io.Reader,
 		data []byte,
 		allocator fileservice.CacheDataAllocator,
 	) (fscache.Data, error) {
-		cacheData, err := construct(ctx, reader, data, allocator)
+		cacheData, err := constructCacheData(ctx, reader, data, allocator, size, algo)
 		if err != nil {
 			return nil, err
 		}
@@ -1061,6 +1067,37 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	return ObjectMeta(buffer)
+}
+
+// TryBorrowCachedVector retains a privately validated cache column as a
+// read-only flat source. It never constructs an identity dictionary. Borrowed
+// bytes have a live owner and full physical pin; mutation follows vector COW.
+func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool) (bool, error) {
+	marked, ok := data.(validatedVectorCacheDataMarker)
+	if !ok || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
+		return false, nil
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return false, err
+	}
+	defer source.Free(nil)
+	if source.GetType().Oid != dst.GetType().Oid {
+		return false, moerr.NewInvalidInputNoCtx("cached column type mismatch")
+	}
+	source.SetType(*dst.GetType())
+	data.Retain()
+	lease, err := vector.NewRefCountedBufferLease(marked.validatedVectorBackingForScope(), data.Capacity(), data.Release)
+	if err != nil {
+		data.Release()
+		return false, err
+	}
+	defer lease.Release()
+	admitted, err := vector.RetainBorrowedBufferInto(dst, &source, lease, mp)
+	if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+		return false, nil
+	}
+	return admitted, err
 }
 
 // JSONCachePinAdmission reserves physical non-MPool backing for the lifetime

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -155,6 +156,10 @@ func handleBranchRebase(execCtx *ExecCtx, ses *Session, stmt *tree.DataBranchReb
 // executeRebaseDatabase uses one transaction for native R1. It does not
 // publish adapter generations/history. A caller-owned summary is provisional.
 func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabaseRequest) (summary rebaseDatabaseSummary, err error) {
+	finishTotal := beginRebasePhase("total", "", "")
+	defer func() { finishTotal(err) }()
+	finishAdmission := beginRebasePhase("admission", "", "")
+	defer func() { finishAdmission(err) }()
 	ctx := execCtx.reqCtx
 	if request.destination == "" || strings.ContainsRune(request.destination, 0) || request.policy > rebaseKeepBranch {
 		return summary, moerr.NewInvalidInput(ctx, "invalid Rebase request")
@@ -274,6 +279,7 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 	if err = protectRebaseEndpoints(ctx, ses, bh, admission, sources, dag); err != nil {
 		return
 	}
+	finishAdmission(nil)
 	tables, reads, err := preflightRebaseTables(ctx, bh, sources, dag, request)
 	if err != nil {
 		return summary, err
@@ -284,7 +290,36 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 			return summary, err
 		}
 	}
+	var deltaAllocator *branchHashmapAllocator
+	defer func() {
+		for i := range tables {
+			if tables[i].delta != nil {
+				err = errors.Join(err, tables[i].delta.close())
+			}
+		}
+	}()
+	// Decide capability and finish all delta reads before the destination is
+	// created. Runtime failures never switch algorithms or replay a second time.
+	for i := range tables {
+		table := &tables[i]
+		if table.sql.changes == "" {
+			continue
+		}
+		keyTypes, eligible := rebaseDeltaLayout(table.columns)
+		if !eligible {
+			continue
+		}
+		if deltaAllocator == nil {
+			deltaAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+		}
+		table.delta, err = prepareRebaseDeltaReplay(ctx, ses, bh, *table, reads, request.policy, deltaAllocator, keyTypes)
+		if err != nil {
+			return summary, err
+		}
+	}
+	finishClone := beginRebaseStatementPhase(bh, "clone", "", "")
 	receipts, err := handleCloneDatabaseWithSource(execCtx, ses, bh, &sources[3].stmt, &sources[3].source)
+	finishClone(err)
 	if err != nil {
 		return summary, err
 	}
@@ -311,16 +346,32 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 		if table.sql.changes == "" {
 			continue // Independently proven unchanged no-PK table.
 		}
-		counts, readErr := readRebaseCounts(ctx, bh, table.sql.changes, 6)
-		if readErr != nil {
-			return summary, readErr
-		}
-		if request.policy == rebaseFail && counts[2] != 0 {
-			return summary, moerr.NewInvalidInputf(ctx, "Rebase conflict in table %s", table.name)
-		}
-		if counts[3] != 0 || counts[4] != 0 || counts[5] != 0 {
-			for _, query := range []string{table.sql.deleteRows, table.sql.insertRows} {
-				if err = bh.Exec(ctx, query); err != nil {
+		var counts []uint64
+		if table.delta != nil {
+			counts = table.delta.counts[:]
+			if err = table.delta.apply(ctx, ses, bh, request.destination, table); err != nil {
+				return summary, err
+			}
+			if err = table.delta.close(); err != nil {
+				return summary, err
+			}
+		} else {
+			counts, err = readRebasePhaseCounts(ctx, bh, "changes", table.name, table.sql.changes, 6)
+			if err != nil {
+				return summary, err
+			}
+			if request.policy == rebaseFail && counts[2] != 0 {
+				return summary, moerr.NewInvalidInputf(ctx, "Rebase conflict in table %s", table.name)
+			}
+			for _, query := range rebaseApplyQueries(table.sql, counts) {
+				phase := "insert"
+				if query == table.sql.deleteRows {
+					phase = "delete"
+				}
+				finishWrite := beginRebaseStatementPhase(bh, phase, table.name, query)
+				err = bh.Exec(ctx, query)
+				finishWrite(err)
+				if err != nil {
 					return
 				}
 				clearRebaseResults(bh)
@@ -347,6 +398,22 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 	summary.baseDatabase, summary.baseTimestamp = reads[3].database, reads[3].timestamp
 	summary.tables = uint64(len(tables))
 	return
+}
+
+func rebaseApplyQueries(sql rebaseTableSQL, counts []uint64) []string {
+	queries := make([]string, 0, 2)
+	if counts[4] != 0 || counts[5] != 0 {
+		queries = append(queries, sql.deleteRows)
+	}
+	if counts[3] != 0 || counts[4] != 0 {
+		queries = append(queries, sql.insertRows)
+	}
+	return queries
+}
+
+// The caller has already validated account and schema identity.
+func rebaseSameTableSnapshot(leftID, rightID uint64, left, right rebaseSQLRead) bool {
+	return leftID != 0 && leftID == rightID && left.timestamp > 0 && left.timestamp == right.timestamp
 }
 
 // Reject rules for any role on an endpoint: role membership can change while
@@ -481,9 +548,11 @@ func resolveRebaseTableDefinitions(ctx context.Context, ses *Session, bh Backgro
 }
 
 type rebasePlannedTable struct {
-	name   string
-	replay bool
-	sql    rebaseTableSQL
+	name    string
+	replay  bool
+	sql     rebaseTableSQL
+	columns []rebaseSQLColumn
+	delta   *rebaseDeltaReplay
 }
 
 func preflightRebaseTables(ctx context.Context, bh BackgroundExec, sources [4]rebaseBoundDatabase, dag databranchutils.BranchReclaimDag, request rebaseDatabaseRequest) ([]rebasePlannedTable, [4]rebaseSQLRead, error) {
@@ -537,27 +606,30 @@ func preflightRebaseTables(ctx context.Context, bh BackgroundExec, sources [4]re
 				return nil, reads, moerr.NewInvalidInput(ctx, "Rebase base is not a protected ancestor of its head")
 			}
 		}
-		table := rebasePlannedTable{name: name, replay: replay}
+		table := rebasePlannedTable{name: name, replay: replay, columns: columns}
 		hasPK := slices.ContainsFunc(columns, func(column rebaseSQLColumn) bool { return column.primary })
 		var checks []string
 		if hasPK && replay {
 			table.sql, err = buildRebaseTableSQL(ctx, name, request.destination, reads, columns, request.policy)
-			checks = append(checks, table.sql.baseMismatch)
-		} else if !hasPK {
-			for _, pair := range [][2]int{{0, 2}, {0, 1}, {2, 3}} {
-				var query string
-				query, err = buildRebaseBagMismatchSQL(ctx, name, reads[pair[0]], reads[pair[1]], columns)
-				if err != nil {
-					break
-				}
-				checks = append(checks, query)
+			// Account and schema equality have already been checked. One table
+			// at one fixed timestamp is the same visible state, not a heuristic.
+			if !rebaseSameTableSnapshot(defs[0].TblId, defs[2].TblId, reads[0], reads[2]) {
+				checks = append(checks, table.sql.baseMismatch)
 			}
+		} else if !hasPK {
+			var query string
+			query, err = buildRebaseBagsMismatchSQL(ctx, name, reads[:], columns)
+			checks = append(checks, query)
 		}
 		if err != nil {
 			return nil, reads, err
 		}
 		for _, query := range checks {
-			counts, err := readRebaseCounts(ctx, bh, query, 1)
+			phase := "base_check"
+			if !hasPK {
+				phase = "bag_check"
+			}
+			counts, err := readRebasePhaseCounts(ctx, bh, phase, name, query, 1)
 			if err != nil {
 				return nil, reads, err
 			}
