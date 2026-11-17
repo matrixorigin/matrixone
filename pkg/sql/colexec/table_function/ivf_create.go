@@ -148,7 +148,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		logutil.Infof("IVFFLAT: int8 quantizer min=%g max=%g stored", qmin, qmax)
 	}
 
-	return nil
+	return writeIVFBuildInfo(proc, sqlproc, u.tblcfg, version, len(data), int(u.idxcfg.Ivfflat.Lists))
 }
 
 // kmeansCentroids returns the rows of the centroids k-means trains on data.

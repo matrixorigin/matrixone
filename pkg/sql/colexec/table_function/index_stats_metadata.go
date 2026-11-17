@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -144,6 +145,14 @@ func readIndexStatsSourceCommit(proc *process.Process, sqlproc *sqlexec.SqlProce
 }
 
 func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (map[string]any, error) {
+	return readIndexStatsMaintenanceObserved(proc, sqlproc, cfg, func(query string) (executor.Result, error) {
+		return indexStatsRunCurrentSQL(proc.Ctx, proc.GetService(), catalog.System_Account, catalog.MO_CATALOG, query)
+	})
+}
+
+// Deep analysis observes progress in the same read view as the index entries.
+// The normal status endpoint deliberately observes the latest durable progress.
+func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config, observe func(string) (executor.Result, error)) (map[string]any, error) {
 	accountID, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {
 		return nil, err
@@ -155,9 +164,9 @@ func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProces
 		"FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d AND job_name = %s "+
 		"AND drop_at IS NULL ORDER BY job_id DESC LIMIT 1", accountID, cfg.TableID, sqlquote.String(iscpmeta.IndexJobName(cfg.Index)))
 	metrics := map[string]any{"status": "task_missing", "caught_up": nil, "lag_seconds": nil}
-	// Tenant snapshots do not retain sys-owned job history. Observe the task
-	// in a fresh system transaction, keeping its tenant/table/index filter.
-	res, err := indexStatsRunCurrentSQL(proc.Ctx, proc.GetService(), catalog.System_Account, catalog.MO_CATALOG, query)
+	// The caller chooses latest durable status or the analysis read view;
+	// tenant/table/index filters and watermark semantics remain shared.
+	res, err := observe(query)
 	if err != nil {
 		if proc.Ctx.Err() != nil {
 			return nil, proc.Ctx.Err()

@@ -20,6 +20,8 @@ const FunctionName = "mo_index_stats"
 // Config is produced by the planner after resolving the authorized source.
 // Hidden table names are never taken directly from SQL function arguments.
 type Config struct {
+	Analyze                                    *AnalyzeOptions
+	SupportsAnalysis                           bool
 	Algorithm                                  string
 	FullTextVersion                            int64
 	Columns                                    []string

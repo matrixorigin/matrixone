@@ -31,6 +31,7 @@ func (Hooks) ConfigureIndexStats(ctx context.Context, source *plan.TableDef, def
 	if source == nil || source.Pkey == nil {
 		return moerr.NewInvalidInput(ctx, "mo_index_stats: incomplete IVF_FLAT index definition")
 	}
+	cfg.SupportsAnalysis = true
 	cfg.Lists = 1
 	for _, idx := range defs {
 		if idx.IndexTableName != "" {
