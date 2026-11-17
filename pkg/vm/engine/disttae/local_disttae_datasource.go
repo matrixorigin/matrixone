@@ -133,11 +133,13 @@ type LocalDisttaeDataSource struct {
 
 	//TODO:: It's so ugly, need to refactor
 	//for order by
-	desc     bool
-	blockZMS []index.ZM
-	sorted   bool // blks need to be sorted by zonemap
-	OrderBy  []*plan.OrderBySpec
-	Limit    uint64
+	desc       bool
+	nullsLead  bool
+	blockZMS   []index.ZM
+	blockNulls []uint32
+	sorted     bool // blks need to be sorted by zonemap
+	OrderBy    []*plan.OrderBySpec
+	Limit      uint64
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
@@ -189,6 +191,7 @@ func (ls *LocalDisttaeDataSource) String() string {
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 	ls.desc = len(orderby) > 0 && orderby[0] != nil && orderby[0].Flag&plan.OrderBySpec_DESC != 0
+	ls.nullsLead = len(orderby) > 0 && orderby[0] != nil && readutil.OrderHeadNullsLead(orderby[0].Flag)
 	// Ordered scans prune blocks after reading their zone maps. Prefetching the
 	// original block order can read whole objects that the scan will skip.
 	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
@@ -222,20 +225,34 @@ func (ls *LocalDisttaeDataSource) needReadBlkByZM(i int) bool {
 	if !ls.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
+	keep := false
 	if ls.desc {
-		return ls.filterZM.CompareMax(zm) <= 0
+		keep = ls.filterZM.CompareMax(zm) <= 0
 	} else {
-		return ls.filterZM.CompareMin(zm) >= 0
+		keep = ls.filterZM.CompareMin(zm) >= 0
 	}
+	if keep {
+		return true
+	}
+	// Zone maps describe non-NULL extrema only, so the interval rule above
+	// says nothing about rows a NULL-carrying block keeps unless NULLs also
+	// lead the requested head: those blocks must always be read. Under a
+	// trailing placement every NULL ranks after all head candidates, so the
+	// interval rule alone stays sound and null counts are deliberately
+	// ignored.
+	if ls.nullsLead && i < len(ls.blockNulls) && ls.blockNulls[i] > 0 {
+		return true
+	}
+	return false
 }
 
-func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, error) {
+func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, []uint32, error) {
 	if len(ls.OrderBy) == 0 || ls.OrderBy[0] == nil || ls.OrderBy[0].Expr == nil {
-		return nil, moerr.NewInternalError(ctx, "missing ORDER BY expression for ordered scan")
+		return nil, nil, moerr.NewInternalError(ctx, "missing ORDER BY expression for ordered scan")
 	}
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
 	if orderByCol == nil || orderByCol.Col == nil {
-		return nil, moerr.NewInternalError(ctx, "invalid ORDER BY column for ordered scan")
+		return nil, nil, moerr.NewInternalError(ctx, "invalid ORDER BY column for ordered scan")
 	}
 
 	def := ls.table.tableDef
@@ -334,18 +351,22 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		for _, col := range def.Cols {
 			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
 		}
-		return nil, moerr.NewInternalErrorf(ctx,
+		return nil, nil, moerr.NewInternalErrorf(ctx,
 			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
 			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols)
 	}
 
 	sliceLen := ls.rangeSlice.Len()
 	blockZMS := make([]index.ZM, sliceLen)
+	// Null counts ride the same immutable metadata the zone maps come from
+	// (an upper bound of visible NULLs under any tombstone overlay), so the
+	// reader can honor a leading NULL placement without extra object reads.
+	blockNulls := make([]uint32, sliceLen)
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
 	for i := ls.rangesCursor; i < sliceLen; i++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		block := ls.rangeSlice.Get(i)
 		if block.IsAppendable() {
@@ -355,22 +376,24 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, ls.fs)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
-			zm := blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+			colMeta := blkMeta.ColumnMeta(uint16(orderByColIDX))
+			zm := colMeta.ZoneMap()
 			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
 				blockZMS[i] = zm
+				blockNulls[i] = colMeta.NullCnt()
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return blockZMS, nil
+	return blockZMS, blockNulls, nil
 }
 
 func (ls *LocalDisttaeDataSource) sortBlockList() {
@@ -379,6 +402,9 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	for i := range sliceLen {
 		helper[i].blk = ls.rangeSlice.Get(i)
 		helper[i].zm = ls.blockZMS[i]
+		if i < len(ls.blockNulls) {
+			helper[i].nulls = ls.blockNulls[i]
+		}
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
@@ -420,6 +446,9 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 		ls.rangeSlice.Set(i, helper[i].blk)
 		//ls.ranges[i] = helper[i].blk
 		ls.blockZMS[i] = helper[i].zm
+		if i < len(ls.blockNulls) {
+			ls.blockNulls[i] = helper[i].nulls
+		}
 	}
 }
 
@@ -564,11 +593,13 @@ func (ls *LocalDisttaeDataSource) handleOrderBy(ctx context.Context) error {
 	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
 			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
-			blockZMS, err := ls.getBlockZMs(ctx)
+			ls.nullsLead = readutil.OrderHeadNullsLead(ls.OrderBy[0].Flag)
+			blockZMS, blockNulls, err := ls.getBlockZMs(ctx)
 			if err != nil {
 				return err
 			}
 			ls.blockZMS = blockZMS
+			ls.blockNulls = blockNulls
 			ls.sortBlockList()
 			ls.sorted = true
 		}
