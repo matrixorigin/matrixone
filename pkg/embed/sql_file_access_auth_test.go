@@ -480,10 +480,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var mutationStore string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name='mutation_ftidx' and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='mutation_documents') limit 1").Scan(&mutationStore))
 		tailSQL := fmt.Sprintf("select coalesce(max(chunk_id),-1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", dbName, mutationStore)
-		var forbiddenTail int64
-		require.ErrorContains(t, tenant.QueryRow(tailSQL).Scan(&forbiddenTail), "privilege")
-		// Durable index progress is a privileged test observation; tenant SQL
-		// must not acquire direct access to the physical fulltext store.
+		// An accountadmin may inspect its own physical index through a read-only
+		// SELECT. Keep using the internal executor below for the durable CDC
+		// progress oracle, which waits for committed log application.
+		var observedTail int64
+		require.NoError(t, tenant.QueryRow(tailSQL).Scan(&observedTail))
 		var tailAccountID uint32
 		require.NoError(t, admin.QueryRow("select account_id from mo_catalog.mo_account where account_name='"+account+"'").Scan(&tailAccountID))
 		tailCtx, tailCancel := context.WithTimeout(defines.AttachAccountId(t.Context(), tailAccountID), 2*time.Minute)
@@ -632,9 +633,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswMeta))
 		var filesz int64
 		filesizeSQL := fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)
-		require.ErrorContains(t, tenant.QueryRow(filesizeSQL).Scan(&filesz), "privilege")
+		var tenantFilesz int64
+		require.NoError(t, tenant.QueryRow(filesizeSQL).Scan(&tenantFilesz))
 		require.NoError(t, readPhysical(filesizeSQL, &filesz))
 		require.Greater(t, filesz, int64(0))
+		require.Equal(t, filesz, tenantFilesz)
 
 		t.Run("HNSW loaded IDs remain data during persistence", func(t *testing.T) {
 			var hnswStore string

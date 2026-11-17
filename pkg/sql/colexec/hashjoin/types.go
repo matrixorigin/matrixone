@@ -67,10 +67,11 @@ const (
 )
 
 type container struct {
-	state       int
-	itr         hashmap.Iterator
-	rightBats   []*batch.Batch
-	rightRowCnt int64
+	dictionaryBoundary vm.DictionaryOutputState
+	state              int
+	itr                hashmap.Iterator
+	rightBats          []*batch.Batch
+	rightRowCnt        int64
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64

@@ -80,8 +80,8 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
-# Keep an explicit caller cap for engine admission. Default the subsequent
-# heavy/plan wave to three only after the exclusive engine budget is resolved.
+# Keep an explicit caller cap for engine admission. Resolve the subsequent
+# heavy/plan default only after the exclusive engine budget is resolved.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
@@ -130,6 +130,7 @@ PREBUILT_RACE_TEST_BINARY=""
 LIGHT_RACE_JOB_PID=""
 LIGHT_RACE_REPORT=""
 CURRENT_UT_PID=""
+CURRENT_UT_BATCHED_OWNER=0
 CURRENT_UT_COMMAND_STAGE=""
 CURRENT_UT_COMMAND_LABEL=""
 CURRENT_UT_STAGE="initializing"
@@ -170,6 +171,49 @@ if [[ -n "${MO_CL_CUDA:-}" ]] ; then
          LD_LIBRARY_PATH="${MO_GPU_RUNTIME_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 	 TAGS="${TAGS},gpu"
     fi
+fi
+
+# Keep a prior run's live diagnostic links out of this run's bounded upload
+# without deleting them. rename(2) is required: a cross-device copy could be
+# slow and would not preserve the meaning of a link to a still-live writer.
+function archive_previous_live_prebuilt_diagnostics(){
+    local directory name archive archive_root="${BUILD_WKSP}/scratch"
+    for directory in "${UT_DIAGNOSTIC_DIR}"/live-prebuilt-[0-9]*; do
+        name=${directory##*/}
+        [[ "${name}" =~ ^live-prebuilt-[0-9]{14}$ ]] || continue
+        [[ -e "${directory}" || -L "${directory}" ]] || continue
+        if [[ -L "${directory}" || ! -d "${directory}" ]]; then
+            echo "invalid previous live diagnostic directory: ${directory}" >&2
+            return 1
+        fi
+        mkdir -p "${archive_root}" || return 1
+        archive=$(mktemp -d "${archive_root}/archived-live-prebuilt.XXXXXX") || return 1
+        if ! python3 - "${directory}" "${archive}/${name}" "${UT_DIAGNOSTIC_DIR}" <<'PY'
+import os
+import re
+import sys
+destination = os.path.realpath(os.path.dirname(sys.argv[2]))
+diagnostics = os.path.realpath(sys.argv[3])
+if os.path.commonpath((destination, diagnostics)) == diagnostics:
+    raise RuntimeError("archive destination is inside the diagnostic directory")
+for entry in os.scandir(sys.argv[1]):
+    name_ok = entry.name == "origin.txt" or re.fullmatch(r"live\.(?:base|[0-9]+)\.jsonl", entry.name)
+    if not name_ok or not entry.is_file(follow_symlinks=False):
+        raise RuntimeError("unexpected live diagnostic entry: " + entry.name)
+os.rename(sys.argv[1], sys.argv[2])
+PY
+        then
+            rmdir "${archive}" 2>/dev/null || echo "preserving archive directory: ${archive}" >&2
+            echo "failed to archive previous live diagnostics: ${directory}" >&2
+            return 1
+        fi
+        echo "archived previous live diagnostics: ${directory} -> ${archive}/${name}" >&2
+    done
+}
+
+if [[ "${TEST_TYPE}" == UT ]] && ! archive_previous_live_prebuilt_diagnostics; then
+    echo "refusing to mix diagnostics from different UT runs" >&2
+    exit 1
 fi
 
 if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
@@ -261,9 +305,47 @@ function publish_ut_helper_completion(){
 
 function invoke_ut_helper(){
     local UT_HELPER_COMPLETION="${G_WKSP}/${G_TS}-owner-complete.$1"
+    local owner_name=$1 helper_name=${2:-}
+    local batched_owner=0 BATCHED_RACE_INVOKE_TERM_REQUESTED=0 BATCHED_RACE_OWNER_PID="" BATCHED_RACE_OWNER_VERIFIED=0
+    local owner_group="" owner_candidate=""
     local helper_status=0
     shift
+    if [[ "${owner_name}" == CURRENT_UT_PID && "${helper_name}" == run_race_test_batches ]]; then
+        batched_owner=1
+        # The preparation wrapper temporarily replaces this trap. Keep a
+        # separate latch alive through the return-to-completion handoff.
+        trap 'BATCHED_RACE_INVOKE_TERM_REQUESTED=1' TERM
+        if [[ "${BATCHED_RACE_LAUNCHED_FROM_START:-0}" == 1 && -f "${UT_HELPER_COMPLETION}" ]]; then
+            if [[ -n "${BASHPID:-}" ]]; then
+                owner_candidate=${BASHPID}
+            else
+                owner_candidate=$(exec /bin/sh -c 'printf "%s" "$PPID"') || owner_candidate=""
+            fi
+            if [[ "${owner_candidate}" =~ ^[1-9][0-9]*$ ]]; then
+                owner_group=$(ps -o pgid= -p "${owner_candidate}") || owner_group=""
+                owner_group=${owner_group//[[:space:]]/}
+                if [[ "${owner_group}" == "${owner_candidate}" ]]; then
+                    BATCHED_RACE_OWNER_PID=${owner_candidate}
+                    BATCHED_RACE_OWNER_VERIFIED=1
+                fi
+            fi
+        fi
+    fi
     "$@" || helper_status=$?
+    if (( batched_owner )); then
+        if (( helper_status != 0 && helper_status != 125 )); then
+            logger "ERR" "batched UT owner selected status ${helper_status}" >&2
+        fi
+        # The helper has returned from its descendant ownership boundary. A
+        # TERM from now through completion publication must prevent a success
+        # acknowledgement; a prior TERM remains in the latch below.
+        trap 'exit 125' TERM
+        if (( BATCHED_RACE_INVOKE_TERM_REQUESTED != 0 )) ||
+            [[ -e "${UT_HELPER_COMPLETION}.cancel" ]]; then
+            logger "ERR" "batched UT owner canceled after status ${helper_status}; retaining diagnostics" >&2
+            return 125
+        fi
+    fi
     publish_ut_helper_completion "${helper_status}" || return 125
     return "${helper_status}"
 }
@@ -305,6 +387,12 @@ function join_ut_owner(){
                 [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
                 join_status=125
             fi
+            # The request can race the helper's final marker check and its
+            # acknowledgement. A zero completion does not cancel the request.
+            if [[ "${pid_name}" == CURRENT_UT_PID && "${CURRENT_UT_BATCHED_OWNER}" == 1 &&
+                  -e "${completion_path}.cancel" ]] && (( join_status == 0 )); then
+                join_status=125
+            fi
             # The helper has joined and acknowledged descendant drainage.
             # Only now can its parent's cancellation request be retired.
             if (( join_status != 125 )); then
@@ -333,6 +421,12 @@ function start_ut_command(){
     shift 2
     local saved_term_trap
     local term_pending=0
+    local BATCHED_RACE_LAUNCHED_FROM_START=0
+    CURRENT_UT_BATCHED_OWNER=0
+    if [[ "${1:-}" == run_race_test_batches ]]; then
+        CURRENT_UT_BATCHED_OWNER=1
+        BATCHED_RACE_LAUNCHED_FROM_START=1
+    fi
     CURRENT_UT_COMMAND_STAGE=${stage}
     CURRENT_UT_COMMAND_LABEL=${label}
     mark_ut_stage "${stage}" "${label}" start "" "${*}"
@@ -579,6 +673,7 @@ function report_slow_ut_cases(){
 
 function snapshot_ut_diagnostics(){
     local destination="${UT_DIAGNOSTIC_DIR}"
+    local source live_directory="" suffix target
     mkdir -p "${destination}"
     if [[ -f "${UT_REPORT}" && "${UT_REPORT}" != "${destination}/ut-report.json" ]]; then
         if [[ ! -e "${destination}/ut-report.json" ]] &&
@@ -597,6 +692,48 @@ function snapshot_ut_diagnostics(){
             ! ln "${UT_STDERR}" "${destination}/ut-stderr.log" 2>/dev/null; then
             cp "${UT_STDERR}" "${destination}/ut-stderr.log"
         fi
+    fi
+    # These files are deliberately not merged into the authoritative report:
+    # an owner that failed to acknowledge drainage may still be writing them.
+    # A hard link makes the live, potentially partial data available to CI's
+    # bounded diagnostic collector without copying or deleting the original.
+    if [[ -n "${PREBUILT_RACE_REPORT}" ]] &&
+        (( CURRENT_UT_DRAIN_FAILED != 0 || CLUSTER_PREBUILD_DRAIN_FAILED != 0 )); then
+        for source in "${PREBUILT_RACE_REPORT}" "${PREBUILT_RACE_REPORT}".[0-9]*; do
+            [[ -f "${source}" && ! -L "${source}" ]] || continue
+            suffix=${source#"${PREBUILT_RACE_REPORT}"}
+            if [[ -z "${suffix}" ]]; then
+                suffix=.base
+            elif ! [[ "${suffix#.}" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+            if [[ -z "${live_directory}" ]]; then
+                live_directory="${destination}/live-prebuilt-${G_TS}"
+                if [[ -L "${live_directory}" || ( -e "${live_directory}" && ! -d "${live_directory}" ) ]]; then
+                    logger "ERR" "invalid live prebuilt diagnostic directory; originals remain at ${PREBUILT_RACE_REPORT}"
+                    break
+                fi
+                mkdir -p "${live_directory}" || {
+                    logger "ERR" "cannot stage live prebuilt diagnostics; originals remain at ${PREBUILT_RACE_REPORT}"
+                    break
+                }
+                if [[ ! -e "${live_directory}/origin.txt" && ! -L "${live_directory}/origin.txt" ]]; then
+                    printf 'runner_timestamp=%s\nsource=%s\nstate=live, non-authoritative; writers may still change these files\n' \
+                        "${G_TS}" "${PREBUILT_RACE_REPORT}" > "${live_directory}/origin.txt" ||
+                        logger "ERR" "cannot write live prebuilt diagnostic origin: ${live_directory}"
+                fi
+            fi
+            target="${live_directory}/live${suffix}.jsonl"
+            if [[ -e "${target}" || -L "${target}" ]]; then
+                if [[ -L "${target}" || ! "${source}" -ef "${target}" ]]; then
+                    logger "ERR" "live prebuilt diagnostic already exists; original remains at ${source}"
+                fi
+                continue
+            fi
+            if ! ln "${source}" "${target}" 2>/dev/null; then
+                logger "ERR" "cannot link live prebuilt diagnostic; original remains at ${source}"
+            fi
+        done
     fi
     logger "ERR" "UT diagnostic snapshot: ${destination}"
 }
@@ -2132,6 +2269,7 @@ function run_prebuilt_race_commands(){
     }
     function prebuilt_race_cancel_requested(){
         (( term_pending != 0 )) ||
+            batched_race_cancel_requested ||
             [[ -n "${UT_HELPER_COMPLETION:-}" && -e "${UT_HELPER_COMPLETION:-}.cancel" ]]
     }
     # Keep one sticky TERM latch for the entire admission/drain lifetime.
@@ -2297,6 +2435,9 @@ function run_prebuilt_race_commands(){
     done
     if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
     restore_ut_term_trap "${previous_term_trap}"
+    # TERM between the final poll and restoring the caller's trap belongs to
+    # this dispatcher's latch. After restoration the caller keeps its own.
+    if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
     return "${status}"
 }
 
@@ -2356,6 +2497,12 @@ function run_prebuilt_embedded_tests(){
     fi
 }
 
+function batched_race_cancel_requested(){
+    [[ "${BATCHED_RACE_ACTIVE:-0}" == 1 ]] || return 1
+    (( ${BATCHED_RACE_TERM_REQUESTED:-0} != 0 || ${BATCHED_RACE_INVOKE_TERM_REQUESTED:-0} != 0 )) ||
+        [[ -n "${UT_HELPER_COMPLETION:-}" && -e "${UT_HELPER_COMPLETION}.cancel" ]]
+}
+
 function run_race_inventory_with_deadline(){
     local directory=$1 binary=$2 inventory=$3 deadline=$4
     local pid now status=0 term_pending=0
@@ -2381,6 +2528,10 @@ function run_race_inventory_with_deadline(){
 
     previous_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
+    if (( term_pending != 0 )) || batched_race_cancel_requested; then
+        restore_ut_term_trap "${previous_term_trap}"
+        return 125
+    fi
     set -m
     (
         cd "${directory}" || exit 2
@@ -2389,12 +2540,12 @@ function run_race_inventory_with_deadline(){
     ) > "${inventory}" 2>&1 &
     pid=$!
     set +m
-    if (( term_pending != 0 )); then
+    if (( term_pending != 0 )) || batched_race_cancel_requested; then
         abort_race_inventory 125
         return $?
     fi
     while ut_process_group_alive "${pid}"; do
-        if (( term_pending != 0 )); then
+        if (( term_pending != 0 )) || batched_race_cancel_requested; then
             abort_race_inventory 125
             return $?
         fi
@@ -2407,11 +2558,108 @@ function run_race_inventory_with_deadline(){
     done
     wait "${pid}" || status=$?
     restore_ut_term_trap "${previous_term_trap}"
-    if (( term_pending != 0 )); then status=125; fi
+    if (( term_pending != 0 )) || batched_race_cancel_requested; then status=125; fi
     return "${status}"
 }
 
 function run_race_test_batches(){
+    local BATCHED_RACE_ACTIVE=1 BATCHED_RACE_TERM_REQUESTED=0
+    local saved_batched_term_trap status=0
+    saved_batched_term_trap=$(trap -p TERM)
+    trap 'BATCHED_RACE_TERM_REQUESTED=1' TERM
+    run_race_test_batches_impl "$@" || status=$?
+    # Restore the caller's sticky trap before the final local check. TERM on
+    # either side of this handoff is retained by one of the two latches.
+    restore_ut_term_trap "${saved_batched_term_trap}"
+    if batched_race_cancel_requested; then
+        if (( status != 0 && status != 125 )); then
+            logger "ERR" "batched UT preparation selected status ${status} before cancellation" >&2
+        fi
+        status=125
+    fi
+    return "${status}"
+}
+
+# The production fallback stays in the verified helper group so the parent can
+# drain it even if the helper is killed before publishing a child PID. Direct
+# callers without that owner retain the original foreground command semantics.
+function run_batched_race_fallback(){
+    local package=$1 fallback_timeout=$2 pid status=0
+    local int_trap="" quit_trap="" ignore_int=0 ignore_quit=0 use_owned_group=0
+    if batched_race_cancel_requested; then return 125; fi
+    # Bash 3.2 cannot reset INT/QUIT after an asynchronous child inherits
+    # ignored dispositions. Keep the foreground path on older shells and on
+    # platforms whose process-group behavior has not been validated here.
+    if (( BASH_VERSINFO[0] >= 5 )) &&
+        [[ "${OSTYPE:-}" == linux* && "${BATCHED_RACE_LAUNCHED_FROM_START:-0}" == 1 &&
+          "${BATCHED_RACE_OWNER_VERIFIED:-0}" == 1 && -n "${BATCHED_RACE_OWNER_PID:-}" ]]; then
+        use_owned_group=1
+        int_trap=$(trap -p INT) || use_owned_group=0
+        quit_trap=$(trap -p QUIT) || use_owned_group=0
+        case "${int_trap}" in
+            '') ;;
+            "trap -- '' SIGINT"|"trap -- '' INT") ignore_int=1 ;;
+            "trap -- "*' SIGINT'|"trap -- "*' INT') ;;
+            *) use_owned_group=0 ;;
+        esac
+        case "${quit_trap}" in
+            '') ;;
+            "trap -- '' SIGQUIT"|"trap -- '' QUIT") ignore_quit=1 ;;
+            "trap -- "*' SIGQUIT'|"trap -- "*' QUIT') ;;
+            *) use_owned_group=0 ;;
+        esac
+    fi
+    if (( use_owned_group == 0 )); then
+        if batched_race_cancel_requested; then return 125; fi
+        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+            -p 1 -timeout "${fallback_timeout}s" -race "${package}" || status=$?
+        if batched_race_cancel_requested; then
+            if (( status != 0 )); then logger "ERR" "${package} fallback exited with status ${status} during cancellation" >&2; fi
+            return 125
+        fi
+        return "${status}"
+    fi
+    # Non-interactive Bash otherwise makes asynchronous jobs ignore INT and
+    # QUIT. Recreate the dispositions the original foreground command would
+    # inherit, including a caller that explicitly ignored either signal.
+    set +m
+    if batched_race_cancel_requested; then return 125; fi
+    (
+        trap - INT QUIT
+        (( ignore_int == 0 )) || trap '' INT
+        (( ignore_quit == 0 )) || trap '' QUIT
+        exec env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+            -p 1 -timeout "${fallback_timeout}s" -race "${package}"
+    ) 0<&0 &
+    pid=$!
+    while kill -0 "${pid}" 2>/dev/null; do
+        if batched_race_cancel_requested; then
+            # The helper's sticky TERM trap also receives this signal. Its
+            # parent retains the group and applies the bounded drain/KILL.
+            terminate_ut_process_group "${BATCHED_RACE_OWNER_PID}" TERM
+            if ! kill -0 "${pid}" 2>/dev/null; then
+                wait "${pid}" 2>/dev/null || status=$?
+                if (( status != 0 )); then
+                    logger "ERR" "${package} fallback exited with status ${status} during cancellation" >&2
+                fi
+            fi
+            return 125
+        fi
+        sleep 0.1
+    done
+    # The parent joins this helper's group before accepting its acknowledgement.
+    wait "${pid}" || status=$?
+    if batched_race_cancel_requested; then
+        logger "ERR" "${package} fallback selected status ${status} before cancellation" >&2
+        terminate_ut_process_group "${BATCHED_RACE_OWNER_PID}" TERM
+        return 125
+    fi
+    return "${status}"
+}
+
+function run_race_test_batches_impl(){
     local package=$1 binary=$2 batches=$3 parallel=${4:-1}
     local child_go_budget=${5:-} main_contract=${6:-independent}
     local metadata="${binary}-metadata" inventory="${binary}-inventory"
@@ -2424,9 +2672,11 @@ function run_race_test_batches(){
     # Establish report ownership now; the dispatcher replaces it with partials
     # when execution starts. The parent consumes only after joining/draining.
     : > "${PREBUILT_RACE_REPORT}" || return 125
+    if batched_race_cancel_requested; then return 125; fi
     # Preparation may use the complete ordinary command only before any
     # selected test has executed. A runtime failure never reruns earlier roots.
     effective_go_flags=$(go env GOFLAGS 2>/dev/null) || status=1
+    if batched_race_cancel_requested; then return 125; fi
     if [[ -n "${GOFLAGS:-}" || -n "${effective_go_flags:-}" ]]; then status=1; fi
     case "${main_contract}" in
         independent|cleanup-only) ;;
@@ -2439,11 +2689,13 @@ function run_race_test_batches(){
             ! IFS=$'\t' read -r directory import_path < "${metadata}"; then
             status=1
         elif [[ "${main_contract}" == independent ]]; then
+            if batched_race_cancel_requested; then return 125; fi
             # A TestMain may own cross-root assertions or process-wide state.
             # A caller may opt in only after auditing its cleanup-only contract;
             # inventory and every batch still execute the real TestMain.
             while IFS= read -r test_file; do
                 [[ -n "${test_file}" ]] || continue
+                if batched_race_cancel_requested; then return 125; fi
                 if grep -Eq '(^|[^[:alnum:]_])TestMain([^[:alnum:]_]|$)' "${directory}/${test_file}"; then
                     status=1
                     break
@@ -2451,11 +2703,13 @@ function run_race_test_batches(){
             done < <(tail -n +2 "${metadata}")
         fi
     fi
+    if batched_race_cancel_requested; then return 125; fi
     if (( status == 0 )); then
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
             go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} \
             -short -race -tags "${TAGS}" -p 1 -c -o "${binary}" "${package}" >&2 || status=$?
     fi
+    if batched_race_cancel_requested; then return 125; fi
     if (( status == 0 )); then
         deadline=$(( $(date +%s) + 10#${UT_TIMEOUT} * 60 ))
         run_race_inventory_with_deadline "${directory}" "${binary}" "${inventory}" "${deadline}" || status=$?
@@ -2464,17 +2718,20 @@ function run_race_test_batches(){
     if (( status == 0 && 10#${parallel} > 1 )); then
         partition_layout=roundrobin
     fi
-    if (( status == 0 )) && ! partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}"; then status=1; fi
+    if (( status == 0 )); then
+        partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}" || status=$?
+    fi
+    if batched_race_cancel_requested; then status=125; fi
     if (( status == 124 || status == 125 )); then
-        logger "ERR" "${package} batching discovery exhausted its shared timeout (status ${status}); refusing an unbounded fallback" >&2
         if (( status == 124 )); then
+            logger "ERR" "${package} batching discovery exhausted its shared timeout; refusing an unbounded fallback" >&2
             rm -f "${metadata}" "${inventory}" "${binary}"
         else
+            logger "ERR" "${package} batching discovery canceled or could not establish drainage; refusing fallback" >&2
             logger "ERR" "retaining ${package} discovery diagnostics: ${metadata} ${inventory} ${binary}" >&2
         fi
         return "${status}"
     fi
-    rm -f "${metadata}" "${inventory}"
     if (( status != 0 )); then
         if (( deadline != 0 )); then
             remaining=$((deadline - $(date +%s)))
@@ -2487,12 +2744,14 @@ function run_race_test_batches(){
         else
             fallback_timeout=$((10#${UT_TIMEOUT} * 60))
         fi
+        if batched_race_cancel_requested; then return 125; fi
+        # No batch has executed and discovery is finished. Do not retain a
+        # large prebuilt binary while the complete fallback links another one.
+        rm -f "${metadata}" "${inventory}" "${binary}"
+        if batched_race_cancel_requested; then return 125; fi
         logger "WRN" "${package} batching preparation unavailable; run the ordinary command with ${fallback_timeout}s remaining" >&2
-        rm -f "${binary}"
-        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
-            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-            -p 1 -timeout "${fallback_timeout}s" -race "${package}"
-        status=$?
+        status=0
+        run_batched_race_fallback "${package}" "${fallback_timeout}" || status=$?
         return "${status}"
     fi
     for (( index=0; index<batches; index++ )); do
@@ -2510,9 +2769,15 @@ function run_race_test_batches(){
         export GOMAXPROCS
     fi
     logger "INF" "Run ${batches} ${package} batches with bounded parallelism ${parallel} and ${partition_layout} partition" >&2
+    if batched_race_cancel_requested; then return 125; fi
+    status=0
     MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${parallel}" \
         run_prebuilt_race_commands "${CURRENT_UT_COMMAND_STAGE:-serial}" "${PREBUILT_RACE_REPORT}" \
-            "${parallel}" "$((10#${UT_TIMEOUT} * 60 + 120))"
+            "${parallel}" "$((10#${UT_TIMEOUT} * 60 + 120))" || status=$?
+    if (( status != 125 )) && ! batched_race_cancel_requested; then
+        rm -f "${metadata}" "${inventory}"
+    fi
+    return "${status}"
 }
 
 function run_embedded_tests(){
@@ -2647,6 +2912,17 @@ function run_embedded_tests(){
     return "${test_status}"
 }
 
+function default_heavy_race_parallel(){
+    # Only this overlap profile has complete joined-wall and resource evidence.
+    if [[ "${OSTYPE_PREFIX}" == linux && "${UT_PARALLEL}" == 8 &&
+          "${UT_OVERLAP_PLAN}" == 1 && "${PLAN_RACE_PARALLEL}" == 2 &&
+          "${PLAN_RACE_SHARDS}" == 2 ]]; then
+        printf '%s\n' 4
+    else
+        printf '%s\n' 3
+    fi
+}
+
 function run_tests(){
     if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
     cd $BUILD_WKSP
@@ -2670,7 +2946,7 @@ function run_tests(){
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
     echo "#  UT STDERR:       $UT_STDERR"
-    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-3} total package slots"
+    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-$(default_heavy_race_parallel)} total package slots"
     horiz_rule
     mark_ut_stage "routing" "validate shard and package partition" start
 
@@ -2875,8 +3151,10 @@ function run_tests(){
             logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
-        if ! [[ "${HEAVY_RACE_PARALLEL:-3}" =~ ^[1-9][0-9]*$ ]] ||
-            (( ${HEAVY_RACE_PARALLEL:-3} > 64 )); then
+        local heavy_race_default
+        heavy_race_default=$(default_heavy_race_parallel)
+        if ! [[ "${HEAVY_RACE_PARALLEL:-${heavy_race_default}}" =~ ^[1-9][0-9]*$ ]] ||
+            (( ${HEAVY_RACE_PARALLEL:-${heavy_race_default}} > 64 )); then
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
@@ -2889,7 +3167,7 @@ function run_tests(){
             (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
             engine_race_parallel=${HEAVY_RACE_PARALLEL}
         fi
-        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-3}
+        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-${heavy_race_default}}
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -3133,7 +3411,7 @@ function run_tests(){
 
         # The plan race wave is independent after the engine wave has completed.
         # Reserve exactly its configured process count from the existing heavy
-        # budget, so plan+resource work never exceeds the prior three-slot cap.
+        # budget, so plan+resource work never exceeds the configured task cap.
         # If the budget cannot admit both waves, keep the phases sequential.
         if should_run_ut_stage heavy; then
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
