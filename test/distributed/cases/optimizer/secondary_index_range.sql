@@ -344,8 +344,12 @@ select id from t10 where prefix_in(k, ('', 'zz')) order by id;
 select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
 select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
 select mo_ctl('dn', 'flush', 'd1.t10');
+-- Unfiltered scalar results must agree with persisted predicate pruning.
+select id, prefix_in(k, ('', 'zz')) as scalar_match from t10 order by id;
 select id from t10 where prefix_in(k, ('', 'zz')) order by id;
+select id, prefix_in(k, ('a', 'aa', 'az')) as scalar_match from t10 order by id;
 select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
+select id, prefix_in(k, (char(0), 'zz')) as scalar_match from t10 order by id;
 select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
 select id from t10 where prefix_in(k, ('ab', 'missing')) order by id;
 
