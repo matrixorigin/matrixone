@@ -621,6 +621,11 @@ func TestEvalZonemapFilter(t *testing.T) {
 			zms := make([]objectio.ZoneMap, cnt)
 			vecs := make([]*vector.Vector, cnt)
 			zm := colexec.EvaluateFilterByZoneMap(context.Background(), proc, expr, tc.meta, columnMap, zms, vecs)
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
 			require.Equal(t, tc.expect[i], zm, tc.desc[i])
 		}
 	}

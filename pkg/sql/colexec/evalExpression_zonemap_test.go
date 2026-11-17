@@ -69,6 +69,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 			parseDatetime(t, "2026-08-10 11:00:00"),
 		)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -87,6 +88,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 			parseDatetime(t, "2024-01-10 11:00:00"),
 		)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -106,6 +108,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 			parseDatetime(t, "2024-11-03 01:59:59"),
 		)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.True(t, selected, "ambiguous local-time ranges must remain for residual evaluation")
@@ -120,6 +123,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 		expr := makeExpr(t, threshold, 3)
 		meta := makeDatetimeBlockMeta(value, value)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, "comparison must retain the prior TIMESTAMP(3) cast precision")
@@ -145,6 +149,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 			parseDatetime(t, "2026-08-10 11:00:00"),
 		)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -170,6 +175,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "between", []*plan.Expr{column, lower, upper})
 		require.NoError(t, err)
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(
 			proc.Ctx, proc, expr, makeDatetimeBlockMeta(value), map[int]int{0: 0}, zms, vecs,
@@ -185,6 +191,7 @@ func TestEvaluateFilterByZoneMapNullableInListIsConservative(t *testing.T) {
 	expr := makeVarcharInExpr(t, ctx, "keep", true)
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -197,6 +204,7 @@ func TestEvaluateFilterByZoneMapNullableInVecIsConservative(t *testing.T) {
 	expr := makeVarcharInVecExpr(t, ctx, proc, "keep", true)
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -242,6 +250,7 @@ func TestEvaluateFilterByZoneMapStillPrunesFalseEquality(t *testing.T) {
 
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -270,6 +279,7 @@ func TestEvaluateFilterByZoneMapAndKeepsKnownFalsePruning(t *testing.T) {
 
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -289,6 +299,7 @@ func TestEvaluateFilterByZoneMapAndKeepsPossibleTrueBoolRange(t *testing.T) {
 
 	meta := makeBoolAndVarcharBlockMeta(false, true, "key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0, 1: 1}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -301,6 +312,7 @@ func TestEvaluateFilterByZoneMapNullableInListWithoutMatchPrunes(t *testing.T) {
 	expr := makeVarcharInExpr(t, ctx, "zzz", true)
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -313,6 +325,7 @@ func TestEvaluateFilterByZoneMapNullableNotInListPrunes(t *testing.T) {
 	expr := makeVarcharNotInExpr(t, ctx, "zzz", true)
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -337,6 +350,7 @@ func TestEvaluateFilterByZoneMapNotInExpandedWithBareNullPrunes(t *testing.T) {
 
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -356,6 +370,7 @@ func TestEvaluateFilterByZoneMapNotEqualBareNullPrunes(t *testing.T) {
 
 			meta := makeVarcharBlockMeta("key", "keep")
 			zms, vecs := makeZoneMapEvalScratch(expr)
+			defer freeZoneMapEvalVectors(proc, vecs)
 
 			selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 			require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -370,6 +385,7 @@ func TestEvaluateFilterByZoneMapUnknownResultIsConservative(t *testing.T) {
 	expr := makeVarcharColExpr()
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -389,6 +405,7 @@ func TestEvaluateFilterByZoneMapNullComparisonsPrune(t *testing.T) {
 
 			meta := makeVarcharBlockMeta("key", "keep")
 			zms, vecs := makeZoneMapEvalScratch(expr)
+			defer freeZoneMapEvalVectors(proc, vecs)
 
 			selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 			require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -405,6 +422,7 @@ func TestEvaluateFilterByZoneMapNullComparisonsPrune(t *testing.T) {
 
 		meta := makeVarcharBlockMeta("key", "keep")
 		zms, vecs := makeZoneMapEvalScratch(expr)
+		defer freeZoneMapEvalVectors(proc, vecs)
 
 		selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -432,6 +450,7 @@ func TestEvaluateFilterByZoneMapInListWithUnknownMemberIsConservative(t *testing
 
 	meta := makeVarcharBlockMeta("key", "keep")
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -445,6 +464,7 @@ func TestEvaluateFilterByZoneMapInListWithUninitializedLHSIsConservative(t *test
 	dataMeta := objectio.BuildMetaData(1, 1)
 	meta := dataMeta.GetBlockMeta(0)
 	zms, vecs := makeZoneMapEvalScratch(expr)
+	defer freeZoneMapEvalVectors(proc, vecs)
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
@@ -662,4 +682,12 @@ func makeBoolAndVarcharBlockMeta(minBool, maxBool bool, values ...string) object
 func makeZoneMapEvalScratch(expr *plan.Expr) ([]objectio.ZoneMap, []*vector.Vector) {
 	need := plan2.AssignAuxIdForExpr(expr, 0)
 	return make([]objectio.ZoneMap, need), make([]*vector.Vector, need)
+}
+
+func freeZoneMapEvalVectors(proc *process.Process, vecs []*vector.Vector) {
+	for _, vec := range vecs {
+		if vec != nil {
+			vec.Free(proc.Mp())
+		}
+	}
 }
