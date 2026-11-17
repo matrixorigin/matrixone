@@ -1649,6 +1649,8 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
 	const maxCandidates = 64
 	const maxStringBytes = 30
+	// SortAndCompact 可缩短逻辑行数而保留整个 varlen area，不能只检查 Len。
+	const maxPayloadBytes = 4 << 10
 	isString := typ == types.T_char || typ == types.T_varchar
 	if !(typ.IsInteger() || typ.IsDecimal() || typ.IsDateRelate() || typ == types.T_bool || isString) ||
 		types.T(rhs.Typ.Id).IsFloat() {
@@ -1675,7 +1677,7 @@ func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
 		return isRuntimeConstExpr(rhs)
 	}
 	vec := rhs.GetVec()
-	if vec == nil || vec.Len < 0 || vec.Len > maxCandidates {
+	if vec == nil || vec.Len < 0 || vec.Len > maxCandidates || len(vec.Data) > maxPayloadBytes {
 		return false
 	}
 	if isString {

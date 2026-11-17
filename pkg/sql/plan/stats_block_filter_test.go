@@ -364,6 +364,69 @@ func TestSimpleInAdmissionBounds(t *testing.T) {
 	}
 }
 
+func TestSmallInPhysicalPayloadBudget(t *testing.T) {
+	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 1)
+	// 仅检查准入预算，不解码伪造数据；物理上界与逻辑Len独立。
+	for _, size := range []int{4095, 4096, 4097} {
+		expr := MakeInExpr(context.Background(), col, 2, make([]byte, size), false)
+		require.Equal(t, size <= 4096, isSimpleZoneMapFilter(expr))
+	}
+}
+
+func TestFinalStringInLogicalIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	col := GetColExpr(planpb.Type{Id: int32(types.T_varchar)}, 1, 1)
+	a, b, c := strings.Repeat("a", 30), strings.Repeat("b", 30), strings.Repeat("c", 30)
+	makeIn := func(values []string, null bool, unused bool, width int32) *planpb.Expr {
+		v := vector.NewVec(types.T_varchar.ToType())
+		defer v.Free(mp)
+		v.GetType().Width = width
+		if unused {
+			require.NoError(t, vector.AppendBytes(v, []byte(c), false, mp))
+		}
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(v, []byte(value), false, mp))
+		}
+		if unused {
+			v.Shrink([]int64{1, 2}, false)
+		}
+		if null {
+			require.NoError(t, vector.AppendBytes(v, nil, true, mp))
+		}
+		v.InplaceSortAndCompact()
+		data, err := v.MarshalBinary()
+		require.NoError(t, err)
+		return MakeInExpr(context.Background(), col, int32(v.Length()), data, false)
+	}
+	for _, tc := range []struct {
+		name        string
+		left, right *planpb.Expr
+		want        int
+	}{
+		{"opposite insertion", makeIn([]string{a, b}, false, false, 30), makeIn([]string{b, a}, false, false, 30), 1},
+		{"unreferenced area", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, false, true, 30), 1},
+		{"nullable order", makeIn([]string{a, b}, true, false, 30), makeIn([]string{b, a}, true, false, 30), 1},
+		{"different nulls", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, true, false, 30), 2},
+		{"different values", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, c}, false, false, 30), 2},
+		{"different actual type", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, false, false, 31), 2},
+		{"null versus empty", makeIn([]string{a, ""}, false, false, 30), makeIn([]string{a}, true, false, 30), 2},
+		{"embedded zero", makeIn([]string{"a\x00b", "c"}, false, false, 30), makeIn([]string{"a", "b\x00c"}, false, false, 30), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeLeft, beforeRight := DeepCopyExpr(tc.left), DeepCopyExpr(tc.right)
+			result := DeduplicateFinalBlockFilters([]*planpb.Expr{tc.left, tc.right})
+			require.Len(t, result, tc.want)
+			require.Same(t, tc.left, result[0])
+			require.True(t, exprStructuralEqual(tc.left, beforeLeft))
+			require.True(t, exprStructuralEqual(tc.right, beforeRight))
+		})
+	}
+}
+
 func TestPlanLargeNullableInKeepsExistingAdmission(t *testing.T) {
 	mock := NewMockCompilerContext(false)
 	mock.tables["nation"].TblId = 42001

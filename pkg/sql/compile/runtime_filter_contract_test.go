@@ -15,11 +15,17 @@
 package compile
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -58,8 +64,60 @@ func (ctx *blockFilterInsertContext) Resolve(db, table string, snapshot *plan.Sn
 	return &copyObj, def, nil
 }
 
+// 这些表达式测试只需要 process/mpool；不安装自增服务或创建文件服务。
+// 借用的 runtime 服务不归 fixture 所有，只有本地资源由 Cleanup 逆序释放。
+func newBlockFilterCompile(t testing.TB) *Compile {
+	t.Helper()
+	mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.AllocatedBytes())
+	})
+	ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	t.Cleanup(cancel)
+	proc := process.NewTopProcess(ctx, mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(proc.Free)
+	c := &Compile{proc: proc}
+	t.Cleanup(func() {
+		for _, exe := range c.filterExprExes {
+			exe.Free()
+		}
+	})
+	return c
+}
+
+func TestBlockFilterFixtureOwnership(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	before, existed := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+	var proc *process.Process
+	var name string
+	t.Run("owned process", func(t *testing.T) {
+		name = t.Name()
+		c := newBlockFilterCompile(t)
+		proc = c.proc
+		current, exists := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+		require.Equal(t, existed, exists, "纯表达式 fixture 不应安装新服务")
+		if before == nil {
+			require.Nil(t, current)
+		} else {
+			require.Same(t, before, current, "不能替换 runtime 已有服务")
+		}
+		require.Nil(t, proc.GetFileService(), "纯表达式 fixture 不需要文件服务")
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(name))
+		buf, err := proc.Mp().Alloc(128, true)
+		require.NoError(t, err)
+		t.Cleanup(func() { proc.Mp().Free(buf) })
+		require.Positive(t, proc.Mp().CurrNB())
+	})
+	require.ErrorIs(t, proc.Ctx.Err(), context.Canceled)
+	require.Zero(t, proc.Mp().CurrNB())
+	require.Zero(t, proc.Mp().AllocatedBytes())
+	require.Equal(t, "[]", mpool.ReportMemUsage(name), "拥有的池必须注销，而非仅释放向量")
+}
+
 func TestInternalInsertFinalBlockFilters(t *testing.T) {
-	c := NewMockCompile(t)
+	c := newBlockFilterCompile(t)
 	ctx := &blockFilterInsertContext{CompilerContext: plan2.NewMockCompilerContext(true), proc: c.proc}
 	stmt, err := mysql.ParseOne(c.proc.Ctx, "insert into nation2 select * from nation where n_nationkey in (1,2,3,4) and n_nationkey not in (2,3)", 1)
 	require.NoError(t, err)
@@ -68,11 +126,6 @@ func TestInternalInsertFinalBlockFilters(t *testing.T) {
 	pn, err := plan2.BuildPlan(ctx, stmt, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Query_INSERT, pn.GetQuery().StmtType)
-	t.Cleanup(func() {
-		for _, exe := range c.filterExprExes {
-			exe.Free()
-		}
-	})
 	scans := 0
 	for _, node := range pn.GetQuery().Nodes {
 		if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef.Name != "nation" {
@@ -119,12 +172,7 @@ func decodeBlockFilterVector(t *testing.T, proc *process.Process, filter *plan.E
 }
 
 func TestReaderBlockFilterFoldReuse(t *testing.T) {
-	c := NewMockCompile(t)
-	t.Cleanup(func() {
-		for _, exe := range c.filterExprExes {
-			exe.Free()
-		}
-	})
+	c := newBlockFilterCompile(t)
 	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 0)
 	filters := make([]*plan.Expr, 0, 2)
 	for pos := range int32(2) {
@@ -187,7 +235,7 @@ func TestReaderBlockFilterFoldReuse(t *testing.T) {
 }
 
 func TestReaderDeduplicatesOnlyStaticFilters(t *testing.T) {
-	c := NewMockCompile(t)
+	c := newBlockFilterCompile(t)
 	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 0)
 	v := vector.NewVec(types.T_int32.ToType())
 	defer v.Free(c.proc.Mp())
@@ -213,10 +261,103 @@ func TestReaderDeduplicatesOnlyStaticFilters(t *testing.T) {
 	}
 }
 
+func blockFilterStringInsert(t testing.TB, c *Compile, predicate string) *plan.Node {
+	ctx := &blockFilterInsertContext{CompilerContext: plan2.NewMockCompilerContext(true), proc: c.proc}
+	stmt, err := mysql.ParseOne(c.proc.Ctx, "insert into nation2 select * from nation where "+predicate, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	pn, err := plan2.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	for _, node := range pn.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Name == "nation" {
+			return node
+		}
+	}
+	t.Fatal("没有生成目标扫描")
+	return nil
+}
+
+func TestReaderStringInLogicalIdentity(t *testing.T) {
+	c := newBlockFilterCompile(t)
+	a, b := strings.Repeat("a", 30), strings.Repeat("b", 30)
+	node := blockFilterStringInsert(t, c, "n_name in ('"+a+"','"+b+"') and n_name in ('"+b+"','"+a+"')")
+	filters := plan2.DeepCopyExprList(node.BlockFilterList)
+	require.Len(t, filters, 4, "真实 BuildPlan 保留两种顺序各自的 List/Vec")
+	for _, f := range filters {
+		_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
+		require.NoError(t, err)
+	}
+	first, second := filters[0].GetF().Args[1].GetVec(), filters[1].GetF().Args[1].GetVec()
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	require.False(t, bytes.Equal(first.Data, second.Data), "必须实际覆盖不同 area 布局")
+	firstData, secondData := bytes.Clone(first.Data), bytes.Clone(second.Data)
+	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+	for range 2 {
+		block, err := s.handleRuntimeFilters(c, nil)
+		require.NoError(t, err)
+		require.Len(t, block, 1, "同一字符串域不能因物理偏移不同而重复交给 reader")
+		require.Same(t, filters[0], block[0])
+		v := decodeBlockFilterVector(t, c.proc, block[0])
+		require.Equal(t, []string{a, b}, []string{string(v.GetBytesAt(0)), string(v.GetBytesAt(1))})
+		require.Len(t, s.DataSource.BlockFilterList, 4)
+		require.Equal(t, firstData, first.Data)
+		require.Equal(t, secondData, second.Data)
+	}
+}
+
+func TestFoldedStringInPayloadBudget(t *testing.T) {
+	c := newBlockFilterCompile(t)
+	a, b := "'"+strings.Repeat("a", 30)+"'", "'"+strings.Repeat("b", 30)+"'"
+	// 用跨越4KiB的最小量级，100001项仅在显式benchmark中出现。
+	node := blockFilterStringInsert(t, c, "n_name in ("+strings.Repeat(a+",", 137)+b+")")
+	require.Len(t, node.FilterList, 1)
+	vec := node.FilterList[0].GetF().Args[1].GetVec()
+	require.NotNil(t, vec)
+	require.Equal(t, int32(2), vec.Len)
+	require.Greater(t, len(vec.Data), 4096, "折叠后 area 仍保留未引用字节")
+	require.Empty(t, node.BlockFilterList, "逻辑项数小不能绕过物理预算")
+}
+
+func BenchmarkReaderFoldedStringPayload(b *testing.B) {
+	c := newBlockFilterCompile(b)
+	// 138项的真实SQL回归已证明可达；成本测量直接复用常量折叠的向量操作，
+	// 不把100001项SQL的解析/绑定成本混进reader benchmark。
+	largeVec := vector.NewVec(types.T_varchar.ToType())
+	defer largeVec.Free(c.proc.Mp())
+	a := []byte(strings.Repeat("a", 30))
+	for range 100_000 {
+		require.NoError(b, vector.AppendBytes(largeVec, a, false, c.proc.Mp()))
+	}
+	require.NoError(b, vector.AppendBytes(largeVec, []byte(strings.Repeat("z", 30)), false, c.proc.Mp()))
+	largeVec.InplaceSortAndCompact()
+	payload, err := largeVec.MarshalBinary()
+	require.NoError(b, err)
+	require.Equal(b, 2, largeVec.Length())
+	require.Greater(b, len(payload), 3_000_000)
+	large := plan2.MakeInExpr(c.proc.Ctx, plan2.GetColExpr(plan.Type{Id: int32(types.T_varchar)}, 1, 1), 2, payload, false)
+	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 2)
+	v := vector.NewVec(types.T_int32.ToType())
+	defer v.Free(c.proc.Mp())
+	require.NoError(b, vector.AppendFixedList(v, []int32{1, 4}, nil, c.proc.Mp()))
+	data, err := v.MarshalBinary()
+	require.NoError(b, err)
+	small := plan2.MakeInExpr(c.proc.Ctx, col, 2, data, false)
+	// 模拟仍可经原统计/hint路径送入的过滤，去重本身也必须守住物理预算。
+	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: []*plan.Expr{large, small}}}
+	b.ReportAllocs()
+	for b.Loop() {
+		block, err := s.handleRuntimeFilters(c, nil)
+		if err != nil || len(block) != 2 || block[0] != large || block[1] != small {
+			b.Fatalf("static filters changed: %v", err)
+		}
+	}
+}
+
 // 向量构造不计时；百万键是现有 JOIN runtime filter 的支持范围。
 func BenchmarkReaderLargeRuntimeFilter(b *testing.B) {
-	proc := testutil.NewProcess(b)
-	c := &Compile{proc: proc}
+	c := newBlockFilterCompile(b)
+	proc := c.proc
 	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 0)
 	v := vector.NewVec(types.T_int32.ToType())
 	defer v.Free(proc.Mp())

@@ -15,7 +15,12 @@
 package plan
 
 import (
+	"encoding/binary"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -123,12 +128,31 @@ func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	return unique
 }
 
-// Vec 的可执行类型、值和 NULL bitmap 都在 Data 中；外层 Typ 可能仍是
-// 折叠前的 tuple，也可能是元素类型。只规范比较视图，不改 reader 的表达式。
+// 只在通过数量及物理字节预算后构造比较视图，绝不交给 reader。
+// Vec 外层 Typ 可为 tuple；字符串身份取实际 type、NULL 与值，而非 area 偏移。
 func finalBlockFilterIdentity(expr *plan.Expr) *plan.Expr {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Vec:
-		return &plan.Expr{Expr: e}
+		v := vector.TryUnmarshalBinaryVarlena(e.Vec.Data)
+		if v == nil {
+			return &plan.Expr{Expr: e}
+		}
+		values := make([]string, v.Length())
+		for i := range values {
+			if v.IsNull(uint64(i)) {
+				values[i] = "\x00"
+			} else {
+				values[i] = "\x01" + string(v.GetBytesAt(i))
+			}
+		}
+		sort.Strings(values)
+		// 0xff 不是向量 class：私有比较编码不能与未规范的固定长 Vec 混淆。
+		data := append([]byte{0xff}, types.EncodeType(v.GetType())...)
+		for _, value := range values {
+			data = binary.LittleEndian.AppendUint32(data, uint32(len(value)))
+			data = append(data, value...)
+		}
+		return &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: e.Vec.Len, Data: data}}}
 	case *plan.Expr_F:
 		copyExpr, fn := *expr, *e.F
 		fn.Args = make([]*plan.Expr, len(e.F.Args))
