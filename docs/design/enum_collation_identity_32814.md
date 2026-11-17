@@ -171,3 +171,31 @@ Changing an ENUM domain or identity with a legacy CRC32(JSON) default or generat
 The bounded index support is explicit: synchronous IVFFLAT INCLUDE with a non-ENUM or opaque composite PK preserves the source type. A nonzero scalar ENUM PK cannot use the shared ignored-row SQL representation, and nonzero ENUM INCLUDE cannot use asynchronous IVFFLAT SQL extraction; their admission fails before publication. The asynchronous writer independently rejects unsupported persisted source metadata before producing SQL. Legacy identity-0 paths retain their existing representation. ALTER must validate the final surviving indexes, including rename and combined DROP INDEX actions.
 
 For unchanged ordered members with a changed ENUM identity, the existing target lookup must map each legal source ordinal to that same ordinal; otherwise ALTER refuses instead of silently canonicalizing data. The proof reuses the bounded collation index, including first-match, padding and UCA behavior, and checks cancellation. It charges member descriptors, maps and weighted keys before allocation against a 32 MiB per-ALTER proof budget. This budget does not impose a 64 KiB ENUM limit or affect ordinary assignment. Different-domain conversions retain their existing explicit remap semantics. Legacy-target identity changes remain conservative refusals. Existing ALTER locks, definition-version checks, snapshot refresh and publication owners remain authoritative; no second lifecycle or retry state is introduced.
+
+
+## Main delivery integration amendment (PR #32826)
+
+The reviewed integration starts at `8afd8d38505a`, rebased on main
+`43addc16ba30`. Retain the shared index payload projection, AST-owned SERIAL
+column handling, ALTER admission, IVF admission and asynchronous-writer guards.
+Checkpoint SQL export conservatively rejects every ENUM column; raw CSV remains
+available. Extend its existing typed catalog proof to every admitted column,
+including expression absence, before either ordinary or external-table rendering.
+Missing, duplicate, malformed or contradictory expression metadata must fail
+before CSV or restore-script publication; proven implicit nullable defaults remain
+admissible. This does not promise general view or external-table replay fidelity.
+
+Keep positive IVF ENUM-key coverage explicitly at legacy identity and separately
+assert nonzero-identity rejection without index publication. Change the shared
+ignored-key producer only if a supported path demonstrates an ordinal defect.
+Compare authored ENUM display-helper INSERT and UPDATE against clean main before
+expanding assignment repair. If the PR introduced the failure, use the existing
+native-helper provenance marker and its consumer/rebind/compatibility closure;
+retain the AST serializer owner. Runtime CAST wrappers, negative widths and
+LONGTEXT widening are excluded. No parallel checkpoint replay implementation or
+new MORPC floor is introduced; rollout remains a homogeneous stopped upgrade.
+
+This integration strategy was approved by `gpt-6.1-terra` at max effort, session
+`01a1e938-abde-7ce1-bec1-22ee0cdf97ca`, before implementation. Final delivery
+requires affected normal/race and incremental static checks, public checkpoint
+and populated-index controls, and overall review of the integrated revision.
