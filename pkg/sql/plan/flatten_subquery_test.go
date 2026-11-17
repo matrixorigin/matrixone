@@ -99,7 +99,7 @@ func TestFlattenSubqueryReusesOnlyStableCompatibleScalar(t *testing.T) {
 		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 		subCtx := &BindContext{
 			projects: []*plan.Expr{DeepCopyExpr(project)},
-			results:  []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)}}},
+			results:  []*plan.Expr{{Typ: project.Typ}},
 		}
 		builder.qry = &plan.Query{Nodes: []*plan.Node{
 			{NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{DeepCopyExpr(project)}},
@@ -109,7 +109,7 @@ func TestFlattenSubqueryReusesOnlyStableCompatibleScalar(t *testing.T) {
 		builder.ctxByNode = []*BindContext{subCtx}
 		ref := func() *plan.Expr {
 			return &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_int64)},
+				Typ: project.Typ,
 				Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
 					NodeId: 0, RowSize: 1, Typ: plan.SubqueryRef_SCALAR,
 				}},
@@ -138,19 +138,39 @@ func TestFlattenSubqueryReusesOnlyStableCompatibleScalar(t *testing.T) {
 		require.Equal(t, int32(4), second.GetCol().ColPos)
 	})
 
-	t.Run("volatile result leaves a rejection tombstone", func(t *testing.T) {
-		project := &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_float64)},
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj: function.EncodeOverloadID(function.RANDOM, 0), ObjName: "rand",
-				},
-			}},
-		}
-		builder, _, expr := newFixture(project)
-		_, _, err := builder.flattenSubqueries(2, expr, &BindContext{})
-		require.ErrorContains(t, err, "repeated scalar subquery in incompatible evaluation contexts")
-	})
+	for _, tc := range []struct {
+		name     string
+		function string
+		args     []*plan.Expr
+		wrapped  bool
+		varying  bool
+	}{
+		{name: "statement timestamp", function: "now", args: []*plan.Expr{makePlan2Int64ConstExprWithType(6)}},
+		{name: "statement date", function: "current_date"},
+		{name: "nested statement timestamp", function: "now", wrapped: true},
+		{name: "random result", function: "rand", varying: true},
+		{name: "wall clock result", function: "sysdate", varying: true},
+		{name: "random bytes result", function: "random_bytes", args: []*plan.Expr{makePlan2Int64ConstExprWithType(4)}, varying: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project, err := BindFuncExprImplByPlanExpr(context.Background(), tc.function, tc.args)
+			require.NoError(t, err)
+			if tc.wrapped {
+				project, err = BindFuncExprImplByPlanExpr(context.Background(), "isnull", []*plan.Expr{project})
+				require.NoError(t, err)
+			}
+			builder, _, expr := newFixture(project)
+			_, flattened, err := builder.flattenSubqueries(2, expr, &BindContext{})
+			if tc.varying {
+				require.ErrorContains(t, err, "repeated scalar subquery in incompatible evaluation contexts")
+				return
+			}
+			require.NoError(t, err)
+			first, second := flattened.GetF().Args[0], flattened.GetF().Args[1]
+			require.Equal(t, first, second)
+			require.NotSame(t, first, second)
+		})
+	}
 
 	t.Run("selective reuse is rejected", func(t *testing.T) {
 		project := &plan.Expr{

@@ -59,6 +59,26 @@ select p.id, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key)
        between p.id - 1 and p.id + 1 as in_range
 from parent_agg p where p.id in (2,3) order by p.id;
 
+-- Statement-stable scalars remain reusable when BETWEEN expands a reference.
+-- Column bounds force that path; the rows distinguish TRUE, NULL and FALSE.
+create table scalar_time_bounds (id int primary key, lo timestamp(6), hi timestamp(6));
+insert into scalar_time_bounds values
+    (1, now(6) - interval 1 day, now(6) + interval 1 day),
+    (2, null, now(6) + interval 1 day),
+    (3, now(6) - interval 2 day, now(6) - interval 1 day);
+select id, (select now(6)) between lo and hi as in_range
+from scalar_time_bounds order by id;
+select id, (select current_date()) between cast(lo as date) and cast(hi as date) as in_range
+from scalar_time_bounds order by id;
+prepare scalar_time from 'select id, (select now(6)) between lo and hi as in_range from scalar_time_bounds where id = ?';
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+set @scalar_time_id = 2;
+execute scalar_time using @scalar_time_id;
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+deallocate prepare scalar_time;
+
 -- The right input of a SINGLE JOIN may contain another join. A missing inner
 -- row must not turn the projected match marker into a constant TRUE.
 select p.id, (select coalesce(p.id, 99) from child_agg c

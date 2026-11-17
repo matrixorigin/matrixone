@@ -82,6 +82,37 @@ from parent_agg p where p.id in (2,3) order by p.id;
 ➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
 2  ¦  1  𝄀
 3  ¦  null
+create table scalar_time_bounds (id int primary key, lo timestamp(6), hi timestamp(6));
+insert into scalar_time_bounds values
+(1, now(6) - interval 1 day, now(6) + interval 1 day),
+(2, null, now(6) + interval 1 day),
+(3, now(6) - interval 2 day, now(6) - interval 1 day);
+select id, (select now(6)) between lo and hi as in_range
+from scalar_time_bounds order by id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+select id, (select current_date()) between cast(lo as date) and cast(hi as date) as in_range
+from scalar_time_bounds order by id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+prepare scalar_time from 'select id, (select now(6)) between lo and hi as in_range from scalar_time_bounds where id = ?';
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1
+set @scalar_time_id = 2;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+2  ¦  null
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1
+deallocate prepare scalar_time;
 select p.id, (select coalesce(p.id, 99) from child_agg c
 join child_agg d on d.corr_key = c.corr_key and d.v > 100
 where c.corr_key = p.corr_key)

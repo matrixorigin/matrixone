@@ -248,15 +248,14 @@ func scalarResultMayChangeWhenRepeated(expr *plan.Expr) bool {
 		}
 		return false
 	case *plan.Expr_F:
+		// CannotFold covers per-evaluation changes. IsRealTimeRelated only
+		// prevents PREPARE-time folding; statement-stable results such as NOW()
+		// remain reusable within this expression's flattening scope.
 		if item.F == nil || item.F.Func == nil || exprMayChangeWhenRepeated(expr) {
 			return true
 		}
 		functionID, _ := function.DecodeOverloadID(item.F.Func.Obj)
 		if functionID == function.RANDOM_BYTES || strings.EqualFold(item.F.Func.ObjName, "random_bytes") {
-			return true
-		}
-		overload, ok := function.GetFunctionByIdWithoutError(item.F.Func.Obj)
-		if !ok || overload.IsRealTimeRelated() {
 			return true
 		}
 		for _, arg := range item.F.Args {
