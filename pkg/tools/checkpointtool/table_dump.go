@@ -1071,7 +1071,9 @@ func ValidateEnumLoadReplay(schema *TableSchema) error {
 				digitWeights[key] = digit
 			}
 		}
-		seen := make([]bool, len(members)+1)
+		// Historical data can contain any uint16 ordinal, even one beyond the
+		// declared member count. Track the first match for the full domain.
+		var seen [1 << 10]uint64
 		for i, member := range members {
 			var digits string
 			if col.EnumCollation == types.EnumCollationGeneralCI {
@@ -1114,10 +1116,14 @@ func ValidateEnumLoadReplay(schema *TableSchema) error {
 				continue
 			}
 			ordinal, parseErr := strconv.Atoi(digits)
-			if parseErr != nil || ordinal < 0 || ordinal > len(members) || strconv.Itoa(ordinal) != digits || seen[ordinal] {
+			if parseErr != nil || ordinal < 0 || ordinal > types.MaxEnumLen || strconv.Itoa(ordinal) != digits {
 				continue
 			}
-			seen[ordinal] = true
+			word, bit := ordinal>>6, uint(ordinal&63)
+			if seen[word]&(uint64(1)<<bit) != 0 {
+				continue
+			}
+			seen[word] |= uint64(1) << bit
 			if ordinal != i+1 {
 				return moerr.NewInvalidInputNoCtxf("cannot replay checkpoint ENUM column %q: decimal ordinal %d matches member %d", col.Name, ordinal, i+1)
 			}

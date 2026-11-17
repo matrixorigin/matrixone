@@ -188,6 +188,50 @@ func TestCheckpointEnumLoadReplayMatchesLabelFirstLookup(t *testing.T) {
 	require.ErrorContains(t, ValidateEnumLoadReplay(schema), "cannot verify checkpoint ENUM domain")
 }
 
+func TestCheckpointEnumLoadReplayPhysicalOrdinalRange(t *testing.T) {
+	for _, identity := range []uint32{types.EnumCollationLegacy, types.EnumCollationUTF8Bin, types.EnumCollationGeneralCI} {
+		for _, tc := range []struct {
+			name        string
+			members     []string
+			wantOrdinal string
+		}{
+			{"out of domain", []string{"3", "x"}, "3"},
+			{"largest uint16", []string{"65535", "x"}, "65535"},
+			{"beyond uint16", []string{"65536", "x"}, ""},
+			{"leading zero", []string{"03", "x"}, ""},
+			{"first duplicate is safe", []string{"1", "1"}, ""},
+			{"first duplicate differs", []string{"x", "1", "1"}, "1"},
+			{"zero label", []string{"0", "x"}, "0"},
+		} {
+			t.Run(fmt.Sprintf("identity_%d_%s", identity, tc.name), func(t *testing.T) {
+				payload, encoding, err := types.EncodeEnumMembers(tc.members)
+				require.NoError(t, err)
+				schema := &TableSchema{Columns: []TableColumn{{Name: "e", SQLType: "ENUM", EnumValues: payload, EnumEncoding: encoding, EnumCollation: identity, EnumValuesAreRaw: true}}}
+				err = ValidateEnumLoadReplay(schema)
+				if tc.wantOrdinal == "" {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, "decimal ordinal "+tc.wantOrdinal+" matches member")
+				}
+			})
+		}
+	}
+	t.Run("first match state is per column", func(t *testing.T) {
+		schema := &TableSchema{Columns: []TableColumn{
+			{Name: "safe", SQLType: "ENUM", EnumValues: "1,x", EnumValuesAreRaw: true},
+			{Name: "unsafe", SQLType: "ENUM", EnumValues: "x,1", EnumValuesAreRaw: true},
+		}}
+		require.ErrorContains(t, ValidateEnumLoadReplay(schema), `column "unsafe": decimal ordinal 1 matches member 2`)
+	})
+	t.Run("general ci full width digits", func(t *testing.T) {
+		schema := &TableSchema{Columns: []TableColumn{{Name: "e", SQLType: "ENUM", EnumValues: "３,x", EnumCollation: types.EnumCollationGeneralCI, EnumValuesAreRaw: true}}}
+		matched, err := types.EnumMembers{"３", "x"}.ParseCollatedName("3", types.EnumCollationGeneralCI)
+		require.NoError(t, err)
+		require.Zero(t, matched)
+		require.NoError(t, ValidateEnumLoadReplay(schema))
+	})
+}
+
 func TestCheckpointEnumDomainRequiresPresentNonNullCell(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
