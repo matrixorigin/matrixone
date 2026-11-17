@@ -209,6 +209,35 @@ func (fs listErrorFS) List(path string) ([]string, error) {
 	return fs.FS.List(path)
 }
 
+func TestReconcileFailedExportRealignsSnapshotIndex(t *testing.T) {
+	const shardID, replicaID = uint64(1), uint64(2)
+	mgr := newSnapshotManager(&Config{
+		FS:                vfs.NewStrictMem(),
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	l := &store{snapshotMgr: mgr, shardSnapshotInfo: newShardSnapshotInfo()}
+	l.shardSnapshotInfo.setSnapshotIndex(shardID, 200)
+
+	// A failed rename leaves only a generating directory. The local high
+	// watermark must move back so a quiescent shard can export index 200 again.
+	temporary := mgr.snapshotPath(nid, 200) + "-2.generating"
+	require.NoError(t, mgr.cfg.FS.MkdirAll(temporary, defaultExportedDirMode))
+	require.NoError(t, l.reconcileFailedExport(shardID, replicaID))
+	_, err := mgr.cfg.FS.Stat(temporary)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, uint64(100), l.shardSnapshotInfo.getSnapshotIndex(shardID))
+
+	// A commit can also finish the final directory before reporting an I/O
+	// error. Reload it rather than issuing a duplicate export at that index.
+	testPrepareSnapshot(t, mgr, nid, 300)
+	require.NoError(t, l.reconcileFailedExport(shardID, replicaID))
+	require.Equal(t, uint64(300), l.shardSnapshotInfo.getSnapshotIndex(shardID))
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
+}
+
 func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
 	for _, tc := range []struct {
 		name string

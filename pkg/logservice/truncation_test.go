@@ -20,6 +20,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +43,52 @@ type pausedExportRenameFS struct {
 	release chan struct{}
 	pause   sync.Once
 	unblock sync.Once
+}
+
+type failExportRenameOnceFS struct {
+	vfs.FS
+	failed atomic.Bool
+}
+
+func (fs *failExportRenameOnceFS) Rename(oldname, newname string) error {
+	if strings.HasSuffix(oldname, ".generating") &&
+		strings.Contains(newname, "/shard-1/replica-2/snapshot-") &&
+		fs.failed.CompareAndSwap(false, true) {
+		return syscall.EIO
+	}
+	return fs.FS.Rename(oldname, newname)
+}
+
+func TestExportSnapshotRetriesFailedCommit(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &failExportRenameOnceFS{FS: cfg.FS}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	_, err = l.append(ctx, shardID, getTestUserEntry())
+	require.NoError(t, err)
+
+	err = l.exportSnapshot(ctx, shardID, replicaID)
+	var exportErr *dragonboat.SnapshotExportError
+	require.ErrorAs(t, err, &exportErr)
+	require.True(t, fs.failed.Load())
+	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+	require.Zero(t, l.shardSnapshotInfo.getSnapshotIndex(shardID))
+	require.NoError(t, l.exportSnapshot(ctx, shardID, replicaID))
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
 }
 
 func (fs *pausedExportRenameFS) Rename(oldname, newname string) error {
@@ -792,6 +840,69 @@ func TestTruncationImportSnapshot(t *testing.T) {
 		assert.Equal(t, 0, s.store.snapshotMgr.Count(1, 1))
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
+	runServiceTest(t, false, true, func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		peers := map[uint64]dragonboat.Target{1: s.ID()}
+		require.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
+		const shardID, replicaID, tnID = uint64(1), uint64(1), uint64(100)
+		resp := s.handleConnect(ctx, pb.Request{
+			Method:     pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{ShardID: shardID, TNID: tnID},
+		})
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		appendRecords := func(count int) {
+			for i := 0; i < count; i++ {
+				resp := s.handleAppend(ctx, pb.Request{
+					Method:     pb.APPEND,
+					LogRequest: pb.LogRequest{ShardID: shardID},
+				}, getTestAppendCmd(tnID, make([]byte, 8)))
+				require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+			}
+		}
+		truncate := func(lsn uint64) {
+			resp := s.handleTruncate(ctx, pb.Request{
+				Method:     pb.TRUNCATE,
+				LogRequest: pb.LogRequest{ShardID: shardID, TNID: tnID, Lsn: lsn},
+			})
+			require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+
+		appendRecords(10)
+		truncate(4)
+		require.NoError(t, s.store.processShardTruncateLog(ctx, shardID))
+		older := s.store.snapshotMgr.NewestIndex(shardID, replicaID)
+		require.NotZero(t, older)
+
+		appendRecords(10)
+		require.NoError(t, s.store.processShardTruncateLog(ctx, shardID))
+		newer := s.store.snapshotMgr.NewestIndex(shardID, replicaID)
+		require.Greater(t, newer, older)
+		require.Equal(t, 2, s.store.snapshotMgr.Count(shardID, replicaID))
+		_, err := s.store.addTNStoreHeartbeat(ctx, pb.TNStoreHeartbeat{
+			UUID: "follower", ReplayedLsn: older,
+		})
+		require.NoError(t, err)
+
+		truncate(newer)
+		nid := nodeID{shardID: shardID, replicaID: replicaID}
+		newerDir := s.store.snapshotMgr.snapshotPath(nid, snapshotIndex(newer))
+		file := s.store.cfg.FS.PathJoin(newerDir,
+			fmt.Sprintf(snapshotPathPattern+".gbsnap", newer))
+		f, err := s.store.cfg.FS.Create(file)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+
+		require.NoError(t, s.store.processShardTruncateLog(ctx, shardID))
+		require.Equal(t, older, s.store.shardSnapshotInfo.getTruncatedLsn(shardID))
+		require.Equal(t, 0, s.store.snapshotMgr.Count(shardID, replicaID))
+		_, err = s.store.cfg.FS.Stat(newerDir)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	})
 }
 
 func TestHAKeeperTruncation(t *testing.T) {

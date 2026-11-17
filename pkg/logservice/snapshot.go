@@ -203,6 +203,25 @@ func (ss *snapshotRecord) removeLast() error {
 	return nil
 }
 
+// removeIndex removes a known unusable export without disturbing newer or
+// older candidates. The Raft log is compacted only after a successful import.
+func (ss *snapshotRecord) removeIndex(index snapshotIndex) (bool, error) {
+	for i, item := range ss.items {
+		if item.index != index {
+			continue
+		}
+		if err := item.Remove(); err != nil {
+			return false, err
+		}
+		copy(ss.items[i:], ss.items[i+1:])
+		ss.items[len(ss.items)-1] = nil
+		ss.items = ss.items[:len(ss.items)-1]
+		putSnapshotItem(item)
+		return true, nil
+	}
+	return false, nil
+}
+
 // remove the snapshots whose index is LE than the index.
 func (ss *snapshotRecord) remove(index snapshotIndex) error {
 	items := make([]*snapshotItem, len(ss.items))
@@ -285,8 +304,8 @@ func (sm *snapshotManager) prepareDir(path string) error {
 
 // ReconcileInterruptedExport removes exports abandoned by a crashed replica:
 // temporary generating directories and final directories still carrying the
-// Dragonboat completion flag. Call this only during store startup, before the
-// replica can export again.
+// Dragonboat completion flag. Call this during store startup or after
+// Dragonboat confirms that a failed export worker has stopped writing.
 func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
@@ -598,6 +617,18 @@ func (sm *snapshotManager) DropNewest(shardID uint64, replicaID uint64) (uint64,
 		return 0, err
 	}
 	return idx, nil
+}
+
+// DropInvalid removes an exported snapshot whose contents have been checked
+// and found unusable. A failed filesystem removal keeps it tracked for retry.
+func (sm *snapshotManager) DropInvalid(shardID, replicaID, index uint64) (bool, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	if ss == nil {
+		return false, nil
+	}
+	return ss.removeIndex(snapshotIndex(index))
 }
 
 // EvalImportSnapshot implements the ISnapshotManager interface.

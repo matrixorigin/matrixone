@@ -17,9 +17,11 @@ package logservice
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/lni/dragonboat/v4/tools"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -269,11 +271,21 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	// Just take a snapshot and export it. This snapshot is invisible to system.
 	idx, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts)
 	if err != nil {
+		var exportErr *dragonboat.SnapshotExportError
+		if errors.As(err, &exportErr) {
+			// The worker has finished. Remove its abandoned generating/flagged
+			// directory and reload a final export if commit finished before the
+			// filesystem reported an error. This permits a quiescent shard to
+			// retry at the same index on the next tick.
+			if cleanupErr := l.reconcileFailedExport(shardID, replicaID); cleanupErr != nil {
+				return errors.Join(err, cleanupErr)
+			}
+		}
 		// These results can arrive after Dragonboat accepted the request;
 		// the export may still reach its final directory later.
-		if errors.Is(err, dragonboat.ErrTimeout) ||
+		if exportErr == nil && (errors.Is(err, dragonboat.ErrTimeout) ||
 			errors.Is(err, dragonboat.ErrCanceled) ||
-			errors.Is(err, dragonboat.ErrShardClosed) {
+			errors.Is(err, dragonboat.ErrShardClosed)) {
 			mayFinishLater = true
 		}
 		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))
@@ -292,6 +304,18 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	}
 	// forward the snapshot index.
 	l.shardSnapshotInfo.forwardSnapshot(shardID, idx)
+	return nil
+}
+
+func (l *store) reconcileFailedExport(shardID, replicaID uint64) error {
+	if err := l.snapshotMgr.ReconcileInterruptedExport(shardID, replicaID); err != nil {
+		return err
+	}
+	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
+		return err
+	}
+	l.shardSnapshotInfo.setSnapshotIndex(shardID,
+		l.snapshotMgr.NewestIndex(shardID, replicaID))
 	return nil
 }
 
@@ -317,6 +341,33 @@ func (l *store) importSnapshot(
 	// forward the truncate lsn.
 	l.shardSnapshotInfo.forwardTruncate(shardID, lsn)
 	return nil
+}
+
+// importCandidateValid distinguishes a damaged export from a transient read
+// error. Only a proven bad image may be removed to try an older candidate.
+func (l *store) importCandidateValid(dir string) (bool, error) {
+	file, err := tools.GetSnapshotFilepath(dir, l.cfg.FS)
+	if errors.Is(err, tools.ErrIncompleteSnapshot) || errors.Is(err, tools.ErrPathNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	ss, err := tools.GetSnapshotRecord(dir, "snapshot.metadata", l.cfg.FS)
+	if err != nil {
+		return false, err
+	}
+	info, err := l.cfg.FS.Stat(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Size() <= 0 || uint64(info.Size()) != ss.FileSize {
+		return false, nil
+	}
+	return tools.IsCompleteSnapshotImage(file, ss, l.cfg.FS)
 }
 
 // shouldProcess checks whether we should do the truncation for the shard.
@@ -537,8 +588,33 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		return nil
 	}
 
-	dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
-	if l.shouldDoImport(ctx, shardID, lsnInSM, lsn, dir) {
+	for {
+		dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
+		if dir == "" {
+			break
+		}
+		valid, err := l.importCandidateValid(dir)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			removed, err := l.snapshotMgr.DropInvalid(shardID, replicaID, lsn)
+			if err != nil {
+				return err
+			}
+			if !removed {
+				return moerr.NewInternalErrorf(ctx, "invalid exported snapshot %d disappeared", lsn)
+			}
+			l.shardSnapshotInfo.setSnapshotIndex(shardID,
+				l.snapshotMgr.NewestIndex(shardID, replicaID))
+			l.runtime.Logger().Warn("removed invalid exported snapshot",
+				zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID),
+				zap.Uint64("index", lsn), zap.String("dir", dir))
+			continue
+		}
+		if !l.shouldDoImport(ctx, shardID, lsnInSM, lsn, dir) {
+			break
+		}
 		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {
 			l.runtime.Logger().Error("do truncate log failed",
 				zap.Uint64("shard ID", shardID),
@@ -569,7 +645,7 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 			l.runtime.Logger().Error("export snapshot failed",
 				zap.Uint64("shard ID", shardID),
 				zap.Uint64("replica ID", replicaID),
-				zap.Uint64("lsn", lsn),
+				zap.Uint64("lsnInSM", lsnInSM),
 				zap.Error(err))
 			return err
 		}
