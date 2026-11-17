@@ -244,6 +244,12 @@ func buildInsertPlans(
 
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows, allAsyncSources bool) error {
+	if updatePlanCtx == nil {
+		return moerr.NewInvalidInputNoCtx("missing legacy UPDATE target")
+	}
+	if err := rejectLegacyNewEnumIndexMutation(updatePlanCtx.tableDef); err != nil {
+		return err
+	}
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
@@ -668,6 +674,12 @@ func appendRecursiveCascadeLockNode(
 	[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+	if delCtx == nil {
+		return moerr.NewInvalidInputNoCtx("missing legacy DELETE target")
+	}
+	if err := rejectLegacyNewEnumIndexMutation(delCtx.tableDef); err != nil {
+		return err
+	}
 	appendDeleteSourceScan := func() int32 {
 		var nodeID int32
 		if delCtx.sourceTag != 0 {

@@ -357,13 +357,14 @@ type QueryBuilder struct {
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
 	// readers, so index/FK side-effect branches cannot multiply returned rows.
-	returningSourceStep int32
-	returningRequested  bool
-	returningTableDef   *plan.TableDef
-	returningObjRef     *plan.ObjectRef
-	returningTableName  string
-	returningAlias      string
-	returningColPos     map[string]int32
+	returningSourceStep    int32
+	returningRawIndexImage bool
+	returningRequested     bool
+	returningTableDef      *plan.TableDef
+	returningObjRef        *plan.ObjectRef
+	returningTableName     string
+	returningAlias         string
+	returningColPos        map[string]int32
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -512,6 +513,10 @@ type BindContext struct {
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+
+	// Internal DML old-image requests are bound after user ORDER BY, so they
+	// cannot participate in name, alias or ordinal resolution.
+	indexRawProjections []*indexRawProjection
 
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type

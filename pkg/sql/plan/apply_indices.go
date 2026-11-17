@@ -471,7 +471,22 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
+		access := builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap)
+		if access != nodeID || builder.isScanProtected(node.NodeId) {
+			return access, nil
+		}
+		// A forced new-identity index whose SET column needs a base-row read
+		// cannot use the covering map. Retain the explicit index request with
+		// the existing full-index-plus-base-row join instead of dropping it.
+		forced, err := builder.forceNewEnumSetBackfill(node, colRefCnt)
+		if err != nil {
+			return -1, err
+		}
+		if forced != -1 {
+			builder.protectedScans[node.NodeId]++
+			return forced, nil
+		}
+		return access, nil
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
@@ -1505,7 +1520,55 @@ func (builder *QueryBuilder) applyForcedCoveringAccess(scanNode *plan.Node, colR
 			return remember(access)
 		}
 	}
+	forced, err := builder.forceNewEnumSetBackfill(scanNode, colRefCnt)
+	if err != nil {
+		return -1, err
+	}
+	if forced != -1 {
+		return remember(forced)
+	}
 	return remember(scanNode.NodeId)
+}
+
+// forceNewEnumSetBackfill is limited to indexes whose covering projection was
+// declined because a consumed SET domain cannot yet be safely recovered.
+func (builder *QueryBuilder) forceNewEnumSetBackfill(node *plan.Node, refs map[[2]int32]int) (int32, error) {
+	if node == nil || node.TableDef == nil || len(node.BindingTags) == 0 ||
+		!builder.scanHintsForceIndexes(node) || builder.scanHasMatchedFullTextFilter(node) {
+		return -1, nil
+	}
+	for _, idx := range builder.filterRegularIndexesByScanHints(node, node.TableDef.Indexes) {
+		if !usableRegularHintIndex(idx) || !hintedIndexScanComplete(idx, node) || !indexTableStoresSerializedKey(idx) {
+			continue
+		}
+		usesNew, err := EnumIndexUsesNewIdentity(node.TableDef, idx)
+		if err != nil {
+			return -1, err
+		}
+		if !usesNew {
+			continue
+		}
+		needsSet := false
+		for _, part := range idx.Parts {
+			pos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+			if ok && pos >= 0 && int(pos) < len(node.TableDef.Cols) &&
+				node.TableDef.Cols[pos] != nil && isSetPlanType(&node.TableDef.Cols[pos].Typ) &&
+				refs[[2]int32{node.BindingTags[0], pos}] > 0 {
+				needsSet = true
+				break
+			}
+		}
+		if needsSet {
+			access, _, err := builder.buildHintedIndexBackfillJoin(idx, node)
+			if err != nil {
+				return -1, err
+			}
+			if access != -1 {
+				return access, nil
+			}
+		}
+	}
+	return -1, nil
 }
 
 func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
@@ -2527,6 +2590,10 @@ func (builder *QueryBuilder) applyBoundedUniqueKeySetExhaustive(indexes []*Index
 // regularIndexColumnMap describes the values available in a regular index scan.
 // Build it from index and primary-key parts, independently of base-table width.
 func (builder *QueryBuilder) regularIndexColumnMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTable *plan.TableDef) (map[[2]int32]*plan.Expr, error) {
+	usesNew, err := EnumIndexUsesNewIdentity(node.TableDef, idxDef)
+	if err != nil {
+		return nil, err
+	}
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
 		return nil, err
@@ -2554,6 +2621,13 @@ func (builder *QueryBuilder) regularIndexColumnMap(idxDef *IndexDef, node *plan.
 		}
 		value := GetColExpr(idxTable.Cols[0].Typ, idxTag, 0)
 		if len(idxDef.Parts) > 1 {
+			// Generic SERIAL_EXTRACT returns a numeric UINT64 without a SET
+			// domain. Until that domain can be proven at every consumer, use
+			// the base row for this column rather than an index-only projection.
+			// Legacy-only indexes retain their existing mapping.
+			if usesNew && isSetPlanType(&node.TableDef.Cols[pos].Typ) {
+				continue
+			}
 			var err error
 			value, err = MakeSerialExtractExpr(builder.GetContext(), value, node.TableDef.Cols[pos].Typ, int64(i))
 			if err != nil {
@@ -2573,6 +2647,9 @@ func (builder *QueryBuilder) regularIndexColumnMap(idxDef *IndexDef, node *plan.
 		}
 		value := GetColExpr(idxTable.Cols[1].Typ, idxTag, 1)
 		if len(pk.Names) > 1 {
+			if usesNew && isSetPlanType(&node.TableDef.Cols[pos].Typ) {
+				continue
+			}
 			var err error
 			value, err = MakeSerialExtractExpr(builder.GetContext(), value, node.TableDef.Cols[pos].Typ, int64(i))
 			if err != nil {

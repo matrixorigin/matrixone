@@ -343,9 +343,8 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	}
 
 	returnCtx := NewBindContext(builder, bindCtx)
-	scanTag := builder.genNewBindTag()
 	visibleCols := make([]*planpb.ColDef, 0, len(builder.returningTableDef.Cols))
-	scanProjects := make([]*planpb.Expr, 0, len(builder.returningTableDef.Cols))
+	positions := make([]int32, 0, len(builder.returningTableDef.Cols))
 	for _, col := range builder.returningTableDef.Cols {
 		if col.Hidden || col.Name == catalog.Row_ID {
 			continue
@@ -355,18 +354,45 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 			return moerr.NewInternalErrorf(builder.GetContext(), "DML RETURNING cannot locate final image column %s", col.Name)
 		}
 		visibleCols = append(visibleCols, &planpb.ColDef{Name: col.Name, Typ: col.Typ})
+		positions = append(positions, pos)
+	}
+	returningStep := builder.returningSourceStep
+	if builder.returningRawIndexImage {
+		// SINK_SCAN remapping is positional: a sparse ProjectList is treated
+		// as slots 0..N, even when its ColRefs name other source positions.
+		// Normalize the final-image selection in an explicit PROJECT first.
+		inputTag := builder.genNewBindTag()
+		inputID := builder.appendTaggedSinkScan(returnCtx, returningStep, inputTag)
+		projectTag := builder.genNewBindTag()
+		projects := make([]*planpb.Expr, len(visibleCols))
+		for i, col := range visibleCols {
+			projects[i] = GetColExpr(col.Typ, inputTag, positions[i])
+			positions[i] = int32(i)
+		}
+		projectID := builder.appendNode(&planpb.Node{
+			NodeType: planpb.Node_PROJECT, Children: []int32{inputID},
+			BindingTags: []int32{projectTag}, ProjectList: projects,
+		}, returnCtx)
+		sinkID := appendSinkNodeWithTag(builder, returnCtx, projectID, projectTag)
+		builder.preserveReturningSinkProjection(sinkID)
+		returningStep = builder.appendStep(sinkID)
+		sourceSink = builder.qry.Nodes[sinkID]
+	}
+	scanTag := builder.genNewBindTag()
+	scanProjects := make([]*planpb.Expr, 0, len(visibleCols))
+	for i, col := range visibleCols {
 		scanProjects = append(scanProjects, &planpb.Expr{
 			Typ: col.Typ,
 			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
 				RelPos: sourceSink.BindingTags[0],
-				ColPos: pos,
+				ColPos: positions[i],
 				Name:   col.Name,
 			}},
 		})
 	}
 	scanID := builder.appendNode(&planpb.Node{
 		NodeType:    planpb.Node_SINK_SCAN,
-		SourceStep:  []int32{builder.returningSourceStep},
+		SourceStep:  []int32{returningStep},
 		ProjectList: scanProjects,
 		BindingTags: []int32{scanTag},
 		TableDef: &planpb.TableDef{

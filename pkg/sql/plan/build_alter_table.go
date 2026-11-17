@@ -219,6 +219,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if err := validateNewEnumIndexPrefixes(copyTableDef, copyTableDef.Indexes); err != nil {
+		return nil, err
+	}
+
 	if pkAffected {
 		affectedAllIdxCols()
 	} else {

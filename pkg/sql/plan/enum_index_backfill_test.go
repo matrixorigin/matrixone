@@ -83,6 +83,12 @@ func TestEnumIndexBackfillScopedReferences(t *testing.T) {
 	source.Cols[1].Typ.EnumCollation++
 	require.Error(t, validateEnumIndexBackfillSource(marked, sourceNode, source, sourceObj))
 	source.Cols[1].Typ.EnumCollation--
+	source.Cols[0].Typ.Id = int32(types.T_varchar)
+	require.Error(t, validateEnumIndexBackfillSource(marked, sourceNode, source, sourceObj))
+	source.Cols[0].Typ.Id = int32(types.T_int64)
+	source.Cols[0].Seqnum++
+	require.Error(t, validateEnumIndexBackfillSource(marked, sourceNode, source, sourceObj))
+	source.Cols[0].Seqnum--
 	sourceObj.Obj = 11
 	require.Error(t, validateEnumIndexBackfillSource(marked, sourceNode, source, sourceObj))
 	require.NoError(t, validateEnumIndexBackfillSource(clean, sourceNode, source, sourceObj))

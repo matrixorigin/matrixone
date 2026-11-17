@@ -2146,6 +2146,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	if err := validateNewEnumIndexPrefixes(createTable.TableDef, createTable.TableDef.Indexes); err != nil {
+		return err
+	}
+
 	// process self reference foreign keys after colDefs and indexes are processed.
 	if len(fkDatasOfFKSelfRefer) > 0 {
 		// for fk self refer. the column id of the tableDef is not ready.
@@ -3834,6 +3838,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 		createIndex.TableExist = true
 	}
+	if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+		return nil, err
+	}
+
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
@@ -4368,6 +4376,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
+				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+					return nil, err
+				}
+
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
 						AddIndex: &plan.AlterTableAddIndex{
@@ -4433,6 +4445,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
+				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+					return nil, err
+				}
+
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
 						AddIndex: &plan.AlterTableAddIndex{
@@ -4489,6 +4505,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					oriPriKeyName,
 					ctx,
 				); err != nil {
+					return nil, err
+				}
+
+				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
 					return nil, err
 				}
 

@@ -3299,10 +3299,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			clear(colRefCnt)
 			builder.countColRefs(rootID, colRefCnt)
 		}
-		idxColMap := make(map[[2]int32]*plan.Expr)
-		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
-		if err == nil {
-			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
+		if !isEnumIndexBackfill(builder.GetContext()) {
+			idxColMap := make(map[[2]int32]*plan.Expr)
+			rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
+			if err == nil {
+				rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
+			}
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
@@ -4533,6 +4535,15 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if len(ctx.indexRawProjections) != 0 {
+		// These requests belong to a synthetic DML SELECT. They cannot cross
+		// set operations or a grouping boundary without changing row identity.
+		clause, ok := stmt.Select.(*tree.SelectClause)
+		if !ok || clause.Distinct || clause.GroupBy != nil || clause.Having != nil || stmt.TimeWindow != nil || stmt.RankOption != nil {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "ENUM index old image through this SELECT shape")
+		}
+		defer func() { ctx.indexRawProjections = nil }()
+	}
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
@@ -4819,6 +4830,19 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
+	// ORDER BY may already have added hidden projection slots. Keep the
+	// physical DML values after them and explicitly select their positions at
+	// the result boundary below; they are never user-visible SELECT items.
+	var indexRawPositions []int32
+	if len(ctx.indexRawProjections) != 0 {
+		if len(ctx.groups) != 0 || len(ctx.aggregates) != 0 || len(ctx.windows) != 0 || len(ctx.times) != 0 || ctx.isDistinct {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "ENUM index old image through aggregation or DISTINCT")
+		}
+		if indexRawPositions, err = bindEnumIndexRawProjections(builder, ctx, resultLen); err != nil {
+			return 0, err
+		}
+	}
+
 	// bind limit/offset clause
 	var boundOffsetExpr *Expr
 	var boundCountExpr *Expr
@@ -4939,7 +4963,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append result PROJECT node
-	if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
+	if len(indexRawPositions) != 0 {
+		// Even if nodeID is already PROJECT, add a boundary with exactly the
+		// original result columns followed by the requested physical values.
+		// The ORDER-only slots between them must not shift the DML positions.
+		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen, resultSourceTag)
+		for _, pos := range indexRawPositions {
+			ctx.results = append(ctx.results, GetColExpr(ctx.projects[pos].Typ, resultSourceTag, pos))
+		}
+		builder.qry.Nodes[nodeID].ProjectList = ctx.results
+	} else if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
 		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen, resultSourceTag)
 	} else {
 		ctx.results = ctx.projects

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -31,6 +32,13 @@ import (
 func newEnumIndexBackfillSpec(c *Compile, sourceID uint64, db engine.Database, database string, source *plan.TableDef, index *plan.IndexDef) (*executor.EnumIndexBackfillSpec, error) {
 	if source == nil || index == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing index source")
+	}
+	usesNewIdentity, err := sqlplan.EnumIndexUsesNewIdentity(source, index)
+	if err != nil {
+		return nil, err
+	}
+	if !usesNewIdentity {
+		return nil, nil
 	}
 	wanted := make(map[string]bool)
 	for _, name := range index.Parts {
@@ -42,15 +50,16 @@ func newEnumIndexBackfillSpec(c *Compile, sourceID uint64, db engine.Database, d
 			wanted[strings.ToLower(name)] = true
 		}
 	}
-	hasEnum := false
+	hasNewIdentity := false
 	for _, col := range source.Cols {
-		if col != nil && wanted[strings.ToLower(col.Name)] && col.Typ.Id == int32(types.T_enum) {
-			hasEnum = true
+		if col != nil && wanted[strings.ToLower(col.Name)] &&
+			col.Typ.Id == int32(types.T_enum) && col.Typ.EnumCollation != 0 {
+			hasNewIdentity = true
 			break
 		}
 	}
-	if !hasEnum {
-		return nil, nil
+	if !hasNewIdentity {
+		return nil, moerr.NewNotSupportedNoCtx("index has an unverified derived ENUM identity dependency")
 	}
 	account, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {

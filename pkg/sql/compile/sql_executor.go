@@ -515,6 +515,9 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	}
+	if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
+		return executor.Result{}, err
+	}
 
 	c := NewCompile(
 		exec.s.addr,
@@ -543,6 +546,13 @@ func (exec *txnExecutor) Exec(
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			if spec := statementOption.EnumIndexBackfill(); spec != nil {
+				var err error
+				ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
+				if err != nil {
+					return nil, err
+				}
+			}
 			pn, err := plan.BuildPlan(
 				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 				stmts[0], true,
@@ -554,13 +564,24 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return pn, validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill())
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
+			if spec := statementOption.EnumIndexBackfill(); spec != nil {
+				var err error
+				ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
+				if err != nil {
+					return nil, err
+				}
+			}
+			pn, err := plan.BuildPlan(
 				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 				stmts[0], false)
+			if err != nil {
+				return pn, err
+			}
+			return pn, validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill())
 		})
 	}
 

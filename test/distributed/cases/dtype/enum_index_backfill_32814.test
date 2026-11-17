@@ -44,4 +44,12 @@ insert into `table``name` values(1,'A'),(2,'a');
 alter table `table``name` add index ix(`e.x`);
 select id,`e.x`+0 from `table``name` force index(ix) where `e.x`='a' order by id;
 select id,`e.x`+0 from `table``name` ignore index(ix) where `e.x`='a' order by id;
+-- Temporary tables use session-local physical relation names.
+create temporary table temp_index(id int primary key,e enum('A','a','') collate utf8mb4_bin);
+insert into temp_index values(1,'A'),(2,'a');
+alter table temp_index add index ix(e);
+insert into temp_index values(3,'a');
+select id,e+0 from temp_index force index(ix) where e='a' order by id;
+select id,e+0 from temp_index ignore index(ix) where e='a' order by id;
+drop temporary table temp_index;
 drop database enum_index_backfill_32814;
