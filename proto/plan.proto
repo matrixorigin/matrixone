@@ -863,9 +863,11 @@ message DedupJoinCtx {
   ColRef odku_generated_col = 14;
   ColRef odku_ordinal_col = 15;
   ColRef odku_generated_auto_increment_col = 16;
-  // Optional build-side marker for internal arbitration rows. A NULL value
-  // suppresses only the duplicate warning; duplicate filtering is unchanged.
-  ColRef warning_suppress_null_col = 17;
+  // Optional build-side row ID for repeated-target IGNORE arbitration. NULL
+  // identifies auxiliary reservation/release rows, whose diagnostics are silent.
+  // Real candidates carry their preceding accepted key as the old key; the
+  // delete marker distinguishes release evidence from reservations.
+  ColRef auxiliary_row_id_col = 17;
 }
 
 message UpdateCtx {

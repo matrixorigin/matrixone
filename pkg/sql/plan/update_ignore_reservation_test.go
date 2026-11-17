@@ -49,7 +49,8 @@ func updateIgnoreMergedReservationChecks(t *testing.T, sql string) int {
 		}
 		release := query.Nodes[outer.Children[1]]
 		if len(release.ProjectList) < 3 ||
-			!updateIgnoreReservationNull(release.ProjectList[len(release.ProjectList)-2]) {
+			release.ProjectList[len(release.ProjectList)-1].GetF() == nil ||
+			release.ProjectList[len(release.ProjectList)-1].GetF().GetFunc().GetObjName() != "not" {
 			continue
 		}
 		inner := query.Nodes[outer.Children[0]]
@@ -63,19 +64,24 @@ func updateIgnoreMergedReservationChecks(t *testing.T, sql string) int {
 		}
 		reservationOldKey := reservation.ProjectList[len(reservation.ProjectList)-3]
 		reservationNewKey := reservation.ProjectList[len(reservation.ProjectList)-2]
-		candidateOldKey := candidate.ProjectList[len(candidate.ProjectList)-3].GetF()
+		candidateOldKey := candidate.ProjectList[len(candidate.ProjectList)-3].GetCol()
 		require.True(t, updateIgnoreReservationNull(reservationOldKey),
 			"reservations must not release or delete statement-old keys")
 		require.NotNil(t, reservationNewKey)
 		require.False(t, updateIgnoreReservationNull(reservationNewKey),
 			"reservations must carry the accepted current key")
 		require.NotNil(t, candidateOldKey)
-		require.Equal(t, "if", candidateOldKey.GetFunc().GetObjName())
-		require.Len(t, candidateOldKey.Args, 3)
-		unchanged := candidateOldKey.Args[0].GetF()
-		require.NotNil(t, unchanged)
-		require.Equal(t, "<=>", unchanged.GetFunc().GetObjName(),
-			"a same-row no-op candidate must be allowed to replace its own reservation")
+		candidateNewKey := candidate.ProjectList[len(candidate.ProjectList)-2].GetCol()
+		require.NotNil(t, candidateNewKey)
+		require.NotEqual(t, candidateOldKey.ColPos, candidateNewKey.ColPos,
+			"ownership must use the captured preceding image, not the candidate")
+		releaseKey := release.ProjectList[len(release.ProjectList)-2].GetF()
+		require.NotNil(t, releaseKey)
+		require.Equal(t, "if", releaseKey.GetFunc().GetObjName())
+		require.Len(t, releaseKey.Args, 3)
+		require.Equal(t, release.ProjectList[len(release.ProjectList)-3], releaseKey.Args[1],
+			"changed releases must hash on the released snapshot key")
+		require.True(t, updateIgnoreReservationNull(releaseKey.Args[2]))
 
 		rowIDChecked := false
 		for dedupIdx, dedup := range query.Nodes {
@@ -83,6 +89,10 @@ func updateIgnoreMergedReservationChecks(t *testing.T, sql string) int {
 				len(dedup.Children) != 2 || dedup.Children[1] != int32(outerIdx) {
 				continue
 			}
+			require.NotNil(t, dedup.DedupJoinCtx.AuxiliaryRowIdCol)
+			copied := DeepCopyDedupJoinCtx(dedup.DedupJoinCtx)
+			require.Equal(t, dedup.DedupJoinCtx.AuxiliaryRowIdCol, copied.AuxiliaryRowIdCol)
+			require.NotSame(t, dedup.DedupJoinCtx.AuxiliaryRowIdCol, copied.AuxiliaryRowIdCol)
 			for _, filter := range query.Nodes {
 				if filter.NodeType != plan.Node_FILTER || len(filter.Children) != 1 ||
 					filter.Children[0] != int32(dedupIdx) {
@@ -124,7 +134,7 @@ func TestUpdateIgnoreMergedUniqueReservationPlan(t *testing.T) {
 		"UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno "+
 			"SET a.dname = 'a', a.loc = 'a', b.dname = 'b', b.loc = 'b'")
 	require.Equal(t, 2, twoKeyTargets,
-		"each key-mutating alias needs reservation -> candidate -> release arbitration")
+		"each key-mutating alias needs one merged arbitration stage")
 
 	oneKeyTarget := updateIgnoreMergedReservationChecks(t,
 		"UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno "+

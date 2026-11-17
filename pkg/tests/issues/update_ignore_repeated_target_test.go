@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -91,6 +92,23 @@ func (c *updateIgnoreRepeatedTargetConn) stringRows(statement string) []string {
 	return result
 }
 
+func (c *updateIgnoreRepeatedTargetConn) warnings() []string {
+	c.t.Helper()
+	rows, err := c.cn.QueryContext(c.ctx, "show warnings")
+	require.NoError(c.t, err)
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var level, message string
+		var code int
+		require.NoError(c.t, rows.Scan(&level, &code, &message))
+		require.Equal(c.t, "Warning", level)
+		result = append(result, fmt.Sprintf("%d %s", code, message))
+	}
+	require.NoError(c.t, rows.Err())
+	return result
+}
+
 func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -112,12 +130,13 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 		}
 		dbName := testutils.GetDatabaseName(t)
 		exec(fmt.Sprintf("create database `%s`", dbName))
-		exec(fmt.Sprintf("use `%s`", dbName))
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cleanupCancel()
-			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
+			_, cleanupErr := db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
+			require.NoError(t, cleanupErr)
 		}()
+		exec(fmt.Sprintf("use `%s`", dbName))
 
 		newConn := func(t *testing.T) *updateIgnoreRepeatedTargetConn {
 			return &updateIgnoreRepeatedTargetConn{t: t, ctx: ctx, cn: conn}
@@ -130,25 +149,105 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 				"(1,'Alpha',7),(2,NULL,9),(3,'Beta',8)")
 			result := c.exec("update ignore u a join u b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'")
 			require.Equal(t, int64(0), c.affected(result))
-			warnings, err := c.cn.QueryContext(ctx, "show warnings")
-			require.NoError(t, err)
-			defer warnings.Close()
-			count := 0
-			for warnings.Next() {
-				var level, message string
-				var code int
-				require.NoError(t, warnings.Scan(&level, &code, &message))
-				require.Equal(t, "Warning", level)
-				require.Equal(t, 1062, code)
-				require.Equal(t, "Duplicate entry 'ALPHA' for key 'uk_named'", message)
-				count++
-			}
-			require.NoError(t, warnings.Err())
-			require.NoError(t, warnings.Close())
-			require.Equal(t, 2, count)
+			require.Equal(t, []string{"1062 Duplicate entry 'ALPHA' for key 'uk_named'"}, c.warnings())
 			require.Equal(t, []string{"Alpha"}, c.stringRows("select s from u where id=1"))
 			require.Equal(t, []string{"Beta"}, c.stringRows("select s from u where id=3"))
 		})
+
+		for _, ownerID := range []int{1, 2} {
+			for _, tc := range []struct {
+				name                          string
+				lastKey, finalKey, finalValue int
+				affected                      int64
+				warnings                      []string
+			}{
+				{"snapshot key now belongs to another row", 10, 30, 100, 2, []string{"1062 Duplicate entry '10' for key 'k'"}},
+				{"distinct third key has no stale warning", 40, 40, 999, 3, nil},
+				{"current-key no-op keeps payload", 30, 30, 999, 3, nil},
+			} {
+				t.Run(fmt.Sprintf("%s owner%d", tc.name, ownerID), func(t *testing.T) {
+					c := newConn(t)
+					otherID := 3 - ownerID
+					c.resetTable("t", intTable, fmt.Sprintf("(%d,10,100),(%d,20,200)", ownerID, otherID))
+					result := c.exec(fmt.Sprintf(`update ignore t x join t y on x.id=%d and y.id=%d
+						join t z on z.id=x.id set x.k=30,y.k=10,z.k=%d,z.v=999`, ownerID, otherID, tc.lastKey))
+					require.Equal(t, tc.affected, c.affected(result))
+					require.Equal(t, tc.warnings, c.warnings())
+					want := [][]int64{{int64(ownerID), int64(tc.finalKey), int64(tc.finalValue)}, {int64(otherID), 10, 200}}
+					require.ElementsMatch(t, want, c.intRows("select id,k,v from t", 3))
+					require.ElementsMatch(t, want, c.intRows("select id,k,v from t force index(k)", 3))
+					require.Equal(t, [][]int64{{2, 2}}, c.intRows("select count(*),count(distinct k) from t", 2))
+				})
+			}
+		}
+
+		t.Run("CHECK rejection retains accepted reservation", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("t", "(id int primary key,k int unique,u int,v int,check(u+v<150))", "(1,10,1,1),(2,20,1,1)")
+			result := c.exec(`update ignore t x join t y on x.id=1 and y.id in(1,2)
+				set x.k=30,x.u=100,y.k=if(y.id=1,40,30),y.v=if(y.id=1,100,y.v)`)
+			require.Equal(t, int64(1), c.affected(result))
+			require.ElementsMatch(t, []string{"3819 Check constraint 't_chk_1' is violated", "1062 Duplicate entry '30' for key 'k'"}, c.warnings())
+			require.Equal(t, [][]int64{{1, 30, 100, 1}, {2, 20, 1, 1}}, c.intRows("select id,k,u,v from t order by id", 4))
+			require.Equal(t, [][]int64{{1, 30}, {2, 20}}, c.intRows("select id,k from t force index(k) order by id", 2))
+		})
+
+		t.Run("singleton table keeps its independent UNIQUE check", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("t", intTable, "(1,10,100),(2,20,200)")
+			c.resetTable("single_target", intTable, "(1,10,100),(2,20,200)")
+			result := c.exec(`update ignore t x join t y on x.id=1 and y.id=2
+				join single_target z on z.id=2 set x.k=30,y.k=40,z.k=10`)
+			require.Equal(t, int64(2), c.affected(result))
+			require.Equal(t, []string{"1062 Duplicate entry '10' for key 'k'"}, c.warnings())
+			require.Equal(t, [][]int64{{1, 30, 100}, {2, 40, 200}}, c.intRows("select id,k,v from t order by id", 3))
+			require.Equal(t, [][]int64{{1, 10, 100}, {2, 20, 200}}, c.intRows("select id,k,v from single_target order by id", 3))
+		})
+
+		t.Run("repeated PK update guard remains atomic", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("t", intTable, "(1,10,100),(2,20,200)")
+			_, err := c.cn.ExecContext(ctx, "update ignore t a join t b on a.id=b.id and a.id=1 set a.id=2,b.v=9")
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr)
+			require.Equal(t, uint16(1706), sqlErr.Number)
+			require.Equal(t, [][]int64{{1, 10, 100}, {2, 20, 200}}, c.intRows("select id,k,v from t order by id", 3))
+		})
+
+		for _, chain := range []bool{false, true} {
+			t.Run(fmt.Sprintf("generated PK guard chain=%t", chain), func(t *testing.T) {
+				c := newConn(t)
+				definition := "(a int,n int,g int generated always as(a*2) stored,primary key(g))"
+				firstKey, secondKey := int64(2), int64(4)
+				if chain {
+					definition = "(a int,n int,m int generated always as(a*2) stored,g int generated always as(m+1) stored,primary key(g))"
+					firstKey, secondKey = 3, 5
+				}
+				c.resetTable("genpk", definition, "")
+				c.exec("insert into genpk(a,n) values(1,10),(2,20)")
+				original := [][]int64{{1, 10, firstKey}, {2, 20, secondKey}}
+				for _, keyword := range []string{"update", "update ignore"} {
+					_, err := c.cn.ExecContext(ctx, fmt.Sprintf("%s genpk x join genpk y on x.g=y.g and x.g=%d set x.a=2,y.n=9", keyword, firstKey))
+					var sqlErr *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.Equal(t, uint16(1706), sqlErr.Number)
+					require.Equal(t, original, c.intRows("select a,n,g from genpk order by g", 3))
+				}
+				c.exec(fmt.Sprintf("update ignore genpk x join genpk y on x.g=y.g and x.g=%d set x.n=11,y.n=9", firstKey))
+				require.Equal(t, []string(nil), c.warnings())
+				require.Equal(t, [][]int64{{1, 9, firstKey}, {2, 20, secondKey}}, c.intRows("select a,n,g from genpk order by g", 3))
+				c.exec(fmt.Sprintf("update ignore genpk x join genpk y on x.g=y.g and x.g=%d set x.a=3", firstKey))
+				newKey := int64(6)
+				if chain {
+					newKey = 7
+				}
+				require.Equal(t, [][]int64{{3, 9, newKey}}, c.intRows(fmt.Sprintf("select a,n,g from genpk where g=%d", newKey), 3))
+				if chain {
+					c.exec(fmt.Sprintf("update ignore genpk x join genpk y on x.g=y.g and x.g=%d set x.a=4,y.m=DEFAULT", newKey))
+					require.Equal(t, [][]int64{{4, 9, 9}}, c.intRows("select a,n,g from genpk where g=9", 3))
+				}
+			})
+		}
 
 		t.Run("generated unique key rejects conflicting alias", func(t *testing.T) {
 			c := newConn(t)

@@ -310,9 +310,9 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		col := *ctx.OdkuGeneratedAutoIncrementCol
 		newCtx.OdkuGeneratedAutoIncrementCol = &col
 	}
-	if ctx.WarningSuppressNullCol != nil {
-		col := *ctx.WarningSuppressNullCol
-		newCtx.WarningSuppressNullCol = &col
+	if ctx.AuxiliaryRowIdCol != nil {
+		col := *ctx.AuxiliaryRowIdCol
+		newCtx.AuxiliaryRowIdCol = &col
 	}
 	newCtx.ForeignKeyChecks = make([]plan.ODKUForeignKeyCheck, len(ctx.ForeignKeyChecks))
 	for i, check := range ctx.ForeignKeyChecks {
