@@ -71,7 +71,7 @@ jobs:
   cs-environment-pvc-control:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && contains(fromJSON('["mty-pvc-baseline","mty-pvc-seed","jed-pvc-baseline","jed-pvc-seed"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
-      group: cs-gomod-comparison
+      group: cs-pvc-comparison-${{ startsWith(inputs.coverage_comparison, 'mty-') && 'mty' || 'jed' }}
       cancel-in-progress: false
     permissions:
       contents: read
