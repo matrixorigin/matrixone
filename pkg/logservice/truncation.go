@@ -354,6 +354,9 @@ func (l *store) importCandidateValid(dir string) (bool, error) {
 		return false, err
 	}
 	ss, err := tools.GetSnapshotRecord(dir, "snapshot.metadata", l.cfg.FS)
+	if errors.Is(err, tools.ErrIncompleteSnapshot) || errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -367,7 +370,11 @@ func (l *store) importCandidateValid(dir string) (bool, error) {
 	if info.Size() <= 0 || uint64(info.Size()) != ss.FileSize {
 		return false, nil
 	}
-	return tools.IsCompleteSnapshotImage(file, ss, l.cfg.FS)
+	complete, err := tools.IsCompleteSnapshotImage(file, ss, l.cfg.FS)
+	if errors.Is(err, tools.ErrIncompleteSnapshot) {
+		return false, nil
+	}
+	return complete, err
 }
 
 // shouldProcess checks whether we should do the truncation for the shard.

@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -843,6 +844,58 @@ func TestTruncationImportSnapshot(t *testing.T) {
 }
 
 func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		corrupt func(*testing.T, vfs.FS, string, uint64)
+	}{
+		{"empty image", func(t *testing.T, fs vfs.FS, dir string, index uint64) {
+			file := fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))
+			f, err := fs.Create(file)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		}},
+		{"missing metadata", func(t *testing.T, fs vfs.FS, dir string, _ uint64) {
+			require.NoError(t, fs.Remove(fs.PathJoin(dir, "snapshot.metadata")))
+		}},
+		{"truncated metadata", func(t *testing.T, fs vfs.FS, dir string, _ uint64) {
+			f, err := fs.Create(fs.PathJoin(dir, "snapshot.metadata"))
+			require.NoError(t, err)
+			_, err = f.Write([]byte{1, 2, 3})
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		}},
+		{"bad metadata hash", func(t *testing.T, fs vfs.FS, dir string, _ uint64) {
+			f, err := fs.Create(fs.PathJoin(dir, "snapshot.metadata"))
+			require.NoError(t, err)
+			_, err = f.Write([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0xff})
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		}},
+		{"invalid image header", func(t *testing.T, fs vfs.FS, dir string, index uint64) {
+			file := fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))
+			f, err := fs.Open(file)
+			require.NoError(t, err)
+			data, err := io.ReadAll(f)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			require.GreaterOrEqual(t, len(data), 8)
+			clear(data[:8])
+			f, err = fs.Create(file)
+			require.NoError(t, err)
+			_, err = f.Write(data)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testTruncationFallsBackFromCorruptExport(t, tc.corrupt)
+		})
+	}
+}
+
+func testTruncationFallsBackFromCorruptExport(
+	t *testing.T, corrupt func(*testing.T, vfs.FS, string, uint64),
+) {
 	runServiceTest(t, false, true, func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -891,11 +944,7 @@ func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
 		truncate(newer)
 		nid := nodeID{shardID: shardID, replicaID: replicaID}
 		newerDir := s.store.snapshotMgr.snapshotPath(nid, snapshotIndex(newer))
-		file := s.store.cfg.FS.PathJoin(newerDir,
-			fmt.Sprintf(snapshotPathPattern+".gbsnap", newer))
-		f, err := s.store.cfg.FS.Create(file)
-		require.NoError(t, err)
-		require.NoError(t, f.Close())
+		corrupt(t, s.store.cfg.FS, newerDir, newer)
 
 		require.NoError(t, s.store.processShardTruncateLog(ctx, shardID))
 		require.Equal(t, older, s.store.shardSnapshotInfo.getTruncatedLsn(shardID))
