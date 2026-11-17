@@ -61,3 +61,32 @@ before readiness and obtain approval for material design changes. Do not verify
 datasets/results in benchmark scripts. Append results as comments; use the PR
 template and retain draft until acceptance. Remove only task-owned run clones
 after completion, retaining raw datasets and evidence.
+
+## Approved revision 2: identity probe forwarding
+
+On 2026-11-17 the requester approved the measured-cost correction recorded in
+`build/tpch-dictionary-output-wave-20261117/evidence/join-output-cost-revision.md`.
+It supersedes partial-output join dictionary construction in revision 1; shuffle
+full-slot partition production is unchanged. The original constructor experiment
+and allocation profile remain in local evidence, not in the delivered path.
+
+Start the existing bounded unique INNER/probe-only SEMI/ANTI match path with an
+optimistic identity projection. Continue gathering build payload normally. Skip
+probe-payload copies while every row survives. At the first mismatch, copy the
+preceding matched prefix once into existing owned result buffers, then continue
+ordinary selected gathers without rehashing or reevaluating predicates. If all
+rows survive, borrow the original probe headers until the next Call through one
+private result batch. Retire that batch by clearing references, never by freeing
+or mutating its borrowed columns. Existing downstream retention rules still apply.
+
+Use the ordinary path for oversized/continued input, residuals, other join modes,
+spill and owned-only destinations. No new row-map buffer, lease, core API or
+per-row kernel change is introduced. Gate all-match/first/middle/last-mismatch,
+all-rejected and selected-source controls against the existing path: no extra
+steady-state Go allocations or repeated payload copies, with an identity-case
+work saving before all22 qualification. Keep the original per-query gates.
+
+Identity forwarding stays inside the original child Call lifetime, so revision 2
+retains the existing owned-input preference. It avoids the second join payload
+copy without forcing upstream readers to construct immutable dictionary metadata.
+Already-selected inputs remain supported and can be forwarded unchanged.

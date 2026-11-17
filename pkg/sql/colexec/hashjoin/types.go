@@ -68,6 +68,7 @@ const (
 
 type container struct {
 	dictionaryBoundary vm.DictionaryOutputState
+	probeOutput        *identityProbeOutput
 	state              int
 	itr                hashmap.Iterator
 	rightBats          []*batch.Batch
@@ -401,6 +402,7 @@ func (hashJoin *HashJoin) Release() {
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -442,6 +444,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -518,6 +521,10 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.probeOutput != nil {
+		ctr.probeOutput.free(proc)
+		ctr.probeOutput = nil
+	}
 	ctr.rightBats = nil
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())

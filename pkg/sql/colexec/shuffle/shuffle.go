@@ -458,18 +458,24 @@ func (shuffle *Shuffle) stopWritingOnce() {
 }
 
 func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct{}, error) {
-	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWriteMode(
+	var views **shufflePartitionViews
+	if shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput() && !shuffle.ctr.dictionaryBoundary.PrefersOwnedOutput() {
+		views = &shuffle.ctr.partitionViews
+	}
+	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWriteModeWithViews(
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
 		shuffle.CurrentShuffleIdx,
 		shuffle.ctr.pendingPosition,
 		shuffle.ctr.pendingOffset,
 		shuffle.ctr.pendingWholeBucket,
+		views,
 		proc,
 	)
 	shuffle.ctr.pendingPosition = nextBucket
 	shuffle.ctr.pendingOffset = nextOffset
 	if done || err != nil {
+		shuffle.freePartitionViews(proc)
 		shuffle.ctr.pendingBat = nil
 		shuffle.ctr.pendingPosition = 0
 		shuffle.ctr.pendingOffset = 0

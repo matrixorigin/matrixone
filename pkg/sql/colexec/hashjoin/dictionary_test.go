@@ -25,16 +25,33 @@ import (
 	"testing"
 )
 
+type dictionaryJoinSink struct{ *colexec.MockOperator }
+
+func (*dictionaryJoinSink) AcceptsDictionary(child int) bool { return child == 0 }
+
 func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		mode     plan.Node_JoinType
 		selected bool
+		views    bool
+		complete bool
+		prefix   bool
 	}{
-		{"INNER/selected", plan.Node_INNER, true},
-		{"INNER/flat", plan.Node_INNER, false},
-		{"SEMI/selected", plan.Node_SEMI, true},
-		{"ANTI/selected", plan.Node_ANTI, true},
+		{"INNER/selected", plan.Node_INNER, true, false, false, false},
+		{"INNER/flat", plan.Node_INNER, false, false, false, false},
+		{"SEMI/selected", plan.Node_SEMI, true, false, false, false},
+		{"ANTI/selected", plan.Node_ANTI, true, false, false, false},
+		{"INNER/partial-fallback", plan.Node_INNER, true, true, false, false},
+		{"SEMI/partial-fallback", plan.Node_SEMI, true, true, false, false},
+		{"ANTI/partial-fallback", plan.Node_ANTI, true, true, false, false},
+		{"INNER/identity-selected", plan.Node_INNER, true, true, true, false},
+		{"INNER/identity-flat", plan.Node_INNER, false, true, true, false},
+		{"SEMI/identity", plan.Node_SEMI, true, true, true, false},
+		{"ANTI/identity", plan.Node_ANTI, true, true, true, false},
+		{"INNER/matched-prefix", plan.Node_INNER, false, true, false, true},
+		{"SEMI/matched-prefix", plan.Node_SEMI, false, true, false, true},
+		{"ANTI/matched-prefix", plan.Node_ANTI, false, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
@@ -61,6 +78,12 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 			resetChildrenWithBatch(fixture.arg, probe)
 			probe.Vecs[0] = vector.NewVec(typ)
 			values := []int32{6, 2, 6, 1}
+			if tc.prefix {
+				values = make([]int32, 257)
+				for row := range values {
+					values[row] = int32(row + 1)
+				}
+			}
 			if tc.selected {
 				values = []int32{1, 2, 3, 4, 5, 6}
 			}
@@ -78,10 +101,29 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 			build := batch.NewWithSize(1)
 			resetHashBuildChildrenWithBatch(fixture.barg, build)
 			build.Vecs[0] = vector.NewVec(typ)
-			require.NoError(t, vector.AppendFixedList(build.Vecs[0], []int32{2, 6}, nil, mp))
-			build.SetRowCount(2)
+			buildValues := []int32{2, 6}
+			if tc.prefix {
+				buildValues = values[:256]
+				if tc.mode == plan.Node_ANTI {
+					buildValues = []int32{257}
+				}
+			}
+			if tc.complete {
+				buildValues = []int32{1, 2, 6}
+				if tc.mode == plan.Node_ANTI {
+					buildValues = []int32{99}
+				}
+			}
+			require.NoError(t, vector.AppendFixedList(build.Vecs[0], buildValues, nil, mp))
+			build.SetRowCount(len(buildValues))
 			require.NoError(t, fixture.barg.Prepare(fixture.proc))
 			require.NoError(t, fixture.arg.Prepare(fixture.proc))
+			if tc.views {
+				sink := &dictionaryJoinSink{colexec.NewMockOperator()}
+				sink.AppendChild(fixture.arg)
+				vm.ConfigureDictionaryBoundaries(sink)
+				require.True(t, fixture.arg.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+			}
 			require.True(t, fixture.arg.AcceptsDictionary(0))
 			require.True(t, fixture.arg.PrefersOwnedDictionaryInput(0))
 			require.False(t, fixture.arg.PrefersOwnedDictionaryInput(1))
@@ -94,12 +136,26 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 				if result.Batch == nil {
 					break
 				}
-				require.False(t, result.Batch.HasDictionary(), "join payload remains owned and flat")
-				got = append(got, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])...)
+				if result.Batch.IsEmpty() {
+					continue
+				}
+				require.Equal(t, tc.views && tc.complete && tc.selected, result.Batch.HasDictionary())
+				if tc.views && tc.complete {
+					require.Same(t, probe.Vecs[0], result.Batch.Vecs[0], "identity output must forward the existing header")
+				}
+				for row := range result.Batch.RowCount() {
+					got = append(got, vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[0], row))
+				}
 			}
 			want := []int32{6, 2, 6}
 			if tc.mode == plan.Node_ANTI {
 				want = []int32{1}
+			}
+			if tc.complete {
+				want = []int32{6, 2, 6, 1}
+			}
+			if tc.prefix {
+				want = values[:256]
 			}
 			require.Equal(t, want, got)
 			require.Equal(t, tc.selected, probe.Vecs[0].IsDictionary())
