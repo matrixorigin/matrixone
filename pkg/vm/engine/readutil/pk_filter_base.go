@@ -405,7 +405,7 @@ func constructBasePKFilter(
 			filter.Valid = true
 			filter.Op = function.PREFIX_IN
 			{
-				vec, unmarshalErr := unmarshalPKInVector(vals[0])
+				vec, unmarshalErr := unmarshalPrefixInVector(vals[0])
 				if unmarshalErr != nil {
 					return BasePKFilter{}, nil
 				}
@@ -516,6 +516,64 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 		return nil, err
 	}
 	normalizePKInVector(owned)
+	return owned, nil
+}
+
+// unmarshalPrefixInVector applies SQL IN semantics to serialized prefix keys.
+// serial_full can encode SQL NULL as a zero-leading key without setting the
+// vector null bitmap. NULL never satisfies IN, so drop that key and any empty
+// payload while retaining the non-NULL keys for ordered prefix pruning. Any
+// mutation is performed on a private vector, never the shared plan buffer.
+func unmarshalPrefixInVector(data []byte) (*vector.Vector, error) {
+	vec, err := unmarshalPKInVector(data)
+	if err != nil || vec.IsConstNull() || vec.Length() == 0 {
+		return vec, err
+	}
+
+	col, area := vector.MustVarlenaRawData(vec)
+	rows := vec.Length()
+	if vec.IsConst() {
+		rows = 1
+	}
+	hasSerializedNull := false
+	for row := 0; row < rows; row++ {
+		key := col[row].GetByteSlice(area)
+		if len(key) == 0 || key[0] == 0 {
+			hasSerializedNull = true
+			break
+		}
+	}
+	if !hasSerializedNull {
+		return vec, nil
+	}
+
+	owned := vector.NewVec(types.T_any.ToType())
+	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+		return nil, err
+	}
+	normalizePKInVector(owned)
+	ownedCol, ownedArea := vector.MustVarlenaRawData(owned)
+	ownedRows := owned.Length()
+	if owned.IsConst() && ownedRows > 0 {
+		ownedRows = 1
+	}
+	sels := make([]int64, 0, ownedRows)
+	for row := 0; row < ownedRows; row++ {
+		key := ownedCol[row].GetByteSlice(ownedArea)
+		if len(key) == 0 || key[0] == 0 {
+			continue
+		}
+		sels = append(sels, int64(row))
+	}
+	if owned.IsConst() {
+		owned.SetLength(len(sels))
+		if len(sels) == 0 {
+			owned.GetNulls().Reset()
+		}
+	} else {
+		owned.Shrink(sels, false)
+	}
+	owned.SetSorted(true)
 	return owned, nil
 }
 

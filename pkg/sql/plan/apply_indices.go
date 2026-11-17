@@ -2846,15 +2846,8 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 				}
 			}
 		}
-		serialFunc := indexTableLookupSerialFunc(idxDef)
-		if name == "prefix_in" && fn.Args[1].GetVec() != nil && literalVectorMayContainNull(fn.Args[1].GetVec()) {
-			// serial_full materializes NULL as an ordinary encoded key. A NULL
-			// IN item never matches, so retain its null bitmap with serial and
-			// let read-time prefix pruning fail open on the nullable vector.
-			serialFunc = "serial"
-		}
 		for _, pos := range positions {
-			fn.Args[pos] = builder.bindOptionalIndexFunc(serialFunc, []*plan.Expr{fn.Args[pos]})
+			fn.Args[pos] = builder.bindOptionalIndexFunc(indexTableLookupSerialFunc(idxDef), []*plan.Expr{fn.Args[pos]})
 			if fn.Args[pos] == nil {
 				return nil
 			}
