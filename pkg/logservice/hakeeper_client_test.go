@@ -840,7 +840,7 @@ func TestPrepareClientLockedNormalizesInitialConnectionError(t *testing.T) {
 	}()
 
 	c := &managedHAKeeperClient{}
-	err := c.prepareClient(context.Background())
+	_, err := c.getPreparedClient(context.Background())
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 }
 
@@ -874,9 +874,18 @@ func TestHAKeeperClientRetryableError(t *testing.T) {
 		{"typed_unexpected_eof", moerr.NewUnexpectedEOF(context.Background(), io.EOF.Error()), true},
 		{"native_reset", syscall.ECONNRESET, true},
 		{"wrapped_reset", fmt.Errorf("transport: %w", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}), true},
+		{"backend_create_timeout", morpc.ErrBackendCreateTimeout, false},
+		{"wrapped_backend_create_timeout", fmt.Errorf("backend: %w", morpc.ErrBackendCreateTimeout), false},
+		{"typed_backend_closed", moerr.NewBackendClosedNoCtx(), true},
+		{"typed_backend_cannot_connect", moerr.NewBackendCannotConnectNoCtx(), true},
+		{"typed_reset", moerr.NewConnectionResetNoCtx(), true},
+		{"wrapped_typed_reset", fmt.Errorf("transport: %w", moerr.NewConnectionResetNoCtx()), true},
+		{"terminal_closed", moerr.NewClientClosedNoCtx(), false},
+		{"no_available_backend", moerr.NewNoAvailableBackendNoCtx(), false},
 		{"reset_text", errors.New("connection reset by peer"), false},
 		{"broken_pipe", &net.OpError{Op: "write", Net: "tcp4", Err: syscall.EPIPE}, false},
 		{"canceled", context.Canceled, false},
+		{"canceled_with_reset", errors.Join(context.Canceled, syscall.ECONNRESET), false},
 		{"deadline", context.DeadlineExceeded, false},
 		{"application", moerr.NewInvalidInputNoCtx("permanent error"), false},
 	} {
@@ -992,6 +1001,9 @@ func TestAllocateIDRetriesTransportSendError(t *testing.T) {
 		{"eof", io.EOF},
 		{"native_reset", syscall.ECONNRESET},
 		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}},
+		{"typed_backend_closed", moerr.NewBackendClosedNoCtx()},
+		{"typed_backend_cannot_connect", moerr.NewBackendCannotConnectNoCtx()},
+		{"typed_reset", moerr.NewConnectionResetNoCtx()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			originalNew := newHAKeeperClientFunc
@@ -1079,8 +1091,13 @@ func TestAllocateIDResetStopsOnCancellation(t *testing.T) {
 			c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{AllocateIDBatch: 2}}
 			_, err := c.AllocateID(ctx)
 			require.ErrorIs(t, err, ctx.Err())
-			require.Equal(t, 1, created)
-			require.Equal(t, 1, sent)
+			if phase == "during_send" {
+				require.Equal(t, 1, created)
+				require.Equal(t, 1, sent)
+			} else {
+				require.Zero(t, created)
+				require.Zero(t, sent)
+			}
 			require.Nil(t, c.mu.client)
 		})
 	}
@@ -1346,6 +1363,9 @@ func TestAllocateBatchIDRetriesTransportSendError(t *testing.T) {
 		{"eof", io.EOF},
 		{"native_reset", syscall.ECONNRESET},
 		{"wrapped_reset", &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}},
+		{"typed_backend_closed", moerr.NewBackendClosedNoCtx()},
+		{"typed_backend_cannot_connect", moerr.NewBackendCannotConnectNoCtx()},
+		{"typed_reset", moerr.NewConnectionResetNoCtx()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			originalNew := newHAKeeperClientFunc
