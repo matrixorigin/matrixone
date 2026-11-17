@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -168,7 +169,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 }
 
 func TestLocalDomainProbeConstantAndShape(t *testing.T) {
-	for _, name := range []string{"constant", "constant NULL", "wrong type", "short flat vector"} {
+	for _, name := range []string{"constant", "full constant", "constant NULL", "full constant NULL", "wrong type", "short flat vector"} {
 		t.Run(name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.SetMessageBoard(message.NewMessageBoard())
@@ -188,6 +189,10 @@ func TestLocalDomainProbeConstantAndShape(t *testing.T) {
 			switch name {
 			case "constant":
 				probe, err = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
+			case "full constant":
+				probe, err = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 3, proc.Mp())
+			case "full constant NULL":
+				probe = vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
 			case "constant NULL":
 				probe = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 			case "wrong type":
@@ -203,7 +208,7 @@ func TestLocalDomainProbeConstantAndShape(t *testing.T) {
 			scan := &TableScan{ctr: container{buf: bat, domainRows: make([]int64, 0, 3),
 				domainProbes: []localDomainProbeState{{domain: domain, bloom: bloom, mask: make([]uint8, 3)}}}}
 			require.NoError(t, scan.applyLocalDomains(proc))
-			if name == "constant NULL" {
+			if name == "constant NULL" || name == "full constant NULL" {
 				require.Zero(t, bat.RowCount())
 			} else {
 				require.Equal(t, 3, bat.RowCount())
@@ -214,6 +219,104 @@ func TestLocalDomainProbeConstantAndShape(t *testing.T) {
 				require.Equal(t, int64(3), state.bypassed)
 			} else {
 				require.Equal(t, int64(3), state.tested)
+			}
+		})
+	}
+}
+
+func TestLocalDomainMaskCompositionAndCounters(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprintf("domains=%d", count), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetMessageBoard(message.NewMessageBoard())
+			t.Cleanup(proc.Free)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 2, 3, 0}, []uint64{3}, proc.Mp())
+			input.SetRowCount(4)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			scan := &TableScan{ctr: container{domainRows: make([]int64, 0, 4)}}
+			want := []bool{true, true, true, false}
+			for i := range count {
+				domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
+				t.Cleanup(domain.Close)
+				source, err := domain.Begin(proc, 0, 1)
+				require.NoError(t, err)
+				keys := testutil.MakeInt64Vector([]int64{int64(i + 1), int64(i + 2)}, nil, proc.Mp())
+				t.Cleanup(func() { keys.Free(proc.Mp()) })
+				require.NoError(t, source.AddVector(proc.Ctx, keys, keys.Length()))
+				source.Complete(false)
+				bloom, _, err := domain.Wait(proc.Ctx)
+				require.NoError(t, err)
+				probe := localDomainProbeState{domain: domain, bloom: bloom, mask: make([]uint8, 4), tested: runtimefilter.LocalDomainBatchRows - 4}
+				rejected := int64(0)
+				for row := range 4 {
+					// Scalar membership is the independent mask-consumer oracle;
+					// Bloom false positives remain permitted.
+					keep := row != 3 && bloom.Test(input.Vecs[0].GetData()[row*8:row*8+8])
+					want[row] = want[row] && keep
+					if !keep {
+						rejected++
+					}
+				}
+				scan.ctr.domainProbes = append(scan.ctr.domainProbes, probe)
+				t.Cleanup(func() { require.Equal(t, rejected, scan.ctr.domainProbes[i].rejected) })
+			}
+			rows, all, err := scan.selectLocalDomains(proc, input)
+			require.NoError(t, err)
+			require.False(t, all)
+			var expected []int64
+			for row, keep := range want {
+				if keep {
+					expected = append(expected, int64(row))
+				}
+			}
+			require.Equal(t, expected, rows)
+			for _, p := range scan.ctr.domainProbes {
+				require.EqualValues(t, runtimefilter.LocalDomainBatchRows, p.tested)
+				require.True(t, p.pass, "the low-rejection transition must preserve current-batch filtering")
+			}
+			_, all, err = scan.selectLocalDomains(proc, input)
+			require.NoError(t, err)
+			require.True(t, all, "the next batch must bypass even NULL rejection")
+			for _, p := range scan.ctr.domainProbes {
+				require.EqualValues(t, 4, p.bypassed)
+			}
+		})
+	}
+}
+
+func BenchmarkLocalDomainMaskConsumer(b *testing.B) {
+	for _, nullable := range []bool{false, true} {
+		b.Run(fmt.Sprintf("nullable=%t", nullable), func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			proc.SetMessageBoard(message.NewMessageBoard())
+			b.Cleanup(proc.Free)
+			domain, _ := runtimefilter.NewLocalDomain(types.T_int32, 1000, 1, 1, 1000000)
+			b.Cleanup(domain.Close)
+			source, err := domain.Begin(proc, 0, 1)
+			require.NoError(b, err)
+			keys := vector.NewVec(types.T_int32.ToType())
+			b.Cleanup(func() { keys.Free(proc.Mp()) })
+			require.NoError(b, vector.AppendFixedList(keys, []int32{1, 2}, nil, proc.Mp()))
+			require.NoError(b, source.AddVector(proc.Ctx, keys, 2))
+			source.Complete(false)
+			bloom, _, err := domain.Wait(proc.Ctx)
+			require.NoError(b, err)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			b.Cleanup(func() { input.Clean(proc.Mp()) })
+			const rows = runtimefilter.LocalDomainBatchRows
+			for row := range rows {
+				require.NoError(b, vector.AppendFixed(input.Vecs[0], int32(row%4), nullable && row%7 == 0, proc.Mp()))
+			}
+			input.SetRowCount(rows)
+			scan := &TableScan{ctr: container{domainRows: make([]int64, 0, rows), domainProbes: []localDomainProbeState{{domain: domain, bloom: bloom, mask: make([]uint8, rows)}}}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, _, err := scan.selectLocalDomains(proc, input); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

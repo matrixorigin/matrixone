@@ -78,10 +78,16 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 			return true, err
 		}
 		identity = deleted.IsEmpty()
-		for row := range int(info.MetaLocation().Rows()) {
-			if !deleted.Contains(uint64(row)) {
-				physical[live] = int64(row)
-				live++
+		if identity {
+			// Identity coordinates are derived at the first real selection.
+			// Do not fill a map that the membership-first path overwrites.
+			live = int(info.MetaLocation().Rows())
+		} else {
+			for row := range int(info.MetaLocation().Rows()) {
+				if !deleted.Contains(uint64(row)) {
+					physical[live] = int64(row)
+					live++
+				}
 			}
 		}
 		deleted.Release()
@@ -125,7 +131,11 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 		if !member.All {
 			original = member.Sels[row]
 		}
-		physical[row] = physical[original]
+		if identity {
+			physical[row] = original
+		} else {
+			physical[row] = physical[original]
+		}
 	}
 	physical = physical[:count]
 	// Preserve the existing native exact program and its owned-payload path.
@@ -227,7 +237,11 @@ func finishPredicateMembership(ctx context.Context, info *objectio.BlockInfo,
 			original = residual.Sels[row]
 		}
 		logical[row] = original
-		physical[row] = physical[original]
+		if identity {
+			physical[row] = original
+		} else {
+			physical[row] = physical[original]
+		}
 	}
 	physical, logical = physical[:count], logical[:count]
 	var readRows []int64

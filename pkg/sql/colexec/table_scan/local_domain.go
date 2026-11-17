@@ -194,11 +194,25 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 // reader consumes it before invoking another predicate callback.
 func (tableScan *TableScan) selectLocalDomains(proc *process.Process, bat *batch.Batch) ([]int64, bool, error) {
 	var combined []uint8
+	var first *localDomainProbeState
 	for i := range tableScan.ctr.domainProbes {
 		p := &tableScan.ctr.domainProbes[i]
 		if p.pass || bat.RowCount() > len(p.mask) {
 			p.bypassed += int64(bat.RowCount())
 			continue
+		}
+		if first != nil {
+			// A second active domain needs the first domain's own count
+			// before AND changes its mask. With one domain, count and collect
+			// selected rows together in the final pass instead.
+			rejected := int64(0)
+			for _, keep := range combined {
+				if keep == 0 {
+					rejected++
+				}
+			}
+			first.recordRejections(rejected)
+			first = nil
 		}
 		vec := bat.Vecs[p.column]
 		matched := false
@@ -216,42 +230,57 @@ func (tableScan *TableScan) selectLocalDomains(proc *process.Process, bat *batch
 			continue
 		}
 		mask := p.mask[:bat.RowCount()]
-		if vec.IsConst() && len(mask) > 0 {
+		if vec.IsConst() && vec.Length() != bat.RowCount() && len(mask) > 0 {
 			value := mask[0]
 			for row := range mask {
 				mask[row] = value
 			}
 		}
 		p.tested += int64(len(mask))
-		for row := range mask {
-			if vec.IsNull(uint64(row)) {
-				mask[row] = 0
-			}
-			if mask[row] == 0 {
-				p.rejected++
-			}
-		}
-		if p.tested >= runtimefilter.LocalDomainBatchRows && p.rejected*10 < p.tested {
-			p.pass = true
-		}
+		// The unchanged Bloom API already clears NULLs (including const NULL)
+		// and broadcasts a constant over its declared logical vector length.
 		if combined == nil {
-			combined = mask
+			combined, first = mask, p
 		} else {
-			for row := range combined {
-				combined[row] &= mask[row]
+			rejected := int64(0)
+			for row, keep := range mask {
+				if keep == 0 {
+					rejected++
+				}
+				combined[row] &= keep
 			}
+			p.recordRejections(rejected)
 		}
 	}
 	if combined == nil {
 		return nil, true, nil
 	}
 	tableScan.ctr.domainRows = tableScan.ctr.domainRows[:0]
-	for row, keep := range combined {
-		if keep != 0 {
-			tableScan.ctr.domainRows = append(tableScan.ctr.domainRows, int64(row))
+	if first != nil {
+		rejected := int64(0)
+		for row, keep := range combined {
+			if keep != 0 {
+				tableScan.ctr.domainRows = append(tableScan.ctr.domainRows, int64(row))
+			} else {
+				rejected++
+			}
+		}
+		first.recordRejections(rejected)
+	} else {
+		for row, keep := range combined {
+			if keep != 0 {
+				tableScan.ctr.domainRows = append(tableScan.ctr.domainRows, int64(row))
+			}
 		}
 	}
 	return tableScan.ctr.domainRows, len(tableScan.ctr.domainRows) == bat.RowCount(), nil
+}
+
+func (p *localDomainProbeState) recordRejections(rejected int64) {
+	p.rejected += rejected
+	if p.tested >= runtimefilter.LocalDomainBatchRows && p.rejected*10 < p.tested {
+		p.pass = true
+	}
 }
 
 func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {

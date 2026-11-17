@@ -771,7 +771,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		memberInput, want                                   []int32
 		storage                                             []int64
 		predicatePayload, textPredicate                     bool
-		scoped, unusedPredicate, total                      bool
+		scoped, unusedPredicate, total, identity            bool
 		memberError, residualError, refusal, exact, keyOnly bool
 	}{
 		{name: "predicates then membership then late payload", residual: engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, member: engine.ReaderFilterResult{Sels: []int64{1, 2}}, memberInput: []int32{1, 4, 6}, want: []int32{4, 6}},
@@ -782,6 +782,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		{name: "total membership precedes predicates", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, want: []int32{4, 6}},
 		{name: "total predicate key overlaps membership", scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{Sels: []int64{1, 2}}, want: []int32{4, 6}},
 		{name: "total identity membership", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{Sels: []int64{4, 6}}, want: []int32{4, 6}},
+		{name: "total identity stages ignore poisoned maps", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{All: true}, residual: engine.ReaderFilterResult{All: true}, want: []int32{0, 1, 2, 3, 4, 5, 6, 7}},
+		{name: "identity rows compose native exact selection", identity: true, exact: true, keyOnly: true, member: engine.ReaderFilterResult{Sels: []int64{0, 4, 6}}, want: []int32{4, 6}},
+		{name: "identity membership composes native exact selection", identity: true, exact: true, keyOnly: true, member: engine.ReaderFilterResult{All: true}, want: []int32{4, 5, 6, 7}},
 		{name: "total empty membership skips predicates", textPredicate: true, scoped: true, total: true},
 		{name: "total empty predicate retires cached inputs", textPredicate: true, scoped: true, total: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}},
 		{name: "total unused predicate stays empty", textPredicate: true, scoped: true, total: true, unusedPredicate: true, member: engine.ReaderFilterResult{Sels: []int64{1, 4, 6}}, residual: engine.ReaderFilterResult{All: true}, want: []int32{1, 4, 6}},
@@ -880,7 +883,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			}
 			caseDS := ds
 			visible := []int32{0, 1, 2, 4, 5, 6, 7}
-			if tc.scoped {
+			if tc.scoped || tc.identity {
 				caseDS = &blockReadTestDataSource{}
 				visible = []int32{0, 1, 2, 3, 4, 5, 6, 7}
 				if !tc.residualError && !tc.total {
@@ -966,6 +969,17 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					return engine.ReaderFilterResult{}, failure
 				}
 				return tc.member, nil
+			}
+			if tc.scoped || tc.identity {
+				scratch, err := request.MembershipScratch(len(readColumns))
+				require.NoError(t, err)
+				for _, v := range []*vector.Vector{scratch.Physical, scratch.Logical} {
+					require.NoError(t, v.PreExtend(8, queryMP))
+					v.SetLength(8)
+					for i := range vector.MustFixedColNoTypeCheck[int64](v) {
+						vector.MustFixedColNoTypeCheck[int64](v)[i] = -100 - int64(i)
+					}
+				}
 			}
 			if tc.storage != nil {
 				handled, readErr := blockDataReadMembership(ctx, &info, ds, readColumns, readTypes, tc.storage, early, fileservice.Policy(0), output, queryMP, fs, request, nil)

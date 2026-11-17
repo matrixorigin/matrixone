@@ -129,13 +129,19 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		if err := validateReaderFilterResult(residual, count, selected); err != nil {
 			return err
 		}
+		// Retire the views before changing the row map they borrow.
+		s.Scope.End()
 		if !residual.All {
-			for row, survivor := range residual.Sels {
-				physical[row] = physical[survivor]
+			if member.All {
+				// Membership did not write the lazy identity map.
+				copy(physical, residual.Sels)
+			} else {
+				for row, survivor := range residual.Sels {
+					physical[row] = physical[survivor]
+				}
 			}
 		}
 		physical = physical[:selected]
-		s.Scope.End()
 		for i, column := range early {
 			if copiedPredicates && slices.Contains(predicates, column) {
 				read.Sources[i].CleanOnlyData()
