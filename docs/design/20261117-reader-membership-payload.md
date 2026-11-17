@@ -101,3 +101,22 @@ columns and membership-only keys; overlap, tombstone and retained-output shapes
 keep the established accounted route. No borrowed header or cached bytes escape,
 and no cache policy/kernel changes. Prove native Q19 activation and Q10 copied
 work/instructions before another full qualification.
+
+## Approved revision 4: proven-total membership scheduling
+
+Requester approved this design with “go on” before implementation. All earlier scope and validation contracts remain except the explicitly revised scheduling/copy admission below.
+
+### Proposed implementation
+
+1. Carry an explicit, optional total-predicate permission in the existing reader membership request. Validate the actual final scan predicates and generated runtime predicates against the same domain-specific totality proof at compilation; do not infer it from selectivity or a query name. Preserve the current conservative prepared/correlated/remote/unsupported refusals. Ordinary/custom reader callbacks default to predicate-first. No protobuf/wire or public SQL option.
+2. For the existing identity/no-tombstone scoped-owned reader subset, load and lend cached key/predicate headers once through WithColumnsDataInto. Keep the existing IOVector alive until all callbacks and final owned gathering finish. Never copy the full key or predicate column merely to test membership. Use only existing bounded schema operands and dictionary selection scope.
+3. On that proven-total path, test complete membership on the original key domain. Bind the existing synchronous read-only selection scope over membership survivors, then run the unchanged ordered predicate chain on those rows. Consume its borrowed map, compose to original physical rows once, retire temporary views, and gather only final escaping outputs. Discard unused inputs. A function lacking native dictionary execution uses its existing normalization on the narrowed row set; no new function/vector kernel.
+4. Empty/all membership, NULL keys and multiple domains preserve current semantics. Restore owned headers on all returns, end the temporary selection before releasing cached inputs, and retain normal scratch-admission refusal/cancellation/reset cleanup. Tombstones, storage selection, overlap/representation cases not covered by the scoped route retain their established implementation. Existing native exact/Top-K paths stay unchanged.
+5. Keep the existing low-rejection bypass and ordinary schedule restoration. Do not add thresholds, global switches, a new cache, a work queue or a second membership structure.
+
+## Verification and decision
+
+First prove the permission is derived from the final executable predicates and refuses fallible/volatile counterexamples. Extend the existing persisted fixture for total key-first ordering, key/predicate overlap, no/all/partial selection, borrowed-header restoration and unused-input copies; preserve every predicate-first error oracle. Reuse unchanged topology/race evidence, rerunning only affected scopes.
+
+Require actual native Q10/Q19 predicate-input reduction and lower instructions than current main before another full reader comparison. If that gate fails, retain the evidence and propose the next decision; do not push or relax acceptance. The independent join PR continues all22 local acceptance now.
+
