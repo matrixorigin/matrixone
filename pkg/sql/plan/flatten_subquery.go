@@ -387,6 +387,12 @@ func (builder *QueryBuilder) flattenSubquery(
 		// from the reachable plan used for prepared-statement metadata.
 		return 0, nil, moerr.NewNYI(builder.GetContext(), "prepared correlated subquery with LIMIT 0")
 	}
+	if rootLimitIsZero {
+		if scan, ok := builder.emptyCorrelatedScalarScan(subID, subquery, subCtx); ok {
+			id, result := builder.flattenEmptyCorrelatedScalar(nodeID, scan, subCtx, ctx)
+			return id, result, nil
+		}
+	}
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.noFromSubqueryProject(subID)
