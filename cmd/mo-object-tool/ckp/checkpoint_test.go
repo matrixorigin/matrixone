@@ -281,11 +281,14 @@ func TestRestoreCreateTableDDLUsesViewCreateSQL(t *testing.T) {
 	}
 	dumpData := &checkpointtool.TableDumpData{
 		Schema: &checkpointtool.TableSchema{
-			TableName: "stale_name",
-			CreateSQL: "CREATE VIEW `old_db`.`old_view` AS SELECT id, name FROM `ckp_tables`.`t_normal`",
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+			TableName:           "stale_name",
+			ViewDefinitionKnown: true,
+			CreateSQL:           "CREATE VIEW `old_db`.`old_view` AS SELECT id, name FROM `ckp_tables`.`t_normal`",
+			Columns:             []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
 		},
 	}
+
+	setTestViewDefinition(t, dumpData, "ckp_views")
 
 	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
 	require.NoError(t, err)
@@ -300,15 +303,18 @@ func TestRestoreCreateTableDDLViewRequiresCreateViewSQL(t *testing.T) {
 	}
 	dumpData := &checkpointtool.TableDumpData{
 		Schema: &checkpointtool.TableSchema{
-			TableName: "v_normal",
-			CreateSQL: "CREATE TABLE `v_normal` (`id` INT)",
-			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+			TableName:           "v_normal",
+			ViewDefinitionKnown: true,
+			CreateSQL:           "CREATE TABLE `v_normal` (`id` INT)",
+			Columns:             []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
 		},
 	}
 
+	setTestViewDefinition(t, dumpData, "ckp_views")
+
 	_, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rel_createsql is not CREATE VIEW")
+	assert.Contains(t, err.Error(), "view definition is not CREATE VIEW")
 }
 
 func TestResolveTableByIDAndRestoreFallback(t *testing.T) {
@@ -323,7 +329,7 @@ func TestResolveTableByIDAndRestoreFallback(t *testing.T) {
 			Rows: [][]string{
 				ckpMoTablesRow(t, "2", catalog.MO_TABLES, catalog.MO_CATALOG, "1", "r", "0"),
 				ckpMoTablesRow(t, "42", "target", "db", "7", "r", "1"),
-			},
+			}, NullsKnown: true, RowNulls: [][]uint64{make([]uint64, (len(catalog.MoTablesSchema)+63)/64), make([]uint64, (len(catalog.MoTablesSchema)+63)/64)},
 		}, nil
 	})
 
@@ -597,10 +603,12 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 		{table: other, data: &checkpointtool.TableDumpData{TableID: other.TableID, Schema: &checkpointtool.TableSchema{}}},
 		{table: base, data: &checkpointtool.TableDumpData{TableID: base.TableID, Schema: &checkpointtool.TableSchema{}}},
 		{table: view, data: &checkpointtool.TableDumpData{TableID: view.TableID, Schema: &checkpointtool.TableSchema{
-			CreateSQL: "CREATE VIEW `db`.`a_view` AS SELECT * FROM `db`.`z_table`",
+			ViewDefinitionKnown: true,
+			CreateSQL:           "CREATE VIEW `db`.`a_view` AS SELECT * FROM `db`.`z_table`",
 		}}},
 		{table: view2, data: &checkpointtool.TableDumpData{TableID: view2.TableID, Schema: &checkpointtool.TableSchema{
-			CreateSQL: "CREATE VIEW `db`.`b_view` AS SELECT * FROM `db`.`a_view`",
+			ViewDefinitionKnown: true,
+			CreateSQL:           "CREATE VIEW `db`.`b_view` AS SELECT * FROM `db`.`a_view`",
 		}}},
 	}
 
@@ -733,11 +741,13 @@ func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {
 		10: {
 			TableID: 10,
 			Schema: &checkpointtool.TableSchema{
-				TableName: "v1",
-				CreateSQL: "CREATE VIEW old_v AS SELECT 1 AS c",
+				TableName:           "v1",
+				ViewDefinitionKnown: true,
+				CreateSQL:           "CREATE VIEW old_v AS SELECT 1 AS c",
 			},
 		},
 	}
+	setTestViewDefinition(t, dataByTable[10], "db")
 	resolver := loadDataPathResolver{}
 
 	path, err := writeRestoreScript(
@@ -1233,13 +1243,15 @@ func TestWriteRestoreScriptForView(t *testing.T) {
 		table.TableID: {
 			TableID: table.TableID,
 			Schema: &checkpointtool.TableSchema{
-				TableName: "old_v",
-				CreateSQL: "CREATE VIEW old_v AS SELECT 1 AS id",
-				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+				TableName:           "old_v",
+				ViewDefinitionKnown: true,
+				CreateSQL:           "CREATE VIEW old_v AS SELECT 1 AS id",
+				Columns:             []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
 			},
 		},
 	}
 
+	setTestViewDefinition(t, dumpData[table.TableID], "db")
 	scriptPath, err := writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{table}, dumpData, types.BuildTS(1, 0), outputDir, outputDir, loadDataPathResolver{}, true, true)
 	require.NoError(t, err)
 	require.Equal(t, outputPathJoin(outputDir, "restore.sql"), scriptPath)
@@ -1985,4 +1997,12 @@ func TestCkpInfoEmptyDir(t *testing.T) {
 	cmd := PrepareCommand()
 	cmd.SetArgs([]string{"info", "--local", t.TempDir()})
 	require.NoError(t, cmd.Execute())
+}
+
+func setTestViewDefinition(t *testing.T, dump *checkpointtool.TableDumpData, defaultDB string) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"Stmt": dump.Schema.CreateSQL, "DefaultDatabase": defaultDB, "sql_mode": ""})
+	require.NoError(t, err)
+	dump.Schema.ViewDefinition = string(raw)
+	dump.Schema.ViewDefinitionKnown = true
 }

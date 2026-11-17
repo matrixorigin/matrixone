@@ -80,6 +80,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err := validateEnumIndexBackfillTarget(builder.GetContext(), stmt, tableDef, dmlCtx.objRefs[0]); err != nil {
 		return 0, err
 	}
+	if err := validateAlterEnumTarget(builder.GetContext(), stmt, tableDef, dmlCtx.objRefs[0]); err != nil {
+		return 0, err
+	}
 	if stmt.HasReturning() {
 		if err := validateReturningTarget(builder, tableDef, dmlCtx.objRefs[0]); err != nil {
 			return 0, err
@@ -3288,9 +3291,16 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 				}
 				projExpr = raw
 			}
-			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			var transferred bool
+			projExpr, transferred, err = alterEnumTransferExpr(builder.GetContext(), astRows, column, projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err
+			}
+			if !transferred {
+				projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+				if err != nil {
+					return 0, nil, nil, err
+				}
 			}
 		} else if isSetPlanType(&tableDef.Cols[colIdx].Typ) {
 			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)

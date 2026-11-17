@@ -7296,6 +7296,9 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 }
 
 func dupType(typ *plan.Type) types.Type {
+	if typ.Id == int32(types.T_enum) {
+		return vector.ProtoTypeToType(*typ)
+	}
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 

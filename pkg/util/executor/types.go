@@ -91,6 +91,7 @@ type Options struct {
 type StatementOption struct {
 	// enumIndexBackfill is scoped to one generated index-build statement.
 	enumIndexBackfill *EnumIndexBackfillSpec
+	alterEnumTransfer *AlterEnumTransferSpec
 	waitPolicy        lock.WaitPolicy
 	accountId         uint32
 	hasAccountID      bool
@@ -126,6 +127,15 @@ type EnumIndexBackfillSpec struct {
 	Index              *plan.IndexDef
 	SQL                string
 	DuplicateCheck     bool
+}
+
+// AlterEnumTransferSpec belongs to one generated ALTER COPY INSERT.
+type AlterEnumTransferSpec struct {
+	AccountID          uint32
+	Database           string
+	SourceID, TargetID uint64
+	Source, Target     *plan.TableDef
+	SQL                string
 }
 
 // Result exec sql result

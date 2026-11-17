@@ -66,6 +66,19 @@ execute pd using @idx;
 select row_count() as affected;
 select id,e+0 from prep_target order by id;
 deallocate prepare pd;
+-- A legacy composite index is rebuilt against the target identity during COPY.
+create table legacy_index_alter(id int primary key,e enum('A','a'),n int,key ix(e,n));
+insert into legacy_index_alter values(1,1,10),(2,2,20);
+alter table legacy_index_alter modify e enum('A','a') collate utf8mb4_general_ci;
+select id,e+0,n from legacy_index_alter force index(ix) where e='a' order by id;
+select id,e+0,n from legacy_index_alter ignore index(ix) where e='a' order by id;
+update legacy_index_alter set id=12,n=21 where id=2;
+select row_count() as affected;
+select id,e+0,n from legacy_index_alter force index(ix) where e='a' order by id;
+select id,e+0,n from legacy_index_alter ignore index(ix) where e='a' order by id;
+delete from legacy_index_alter where id=12;
+select row_count() as affected;
+select id,e+0,n from legacy_index_alter order by id;
 create table uniq_target(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,unique key uq(e));
 insert into uniq_target values(1,'A',11),(2,'a',22);
 update uniq_target set e='A' where id=2;
@@ -75,9 +88,21 @@ select row_count() as affected;
 select id,e+0 from uniq_target order by id;
 create table unique_alter(id int primary key,e enum('A','a') collate utf8mb4_bin,unique key uq(e));
 insert into unique_alter values(1,'A'),(2,'a');
+-- Changed domains still remap labels and must roll back real uniqueness collisions.
+alter table unique_alter modify e enum('a') collate utf8mb4_general_ci;
+select id,e,e+0 from unique_alter order by id;
+show create table unique_alter;
+-- The unchanged ordered domain keeps its two physical ordinals.
 alter table unique_alter modify e enum('A','a') collate utf8mb4_general_ci;
 select id,e,e+0 from unique_alter order by id;
 show create table unique_alter;
+insert into unique_alter values(3,1);
+insert into unique_alter values(4,2);
+update unique_alter set id=12 where id=2;
+select row_count() as affected;
+delete from unique_alter where id=12;
+select row_count() as affected;
+select id,e,e+0 from unique_alter order by id;
 create table downgrade_alter(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,key ix(e,n));
 insert into downgrade_alter values(1,'A',10),(2,'a',20);
 alter table downgrade_alter modify e enum('A','a');
@@ -111,4 +136,49 @@ delete from delete_all;
 select row_count() as affected;
 select count(*) as remaining from delete_all;
 create table invalid_prefix(id int primary key,e enum('A','a') collate utf8mb4_bin,key ix(e(1)));
+-- COPY preserves two same-domain generated columns independently, including
+-- NULL, the empty member and physical error ordinal zero.
+create table generated_pair(id int primary key,v int,
+ a enum('A','a','') generated always as (if(v is null,null,if(v=-1,0,if(v=0,3,if(v=2,2,1))))) stored,
+ b enum('A','a','') generated always as (if(v is null,null,if(v=-1,0,if(v=0,3,if(v=2,1,2))))) virtual,
+ key ix(a,v));
+insert into generated_pair(id,v) values(1,1),(2,2),(3,0),(5,null);
+insert ignore into generated_pair(id,v) values(4,-1);
+alter table generated_pair change a aa enum('A','a','') collate utf8mb4_general_ci, change b bb enum('A','a','') collate utf8mb4_general_ci;
+select id,hex(cast(aa as char)),aa+0,hex(cast(bb as char)),bb+0 from generated_pair order by id;
+select id,aa+0,v from generated_pair force index(ix) where aa='a' order by id;
+select id,aa+0,v from generated_pair ignore index(ix) where aa='a' order by id;
+update generated_pair set v=99 where id=2;
+select id,v,aa+0,bb+0 from generated_pair where id=2;
+create table generated_unique(id int primary key,v int,e enum('A','a') generated always as (if(v=2,2,1)) stored,unique key uq(e));
+insert into generated_unique(id,v) values(1,1),(2,2);
+alter table generated_unique modify e enum('A','a') collate utf8mb4_general_ci;
+update generated_unique set e=1 where id=2;
+select id,e+0 from generated_unique order by id;
+create table generated_null(id int primary key,v int,e enum('A','a') generated always as (if(v is null,null,1)) stored,key ix(e));
+insert into generated_null(id,v) values(1,null),(2,1);
+alter table generated_null modify e enum('A','a') collate utf8mb4_general_ci not null;
+show create table generated_null;
+select id,v,e+0,e is null from generated_null order by id;
+-- Replacement tables renumber columns; PRE_INSERT must preserve ENUM slots.
+create table reorder_enum(id int primary key,e enum('A','a'),n int);
+insert into reorder_enum values(1,1,10),(2,2,20);
+alter table reorder_enum modify e enum('A','a') collate utf8mb4_general_ci first;
+alter table reorder_enum modify e enum('A','a') collate utf8mb4_bin after n;
+select id,hex(cast(e as char)),e+0,n from reorder_enum order by id;
+create table auto_enum(id bigint auto_increment primary key,e enum('A','a'));
+insert into auto_enum(e) values(1),(2);
+alter table auto_enum modify e enum('A','a') collate utf8mb4_general_ci;
+select id,hex(cast(e as char)),e+0 from auto_enum order by id;
+create table compound_enum(id int,v int,e enum('A','a'),primary key(id,v));
+insert into compound_enum values(1,1,1),(2,2,2);
+alter table compound_enum modify e enum('A','a') collate utf8mb4_general_ci;
+select id,v,hex(cast(e as char)),e+0 from compound_enum order by id;
+-- Changing an indexed FULLTEXT column materializes the new-row image in a sink.
+create table fulltext_enum(id int primary key,e enum('A','a'),body varchar(128));
+create fulltext index ft on fulltext_enum(body);
+insert into fulltext_enum values(1,1,'alpha beta'),(2,2,'beta gamma');
+alter table fulltext_enum modify e enum('A','a') collate utf8mb4_general_ci, modify body varchar(256);
+select id,hex(cast(e as char)),e+0,body from fulltext_enum order by id;
+show create table fulltext_enum;
 drop database enum_index_mutation_32814;

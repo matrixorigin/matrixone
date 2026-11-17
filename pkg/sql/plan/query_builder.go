@@ -3299,7 +3299,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			clear(colRefCnt)
 			builder.countColRefs(rootID, colRefCnt)
 		}
-		if !isEnumIndexBackfill(builder.GetContext()) {
+		if !isEnumIndexBackfill(builder.GetContext()) && !isAlterEnumTransfer(builder.GetContext()) {
 			idxColMap := make(map[[2]int32]*plan.Expr)
 			rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 			if err == nil {
@@ -9422,6 +9422,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
 		}
 		if err = validateEnumIndexBackfillSource(builder.GetContext(), tbl, tableDef, obj); err != nil {
+			return 0, err
+		}
+		if err = validateAlterEnumSource(builder.GetContext(), tbl, tableDef, obj); err != nil {
 			return 0, err
 		}
 

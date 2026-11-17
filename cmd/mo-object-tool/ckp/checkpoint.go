@@ -39,7 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
@@ -869,7 +871,32 @@ func writeRestoreScript(
 	scriptPath := outputPathJoin(scriptDir, "restore.sql")
 
 	var script bytes.Buffer
+	// Reconstructed literals and LOAD DATA delimiters use ordinary MySQL
+	// backslash escapes. A dedicated session also confines its mode if a
+	// client aborts the script before the final restore statement.
+	if _, err := fmt.Fprintln(&script, "-- Run this restore script in a dedicated session."); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(&script, "SET @__mo_ckp_saved_sql_mode = @@SESSION.sql_mode;"); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprint(&script, "SET SESSION sql_mode = TRIM(BOTH ',' FROM REPLACE(CONCAT(',', @@SESSION.sql_mode, ','), ',NO_BACKSLASH_ESCAPES,', ','));\n"); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(&script, "SET @__mo_ckp_normal_sql_mode = @@SESSION.sql_mode;"); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(&script, "SET @__mo_ckp_saved_view_security_type = @@SESSION.view_security_type;"); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(&script); err != nil {
+		return "", err
+	}
 	currentDB := ""
+	selectedDBs := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		selectedDBs[strings.ToLower(table.DatabaseName)] = true
+	}
 	restoreOrder := buildRestoreTableOrder(tables, dumpDataByTable)
 	deferredFKs := make([]deferredForeignKeyDDL, 0)
 	for _, table := range restoreOrder.tables {
@@ -896,9 +923,22 @@ func writeRestoreScript(
 		if shouldWriteLoadData(includeLoad, table) && dumpData == nil {
 			return "", fmt.Errorf("restore script table %d (%s.%s): missing prepared dump data", table.TableID, table.DatabaseName, table.TableName)
 		}
-		ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{
-			omitForeignKeys: omitForeignKeys,
-		})
+		if shouldWriteLoadData(includeLoad, table) {
+			if err := checkpointtool.ValidateEnumLoadReplay(dumpData.Schema); err != nil {
+				return "", fmt.Errorf("restore script table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
+			}
+		}
+		var view *checkpointViewRestore
+		var ddl string
+		var err error
+		if isViewRelation(table) {
+			view, err = prepareCheckpointViewRestore(ctx, table, dumpData)
+			if err == nil {
+				ddl = view.ddl
+			}
+		} else {
+			ddl, err = restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{omitForeignKeys: omitForeignKeys})
+		}
 		if err != nil {
 			return "", err
 		}
@@ -926,11 +966,40 @@ func writeRestoreScript(
 				return "", fmt.Errorf("merge create table indexes for table %d: %w", table.TableID, err)
 			}
 		}
+		if view != nil {
+			// A view can use an unqualified name from a different default DB.
+			// Create that database early only if it belongs to this dump.
+			if !strings.EqualFold(view.defaultDB, currentDB) && selectedDBs[strings.ToLower(view.defaultDB)] {
+				if _, err := fmt.Fprintf(&script, "CREATE DATABASE IF NOT EXISTS %s;\n", quoteSQLIdent(view.defaultDB)); err != nil {
+					return "", err
+				}
+			}
+			if _, err := fmt.Fprintf(&script, "SET SESSION sql_mode = %s;\n", quoteSQLString(view.sqlMode)); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintf(&script, "SET SESSION view_security_type = %s;\n", quoteSQLString(view.security)); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintf(&script, "USE %s;\n", quoteSQLIdent(view.defaultDB)); err != nil {
+				return "", err
+			}
+		}
 		if _, err := fmt.Fprintln(&script, strings.TrimRight(ddl, " ;\n\t")); err != nil {
 			return "", err
 		}
 		if _, err := fmt.Fprintln(&script, ";"); err != nil {
 			return "", err
+		}
+		if view != nil {
+			if _, err := fmt.Fprintln(&script, "SET SESSION sql_mode = @__mo_ckp_normal_sql_mode;"); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintln(&script, "SET SESSION view_security_type = @__mo_ckp_saved_view_security_type;"); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintf(&script, "USE %s;\n", quoteSQLIdent(currentDB)); err != nil {
+				return "", err
+			}
 		}
 		if shouldWriteLoadData(includeLoad, table) {
 			if _, err := fmt.Fprintf(&script, "\n%s\n", loadPathResolver.loadDataSource(csvRoot, table)); err != nil {
@@ -984,6 +1053,9 @@ func writeRestoreScript(
 		}
 	}
 
+	if _, err := fmt.Fprintln(&script, "SET SESSION sql_mode = @__mo_ckp_saved_sql_mode;"); err != nil {
+		return "", err
+	}
 	f, err := dumpOut.Create(ctx, scriptPath)
 	if err != nil {
 		return "", fmt.Errorf("create restore script: %w", err)
@@ -1074,7 +1146,20 @@ func buildRestoreTableOrder(
 		if dumpData == nil || dumpData.Schema == nil {
 			return false
 		}
-		sql := strings.ToLower(dumpData.Schema.CreateSQL)
+		sql := dumpData.Schema.CreateSQL
+		defaultDB := view.DatabaseName
+		if dumpData.Schema.ViewDefinitionKnown && dumpData.Schema.ViewDefinition != "" {
+			var data sqlplan.ViewData
+			if json.Unmarshal([]byte(dumpData.Schema.ViewDefinition), &data) == nil {
+				if data.Stmt != "" {
+					sql = data.Stmt
+				}
+				if data.DefaultDatabase != "" {
+					defaultDB = data.DefaultDatabase
+				}
+			}
+		}
+		sql = strings.ToLower(sql)
 		if sql == "" {
 			return false
 		}
@@ -1082,12 +1167,16 @@ func buildRestoreTableOrder(
 		table := strings.ToLower(dependency.TableName)
 		quotedDB := strings.ToLower(quoteSQLIdent(dependency.DatabaseName))
 		quotedTable := strings.ToLower(quoteSQLIdent(dependency.TableName))
-		candidates := []string{
-			quotedDB + "." + quotedTable,
-			db + "." + table,
+		ansiDB := `"` + strings.ReplaceAll(db, `"`, `""`) + `"`
+		ansiTable := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
+		candidates := make([]string, 0, 12)
+		for _, dbName := range []string{db, quotedDB, ansiDB} {
+			for _, tableName := range []string{table, quotedTable, ansiTable} {
+				candidates = append(candidates, dbName+"."+tableName)
+			}
 		}
-		if view.DatabaseName == dependency.DatabaseName {
-			candidates = append(candidates, quotedTable, table)
+		if strings.EqualFold(defaultDB, dependency.DatabaseName) {
+			candidates = append(candidates, quotedTable, ansiTable, table)
 		}
 		for _, candidate := range candidates {
 			if candidate != "" && strings.Contains(sql, candidate) {
@@ -1234,14 +1323,17 @@ func restoreCreateTableDDLWithOptions(
 	ddl := ""
 	if dumpData != nil && dumpData.Schema != nil {
 		schema := dumpData.Schema
+		if !isViewRelation(table) {
+			if err := checkpointtool.ValidateEnumReplaySchema(schema); err != nil {
+				return "", fmt.Errorf("table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
+			}
+		}
 		if isViewRelation(table) {
-			ddl = strings.TrimSpace(schema.CreateSQL)
-			if ddl == "" {
-				return "", fmt.Errorf("view %d (%s.%s): missing CREATE VIEW SQL in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
+			view, err := prepareCheckpointViewRestore(ctx, table, dumpData)
+			if err != nil {
+				return "", err
 			}
-			if !isCreateViewSQL(ddl) {
-				return "", fmt.Errorf("view %d (%s.%s): rel_createsql is not CREATE VIEW: %s", table.TableID, table.DatabaseName, table.TableName, summarizeSQLForError(ddl))
-			}
+			return view.ddl, nil
 		} else if isExternalRelation(table) {
 			if strings.TrimSpace(schema.CreateSQL) == "" {
 				return "", fmt.Errorf("external table %d (%s.%s): missing external table parameter JSON in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
@@ -1290,6 +1382,9 @@ func deferredForeignKeyDDLsForTable(table checkpointtool.TableCatalogEntry, dump
 }
 
 func renderExternalCreateTableDDLFromParamJSON(table checkpointtool.TableCatalogEntry, schema *checkpointtool.TableSchema) (string, error) {
+	if schema.DefaultCharset != types.EnumCollationLegacy || schema.EnumUnsupportedDefault != "" {
+		return "", fmt.Errorf("external table %d (%s.%s): cannot replay a table ENUM collation default", table.TableID, table.DatabaseName, table.TableName)
+	}
 	var param tree.ExternParam
 	if err := json.Unmarshal([]byte(schema.CreateSQL), &param); err != nil {
 		return "", fmt.Errorf("external table %d (%s.%s): decode external table parameter JSON: %w", table.TableID, table.DatabaseName, table.TableName, err)
@@ -1500,6 +1595,107 @@ func isViewRelation(table checkpointtool.TableCatalogEntry) bool {
 	default:
 		return false
 	}
+}
+
+type checkpointViewRestore struct {
+	ddl, sqlMode, defaultDB, security string
+}
+
+func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.TableCatalogEntry, dumpData *checkpointtool.TableDumpData) (*checkpointViewRestore, error) {
+	fail := func(reason string) (*checkpointViewRestore, error) {
+		return nil, fmt.Errorf("view %d (%s.%s): %s", table.TableID, table.DatabaseName, table.TableName, reason)
+	}
+	if dumpData == nil || dumpData.Schema == nil || !dumpData.Schema.ViewDefinitionKnown {
+		return fail("missing verified view definition")
+	}
+	schema := dumpData.Schema
+	if schema.ViewDefinition == "" {
+		return fail("empty view definition")
+	}
+	data := sqlplan.ViewData{}
+	if err := json.Unmarshal([]byte(schema.ViewDefinition), &data); err != nil {
+		return fail("invalid view definition JSON")
+	}
+	if data.Stmt == "" || data.DefaultDatabase == "" {
+		return fail("missing view SQL or default database")
+	}
+	mode, defaultDB, security, stmt := "PIPES_AS_CONCAT", data.DefaultDatabase, "DEFINER", data.Stmt
+	if data.SQLMode != nil {
+		mode = *data.SQLMode
+	}
+	switch strings.ToUpper(strings.TrimSpace(data.SecurityType)) {
+	case "", "DEFINER":
+	case "INVOKER":
+		security = "INVOKER"
+	default:
+		return fail("unsupported view security type")
+	}
+	var err error
+	mode, err = checkpointReplaySQLMode(mode)
+	if err != nil {
+		return fail(err.Error())
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, stmt, 1, mode)
+	defer func() {
+		for _, parsed := range stmts {
+			parsed.Free()
+		}
+	}()
+	if err != nil || len(stmts) != 1 {
+		return fail("view definition is not one valid CREATE VIEW")
+	}
+	if _, ok := stmts[0].(*tree.CreateView); !ok {
+		return fail("view definition is not CREATE VIEW")
+	}
+	start, end, ok := createTableNameRange(stmt)
+	if !ok {
+		return fail("cannot safely identify view name")
+	}
+	if table.DatabaseName == "" || table.TableName == "" || defaultDB == "" {
+		return fail("missing view database or name")
+	}
+	name := quoteSQLIdent(table.DatabaseName) + "." + quoteSQLIdent(table.TableName)
+	ddl := stmt[:start] + name + stmt[end:]
+	rewritten, err := mysql.ParseWithSQLMode(ctx, ddl, 1, mode)
+	defer func() {
+		for _, parsed := range rewritten {
+			parsed.Free()
+		}
+	}()
+	if err != nil || len(rewritten) != 1 {
+		return fail("qualified view definition does not parse")
+	}
+	rewrittenView, ok := rewritten[0].(*tree.CreateView)
+	if !ok || rewrittenView.Name == nil || !strings.EqualFold(string(rewrittenView.Name.SchemaName), table.DatabaseName) || !strings.EqualFold(string(rewrittenView.Name.ObjectName), table.TableName) {
+		return fail("qualified view definition has unexpected target")
+	}
+	return &checkpointViewRestore{ddl: ddl, sqlMode: mode, defaultDB: defaultDB, security: security}, nil
+}
+
+func checkpointReplaySQLMode(mode string) (string, error) {
+	if len(mode) > 4096 {
+		return "", fmt.Errorf("view SQL mode is too long")
+	}
+	allowed := map[string]bool{
+		"TRADITIONAL": true, "ALLOW_INVALID_DATES": true, "ANSI_QUOTES": true,
+		"ERROR_FOR_DIVISION_BY_ZERO": true, "HIGH_NOT_PRECEDENCE": true, "IGNORE_SPACE": true,
+		"MATRIXONE_NATIVE": true, "NO_AUTO_VALUE_ON_ZERO": true, "NO_BACKSLASH_ESCAPES": true,
+		"NO_DIR_IN_CREATE": true, "NO_ENGINE_SUBSTITUTION": true, "NO_UNSIGNED_SUBTRACTION": true,
+		"NO_ZERO_DATE": true, "NO_ZERO_IN_DATE": true, "ONLY_FULL_GROUP_BY": true,
+		"PAD_CHAR_TO_FULL_LENGTH": true, "PIPES_AS_CONCAT": true, "REAL_AS_FLOAT": true,
+		"STRICT_ALL_TABLES": true, "STRICT_TRANS_TABLES": true, "TIME_TRUNCATE_FRACTIONAL": true,
+	}
+	if mode == "" {
+		return "", nil
+	}
+	parts := strings.Split(mode, ",")
+	for i, part := range parts {
+		parts[i] = strings.ToUpper(strings.TrimSpace(part))
+		if !allowed[parts[i]] {
+			return "", fmt.Errorf("unsupported view SQL mode %q", parts[i])
+		}
+	}
+	return strings.Join(parts, ","), nil
 }
 
 func isCreateViewSQL(ddl string) bool {
@@ -2082,19 +2278,64 @@ func createTableNameRange(sql string) (int, int, bool) {
 			}
 		}
 	}
-	i = skipSQLSpace(sql, i)
+	i, ok = skipSQLNameTrivia(sql, i)
+	if !ok {
+		return 0, 0, false
+	}
 	nameStart := i
 	i, ok = consumeSQLIdentifier(sql, i)
 	if !ok {
 		return 0, 0, false
 	}
-	if j := skipSQLSpace(sql, i); j < len(sql) && sql[j] == '.' {
-		j = skipSQLSpace(sql, j+1)
-		if end, ok := consumeSQLIdentifier(sql, j); ok {
-			i = end
+	j, triviaOK := skipSQLNameTrivia(sql, i)
+	if !triviaOK {
+		return 0, 0, false
+	}
+	if j < len(sql) && sql[j] == '.' {
+		j, triviaOK = skipSQLNameTrivia(sql, j+1)
+		if !triviaOK {
+			return 0, 0, false
 		}
+		end, nameOK := consumeSQLIdentifier(sql, j)
+		if !nameOK {
+			return 0, 0, false
+		}
+		i = end
 	}
 	return nameStart, i, true
+}
+
+// Skip ordinary comments before a parsed CREATE object name while keeping
+// those comments in the original SQL. Executable comments are not trivia.
+func skipSQLNameTrivia(sql string, i int) (int, bool) {
+	for {
+		i = skipSQLSpace(sql, i)
+		switch {
+		case strings.HasPrefix(sql[i:], "/*"):
+			if strings.HasPrefix(sql[i:], "/*!") || strings.HasPrefix(sql[i:], "/*+") {
+				return i, false
+			}
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				return i, false
+			}
+			i += end + 4
+		case strings.HasPrefix(sql[i:], "#"):
+			end := strings.IndexByte(sql[i:], '\n')
+			if end < 0 {
+				return len(sql), false
+			}
+			i += end + 1
+		case strings.HasPrefix(sql[i:], "-- ") || strings.HasPrefix(sql[i:], "--\t"):
+			end := strings.IndexByte(sql[i:], '\n')
+			if end < 0 {
+				return len(sql), false
+			}
+			i += end + 1
+		default:
+			return i, true
+		}
+	}
 }
 
 func consumeSQLKeyword(sql string, i int, keyword string) (int, bool) {
@@ -2125,14 +2366,15 @@ func consumeSQLIdentifier(sql string, i int) (int, bool) {
 	if i >= len(sql) {
 		return i, false
 	}
-	if sql[i] == '`' {
+	if sql[i] == '`' || sql[i] == '"' {
+		quote := sql[i]
 		i++
 		for i < len(sql) {
-			if sql[i] != '`' {
+			if sql[i] != quote {
 				i++
 				continue
 			}
-			if i+1 < len(sql) && sql[i+1] == '`' {
+			if i+1 < len(sql) && sql[i+1] == quote {
 				i += 2
 				continue
 			}

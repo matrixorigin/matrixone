@@ -537,3 +537,13 @@ func (opts StatementOption) WithEnumIndexBackfill(spec *EnumIndexBackfillSpec) S
 func (opts StatementOption) EnumIndexBackfill() *EnumIndexBackfillSpec {
 	return opts.enumIndexBackfill
 }
+
+// WithAlterEnumTransfer scopes the transfer proof to one internal statement.
+func (opts StatementOption) WithAlterEnumTransfer(spec *AlterEnumTransferSpec) StatementOption {
+	opts.alterEnumTransfer = spec
+	return opts
+}
+
+func (opts StatementOption) AlterEnumTransfer() *AlterEnumTransferSpec {
+	return opts.alterEnumTransfer
+}

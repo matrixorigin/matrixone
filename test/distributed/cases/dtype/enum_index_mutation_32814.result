@@ -115,6 +115,32 @@ select id,e+0 from prep_target order by id;
 ➤ id[4,32,0]  ¦  e + 0[-5,64,0]  𝄀
 1  ¦  1
 deallocate prepare pd;
+create table legacy_index_alter(id int primary key,e enum('A','a'),n int,key ix(e,n));
+insert into legacy_index_alter values(1,1,10),(2,2,20);
+alter table legacy_index_alter modify e enum('A','a') collate utf8mb4_general_ci;
+select id,e+0,n from legacy_index_alter force index(ix) where e='a' order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+2  ¦  2  ¦  20
+select id,e+0,n from legacy_index_alter ignore index(ix) where e='a' order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+2  ¦  2  ¦  20
+update legacy_index_alter set id=12,n=21 where id=2;
+select row_count() as affected;
+➤ affected[-5,64,0]  𝄀
+1
+select id,e+0,n from legacy_index_alter force index(ix) where e='a' order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+12  ¦  2  ¦  21
+select id,e+0,n from legacy_index_alter ignore index(ix) where e='a' order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+12  ¦  2  ¦  21
+delete from legacy_index_alter where id=12;
+select row_count() as affected;
+➤ affected[-5,64,0]  𝄀
+1
+select id,e+0,n from legacy_index_alter order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+1  ¦  1  ¦  10
 create table uniq_target(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,unique key uq(e));
 insert into uniq_target values(1,'A',11),(2,'a',22);
 update uniq_target set e='A' where id=2;
@@ -132,7 +158,7 @@ select id,e+0 from uniq_target order by id;
 1  ¦  1
 create table unique_alter(id int primary key,e enum('A','a') collate utf8mb4_bin,unique key uq(e));
 insert into unique_alter values(1,'A'),(2,'a');
-alter table unique_alter modify e enum('A','a') collate utf8mb4_general_ci;
+alter table unique_alter modify e enum('a') collate utf8mb4_general_ci;
 Duplicate entry '1' for key 'e'
 select id,e,e+0 from unique_alter order by id;
 ➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
@@ -146,6 +172,34 @@ unique_alter  ¦  CREATE TABLE `unique_alter` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq` (`e`)
 )
+alter table unique_alter modify e enum('A','a') collate utf8mb4_general_ci;
+select id,e,e+0 from unique_alter order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  A  ¦  1  𝄀
+2  ¦  a  ¦  2
+show create table unique_alter;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+unique_alter  ¦  CREATE TABLE `unique_alter` (
+  `id` int NOT NULL,
+  `e` enum('A','a') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq` (`e`)
+)
+insert into unique_alter values(3,1);
+Duplicate entry '1' for key 'e'
+insert into unique_alter values(4,2);
+Duplicate entry '2' for key 'e'
+update unique_alter set id=12 where id=2;
+select row_count() as affected;
+➤ affected[-5,64,0]  𝄀
+1
+delete from unique_alter where id=12;
+select row_count() as affected;
+➤ affected[-5,64,0]  𝄀
+1
+select id,e,e+0 from unique_alter order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  A  ¦  1
 create table downgrade_alter(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,key ix(e,n));
 insert into downgrade_alter values(1,'A',10),(2,'a',20);
 alter table downgrade_alter modify e enum('A','a');
@@ -212,4 +266,93 @@ select count(*) as remaining from delete_all;
 0
 create table invalid_prefix(id int primary key,e enum('A','a') collate utf8mb4_bin,key ix(e(1)));
 not supported: prefix index on an ENUM column with collation identity
+create table generated_pair(id int primary key,v int,
+a enum('A','a','') generated always as (if(v is null,null,if(v=-1,0,if(v=0,3,if(v=2,2,1))))) stored,
+b enum('A','a','') generated always as (if(v is null,null,if(v=-1,0,if(v=0,3,if(v=2,1,2))))) virtual,
+key ix(a,v));
+insert into generated_pair(id,v) values(1,1),(2,2),(3,0),(5,null);
+insert ignore into generated_pair(id,v) values(4,-1);
+alter table generated_pair change a aa enum('A','a','') collate utf8mb4_general_ci, change b bb enum('A','a','') collate utf8mb4_general_ci;
+select id,hex(cast(aa as char)),aa+0,hex(cast(bb as char)),bb+0 from generated_pair order by id;
+➤ id[4,32,0]  ¦  hex(cast(aa as varchar))[12,-1,0]  ¦  aa + 0[-5,64,0]  ¦  hex(cast(bb as varchar))[12,-1,0]  ¦  bb + 0[-5,64,0]  𝄀
+1  ¦  41  ¦  1  ¦  61  ¦  2  𝄀
+2  ¦  61  ¦  2  ¦  41  ¦  1  𝄀
+3  ¦    ¦  3  ¦    ¦  3  𝄀
+4  ¦    ¦  0  ¦    ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null
+select id,aa+0,v from generated_pair force index(ix) where aa='a' order by id;
+➤ id[4,32,0]  ¦  aa + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  2  ¦  2
+select id,aa+0,v from generated_pair ignore index(ix) where aa='a' order by id;
+➤ id[4,32,0]  ¦  aa + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  2  ¦  2
+update generated_pair set v=99 where id=2;
+select id,v,aa+0,bb+0 from generated_pair where id=2;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  aa + 0[-5,64,0]  ¦  bb + 0[-5,64,0]  𝄀
+2  ¦  99  ¦  2  ¦  1
+create table generated_unique(id int primary key,v int,e enum('A','a') generated always as (if(v=2,2,1)) stored,unique key uq(e));
+insert into generated_unique(id,v) values(1,1),(2,2);
+alter table generated_unique modify e enum('A','a') collate utf8mb4_general_ci;
+update generated_unique set e=1 where id=2;
+Duplicate entry '1' for key 'e'
+select id,e+0 from generated_unique order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+create table generated_null(id int primary key,v int,e enum('A','a') generated always as (if(v is null,null,1)) stored,key ix(e));
+insert into generated_null(id,v) values(1,null),(2,1);
+alter table generated_null modify e enum('A','a') collate utf8mb4_general_ci not null;
+constraint violation: Column 'e' cannot be null
+show create table generated_null;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+generated_null  ¦  CREATE TABLE `generated_null` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  `e` enum('A','a') GENERATED ALWAYS AS (if(v is null, null, 1)) STORED,
+  PRIMARY KEY (`id`),
+  KEY `ix` (`e`)
+)
+select id,v,e+0,e is null from generated_null order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  e + 0[-5,64,0]  ¦  e is null[-7,1,0]  𝄀
+1  ¦  null  ¦  null  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  0
+create table reorder_enum(id int primary key,e enum('A','a'),n int);
+insert into reorder_enum values(1,1,10),(2,2,20);
+alter table reorder_enum modify e enum('A','a') collate utf8mb4_general_ci first;
+alter table reorder_enum modify e enum('A','a') collate utf8mb4_bin after n;
+select id,hex(cast(e as char)),e+0,n from reorder_enum order by id;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+1  ¦  41  ¦  1  ¦  10  𝄀
+2  ¦  61  ¦  2  ¦  20
+create table auto_enum(id bigint auto_increment primary key,e enum('A','a'));
+insert into auto_enum(e) values(1),(2);
+alter table auto_enum modify e enum('A','a') collate utf8mb4_general_ci;
+select id,hex(cast(e as char)),e+0 from auto_enum order by id;
+➤ id[-5,64,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  41  ¦  1  𝄀
+2  ¦  61  ¦  2
+create table compound_enum(id int,v int,e enum('A','a'),primary key(id,v));
+insert into compound_enum values(1,1,1),(2,2,2);
+alter table compound_enum modify e enum('A','a') collate utf8mb4_general_ci;
+select id,v,hex(cast(e as char)),e+0 from compound_enum order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  1  ¦  41  ¦  1  𝄀
+2  ¦  2  ¦  61  ¦  2
+create table fulltext_enum(id int primary key,e enum('A','a'),body varchar(128));
+create fulltext index ft on fulltext_enum(body);
+insert into fulltext_enum values(1,1,'alpha beta'),(2,2,'beta gamma');
+alter table fulltext_enum modify e enum('A','a') collate utf8mb4_general_ci, modify body varchar(256);
+select id,hex(cast(e as char)),e+0,body from fulltext_enum order by id;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  body[12,-1,0]  𝄀
+1  ¦  41  ¦  1  ¦  alpha beta  𝄀
+2  ¦  61  ¦  2  ¦  beta gamma
+show create table fulltext_enum;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+fulltext_enum  ¦  CREATE TABLE `fulltext_enum` (
+  `id` int NOT NULL,
+  `e` enum('A','a') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `body` varchar(256) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT `ft`(`body`)
+)
 drop database enum_index_mutation_32814;

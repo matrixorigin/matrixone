@@ -47,8 +47,7 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	clusterByUpdated := false
 	for i, colName := range clusterByCols {
 		qualifiedName := alias + "." + colName
-		colPos, ok := oldColName2Idx[qualifiedName]
-		if !ok {
+		if _, ok := oldColName2Idx[qualifiedName]; !ok {
 			return nil, moerr.NewInternalErrorf(
 				builder.GetContext(),
 				"bind update err, can not find cluster by column %s",
@@ -58,9 +57,8 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 		if _, ok := newColName2Idx[qualifiedName]; ok {
 			clusterByUpdated = true
 		}
-		if pos, ok := finalValuePos(alias, colName, true); ok {
-			colPos = pos
-		} else {
+		colPos, ok := finalValuePos(alias, colName, true)
+		if !ok {
 			return nil, moerr.NewInvalidInputNoCtx("cannot locate final ENUM index row image")
 		}
 		args[i] = &plan.Expr{

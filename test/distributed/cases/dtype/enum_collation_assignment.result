@@ -69,12 +69,12 @@ insert into alter_inherit values (2);
 alter table alter_inherit modify e enum('A','a');
 select hex(cast(e as char)),e+0 from alter_inherit;
 ➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
-41  ¦  1
+61  ¦  2
 alter table alter_inherit change e e enum('A','a') collate utf8mb4_bin;
 alter table alter_inherit change e e enum('A','a');
 select hex(cast(e as char)),e+0 from alter_inherit;
 ➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
-41  ¦  1
+61  ¦  2
 create table alter_reject(e enum('a') collate utf8mb4_bin) collate utf8mb4_unicode_ci;
 insert into alter_reject values ('a');
 alter table alter_reject modify e enum('a');
@@ -179,5 +179,32 @@ unsupported_default  ¦  CREATE TABLE `unsupported_default` (
   `e` enum('a','A') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `x` int DEFAULT NULL
 ) COLLATE=`utf8mb4_unicode_ci`
+create table legacy_reauthor(id int primary key,e enum('A','a',''));
+insert into legacy_reauthor values (1,1),(2,2),(3,3),(5,null);
+insert ignore into legacy_reauthor values (4,'invalid');
+alter table legacy_reauthor modify e enum('A','a','') collate utf8mb4_general_ci;
+select id,hex(cast(e as char)),e+0,e is null from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  e is null[-7,1,0]  𝄀
+1  ¦  41  ¦  1  ¦  0  𝄀
+2  ¦  61  ¦  2  ¦  0  𝄀
+3  ¦    ¦  3  ¦  0  𝄀
+4  ¦    ¦  0  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  1
+alter table legacy_reauthor change e h enum('A','a','') collate utf8mb4_bin, change h k enum('A','a','') collate utf8mb4_bin, add column e int default 7;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(k as varchar))[12,-1,0]  ¦  k + 0[-5,64,0]  ¦  k is null[-7,1,0]  ¦  e[4,32,0]  𝄀
+1  ¦  41  ¦  1  ¦  0  ¦  7  𝄀
+2  ¦  61  ¦  2  ¦  0  ¦  7  𝄀
+3  ¦    ¦  3  ¦  0  ¦  7  𝄀
+4  ¦    ¦  0  ¦  0  ¦  7  𝄀
+5  ¦  null  ¦  null  ¦  1  ¦  7
+alter table legacy_reauthor modify k enum('','x','a','A') collate utf8mb4_bin;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(k as varchar))[12,-1,0]  ¦  k + 0[-5,64,0]  ¦  k is null[-7,1,0]  ¦  e[4,32,0]  𝄀
+1  ¦  41  ¦  4  ¦  0  ¦  7  𝄀
+2  ¦  61  ¦  3  ¦  0  ¦  7  𝄀
+3  ¦    ¦  1  ¦  0  ¦  7  𝄀
+4  ¦    ¦  0  ¦  0  ¦  7  𝄀
+5  ¦  null  ¦  null  ¦  1  ¦  7
 set sql_mode=@saved_mode;
 drop database enum_collation_assignment;

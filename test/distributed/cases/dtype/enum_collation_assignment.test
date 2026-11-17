@@ -115,5 +115,15 @@ select id,hex(cast(e as char)),e+0 from unsupported_copy;
 alter table unsupported_default add x int;
 alter table unsupported_default add missing enum('x','X');
 show create table unsupported_default;
+-- ALTER COPY preserves physical ordinals when only ENUM identity changes.
+create table legacy_reauthor(id int primary key,e enum('A','a',''));
+insert into legacy_reauthor values (1,1),(2,2),(3,3),(5,null);
+insert ignore into legacy_reauthor values (4,'invalid');
+alter table legacy_reauthor modify e enum('A','a','') collate utf8mb4_general_ci;
+select id,hex(cast(e as char)),e+0,e is null from legacy_reauthor order by id;
+alter table legacy_reauthor change e h enum('A','a','') collate utf8mb4_bin, change h k enum('A','a','') collate utf8mb4_bin, add column e int default 7;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
+alter table legacy_reauthor modify k enum('','x','a','A') collate utf8mb4_bin;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
 set sql_mode=@saved_mode;
 drop database enum_collation_assignment;
