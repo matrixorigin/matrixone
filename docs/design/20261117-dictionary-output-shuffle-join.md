@@ -90,3 +90,15 @@ Identity forwarding stays inside the original child Call lifetime, so revision 2
 retains the existing owned-input preference. It avoids the second join payload
 copy without forcing upstream readers to construct immutable dictionary metadata.
 Already-selected inputs remain supported and can be forwarded unchanged.
+
+## Approved revision 3: nested owned-preference admission
+
+The requester approved this repair before implementation. Mechanical destination
+admission remains mandatory. An owned-output preference permits identity
+forwarding when every projected probe vector is flat and owns detachable data
+and area backing. Borrowed/dictionary inputs under that preference retain the
+existing gather. Keep uniqueness, mode, bounded-input, spill and continuation
+restrictions and the upstream owned-input preference. No selector or lease is
+added. Prove nested join negotiation, original header identity, first mismatch
+fallback and source lifetime before native Q9 activation and isolated all22
+qualification. Existing benchmark tables remain current until replaced.
