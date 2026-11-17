@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -282,6 +284,110 @@ func TestFloatInKeepsExistingZoneMapAdmission(t *testing.T) {
 	}
 }
 
+// 新增准入是有界的安全子集，不改变旧统计/显式 hint 的策略。
+func TestSimpleInAdmissionBounds(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	check := func(t *testing.T, expr *planpb.Expr, want bool) {
+		require.Equal(t, want, isSimpleZoneMapFilter(expr), "%s", expr)
+		for _, missing := range []bool{false, true} {
+			stats := &statsinfo.StatsInfo{TableCnt: 60000, BlockNumber: 9,
+				ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"k": {Overlap: 1}}}
+			if missing {
+				stats = nil
+			}
+			builder := NewQueryBuilder(planpb.Query_SELECT, &zoneMapStatsTestCompilerContext{
+				MockCompilerContext: &MockCompilerContext{ctx: ctx}, stats: stats,
+			}, false, false)
+			node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42},
+				TableDef: &planpb.TableDef{TblId: 42, Name: "ordinary",
+					Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+					Cols: []*planpb.ColDef{{Name: "id", Primary: true, Typ: planpb.Type{Id: int32(types.T_int32)}},
+						{Name: "k", Seqnum: 1, Typ: expr.GetF().Args[0].Typ}}}, FilterList: []*planpb.Expr{expr}}
+			calcScanStats(node, builder)
+			require.Equal(t, want, len(node.BlockFilterList) == 1, "missing=%v", missing)
+			require.Same(t, expr, node.FilterList[0])
+		}
+	}
+	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 1)
+	for _, n := range []int{63, 64, 65} {
+		t.Run(strconv.Itoa(n), func(t *testing.T) {
+			items := make([]*planpb.Expr, n)
+			v := vector.NewVec(types.T_int64.ToType())
+			defer v.Free(mp)
+			for i := range items {
+				items[i] = MakePlan2Int64ConstExprWithType(int64(i))
+				require.NoError(t, vector.AppendFixed(v, int64(i), i == n-1, mp))
+			}
+			items[n-1] = &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{col, {
+				Typ: col.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: items}},
+			}})
+			require.NoError(t, err)
+			check(t, expr, n <= 64)
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			check(t, MakeInExpr(ctx, col, int32(n), data, false), n <= 64)
+		})
+	}
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text} {
+		for _, n := range []int{30, 31} {
+			t.Run(oid.String()+"/"+strconv.Itoa(n), func(t *testing.T) {
+				col := GetColExpr(planpb.Type{Id: int32(oid)}, 1, 1)
+				// 即使 VARCHAR 含任意字节，也不能凭类型假设上界安全。
+				value := strings.Repeat("\xff", n)
+				lit := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: value}}}}
+				null := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+				expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{col, {
+					Typ: col.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{lit, null}}},
+				}})
+				require.NoError(t, err)
+				// binder 可插入 cast；此处覆盖常量折叠后的 typed List 表示。
+				expr.GetF().Args[1].GetList().List = []*planpb.Expr{lit, null}
+				want := (oid == types.T_char || oid == types.T_varchar) && n <= 30
+				check(t, expr, want)
+				v := vector.NewVec(oid.ToType())
+				defer v.Free(mp)
+				require.NoError(t, vector.AppendBytes(v, []byte(value), false, mp))
+				require.NoError(t, vector.AppendBytes(v, nil, true, mp))
+				data, err := v.MarshalBinary()
+				require.NoError(t, err)
+				check(t, MakeInExpr(ctx, col, 2, data, false), want)
+				expr.GetF().Args[1].GetList().List[0] = &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+				check(t, expr, false)
+			})
+		}
+	}
+}
+
+func TestPlanLargeNullableInKeepsExistingAdmission(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	mock.tables["nation"].TblId = 42001
+	ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock}
+	values := make([]string, 64)
+	for i := range values {
+		values[i] = strconv.Itoa(i)
+	}
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select n_regionkey from nation where n_regionkey in ("+strings.Join(values, ",")+",null)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	qry, err := NewPrepareOptimizer(ctx).Optimize(stmt, true)
+	require.NoError(t, err)
+	scans := 0
+	for _, node := range qry.Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN {
+			scans++
+			require.Empty(t, node.BlockFilterList)
+			require.Len(t, node.FilterList, 1)
+		}
+	}
+	require.Equal(t, 1, scans)
+}
+
 // BuildPlan 之后还会折叠 List/Vec；必须检查完整优化后的 reader 输入。
 func TestFinalInDomainBlockFiltersAreUnique(t *testing.T) {
 	for _, tc := range []struct {
@@ -350,6 +456,10 @@ func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
 	tupleList := list(bound, MakePlan2Int64ConstExprWithType(4))
 	tupleList.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_tuple)}
 	variable := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "block_filter_test"}}}
+	large := make([]*planpb.Expr, 65)
+	for i := range large {
+		large[i] = MakePlan2Int64ConstExprWithType(int64(i))
+	}
 	for _, tc := range []struct {
 		name    string
 		filters []*planpb.Expr
@@ -362,6 +472,8 @@ func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
 		{"different values", []*planpb.Expr{list(bound), list(MakePlan2Int64ConstExprWithType(4))}, 2},
 		{"null bitmap differs", []*planpb.Expr{list(MakePlan2Int64ConstExprWithType(0), bound), list(null, bound), list(null, bound)}, 2},
 		{"same parameter", []*planpb.Expr{list(bound, param(0)), list(bound, param(0))}, 1},
+		{"large static vector unchanged", []*planpb.Expr{list(large...), list(large...)}, 2},
+		{"non IN unchanged", []*planpb.Expr{bind("=", col, bound), bind("=", col, bound)}, 2},
 		{"different parameters", []*planpb.Expr{list(bound, param(0)), list(bound, param(1))}, 2},
 		{"different columns", []*planpb.Expr{bind("=", col, bound), bind("=", GetColExpr(col.Typ, 1, 1), bound)}, 2},
 		{"different types", []*planpb.Expr{bind("=", col, bound), bind("=", GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 1, 0), bound)}, 2},

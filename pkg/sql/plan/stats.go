@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1628,15 +1629,8 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 		}
 	}
 	if fn.GetFunc().GetObjName() == "in" {
-		// 浮点列表（包括执行期参数）可能含 NaN，破坏 AnyIn 二分查找的单调性。
-		// 在消费者支持前，浮点 IN 保留原有的统计/显式 hint 准入策略。
-		if types.T(fn.Args[0].Typ.Id).IsFloat() || types.T(fn.Args[1].Typ.Id).IsFloat() {
-			return false
-		}
-		// IN 的操作数不可交换；列表可在常量折叠前后分别表示为 List/Vec。
-		return fn.Args[0].GetCol() != nil &&
-			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&
-			isRuntimeConstExpr(fn.Args[1])
+		// IN 不可交换；只扩大安全、有界的小列表准入，其余保留旧统计/hint 策略。
+		return fn.Args[0].GetCol() != nil && isSmallZoneMapIn(types.T(fn.Args[0].Typ.Id), fn.Args[1])
 	}
 	if fn.Args[0].GetCol() == nil {
 		return n == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
@@ -1644,6 +1638,56 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	for _, arg := range fn.Args[1:] {
 		if !isRuntimeConstExpr(arg) {
 			return false
+		}
+	}
+	return true
+}
+
+// 没有选择率收益证据时，每个对象/块最多额外检查 64 个候选（含 NULL）。
+// 字符串只接受已知、可完整放入 ZoneMap 30 字节上界槽的值；未知参数、
+// 长值及二进制族不能假设 AnyIn 已支持截断上界。浮点同样不扩大准入。
+func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
+	const maxCandidates = 64
+	const maxStringBytes = 30
+	isString := typ == types.T_char || typ == types.T_varchar
+	if !(typ.IsInteger() || typ.IsDecimal() || typ.IsDateRelate() || typ == types.T_bool || isString) ||
+		types.T(rhs.Typ.Id).IsFloat() {
+		return false
+	}
+	if list := rhs.GetList(); list != nil {
+		if len(list.List) > maxCandidates {
+			return false
+		}
+		if isString {
+			for _, item := range list.List {
+				lit := item.GetLit()
+				if lit == nil {
+					return false
+				}
+				if !lit.Isnull {
+					value, ok := lit.Value.(*plan.Literal_Sval)
+					if !ok || len(value.Sval) > maxStringBytes {
+						return false
+					}
+				}
+			}
+		}
+		return isRuntimeConstExpr(rhs)
+	}
+	vec := rhs.GetVec()
+	if vec == nil || vec.Len < 0 || vec.Len > maxCandidates {
+		return false
+	}
+	if isString {
+		// 只读借用 payload，不复制向量，也不改残余表达式或 NULL bitmap。
+		v := vector.TryUnmarshalBinaryVarlena(vec.Data)
+		if v == nil || v.GetType().Oid != typ || v.Length() != int(vec.Len) {
+			return false
+		}
+		for i := 0; i < v.Length(); i++ {
+			if !v.IsNull(uint64(i)) && len(v.GetBytesAt(i)) > maxStringBytes {
+				return false
+			}
 		}
 	}
 	return true

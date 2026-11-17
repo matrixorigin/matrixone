@@ -186,6 +186,65 @@ func TestReaderBlockFilterFoldReuse(t *testing.T) {
 	}
 }
 
+func TestReaderDeduplicatesOnlyStaticFilters(t *testing.T) {
+	c := NewMockCompile(t)
+	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 0)
+	v := vector.NewVec(types.T_int32.ToType())
+	defer v.Free(c.proc.Mp())
+	require.NoError(t, vector.AppendFixedList(v, []int32{1, 4}, nil, c.proc.Mp()))
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	runtimeExpr := plan2.MakeInExpr(c.proc.Ctx, col, 2, data, false)
+	static := plan2.DeepCopyExpr(runtimeExpr)
+	other := plan2.MakeInExpr(c.proc.Ctx, plan2.GetColExpr(col.Typ, 1, 1), 2, data, false)
+	source := []*plan.Expr{static, other, plan2.DeepCopyExpr(other)}
+	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: source}}
+	runtime := []runtimeFilterExpr{{expr: runtimeExpr}, {expr: runtimeExpr}}
+	for range 2 {
+		s.DataSource.FilterExpr = nil
+		block, err := s.handleRuntimeFilters(c, runtime)
+		require.NoError(t, err)
+		require.Len(t, block, 4, "只消除静态区内部重复，runtime 与跨区表达式保持原样")
+		for i, original := range []*plan.Expr{runtimeExpr, runtimeExpr, static, other} {
+			require.Same(t, original, block[i])
+		}
+		require.Len(t, s.DataSource.BlockFilterList, 3)
+		require.NotNil(t, source[2], "独立输出切片不能压缩缓存的 Source")
+	}
+}
+
+// 向量构造不计时；百万键是现有 JOIN runtime filter 的支持范围。
+func BenchmarkReaderLargeRuntimeFilter(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	c := &Compile{proc: proc}
+	col := plan2.GetColExpr(plan.Type{Id: int32(types.T_int32)}, 1, 0)
+	v := vector.NewVec(types.T_int32.ToType())
+	defer v.Free(proc.Mp())
+	values := make([]int32, 1_000_000)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	require.NoError(b, vector.AppendFixedList(v, values, nil, proc.Mp()))
+	data, err := v.MarshalBinary()
+	require.NoError(b, err)
+	runtime := []runtimeFilterExpr{{expr: plan2.MakeInExpr(proc.Ctx, col, int32(len(values)), data, false)}}
+	v2 := vector.NewVec(types.T_int32.ToType())
+	defer v2.Free(proc.Mp())
+	require.NoError(b, vector.AppendFixedList(v2, []int32{1, 4}, nil, proc.Mp()))
+	data2, err := v2.MarshalBinary()
+	require.NoError(b, err)
+	static := plan2.MakeInExpr(proc.Ctx, plan2.GetColExpr(col.Typ, 1, 1), 2, data2, false)
+	s := &Scope{Proc: proc, DataSource: &Source{BlockFilterList: []*plan.Expr{static}}}
+	b.ReportAllocs()
+	for b.Loop() {
+		s.DataSource.FilterExpr = nil
+		block, err := s.handleRuntimeFilters(c, runtime)
+		if err != nil || len(block) != 2 || block[0] != runtime[0].expr || block[1] != static {
+			b.Fatalf("runtime/static filters changed: %v", err)
+		}
+	}
+}
+
 func TestRuntimeFilterSpecAssociation(t *testing.T) {
 	for _, nonPK := range []bool{false, true} {
 		name := "primary-key"

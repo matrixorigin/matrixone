@@ -425,6 +425,38 @@ execute zm_float32_in using @zm_float_hit,@zm_float_other;
 1
 deallocate prepare zm_float_in;
 deallocate prepare zm_float32_in;
+create table binary_in_values (id int primary key, k varbinary(40));
+insert into binary_in_values values (1,unhex(concat(repeat('ff',30),'01')));
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.binary_in_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare zm_binary_in from 'select count(*) from binary_in_values where k in (?,?)';
+set @zm_binary_other=unhex('00');
+set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @zm_binary_hit=null;
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare zm_binary_in;
 set optimizer_hints='';
 create table bool_values (id int, enabled bool);
 insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
@@ -606,6 +638,9 @@ select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as m
 ➤ min_length[-5,64,0]  ¦  max_length[-5,64,0]  𝄀
 0  ¦  0
 set optimizer_hints='blockFilter=2';
+select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
+➤ count(*)[-5,64,0]  𝄀
+1
 select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
 ➤ id[4,32,0]  𝄀
 1
@@ -646,7 +681,7 @@ Project  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on non_primary_zonemap.period_values  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=218 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=211 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
               Filter Cond: period_values.period in ([2024.12 2025.12])
 select id from bool_values where enabled = true order by id;
 ➤ id[4,32,0]  𝄀

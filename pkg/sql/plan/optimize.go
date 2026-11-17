@@ -91,7 +91,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 	n.BlockFilterList = DeduplicateFinalBlockFilters(n.BlockFilterList)
 }
 
-// DeduplicateFinalBlockFilters 原地压缩当前可执行的稳定过滤列表。
+// DeduplicateFinalBlockFilters 仅压缩本次新增准入的小 IN 重复项。
 // 调用方若需保留缓存列表及 Fold 槽位，必须传入独立切片。
 func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	if len(filters) < 2 {
@@ -100,7 +100,8 @@ func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	buckets := make(map[uint64][]*plan.Expr, len(filters))
 	unique := filters[:0]
 	for _, filter := range filters {
-		if !zoneMapExprIsStable(filter) {
+		// 不把此次修复变成通用表达式去重，也不散列原有大静态向量。
+		if filter.GetF().GetFunc().GetObjName() != "in" || !isSimpleZoneMapFilter(filter) || !zoneMapExprIsStable(filter) {
 			unique = append(unique, filter)
 			continue
 		}

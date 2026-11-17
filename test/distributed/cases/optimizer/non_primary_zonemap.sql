@@ -148,6 +148,22 @@ execute zm_float32_in using @zm_float_hit,@zm_float_other;
 deallocate prepare zm_float_in;
 deallocate prepare zm_float32_in;
 
+-- 二进制截断上界尚不支持新增 IN 准入；常量和参数不能漏掉持久化命中行。
+create table binary_in_values (id int primary key, k varbinary(40));
+insert into binary_in_values values (1,unhex(concat(repeat('ff',30),'01')));
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
+select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
+prepare zm_binary_in from 'select count(*) from binary_in_values where k in (?,?)';
+set @zm_binary_other=unhex('00');
+set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+set @zm_binary_hit=null;
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
+execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
+deallocate prepare zm_binary_in;
+
 -- 同一持久化块混合真假值，BOOL 摘要不能把 true 行排除。
 set optimizer_hints='';
 create table bool_values (id int, enabled bool);
@@ -212,6 +228,7 @@ select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as m
 
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
 select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
 select id from float_in_values where f in (100,cast('NaN' as float)) order by id;
 select k from clustered where k in (100,150) order by k;
