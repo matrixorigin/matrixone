@@ -630,6 +630,32 @@ func encodedPrimaryKeyAt(bat *batch.Batch, pkIdx, row int, packer *types.Packer)
 	return readutil.EncodePrimaryKey(vector.GetAny(bat.Vecs[pkIdx], row, false), packer)
 }
 
+// Zone maps can only prune persisted blocks approximately. The exact replay
+// predicate also has to be applied to their rows, including tombstones.
+func filterExactReplayBatch(bat *batch.Batch, primarySeqnum int, tombstone bool, filter *engine.PKFilter) error {
+	if bat == nil || filter == nil || filter.ReplaySpec == nil ||
+		filter.ReplaySpec.Op != function.EQUAL || len(filter.ReplaySpec.Keys) != 1 {
+		return nil
+	}
+	pkIdx := batchPrimaryKeyIndex(bat, primarySeqnum, tombstone)
+	if pkIdx < 0 || pkIdx >= len(bat.Vecs) || bat.Vecs[pkIdx] == nil {
+		return moerr.NewInternalErrorNoCtx("missing primary key column in persisted change batch")
+	}
+	pk := bat.Vecs[pkIdx]
+	packer := types.NewPacker()
+	defer packer.Close()
+	deletes := make([]int64, 0)
+	for row := 0; row < bat.RowCount(); row++ {
+		if pk.IsNull(uint64(row)) || !bytes.Equal(encodedPrimaryKeyAt(bat, pkIdx, row, packer), filter.ReplaySpec.Keys[0]) {
+			deletes = append(deletes, int64(row))
+		}
+	}
+	if len(deletes) > 0 {
+		bat.Shrink(deletes, true)
+	}
+	return nil
+}
+
 func sortBatchByPrimaryKeyAndTS(bat *batch.Batch, pkIdx int, mp *mpool.MPool) error {
 	if bat == nil || bat.RowCount() < 2 {
 		return nil
@@ -1384,85 +1410,95 @@ func (h *CNObjectHandle) IsEmpty() bool {
 	return len(h.objects) == 0
 }
 func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
-	if h.isEnd() {
-		return moerr.GetOkExpectedEOF()
-	}
-	if len(h.cache) == 0 {
-		err = h.prefetch(ctx)
-		if err != nil {
-			return
+	for {
+		if h.isEnd() {
+			return moerr.GetOkExpectedEOF()
 		}
-	}
-	data := h.cache[0]
-	var blk *types.Blockid
-	if len(h.blks) > 0 {
-		blk = &h.blks[0]
-	}
-	ts := h.TSs[0]
-	discardSource := func() {
-		h.cache = h.cache[1:]
-		if len(h.prepared) > 0 {
-			h.prepared = h.prepared[1:]
-		}
-		if len(h.blks) > 0 {
-			h.blks = h.blks[1:]
-		}
-		h.TSs = h.TSs[1:]
-		data.Clean(h.mp)
-	}
-	prepared := len(h.prepared) > 0 && h.prepared[0]
-	if !prepared {
-		t0 := time.Now()
-		if h.isTombstone {
-			err = updateCNTombstoneBatch(
-				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
-			)
-		} else {
-			err = updateCNDataBatch(
-				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
-			)
-		}
-		if err != nil {
-			discardSource()
-			return err
-		}
-		if len(h.prepared) == 0 {
-			h.prepared = append(h.prepared, true)
-		} else {
-			h.prepared[0] = true
-		}
-		h.base.changesHandle.updateDuration += time.Since(t0)
-	}
-	t0 := time.Now()
-	if *bat == nil {
-		*bat = batch.NewWithSize(0)
-		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
-		for _, vec := range data.Vecs {
-			newVec := vector.NewVec(*vec.GetType())
+		if len(h.cache) == 0 {
+			err = h.prefetch(ctx)
 			if err != nil {
+				return
+			}
+		}
+		data := h.cache[0]
+		var blk *types.Blockid
+		if len(h.blks) > 0 {
+			blk = &h.blks[0]
+		}
+		ts := h.TSs[0]
+		discardSource := func() {
+			h.cache = h.cache[1:]
+			if len(h.prepared) > 0 {
+				h.prepared = h.prepared[1:]
+			}
+			if len(h.blks) > 0 {
+				h.blks = h.blks[1:]
+			}
+			h.TSs = h.TSs[1:]
+			data.Clean(h.mp)
+		}
+		prepared := len(h.prepared) > 0 && h.prepared[0]
+		if !prepared {
+			t0 := time.Now()
+			if h.isTombstone {
+				err = updateCNTombstoneBatch(
+					data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+				)
+			} else {
+				err = updateCNDataBatch(
+					data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+				)
+			}
+			if err != nil {
+				discardSource()
 				return err
 			}
-			(*bat).Vecs = append((*bat).Vecs, newVec)
+			if err = filterExactReplayBatch(data, h.base.changesHandle.primaryIdx, h.isTombstone, h.base.changesHandle.pkFilter); err != nil {
+				discardSource()
+				return err
+			}
+			if len(h.prepared) == 0 {
+				h.prepared = append(h.prepared, true)
+			} else {
+				h.prepared[0] = true
+			}
+			h.base.changesHandle.updateDuration += time.Since(t0)
 		}
-	} else if !batchesShareAppendSchema(*bat, data) {
-		return moerr.GetOkExpectedEOB()
-	}
-	srcLen := data.Vecs[0].Length()
-	sels := make([]int64, srcLen)
-	for j := 0; j < srcLen; j++ {
-		sels[j] = int64(j)
-	}
-	for i, vec := range (*bat).Vecs {
-		src := data.Vecs[i]
-		if err = vec.Union(src, sels, mp); err != nil {
+		if data.RowCount() == 0 {
 			discardSource()
-			return err
+			continue
 		}
+		t0 := time.Now()
+		if *bat == nil {
+			*bat = batch.NewWithSize(0)
+			(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
+			for _, vec := range data.Vecs {
+				newVec := vector.NewVec(*vec.GetType())
+				if err != nil {
+					return err
+				}
+				(*bat).Vecs = append((*bat).Vecs, newVec)
+			}
+		} else if !batchesShareAppendSchema(*bat, data) {
+			return moerr.GetOkExpectedEOB()
+		}
+		srcLen := data.Vecs[0].Length()
+		sels := make([]int64, srcLen)
+		for j := 0; j < srcLen; j++ {
+			sels[j] = int64(j)
+		}
+		for i, vec := range (*bat).Vecs {
+			src := data.Vecs[i]
+			if err = vec.Union(src, sels, mp); err != nil {
+				discardSource()
+				return err
+			}
+		}
+		(*bat).SetRowCount((*bat).Vecs[0].Length())
+		discardSource()
+		h.base.changesHandle.copyDuration += time.Since(t0)
+		return
 	}
-	(*bat).SetRowCount((*bat).Vecs[0].Length())
-	discardSource()
-	h.base.changesHandle.copyDuration += time.Since(t0)
-	return
 }
 
 func (h *CNObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
@@ -1950,6 +1986,9 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			if err = updateDataBatch(h.currentBatch, h.start, h.end, blk, specialLayout, seqnums, h.p.changesHandle.retainRowID, h.mp); err != nil {
 				return err
 			}
+		}
+		if err = filterExactReplayBatch(h.currentBatch, h.p.changesHandle.primaryIdx, h.isTombstone, h.p.changesHandle.pkFilter); err != nil {
+			return err
 		}
 		h.p.changesHandle.updateDuration += time.Since(t0)
 		h.batchLength = h.currentBatch.Vecs[0].Length()
@@ -3134,6 +3173,7 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:                  mp,
 		scheduler:           tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode:      isRecoveryMode,
+		pkFilter:            engine.PKFilterFromContext(ctx),
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
