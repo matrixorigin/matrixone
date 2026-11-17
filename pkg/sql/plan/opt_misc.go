@@ -75,8 +75,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
-		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+		leftFlag := flag || nodeNullExtendsChild(node, 0)
+		rightFlag := flag || nodeNullExtendsChild(node, 1)
 
 		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
 		node.Children[0] = newChildID

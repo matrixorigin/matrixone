@@ -8,6 +8,10 @@ create table parent_agg (id int primary key, corr_key int);
 create table child_agg (corr_key int, v int);
 insert into parent_agg values (1, 10), (2, 20), (3, 30), (4, 30);
 insert into child_agg values (10, 5), (10, 7), (20, null);
+create table repeat_outer (id int primary key, corr_key int);
+create table repeat_inner (corr_key int, v int);
+insert into repeat_outer values (1, 1);
+insert into repeat_inner values (1, 5), (1, 7);
 create table `Author` (`id` int primary key, `name` varchar(32));
 create table `Post` (`id` int primary key, `title` varchar(32), `authorId` int);
 insert into `Author` values (1, 'Zero'), (2, 'One'), (3, 'Many');
@@ -56,6 +60,134 @@ select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a =
 ➤ x[4,32,0]  𝄀
 11
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
+Subquery returns more than 1 row
+select a,
+(select a + 1 from t2 where d > a limit 1),
+(select cast(a as signed) from t2 where d > a limit 1),
+(select coalesce(a, 0) from t2 where d > a limit 1),
+(select if(a > 0, a, 0) from t2 where d > a limit 1),
+(select case when a > 0 then a else 0 end from t2 where d > a limit 1)
+from t1 order by a;
+➤ a[4,32,0]  ¦  (select a + 1 from t2 where d > a limit 1)[-5,64,0]  ¦  (select cast(a as signed) from t2 where d > a limit 1)[-5,64,0]  ¦  (select coalesce(a, 0) from t2 where d > a limit 1)[-5,64,0]  ¦  (select if(a > 0, a, 0) from t2 where d > a limit 1)[-5,64,0]  ¦  (select case when a > 0 then a else 0 end from t2 where d > a limit 1)[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+11  ¦  12  ¦  11  ¦  11  ¦  11  ¦  11
+select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1)
+from t1 order by a;
+➤ a[4,32,0]  ¦  (select case when d > 0 then a else 0 end from t2 where d > a limit 1)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+11  ¦  11
+select p.id, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+between p.id - 1 and p.id + 1 as in_range
+from parent_agg p where p.id in (2,3) order by p.id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  null
+create table scalar_time_bounds (id int primary key, lo timestamp(6), hi timestamp(6));
+insert into scalar_time_bounds values
+(1, now(6) - interval 1 day, now(6) + interval 1 day),
+(2, null, now(6) + interval 1 day),
+(3, now(6) - interval 2 day, now(6) - interval 1 day);
+select id, (select now(6)) between lo and hi as in_range
+from scalar_time_bounds order by id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+select id, (select current_date()) between cast(lo as date) and cast(hi as date) as in_range
+from scalar_time_bounds order by id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+prepare scalar_time from 'select id, (select now(6)) between lo and hi as in_range from scalar_time_bounds where id = ?';
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1
+set @scalar_time_id = 2;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+2  ¦  null
+set @scalar_time_id = 1;
+execute scalar_time using @scalar_time_id;
+➤ id[4,32,0]  ¦  in_range[-7,1,0]  𝄀
+1  ¦  1
+deallocate prepare scalar_time;
+select p.id, (select coalesce(p.id, 99) from child_agg c
+join child_agg d on d.corr_key = c.corr_key and d.v > 100
+where c.corr_key = p.corr_key)
+from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  (select coalesce(p.id, 99) from child_agg as c inner join child_agg as d on d.corr_key = c.corr_key and d.v > 100 where c.corr_key = p.corr_key)[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select p.id, (select distinct p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  (select distinct p.id + 0 from child_agg as c where c.corr_key = p.corr_key)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select (select p.id + 0 from child_agg c where c.corr_key = p.corr_key)
+from parent_agg p where p.id = 1;
+Subquery returns more than 1 row
+select case when p.id = 1 then 42 else
+(select p.id + 0 from child_agg c where c.corr_key = p.corr_key) end
+from parent_agg p where p.id = 1;
+-- @regex("conditional correlated scalar projection", true)
+conditional correlated scalar projection is not yet implemented
+select if(p.id = 1, 42, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key))
+from parent_agg p where p.id = 1;
+-- @regex("conditional correlated scalar projection", true)
+conditional correlated scalar projection is not yet implemented
+select coalesce(p.id, (select p.id + 0 from child_agg c where c.corr_key = p.corr_key))
+from parent_agg p where p.id = 1;
+-- @regex("conditional correlated scalar projection", true)
+conditional correlated scalar projection is not yet implemented
+select case when (select p.id + 0 from child_agg c where c.corr_key = p.corr_key limit 1) > 0
+then 42 else 0 end from parent_agg p where p.id = 1;
+➤ case when (select p.id + 0 from child_agg as c where c.corr_key = p.corr_key limit 1) > 0 then 42 else 0 end[-5,64,0]  𝄀
+42
+select ((select case when i.v = 5 then o.id else 100 end
+from repeat_inner i where i.corr_key = o.corr_key and rand() < 0.5), 0)
+in ((1,0),(100,0)) as matched
+from repeat_outer o where o.id = 1;
+-- @regex("repeated correlated scalar operand may vary", true)
+repeated correlated scalar operand may vary is not yet implemented
+select ((select case when i.v = 5 then o.id else 100 end
+from repeat_inner i where i.corr_key = o.corr_key and rand() < 0.5), 0)
+not between (1,0) and (100,0) as matched
+from repeat_outer o where o.id = 1;
+-- @regex("repeated correlated scalar operand may vary", true)
+repeated correlated scalar operand may vary is not yet implemented
+select ((select case when i.v = 5 then o.id else 100 end
+from repeat_inner i where i.corr_key = o.corr_key and i.v = 5 and rand() < 2), 0)
+in ((1,0)) as matched
+from repeat_outer o where o.id = 1;
+➤ matched[-7,1,0]  𝄀
+1
+select ((select case when i.v = 5 then o.id else 100 end
+from repeat_inner i where i.corr_key = o.corr_key and i.v = 5), 0)
+in ((1,0),(100,0)) as matched
+from repeat_outer o where o.id = 1;
+➤ matched[-7,1,0]  𝄀
+1
+select ((select case when i.v = 5 then o.id else 100 end
+from repeat_inner i where i.corr_key = o.corr_key and i.v = 5), 0)
+not between (1,0) and (1,0) as matched
+from repeat_outer o where o.id = 1;
+➤ matched[-7,1,0]  𝄀
+0
+create table scalar_cast_outer (id int, val varchar(8));
+insert into scalar_cast_outer values (1, '10'), (2, 'bad');
+select o.id, (select cast(o.val as signed) from t2 where d = o.id + 4)
+from scalar_cast_outer o order by o.id;
+➤ id[4,32,0]  ¦  (select cast(o.val as signed) from t2 where d = o.id + 4)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  null
+select (select cast(o.val as signed) from t2 where d > o.id)
+from scalar_cast_outer o where o.id = 2;
 Subquery returns more than 1 row
 select p.id, (select coalesce(sum(c.v), 0) from child_agg c where c.corr_key = p.corr_key) as sum_value from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  sum_value[-5,64,0]  𝄀

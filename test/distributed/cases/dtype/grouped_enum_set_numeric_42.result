@@ -116,6 +116,16 @@ null  ¦  null  𝄀
 3  ¦  0  𝄀
 4  ¦  0  𝄀
 7  ¦  0
+select o.id, o.e + 0, (select o.e + 0 from grouped_values i where i.id = o.id and i.id <> 2),
+o.s + 0, (select o.s + 0 from grouped_values i where i.id = o.id and i.id <> 2)
+from grouped_values o group by o.id, o.e, o.s order by o.id;
+➤ id[4,32,0]  ¦  o.e + 0[-5,64,0]  ¦  (select o.e + 0 from grouped_values as i where i.id = o.id and i.id != 2)[-5,64,0]  ¦  o.s + 0[3,38,0]  ¦  (select o.s + 0 from grouped_values as i where i.id = o.id and i.id != 2)[3,38,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  null  ¦  3  ¦  null  𝄀
+3  ¦  2  ¦  2  ¦  4  ¦  4  𝄀
+4  ¦  3  ¦  3  ¦  7  ¦  7  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0  ¦  0  ¦  null  ¦  null
 select 1 in (select e from grouped_values group by e);
 ➤ 1 in (select e from grouped_values group by e)[-7,1,0]  𝄀
 1
@@ -152,6 +162,190 @@ select e,e+0,count(*) from encoded_values group by e order by e+0;
 null  ¦  null  ¦  1  𝄀
 a,b  ¦  1  ¦  2  𝄀
 c  ¦  2  ¦  1
+select o.e + 0, (select o.e + 0 from grouped_values i where i.id = 1)
+from encoded_values o group by o.e order by o.e + 0;
+➤ o.e + 0[-5,64,0]  ¦  (select o.e + 0 from grouped_values as i where i.id = 1)[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+create table numeric_labels (id int primary key, e enum('1','01','red'), s set('1','2','red'));
+insert into numeric_labels values (1,'1','1'),(2,'01','1,red'),(3,'red','2'),(4,null,null);
+select o.id, (select o.e + 0 from numeric_labels i where i.id = o.id),
+(select o.s + 0 from numeric_labels i where i.id = o.id)
+from numeric_labels o group by o.id, o.e, o.s order by o.id;
+➤ id[4,32,0]  ¦  (select o.e + 0 from numeric_labels as i where i.id = o.id)[-5,64,0]  ¦  (select o.s + 0 from numeric_labels as i where i.id = o.id)[3,38,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  5  𝄀
+3  ¦  3  ¦  2  𝄀
+4  ¦  null  ¦  null
+select o.id, (select o.e) + 0, (select o.s) + 0,
+cast((select o.e) as signed), (select o.e) = 2,
+(select o.e) in (1, 2), (select o.e) = '01', concat((select o.e), ''),
+o.e + o.s, (select o.e) + (select o.s)
+from numeric_labels o group by o.id, o.e, o.s order by o.id;
+➤ id[4,32,0]  ¦  (select o.e) + 0[-5,64,0]  ¦  (select o.s) + 0[3,38,0]  ¦  cast((select o.e) as signed)[-5,64,0]  ¦  (select o.e) = 2[-7,1,0]  ¦  (select o.e) in (1, 2)[-7,1,0]  ¦  (select o.e) = 01[-7,1,0]  ¦  concat((select o.e), )[12,-1,0]  ¦  o.e + o.s[-5,64,0]  ¦  (select o.e) + (select o.s)[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  0  ¦  1  ¦  0  ¦  1  ¦  2  ¦  2  𝄀
+2  ¦  2  ¦  5  ¦  2  ¦  1  ¦  1  ¦  1  ¦  01  ¦  7  ¦  7  𝄀
+3  ¦  3  ¦  2  ¦  3  ¦  0  ¦  0  ¦  0  ¦  red  ¦  5  ¦  5  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select o.id, (select o.e) + 0, (select o.s) + 0,
+(select o.e) + (select o.s) from numeric_labels o order by o.id;
+➤ id[4,32,0]  ¦  (select o.e) + 0[-5,64,0]  ¦  (select o.s) + 0[3,38,0]  ¦  (select o.e) + (select o.s)[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  2  𝄀
+2  ¦  2  ¦  5  ¦  7  𝄀
+3  ¦  3  ¦  2  ¦  5  𝄀
+4  ¦  null  ¦  null  ¦  null
+select o.id, (select o.e) in (1,null), (select o.e) not in (1,null),
+(select o.s) in (5,null), (select o.s) not in (5,null)
+from numeric_labels o group by o.id,o.e,o.s order by o.id;
+➤ id[4,32,0]  ¦  (select o.e) in (1, null)[-7,1,0]  ¦  (select o.e) not in (1, null)[-7,1,0]  ¦  (select o.s) in (5, null)[-7,1,0]  ¦  (select o.s) not in (5, null)[-7,1,0]  𝄀
+1  ¦  1  ¦  0  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+select o.id, (select o.e in (1,2,null)), (select o.e not in (1,2,null)),
+(select o.s in (1,5,null)), (select o.s not in (1,5,null))
+from numeric_labels o order by o.id;
+➤ id[4,32,0]  ¦  (select o.e in (1, 2, null))[-7,1,0]  ¦  (select o.e not in (1, 2, null))[-7,1,0]  ¦  (select o.s in (1, 5, null))[-7,1,0]  ¦  (select o.s not in (1, 5, null))[-7,1,0]  𝄀
+1  ¦  1  ¦  0  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+select o.id, ((select o.e),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select o.id, ((select o.e),o.id) not in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select o.id, (cast((select o.e) as signed),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select o.id, (0+(select o.e),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select o.id, ((select o.e),o.id) in ((2,2)) from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  ((select o.e), o.id) in ((2, 2))[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select o.id, ((select o.e),o.id) in (('1',1),('01',2)) from numeric_labels o group by o.id,o.e order by o.id;
+➤ id[4,32,0]  ¦  ((select o.e), o.id) in ((1, 1), (01, 2))[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select o.id, ((select o.e),o.id) in ((1,1),(2,2)) from numeric_labels o order by o.id;
+➤ id[4,32,0]  ¦  ((select o.e), o.id) in ((1, 1), (2, 2))[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select (select o.e) in (1.5,2,null) from numeric_labels o group by o.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type", true)
+numeric scalar IN list needs a proven lossless shared type is not yet implemented
+select (select o.e) not in (1.5,2,null) from numeric_labels o group by o.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type", true)
+numeric scalar IN list needs a proven lossless shared type is not yet implemented
+select (select o.e in (2,'x') from grouped_values i where i.id=o.id)
+from numeric_labels o group by o.id,o.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract", true)
+correlated special IN comparison requires a proven numeric contract is not yet implemented
+select (select o.e from grouped_values i where i.id = 1) + 0
+from numeric_labels o where o.id = 2 group by o.e;
+➤ (select o.e from grouped_values as i where i.id = 1) + 0[-5,64,0]  𝄀
+1
+select (select o.e limit 0) + 0 from numeric_labels o where o.id = 2;
+➤ (select o.e limit 0) + 0[-5,64,0]  𝄀
+null
+prepare scalar_numeric from 'select (select o.e) + ? from numeric_labels o where o.id = 2 group by o.e';
+set @scalar_arg = 3;
+execute scalar_numeric using @scalar_arg;
+➤ (select o.e) + ?[8,54,0]  𝄀
+5.0
+set @scalar_arg = 8;
+execute scalar_numeric using @scalar_arg;
+➤ (select o.e) + ?[8,54,0]  𝄀
+10.0
+deallocate prepare scalar_numeric;
+select (select o.e in (select 2) from grouped_values i where i.id=o.id),
+(select 2 in (select o.e) from grouped_values i where i.id=o.id)
+from numeric_labels o where o.id=2 group by o.id,o.e;
+➤ (select o.e in (select 2) from grouped_values as i where i.id = o.id)[-7,1,0]  ¦  (select 2 in (select o.e) from grouped_values as i where i.id = o.id)[-7,1,0]  𝄀
+1  ¦  1
+prepare scalar_quantified from 'select (select o.e in (select ?) from grouped_values i where i.id=o.id) from numeric_labels o group by o.id,o.e';
+-- @regex("dynamic quantified comparison with correlated ENUM/SET display", true)
+dynamic quantified comparison with correlated ENUM/SET display is not yet implemented
+prepare scalar_quantified_reverse from 'select (select ? in (select o.e) from grouped_values i where i.id=o.id) from numeric_labels o group by o.id,o.e';
+-- @regex("dynamic quantified comparison with correlated ENUM/SET display", true)
+dynamic quantified comparison with correlated ENUM/SET display is not yet implemented
+create table ambiguous_labels (id int, e enum('', '1'), s set('', '1'));
+insert into ambiguous_labels values (1,'1','1'),(2,'',''),(3,null,null);
+select (select a.e) + 0, (select a.s) + 0 from ambiguous_labels a where id=1;
+➤ (select a.e) + 0[-5,64,0]  ¦  (select a.s) + 0[3,38,0]  𝄀
+2  ¦  2
+select (select a.e) + 0 from ambiguous_labels a group by a.e;
+-- @regex("numeric scalar with non-reversible ENUM/SET display", true)
+numeric scalar with non-reversible ENUM/SET display is not yet implemented
+select (select a.e in (1,2) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract", true)
+correlated special IN comparison requires a proven numeric contract is not yet implemented
+select (select a.e in (2,'x') from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract", true)
+correlated special IN comparison requires a proven numeric contract is not yet implemented
+select (select 1 in (a.e,3) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract", true)
+correlated special IN comparison requires a proven numeric contract is not yet implemented
+select 2 in ((select a.e),3) from ambiguous_labels a group by a.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type", true)
+numeric scalar IN list needs a proven lossless shared type is not yet implemented
+select (select a.e in (select 2) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display", true)
+numeric correlated value with non-reversible ENUM/SET display is not yet implemented
+select (select 2 in (select a.e) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display", true)
+numeric correlated value with non-reversible ENUM/SET display is not yet implemented
+select (select a.e) in (2,'x') from ambiguous_labels a group by a.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type", true)
+numeric scalar IN list needs a proven lossless shared type is not yet implemented
+select (select a.e) in ('1','x') from ambiguous_labels a where id=1 group by a.e;
+➤ (select a.e) in (1, x)[-7,1,0]  𝄀
+1
+select (select a.e='1' from grouped_values i where i.id=a.id)
+from ambiguous_labels a where a.id=1 group by a.id,a.e;
+➤ (select a.e = 1 from grouped_values as i where i.id = a.id)[-7,1,0]  𝄀
+1
+select (select cast(a.s as unsigned) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.s;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display", true)
+numeric correlated value with non-reversible ENUM/SET display is not yet implemented
+select a.id, (select concat(a.e,'') from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e order by a.id;
+➤ id[4,32,0]  ¦  (select concat(a.e, ) from grouped_values as i where i.id = a.id)[12,-1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦    𝄀
+3  ¦  null
 select cast(e as signed), count(*) from grouped_values group by e order by e+0;
 ➤ cast(e as signed)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
 null  ¦  1  𝄀
