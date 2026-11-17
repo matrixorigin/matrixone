@@ -265,6 +265,41 @@ func fixedTypeMatchWithExactText(overloads []overload, inputs []types.Type) chec
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// SUBSTRING_INDEX's count argument keeps FLOAT64 selection for TEXT counts.
+// The exact base resolved a TEXT count through the first-listed FLOAT64
+// overload (every T_text-to-numeric implicit cast costed the same), whose
+// float route truncates fractional counts like '2.9' to 2. The T_text-to-INT64
+// cast preference that keeps BIN/SPACE and unary +/- on their signed INT64
+// peer routes (#32336) would otherwise win the count's INT64 overload and
+// reject those tokens at cast time. CHAR/VARCHAR counts keep their own INT64
+// peer routes here, and every non-TEXT input keeps plain fixedTypeMatch.
+func substringIndexCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 3 && inputs[2].Oid == types.T_text {
+		for i, ov := range overloads {
+			if len(ov.args) != len(inputs) {
+				continue
+			}
+			if ov.args[2] != types.T_float64 {
+				continue
+			}
+			if sta, _ := tryToMatch(inputs, ov.args); sta == matchFailed {
+				continue
+			}
+			castType := make([]types.Type, len(inputs))
+			for j := range castType {
+				if ov.args[j] == inputs[j].Oid {
+					castType[j] = inputs[j]
+				} else {
+					castType[j] = ov.args[j].ToType()
+					SetTargetScaleFromSource(&inputs[j], &castType[j])
+				}
+			}
+			return newCheckResultWithCast(i, castType)
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {

@@ -513,3 +513,21 @@ select vt from func_cast_omit_char_textcol where ceil(vt) = 9007199254740993;
 select vt, ceil(vt) as c from func_cast_omit_char_textcol order by c;
 select vt, floor(vt) as f from func_cast_omit_char_textcol where floor(vt) <> ceil(vt);
 drop table if exists func_cast_omit_char_textcol;
+
+-- [review round #32438] SUBSTRING_INDEX's TEXT counts keep the base's
+-- FLOAT64 route: the pre-widening by-cast tie bound the first-listed
+-- FLOAT64 overload, whose count truncates fractional tokens toward zero,
+-- so working queries like
+-- SUBSTRING_INDEX('a,b,c', ',', CAST('2.9' AS TEXT)) return 'a,b'. The
+-- count never binds the INT64 overload whose signed-string cast rejects
+-- '2.9'; VARCHAR integer counts keep their own INT64 peer route.
+select substring_index('a,b,c', ',', cast('2.9' as text)) as frac_two,
+       substring_index('a,b,c', ',', cast('1.4' as text)) as frac_one,
+       substring_index('a,b,c', ',', convert('99.5', char)) as frac_all,
+       substring_index('a,b,c', ',', cast('3' as text)) as int_text,
+       substring_index('a,b,c', ',', '2') as int_varchar;
+create table func_cast_omit_char_si (ct text);
+insert into func_cast_omit_char_si values ('2'), ('2.9'), ('1.4'), ('1');
+select substring_index('a,b,c', ',', ct) as stored_count
+from func_cast_omit_char_si order by ct;
+drop table if exists func_cast_omit_char_si;

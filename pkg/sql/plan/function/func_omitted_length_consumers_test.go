@@ -1325,3 +1325,63 @@ func TestCeilFloorOmittedCharMarkerOverloadWiring(t *testing.T) {
 		in.Free(proc.Mp())
 	}
 }
+
+// TestSubstringIndexTextCountKeepsBaseFloat64Route pins the review follow-up:
+// SUBSTRING_INDEX's TEXT counts keep the exact base's FLOAT64 route. At the
+// base every T_text-to-numeric implicit cast costed the same, so the count
+// bound the first-listed FLOAT64 overload and fractional tokens like '2.9'
+// truncated to 2. The T_text-to-INT64 cast preference that keeps BIN/SPACE
+// and unary +/- on their signed INT64 peers would otherwise bind the INT64
+// overload and reject those counts at cast time ('invalid argument cast to
+// int'). The matcher keeps every other route untouched: a VARCHAR count keeps
+// its base INT64 peer, and exact numeric counts keep direct binding.
+func TestSubstringIndexTextCountKeepsBaseFloat64Route(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	varStr := types.T_varchar.ToType()
+
+	// A widened TEXT count resolves the base's FLOAT64 overload and
+	// inserts the FLOAT64 implicit cast.
+	textSel, err := GetFunctionByName(proc.Ctx, "substring_index",
+		[]types.Type{varStr, varStr, types.T_text.ToType()})
+	require.NoError(t, err)
+	floatSel, err := GetFunctionByName(proc.Ctx, "substring_index",
+		[]types.Type{varStr, varStr, types.T_float64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, floatSel.GetEncodedOverloadID(), textSel.GetEncodedOverloadID(),
+		"the TEXT count keeps the FLOAT64 overload the base by-cast tie selected")
+	castTypes, shouldCast := textSel.ShouldDoImplicitTypeCast()
+	require.True(t, shouldCast, "the TEXT count inserts an implicit cast")
+	require.Equal(t, types.T_float64, castTypes[2].Oid,
+		"the TEXT count casts to FLOAT64 instead of the rejecting INT64 route")
+
+	// The VARCHAR peer count keeps its own INT64 route (the base
+	// CHAR/VARCHAR cast table prefers INT64 there).
+	varCountSel, err := GetFunctionByName(proc.Ctx, "substring_index",
+		[]types.Type{varStr, varStr, varStr})
+	require.NoError(t, err)
+	varCastTypes, varShouldCast := varCountSel.ShouldDoImplicitTypeCast()
+	require.True(t, varShouldCast)
+	require.Equal(t, types.T_int64, varCastTypes[2].Oid,
+		"the VARCHAR count keeps its base INT64 peer route")
+
+	// The restored FLOAT64 count route truncates fractional counts toward
+	// zero exactly like the working base queries: '2.9' counts 2 -> 'a,b',
+	// '1.4' counts 1 -> 'a', and a fraction beyond the separators returns
+	// the whole string.
+	in0 := testutil.NewVector(3, varStr, proc.Mp(), false,
+		[]string{"a,b,c", "a,b,c", "a,b,c"})
+	in1 := testutil.NewVector(3, varStr, proc.Mp(), false,
+		[]string{",", ",", ","})
+	in2 := testutil.NewVector(3, types.T_float64.ToType(), proc.Mp(), false,
+		[]float64{2.9, 1.4, 99.5})
+	out, err := RunFunctionDirectly(proc, floatSel.GetEncodedOverloadID(),
+		[]*vector.Vector{in0, in1, in2}, 3)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a,b", "a", "a,b,c"},
+		vector.InefficientMustStrCol(out))
+	out.Free(proc.Mp())
+	in0.Free(proc.Mp())
+	in1.Free(proc.Mp())
+	in2.Free(proc.Mp())
+}

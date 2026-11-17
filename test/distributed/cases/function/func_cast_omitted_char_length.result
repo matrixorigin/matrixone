@@ -510,3 +510,20 @@ select vt, floor(vt) as f from func_cast_omit_char_textcol where floor(vt) <> ce
 ➤ vt[12,0,0]  ¦  f[12,-1,0]  𝄀
 2.5  ¦  2
 drop table if exists func_cast_omit_char_textcol;
+select substring_index('a,b,c', ',', cast('2.9' as text)) as frac_two,
+substring_index('a,b,c', ',', cast('1.4' as text)) as frac_one,
+substring_index('a,b,c', ',', convert('99.5', char)) as frac_all,
+substring_index('a,b,c', ',', cast('3' as text)) as int_text,
+substring_index('a,b,c', ',', '2') as int_varchar;
+➤ frac_two[12,-1,0]  ¦  frac_one[12,-1,0]  ¦  frac_all[12,-1,0]  ¦  int_text[12,-1,0]  ¦  int_varchar[12,-1,0]  𝄀
+a,b  ¦  a  ¦  a,b,c  ¦  a,b,c  ¦  a,b
+create table func_cast_omit_char_si (ct text);
+insert into func_cast_omit_char_si values ('2'), ('2.9'), ('1.4'), ('1');
+select substring_index('a,b,c', ',', ct) as stored_count
+from func_cast_omit_char_si order by ct;
+➤ stored_count[12,-1,0]  𝄀
+a  𝄀
+a  𝄀
+a,b  𝄀
+a,b
+drop table if exists func_cast_omit_char_si;

@@ -3788,7 +3788,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING_INDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO:
+		checkFn:    substringIndexCheck,
 
 		Overloads: []overload{
 			{
