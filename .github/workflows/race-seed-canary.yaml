@@ -61,7 +61,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-migrate-isolated.yaml@c3e87e7d70447d049d0124ea0f7dd6eafd49ec04
+    uses: matrixorigin/CI/.github/workflows/node-cache-migrate-isolated.yaml@30decabda9ba316c64b1db3458d1fd877bd71b03
     with:
       target_environment: ${{ fromJSON('{"mty-node-cache-migrate":"mty","jed-node-cache-migrate":"jed","ruh-node-cache-migrate":"ruh","mnl2-node-cache-migrate":"mnl2"}')[inputs.coverage_comparison] }}
     secrets:
