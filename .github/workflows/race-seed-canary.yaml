@@ -80,7 +80,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-full-acceptance.yaml@8a2e04348dded1c3b0416187fddef4b1b7cf3b85
+    uses: matrixorigin/CI/.github/workflows/node-cache-full-acceptance.yaml@da6881b7e257fac97e1d35ace059a3b35778e0f6
     with:
       node_cache_environment: ${{ fromJSON('{"mty-node-cache-2":"mty","mty-node-cache-3":"mty","jed-node-cache-2":"jed","jed-node-cache-3":"jed","ruh-node-cache-2":"ruh","ruh-node-cache-3":"ruh","mnl2-node-cache-2":"mnl2","mnl2-node-cache-3":"mnl2"}')[inputs.coverage_comparison] }}
       group_count: ${{ endsWith(inputs.coverage_comparison, '-2') && 2 || 3 }}
