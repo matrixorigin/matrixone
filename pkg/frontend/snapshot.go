@@ -632,7 +632,12 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 }
 
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	var bh BackgroundExec
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		bh = ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -1637,6 +1642,7 @@ func recreateTable(
 	}
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
+	tableRecreated := true
 
 	var isMasterTable bool
 	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
@@ -1680,6 +1686,7 @@ func recreateTable(
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
 				err = nil
+				tableRecreated = false
 			} else {
 				return err
 			}
@@ -1694,7 +1701,18 @@ func recreateTable(
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	}
-	return
+	if !tableRecreated {
+		return nil
+	}
+	return restoreBranchLineage(ctx, bh, &cloneReceipt{
+		srcDb:      tblInfo.dbName,
+		srcTbl:     tblInfo.tblName,
+		dstDb:      tblInfo.dbName,
+		dstTbl:     tblInfo.tblName,
+		srcAccount: toAccountId,
+		toAccount:  toAccountId,
+		snapshotTS: snapshotTs,
+	})
 }
 
 func needSkipDb(dbName string) bool {

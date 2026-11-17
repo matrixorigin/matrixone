@@ -922,7 +922,12 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 }
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	var bh BackgroundExec
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		bh = ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -1553,7 +1558,23 @@ func reCreateTableWithPitr(
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", pitrName, tblInfo.tblName, time.Since(beginTime)))
 
-	return
+	level, _ := ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType)
+	if level != tree.RestoreCloneLevelTable && level != tree.RestoreCloneLevelDatabase {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	return restoreBranchLineage(ctx, bh, &cloneReceipt{
+		srcDb:      tblInfo.dbName,
+		srcTbl:     tblInfo.tblName,
+		dstDb:      tblInfo.dbName,
+		dstTbl:     tblInfo.tblName,
+		srcAccount: accountID,
+		toAccount:  accountID,
+		snapshotTS: ts,
+	})
 }
 
 func getTableInfoWithPitr(
