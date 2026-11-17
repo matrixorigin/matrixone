@@ -419,6 +419,7 @@ func tableDumpManifestCreateSQL(def *plan.TableDef) (string, error) {
 		// The field is optional; do not publish DDL whose meaning is unverified.
 		return "", nil
 	}
+	omitDDL := false
 	for _, col := range def.Cols {
 		if types.T(col.Typ.Id) == types.T_enum && col.Typ.EnumCollation == types.EnumCollationLegacy {
 			if def.DefaultCharset != types.EnumCollationLegacy ||
@@ -434,8 +435,13 @@ func tableDumpManifestCreateSQL(def *plan.TableDef) (string, error) {
 			(origin == "" && col.Default.Expr != nil) ||
 			(col.GeneratedCol != nil && col.GeneratedCol.Expr != nil) ||
 			(col.OnUpdate != nil && col.OnUpdate.Expr != nil) {
-			return "", nil
+			omitDDL = true
 		}
+	}
+	// Some legacy catalogs retain an inline CHECK only in the original SQL.
+	// The typed DDL renderer can omit it, so inspect the original as well.
+	if omitDDL || strings.Contains(strings.ToUpper(def.Createsql), "CHECK") {
+		return "", nil
 	}
 	returnSQL, _, err := sqlplan.ConstructCreateTableSQL(nil, def, nil, false, nil)
 	if err != nil {

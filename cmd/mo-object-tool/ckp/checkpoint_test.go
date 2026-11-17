@@ -671,6 +671,28 @@ func TestRestoreViewCrossDefaultDependencies(t *testing.T) {
 	require.ErrorContains(t, err, "without default database")
 }
 
+func TestRestoreViewDualDependencies(t *testing.T) {
+	base := checkpointtool.TableCatalogEntry{DatabaseName: "a", TableName: "a", TableID: 1, RelKind: "v"}
+	dependent := checkpointtool.TableCatalogEntry{DatabaseName: "b", TableName: "dual", TableID: 2, RelKind: "v"}
+	data := map[uint64]*checkpointtool.TableDumpData{
+		1: {Schema: &checkpointtool.TableSchema{CreateSQL: "CREATE VIEW a.a AS SELECT 1 AS n FROM dual"}},
+		2: {Schema: &checkpointtool.TableSchema{CreateSQL: "CREATE VIEW b.dual AS SELECT n FROM a.a"}},
+	}
+	setTestViewDefinition(t, data[1], "b")
+	setTestViewDefinition(t, data[2], "b")
+	ordered := buildRestoreTableOrder(context.Background(), []checkpointtool.TableCatalogEntry{base, dependent}, data).tables
+	require.Equal(t, []checkpointtool.TableCatalogEntry{base, dependent}, ordered)
+
+	// The qualified name refers to the actual view, not the special source.
+	data[1].Schema.CreateSQL = "CREATE VIEW a.a AS SELECT n FROM b.dual"
+	setTestViewDefinition(t, data[1], "b")
+	view, err := prepareCheckpointViewRestore(context.Background(), base, data[1])
+	require.NoError(t, err)
+	require.True(t, view.sourceKnown)
+	require.Equal(t, "b", view.sourceDatabase)
+	require.Equal(t, "dual", view.sourceTable)
+}
+
 func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	dumpOut := &dumpOutput{}

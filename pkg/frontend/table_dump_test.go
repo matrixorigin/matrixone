@@ -1514,10 +1514,21 @@ func TestTableDumpManifestOmitsUnprovenExpressions(t *testing.T) {
 	require.Empty(t, ddl)
 
 	def = table()
-	def.Createsql = "CREATE TABLE source (d DATE, CHECK (cast('0000-00-00' as date) IS NULL))"
-	ddl, err = tableDumpManifestCreateSQL(def)
-	require.NoError(t, err)
-	require.Empty(t, ddl)
+	for _, original := range []string{
+		"CREATE TABLE source (d DATE, CHECK (cast('0000-00-00' as date) IS NULL))",
+		"CREATE TABLE source (d DATE CHECK (d > cast('0000-00-00' as date)))",
+	} {
+		def.Createsql = original
+		ddl, err = tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	// Omitting optional DDL must not bypass validation of a later ENUM column.
+	def = table()
+	def.Cols[0].Default.OriginString = "'2026-01-01'"
+	def.Cols = append(def.Cols, &plan.ColDef{Name: "e", Typ: plan.Type{Id: int32(types.T_enum)}, Default: &plan.Default{NullAbility: true}})
+	_, err = tableDumpManifestCreateSQL(def)
+	require.ErrorContains(t, err, "cannot faithfully reconstruct ENUM metadata")
 }
 
 func TestTableDumpManifestOmitsUnverifiableLegacyClusterDDL(t *testing.T) {

@@ -1829,6 +1829,11 @@ func checkpointSimpleViewSource(view *tree.CreateView) (string, string, bool) {
 		return "", "", false
 	}
 	database, table := string(source.SchemaName), string(source.ObjectName)
+	// Match the planner: unqualified dual is a synthetic one-row source,
+	// including when its name is quoted; a qualified db.dual is a relation.
+	if database == "" && table == "dual" {
+		table = ""
+	}
 	if table != "" && database != "" && !source.ExplicitSchema || table == "" && database != "" {
 		return "", "", false
 	}
