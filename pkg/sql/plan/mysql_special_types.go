@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -508,6 +509,203 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 	return moerr.NewNotSupported(ctx,
 		"definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values")
+}
+
+// mysqlSpecialNumericTypeForExpr also resolves correlated references using the
+// same binder-bearing ancestor traversal as baseBindColRef. The temporary
+// ColRef is only for provenance lookup; recovery keeps the original CorrColRef.
+func (bc *BindContext) mysqlSpecialNumericTypeForExpr(expr *plan.Expr) *plan.Type {
+	if bc == nil || expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	corr := expr.GetCorr()
+	if corr == nil {
+		return bc.mysqlSpecialOrderTypeForExpr(expr)
+	}
+	if corr.Depth <= 0 {
+		return nil
+	}
+	owner := bc
+	for depth := int32(0); depth < corr.Depth; depth++ {
+		owner = owner.parent
+		for owner != nil && owner.binder == nil {
+			owner = owner.parent
+		}
+		if owner == nil {
+			return nil
+		}
+	}
+	return owner.mysqlSpecialOrderTypeForExpr(&plan.Expr{
+		Typ:  expr.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: corr.RelPos, ColPos: corr.ColPos}},
+	})
+}
+
+func (bc *BindContext) mysqlSpecialNumericTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialOrderTypes[colPos]; recorded {
+		return DeepCopyType(typ)
+	}
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialNumericTypeForExpr(bc.projects[colPos])
+}
+
+// useStoredMySQLSpecialTypesForNumericContractWithProvenance extends the
+// structural row-level rewrite with a narrow recovery for display values that
+// crossed a GROUP BY or transparent query boundary. It only rewrites operands
+// whose resolved function contract is numeric and whose source provenance is
+// still the exact ENUM/SET display value.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+	ctx context.Context,
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
+	if b == nil || b.ctx == nil {
+		return result, nil
+	}
+
+	hasProvenanceCandidate := false
+	for _, arg := range args {
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			continue
+		}
+		if b.ctx.mysqlSpecialNumericTypeForExpr(arg) != nil {
+			hasProvenanceCandidate = true
+			break
+		}
+	}
+	if !hasProvenanceCandidate {
+		return result, nil
+	}
+	if mysqlSpecialNumericInList(name, args) {
+		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
+			storageType := b.ctx.mysqlSpecialNumericTypeForExpr(args[0])
+			if storageType != nil && mysqlSpecialOrderTypeReversible(storageType) {
+				recovered, err := makeMySQLSpecialNumericValue(ctx, args[0], storageType)
+				if err != nil {
+					return nil, err
+				}
+				result = append([]*plan.Expr(nil), result...)
+				result[0] = recovered
+				return result, nil
+			}
+		}
+	}
+
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return result, nil
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	if !shouldCast || len(targets) != len(args) {
+		return result, nil
+	}
+
+	changed := false
+	for i, arg := range args {
+		if !targets[i].IsNumeric() {
+			continue
+		}
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			continue
+		}
+		storageType := b.ctx.mysqlSpecialNumericTypeForExpr(arg)
+		if storageType == nil || !mysqlSpecialOrderTypeReversible(storageType) {
+			continue
+		}
+
+		recovered, err := makeMySQLSpecialNumericValue(ctx, arg, storageType)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
+			result = append([]*plan.Expr(nil), result...)
+			changed = true
+		}
+		result[i] = recovered
+	}
+	return result, nil
+}
+
+func makeMySQLSpecialNumericValue(
+	ctx context.Context,
+	displayExpr *plan.Expr,
+	storageType *plan.Type,
+) (*plan.Expr, error) {
+	if isEnumPlanType(storageType) {
+		_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
+		if err != nil {
+			return nil, err
+		}
+		// A reversible ENUM definition has no empty label, so an empty grouped
+		// display uniquely represents the error member at ordinal zero. The
+		// legacy parser cannot convert that display, so feed it a valid label
+		// first and restore ordinal zero after parsing. This keeps the serialized
+		// legacy domains on the two-argument overload understood by old workers.
+		// Framed domains use the existing encoding-aware overload.
+		emptyDisplay, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			DeepCopyExpr(displayExpr), makePlan2StringConstExprWithType(""),
+		})
+		if err != nil {
+			return nil, err
+		}
+		members, err := types.DecodeEnumMembers(storageType.Enumvalues, storageType.EnumEncoding)
+		if err != nil {
+			return nil, err
+		}
+		firstLabel := members[0]
+		safeDisplay, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay),
+			makePlan2StringConstExprWithType(firstLabel),
+			DeepCopyExpr(displayExpr),
+		})
+		if err != nil {
+			return nil, err
+		}
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, safeDisplay))
+		if err != nil {
+			return nil, err
+		}
+		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
+		numericExpr.Typ.Enumvalues = storageType.Enumvalues
+		numericExpr.Typ.EnumEncoding = storageType.EnumEncoding
+
+		numericZero := &plan.Expr{
+			Typ: *DeepCopyType(storageType),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_EnumVal{EnumVal: 0},
+			}},
+		}
+		recovered, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay), numericZero, numericExpr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
+		recovered.Typ.Enumvalues = storageType.Enumvalues
+		recovered.Typ.EnumEncoding = storageType.EnumEncoding
+		return recovered, nil
+	}
+
+	if isSetPlanType(storageType) {
+		numericExpr, err := makeMySQLSpecialOrderKey(ctx, displayExpr, storageType)
+		if err != nil {
+			return nil, err
+		}
+		// The SET value-to-index function returns an ordinary uint64 bitmap.
+		// Do not let later SET-aware casts reinterpret it as a display value.
+		numericExpr.Typ.Enumvalues = ""
+		numericExpr.Typ.EnumEncoding = 0
+		return numericExpr, nil
+	}
+	return nil, moerr.NewInternalError(ctx, "invalid ENUM/SET numeric provenance")
 }
 
 // makeMySQLSpecialOrderKey restores definition-order comparison after a query
