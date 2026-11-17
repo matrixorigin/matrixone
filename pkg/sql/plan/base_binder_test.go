@@ -2007,6 +2007,10 @@ func TestSerialEnumColumnStorageRequiresColumnSyntax(t *testing.T) {
 			got := useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{ast}, []*Expr{display})
 			require.Same(t, display, got[0])
 		}
+		// HAVING can expand a column-looking alias into an authored display.
+		authored := DeepCopyExpr(display)
+		authored.GetF().SyntaxExplicitCast = true
+		require.Same(t, authored, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{col}, []*Expr{authored})[0])
 		fake := DeepCopyExpr(display)
 		fake.GetF().Args[1] = makePlan2StringConstExprWithType("a")
 		require.Same(t, fake, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{col}, []*Expr{fake})[0])
@@ -2029,6 +2033,9 @@ func TestSerialSetColumnUsesStoredBitmap(t *testing.T) {
 		require.Equal(t, int32(types.T_uint64), got[0].Typ.Id)
 		require.Empty(t, got[0].Typ.Enumvalues)
 		require.NotEmpty(t, raw.Typ.Enumvalues)
+		authored := DeepCopyExpr(display)
+		authored.GetF().SyntaxExplicitCast = true
+		require.Same(t, authored, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{col}, []*Expr{authored})[0])
 		require.Same(t, display, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{&tree.CastExpr{Expr: col}}, []*Expr{display})[0])
 		require.Same(t, display, useStoredMySQLSpecialColumnsForSerial(name, []tree.Expr{&tree.FuncExpr{}}, []*Expr{display})[0])
 	}

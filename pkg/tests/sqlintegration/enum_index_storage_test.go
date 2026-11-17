@@ -253,6 +253,23 @@ func testAuthoredMySQLSpecialDisplay(t *testing.T, ctx context.Context, db *sql.
 			require.Equal(t, []string{"46017900"}, queryEnumStorageRows(t, ctx, db, "select hex("+serializer+"("+expression+"))"), "serialize the authored y text")
 		}
 	}
+	execSQLRequire(t, ctx, db, "create table display_alias(s varchar(8))")
+	execSQLRequire(t, ctx, db, "insert into display_alias values('b')")
+	execSQLRequire(t, ctx, db, "set @saved_display_mode=@@sql_mode")
+	execSQLRequire(t, ctx, db, "set sql_mode=''")
+	defer execSQLRequire(t, ctx, db, "set sql_mode=@saved_display_mode")
+	for _, tc := range []struct{ helper, index string }{
+		{"cast_index_to_value", "cast_value_to_index"},
+		{"cast_index_to_set_value", "cast_set_value_to_index"},
+	} {
+		index := tc.index + "('a,b',s)"
+		for _, serializer := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+			query := "select " + tc.helper + "('x,y'," + index + ") as label from display_alias group by " + index +
+				" having hex(" + serializer + "(label))='46017900'"
+			require.Equal(t, []string{"y"}, queryEnumStorageRows(t, ctx, db, query), "HAVING aliases retain authored text after expansion")
+		}
+	}
+
 	execSQLRequire(t, ctx, db, "prepare authored_display_insert from 'insert into authored_display values(?,cast_index_to_value(''x,y'',cast_value_to_index(''a,b'',?)))'")
 	defer execSQLRequire(t, ctx, db, "deallocate prepare authored_display_insert")
 	execSQLRequire(t, ctx, db, "set @display_id=4,@display_value='b'")

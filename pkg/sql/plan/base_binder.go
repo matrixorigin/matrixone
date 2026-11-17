@@ -6353,8 +6353,9 @@ func isPositiveIntegerLiteral(lit *plan.Literal) bool {
 }
 
 // Serial functions encode typed storage, not column presentation. Only a
-// direct column (optionally parenthesized) proves that this wrapper was added
-// by column binding; an explicit function or CHAR cast keeps its text result.
+// direct column (optionally parenthesized) with an implicit wrapper proves
+// column storage. An alias may expand to an authored function; preserve its
+// explicit marker, just as for an authored function or CHAR cast in the SQL.
 func useStoredMySQLSpecialColumnsForSerial(name string, astArgs []tree.Expr, args []*Expr) []*Expr {
 	switch name {
 	case "serial", "serial_full", "physical_serial", "physical_serial_full":
@@ -6377,7 +6378,7 @@ func useStoredMySQLSpecialColumnsForSerial(name string, astArgs []tree.Expr, arg
 			continue
 		}
 		fn := args[i].GetF()
-		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil ||
+		if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 || fn.Args[1] == nil ||
 			(fn.Args[1].GetCol() == nil && fn.Args[1].GetCorr() == nil) {
 			continue
 		}
