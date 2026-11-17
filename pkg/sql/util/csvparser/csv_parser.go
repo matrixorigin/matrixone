@@ -116,11 +116,21 @@ type CSVParser struct {
 	// E.g., For the row `a,"b","c""d",e`, recordBuffer will contain `abc"de`
 	// and fieldIndexes will contain the indexes [1, 2, 5, 6].
 	recordBuffer []byte
+	// The configured transaction entry limit applies to the complete raw
+	// record, including separators and escaped fragments. Checking only a
+	// readUntil fragment allowed many short fields to bypass the same limit.
+	recordLimit   int
+	recordStart   int64
+	readingRecord bool
+	recordBudget  int64
+	growRecord    func(int64) (int64, error)
 
 	// fieldIndexes is an index of fields inside recordBuffer.
 	// The width field ends at offset fieldIndexes[i] in recordBuffer.
-	fieldIndexes  []int
-	fieldIsQuoted []bool
+	fieldIndexes   []int
+	fieldIsQuoted  []bool
+	retainedFields int
+	fieldsSeen     int
 
 	LastRow []Field
 
@@ -244,6 +254,7 @@ func NewCSVParser(
 		}
 	}
 	return &CSVParser{
+		recordLimit:       config.LargestEntryLimit,
 		reader:            reader,
 		blockBuf:          make([]byte, blockBufSize*BufferSizeScale),
 		remainBuf:         &bytes.Buffer{},
@@ -280,6 +291,20 @@ func (parser *CSVParser) Pos() int64 {
 // FIRST line.
 func (parser *CSVParser) RecordLine() int64 {
 	return parser.recordStartLine + 1
+}
+
+// RetainFields bounds field metadata for readers that project a known prefix.
+// Unretained fields are still parsed and checked against the raw record limit.
+// LOAD retains two extra fields, preserving its strict column-count checks.
+func (parser *CSVParser) RetainFields(n int) { parser.retainedFields = n }
+
+func (parser *CSVParser) finishField(quoted bool) {
+	parser.fieldsSeen++
+	if parser.retainedFields > 0 && parser.fieldsSeen > parser.retainedFields {
+		return
+	}
+	parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
+	parser.fieldIsQuoted = append(parser.fieldIsQuoted, quoted)
 }
 
 func validDelim(r rune) bool {
@@ -545,54 +570,98 @@ func (parser *CSVParser) appendCSVTokenToRecordBuffer(token csvToken) {
 	parser.recordBuffer = append(parser.recordBuffer, byte(token))
 }
 
-// readUntil reads the buffer until any character from the `chars` set is found.
-// that character is excluded from the final buffer.
-func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
+// readUntil appends bytes up to the next character in chars to dst, excluding
+// that character. Appending directly to the caller-owned buffer avoids a
+// temporary whole-field allocation when a field spans read blocks.
+func (parser *CSVParser) readUntil(chars *byteSet, dst []byte) ([]byte, byte, bool, error) {
 	index := IndexAnyByte(parser.buf, chars)
 	if index >= 0 {
-		ret := parser.buf[:index]
-		parser.lineNo += int64(bytes.Count(ret, newlineByte))
+		if err := parser.checkRecordSize(index); err != nil {
+			return dst, 0, false, err
+		}
+		content := parser.buf[:index]
+		dst = append(dst, content...)
+		parser.lineNo += int64(bytes.Count(content, newlineByte))
 		parser.buf = parser.buf[index:]
 		parser.pos += int64(index)
-		return ret, parser.buf[0], nil
+		return dst, parser.buf[0], index > 0, nil
 	}
-
-	// not found in parser.buf, need allocate and loop.
-	var buf []byte
+	start := len(dst)
 	for {
-		// Every byte of parser.buf is drained into buf here, so this is where
-		// its newlines are consumed. Counting only the final block's prefix
-		// below would lose the newlines of every block drained before it,
-		// which is what a quoted field spanning more than one read block does.
-		parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
-		buf = append(buf, parser.buf...)
-		if len(buf) > config.LargestEntryLimit {
-			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
+		found := index >= 0
+		if !found {
+			index = len(parser.buf)
 		}
-		parser.buf = nil
+		// pos still points at the start of this scan. Reserve for all of its
+		// fragments before growing the caller's buffer.
+		if err := parser.checkRecordSize(len(dst) - start + index); err != nil {
+			// Preserve the empty-fragment error result: lookahead callers
+			// distinguish rejected input from EOF with partial content.
+			return dst[:start], 0, false, err
+		}
+		content := parser.buf[:index]
+		dst = append(dst, content...)
+		parser.lineNo += int64(bytes.Count(content, newlineByte))
+		parser.buf = parser.buf[index:]
+		if found {
+			parser.pos += int64(len(dst) - start)
+			return dst, parser.buf[0], len(dst) > start, nil
+		}
 		if err := parser.readBlock(); err != nil || len(parser.buf) == 0 {
 			if err == nil {
 				err = io.EOF
 			}
-			parser.pos += int64(len(buf))
-			return buf, 0, err
+			parser.pos += int64(len(dst) - start)
+			return dst, 0, len(dst) > start, err
 		}
-		index := IndexAnyByte(parser.buf, chars)
-		if index >= 0 {
-			parser.lineNo += int64(bytes.Count(parser.buf[:index], newlineByte))
-			buf = append(buf, parser.buf[:index]...)
-			parser.buf = parser.buf[index:]
-			parser.pos += int64(len(buf))
-			return buf, parser.buf[0], nil
-		}
+		index = IndexAnyByte(parser.buf, chars)
 	}
+}
+
+// LimitRecordBytes tightens the configured record limit to the admitted input
+// bound. Call before Read; a stale file size must fail before buffer growth.
+func (parser *CSVParser) LimitRecordBytes(limit int64) {
+	if limit > 0 && parser.recordLimit > 0 && limit < int64(parser.recordLimit) {
+		parser.recordLimit = int(limit)
+	}
+}
+
+// SetRecordBudget installs an already reserved budget and its growth owner.
+// The legal record limit remains independent; a grant must precede allocation.
+func (parser *CSVParser) SetRecordBudget(bytes int64, grow func(int64) (int64, error)) {
+	parser.recordBudget, parser.growRecord = bytes, grow
+}
+
+func (parser *CSVParser) checkRecordSize(extra int) error {
+	consumed := int64(extra)
+	if parser.readingRecord {
+		consumed += parser.pos - parser.recordStart
+	}
+	if parser.recordLimit > 0 && consumed > int64(parser.recordLimit) {
+		return moerr.NewInternalErrorNoCtx("size of row exceeds the admitted input bound or txn-entry-size-limit")
+	}
+	if parser.growRecord != nil && consumed > parser.recordBudget {
+		budget, err := parser.growRecord(consumed)
+		if err != nil {
+			return err
+		}
+		if budget < consumed {
+			return moerr.NewInternalErrorNoCtx("CSV record growth grant is too small")
+		}
+		parser.recordBudget = budget
+	}
+	return nil
 }
 
 func (parser *CSVParser) readRecord() error {
 	parser.recordStartLine = parser.lineNo
+	parser.recordStart = parser.pos
+	parser.readingRecord = true
+	defer func() { parser.readingRecord = false }()
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
+	parser.fieldsSeen = 0
 
 	isEmptyLine := true
 	whitespaceLine := true
@@ -616,6 +685,7 @@ outside:
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
+				parser.recordStart = parser.pos
 				continue
 			}
 		}
@@ -640,6 +710,7 @@ outside:
 			}
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
+				parser.recordStart = parser.pos
 				continue
 			}
 			foundStartingByThisLine = true
@@ -652,16 +723,20 @@ outside:
 			parser.buf = append(content, parser.buf...)
 			parser.pos = oldPos + int64(idx+len(parser.startingBy))
 			parser.lineNo = oldLineNo + int64(bytes.Count(consumed, newlineByte))
+			parser.recordStart = parser.pos
 		}
 
-		content, firstByte, err := parser.readUntil(&parser.unquoteByteSet)
+		var firstByte byte
+		var hasContent bool
+		var err error
+		parser.recordBuffer, firstByte, hasContent, err = parser.readUntil(
+			&parser.unquoteByteSet, parser.recordBuffer)
 
-		if len(content) > 0 {
+		if hasContent {
 			isEmptyLine = false
 			if prevToken == csvTokenDelimiter {
 				return errUnexpectedQuoteField
 			}
-			parser.recordBuffer = append(parser.recordBuffer, content...)
 			prevToken = csvTokenAnyUnquoted
 		}
 
@@ -677,13 +752,17 @@ outside:
 			if err != nil {
 				return err
 			}
+			if firstToken != csvTokenNewLine {
+				if err = parser.checkRecordSize(0); err != nil {
+					return err
+				}
+			}
 		}
 
 		switch firstToken {
 		case csvTokenComma:
 			whitespaceLine = false
-			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
-			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
+			parser.finishField(fieldIsQuoted)
 			fieldIsQuoted = false
 		case csvTokenDelimiter:
 			if prevToken != csvTokenComma && prevToken != csvTokenNewLine {
@@ -708,22 +787,31 @@ outside:
 					// The record has not started yet: it begins at the first
 					// line with content, not where the scan started.
 					parser.recordStartLine = parser.lineNo
+					parser.recordStart = parser.pos
 					continue
 				}
 				// skip lines only contain whitespaces
 				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
 					parser.recordBuffer = parser.recordBuffer[:0]
 					parser.recordStartLine = parser.lineNo
+					parser.recordStart = parser.pos
 					continue
 				}
 			}
 			if bytes.Equal(parser.newLine, []byte{'\n'}) {
 				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {
-					parser.recordBuffer = parser.recordBuffer[:n-1]
+					// Preserve CR in an already-sealed field; its boundary must
+					// remain within recordBuffer for every row/header consumer.
+					lastIdx := 0
+					if m := len(parser.fieldIndexes); m > 0 {
+						lastIdx = parser.fieldIndexes[m-1]
+					}
+					if n-1 >= lastIdx {
+						parser.recordBuffer = parser.recordBuffer[:n-1]
+					}
 				}
 			}
-			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
-			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
+			parser.finishField(fieldIsQuoted)
 			// the loop is end, no need to reset fieldIsQuoted
 			break outside
 		default:
@@ -741,7 +829,11 @@ outside:
 func (parser *CSVParser) readQuotedField() error {
 	for {
 		prevPos := parser.pos
-		content, terminator, err := parser.readUntil(&parser.quoteByteSet)
+		start := len(parser.recordBuffer)
+		var terminator byte
+		var err error
+		parser.recordBuffer, terminator, _, err = parser.readUntil(
+			&parser.quoteByteSet, parser.recordBuffer)
 		if err != nil {
 			if err == io.EOF {
 				// return the position of quote to the caller.
@@ -749,16 +841,18 @@ func (parser *CSVParser) readQuotedField() error {
 				// use the `pos` again, so it's safe to modify it here.
 				parser.pos = prevPos - 1
 				// set buf to parser.buf in order to print err log
-				parser.buf = content
+				parser.buf = parser.recordBuffer[start:]
 				err = parser.replaceEOF(err, errUnterminatedQuotedField)
 			}
 			return err
 		}
-		parser.recordBuffer = append(parser.recordBuffer, content...)
 		parser.skipBytes(1)
 
 		token, err := parser.readQuotedToken(terminator)
 		if err != nil {
+			return err
+		}
+		if err = parser.checkRecordSize(0); err != nil {
 			return err
 		}
 
@@ -770,6 +864,9 @@ func (parser *CSVParser) readQuotedField() error {
 				return err
 			}
 			if doubledDelimiter {
+				if err = parser.checkRecordSize(0); err != nil {
+					return err
+				}
 				// consume the double quotation mark and continue
 				parser.recordBuffer = append(parser.recordBuffer, parser.quote...)
 			} else if parser.unescapedQuote {
@@ -843,8 +940,9 @@ func (parser *CSVParser) readColumns() error {
 func (parser *CSVParser) readUntilTerminator() ([]byte, int64, error) {
 	var ret []byte
 	for {
-		content, firstByte, err := parser.readUntil(&parser.newLineByteSet)
-		ret = append(ret, content...)
+		var firstByte byte
+		var err error
+		ret, firstByte, _, err = parser.readUntil(&parser.newLineByteSet, ret)
 		if err != nil {
 			return ret, parser.pos, err
 		}

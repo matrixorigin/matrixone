@@ -498,8 +498,8 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
+	restoreReqCtx := installDataBranchCloneContext(execCtx, tree.NormalCloneLevelTable, "")
+	defer restoreReqCtx()
 
 	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 		opAccountId: opAccountID,
@@ -546,10 +546,8 @@ func dataBranchCreateDatabase(
 		}
 	}()
 
-	execCtx.reqCtx = context.WithValue(
-		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
-	)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
+	restoreReqCtx := installDataBranchCloneContext(execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch)
+	defer restoreReqCtx()
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
@@ -596,6 +594,17 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+// ExecCtx is reused across statements in one COM_QUERY. Clone-only context
+// must not mark a following ordinary CREATE or retain clone-lock ownership.
+func installDataBranchCloneContext(execCtx *ExecCtx, level tree.CloneLevelType, databaseType string) func() {
+	previous := execCtx.reqCtx
+	derived := context.WithValue(previous, tree.CloneLevelCtxKey{}, level)
+	derived = context.WithValue(derived, dataBranchCloneLockCtxKey{}, true)
+	derived = context.WithValue(derived, defines.DatTypKey{}, databaseType)
+	execCtx.reqCtx = derived
+	return func() { execCtx.reqCtx = previous }
 }
 
 func validateDataBranchCreateTxn(pessimistic bool) error {
@@ -743,7 +752,7 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true}); err != nil {
 		return
 	}
 
@@ -763,6 +772,9 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
+	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+		return
+	}
 	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
 		return
 	}
@@ -1165,7 +1177,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+		t := vector.ProtoTypeToType(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1556,7 +1568,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
 		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
+		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
 }
@@ -1702,7 +1714,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 	return left.Id == right.Id &&
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
+		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }
@@ -3307,6 +3319,9 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	if pkFilter == nil {
 		return nil, "empty-mo-tables-cpkey-filter", nil
 	}
+	// mo_tables is sorted by this composite PK, unlike cluster-by data tables
+	// and rowid-sorted tombstone objects.
+	pkFilter.ObjectZMIsPK = true
 	pkFilter.ReplaySpec = &engine.PKReplaySpec{
 		Op:   function.EQUAL,
 		Keys: [][]byte{replayKey},

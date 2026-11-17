@@ -156,6 +156,82 @@ func TestCompileFilterExprComparisonOrientation(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprLegacyBoolZoneMap(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	// 复用真实对象布局，只注入摘要，避免手工构造不可能到达的元数据。
+	writer := ioutil.ConstructWriter(0, []uint16{0}, 0, false, false, fs)
+	func() {
+		input := batch.NewWithSize(1)
+		defer input.Clean(mp)
+		input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{false, true}, nil, mp))
+		input.SetRowCount(2)
+		_, err := writer.WriteBatch(input)
+		require.NoError(t, err)
+	}()
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	original, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	require.NoError(t, err)
+
+	for _, sorted := range []bool{false, true} {
+		for _, storedMax := range []bool{false, true} {
+			for _, bound := range []bool{false, true} {
+				t.Run(fmt.Sprintf("sorted=%v/stored=%v/bound=%v", sorted, storedMax, bound), func(t *testing.T) {
+					meta := append(objectio.ObjectMeta(nil), original...)
+					data := meta.MustDataMeta()
+					// false/false 可能来自旧的混合块；true/true 则可精确排除 false。
+					zm := index.BuildZM(types.T_bool, types.EncodeBool(&storedMax))
+					data.MustGetColumn(0).SetZoneMap(zm)
+					data.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(zm)
+					var objectStats objectio.ObjectStats
+					require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&objectStats, zm))
+					table := &plan.TableDef{
+						Name2ColIndex: map[string]int32{"v": 0},
+						Cols:          []*plan.ColDef{{Name: "v", Seqnum: 0, ClusterBy: sorted, Typ: plan.Type{Id: int32(types.T_bool)}}},
+					}
+					expr := MakeFunctionExprForTest("=", []*plan.Expr{
+						MakeColExprForTest(0, types.T_bool, "v"),
+						{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{
+							Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeBool(&bound)},
+						}},
+					})
+					fast, _, object, block, seek, can, _ := CompileFilterExpr(expr, table, nil)
+					require.True(t, can)
+					want := !storedMax || bound
+					keep, err := object(meta, nil)
+					require.NoError(t, err)
+					require.Equal(t, sorted || want, keep, "对象摘要")
+					stop, keep, err := block(0, data.GetBlockMeta(0), nil)
+					require.NoError(t, err)
+					require.Equal(t, want, keep, "块摘要")
+					if want {
+						require.False(t, stop)
+					}
+					if fast != nil {
+						keep, err := fast(&objectStats)
+						require.NoError(t, err)
+						require.Equal(t, want, keep, "排序键摘要")
+					}
+					if seek != nil && want {
+						require.Zero(t, seek(data), "不能跳过可能含 true 的旧块")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
@@ -176,6 +252,9 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 		},
 	}
 	filterExpr := func(column int32, op string, lower, upper int32) *plan.Expr {
+		if op == "in" {
+			return MakeInExprForTest(MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name), []int32{lower, upper}, types.T_int32, mp)
+		}
 		args := []*plan.Expr{MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name)}
 		bounds := []int32{lower}
 		if op == "between" || op == "in_range" {
@@ -264,6 +343,8 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 				upper  int32
 				want   []uint16
 			}{
+				{name: "in", op: "in", column: 1, lower: 100, upper: 150, want: layout.want},
+				{name: "outside_object_in", op: "in", column: 1, lower: 300, upper: 400},
 				{name: "between", op: "between", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "in_range", op: "in_range", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "equal", op: "=", column: 1, lower: 100, want: layout.comparisons[0]},
@@ -318,6 +399,39 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 					}
 				})
 			}
+			if layout.name == "clustered" {
+				t.Run("sorted_in_unknown_summary_consumer", func(t *testing.T) {
+					table, col := *tableDef, *tableDef.Cols[1]
+					col.ClusterBy = true
+					table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
+					table.Cols[1] = &col
+					for unknown, want := range [][]uint16{{0, 1}, {1}, {1, 2}} {
+						t.Run(fmt.Sprintf("unknown=%d", unknown), func(t *testing.T) {
+							modified := append(objectio.ObjectMeta(nil), meta...)
+							modified.MustDataMeta().GetBlockMeta(uint32(unknown)).MustGetColumn(1).SetZoneMap(index.NewZM(types.T_int32, 0))
+							fast, _, object, block, seek, ok, hint := CompileFilterExprs(
+								[]*plan.Expr{filterExpr(1, "in", 100, 150)}, &table, fs,
+							)
+							require.True(t, ok)
+							load := func(context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+								return modified, nil, nil
+							}
+							sortedStats := stats
+							require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&sortedStats, objectZM))
+							var selected objectio.BlockInfoSlice
+							_, _, _, _, _, _, _, _, err := FilterObjects(
+								ctx, engine.RangesParam{}, fast, load, object, block, seek,
+								nil, nil, []objectio.ObjectStats{sortedStats}, &selected, hint, nil, fs,
+							)
+							require.NoError(t, err)
+							require.Equal(t, len(want), selected.Len())
+							for i, id := range want {
+								require.Equal(t, stats.ConstructBlockId(id), selected.Get(i).BlockID)
+							}
+						})
+					}
+				})
+			}
 		})
 	}
 
@@ -327,7 +441,7 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 			col.ClusterBy = sorted
 			table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
 			table.Cols[1] = &col
-			for _, op := range []string{"between", "in_range"} {
+			for _, op := range []string{"between", "in_range", "in"} {
 				hints := []uint8{0}
 				if op == "in_range" {
 					hints = []uint8{0, 1, 2, 3}

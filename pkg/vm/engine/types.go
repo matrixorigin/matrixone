@@ -263,11 +263,13 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
+		attrType := types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale())
+		attrType.SetEnumEncoding(colTyp.GetEnumEncoding())
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Type:          attrType,
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				GeneratedCol:  col.GetGeneratedCol(),
@@ -1340,6 +1342,19 @@ type LogtailReadBarrier interface {
 // advertises support. False means the peer did not advertise the capability.
 type PeerLogtailReadBarrier interface {
 	AcquirePeerLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, supported bool, err error)
+}
+
+// LogtailAppliedSnapshot waits for the current replay generation to apply an
+// inclusive timestamp and returns a snapshot beyond that applied watermark.
+type LogtailAppliedSnapshot interface {
+	WaitLogtailAppliedSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+}
+
+// PeerTableReadSnapshot acquires a current-stream snapshot at or after an
+// identified table's content and catalog target. False means the peer does not
+// support this operation and the caller must use another visibility barrier.
+type PeerTableReadSnapshot interface {
+	AcquirePeerTableReadSnapshot(context.Context, api.TableID, timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error)
 }
 
 type VectorPool interface {

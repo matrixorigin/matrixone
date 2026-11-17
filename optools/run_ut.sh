@@ -256,13 +256,15 @@ function run_tests(){
         fi
 
         # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package intentionally keeps a
-        # shared embedded cluster alive for most of its test process.
+        # bind fixed ports; the embedded cluster and first-replay tests need
+        # enough capacity to start and recover their control plane.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/embed/firstreplay \
             ./pkg/logservice \
             ./pkg/vm/engine/tae/logstore \
             ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
-            ./pkg/tests/issues); then
+            ./pkg/tests/issues \
+            ./pkg/tests/txnexecutor); then
             logger "ERR" "Failed to resolve serial race-test packages"
             UT_TEST_STATUS=1
             return 0
@@ -272,8 +274,7 @@ function run_tests(){
             ./pkg/sql/plan/function \
             ./pkg/tests/dml \
             ./pkg/tests/shard \
-            ./pkg/tests/partition \
-            ./pkg/tests/txnexecutor); then
+            ./pkg/tests/partition); then
             logger "ERR" "Failed to resolve heavy race-test packages"
             UT_TEST_STATUS=1
             return 0

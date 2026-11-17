@@ -210,10 +210,6 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	if count == 0 {
 		return itr.values, itr.zValues, nil
 	}
-	for i := 0; i < count; i++ {
-		itr.keys[i] = 0
-	}
-	copy(itr.keyOffs[:count], zeroUint32)
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
@@ -254,13 +250,6 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	if count == 0 {
 		return itr.values, itr.zValues, nil
 	}
-
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = 0
-		}
-		copy(itr.keyOffs[:count], zeroUint32)
-	}()
 
 	copy(itr.zValues[:count], OneInt64s[:count])
 	itr.encodeHashKeys(vecs, start, count)

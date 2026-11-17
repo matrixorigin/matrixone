@@ -70,6 +70,19 @@ func (mc *migrateController) startClose() {
 	}
 }
 
+// tryStartClose seals lifecycle admission and returns the active operation's
+// cancellation function without waiting for the controller lock.
+func (mc *migrateController) tryStartClose() (context.CancelFunc, bool) {
+	if !mc.TryLock() {
+		return nil, false
+	}
+	mc.closed = true
+	cancel := mc.operationCancel
+	mc.cond.Broadcast()
+	mc.Unlock()
+	return cancel, true
+}
+
 // tryStartCloseWhenIdle prevents new lifecycle operations without waiting for
 // or interrupting one that has already started.
 func (mc *migrateController) tryStartCloseWhenIdle() bool {

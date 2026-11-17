@@ -138,7 +138,7 @@ func TestDecimal256CompareFns(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestDecimal256CompareScaleOverflowReturnsError(t *testing.T) {
+func TestDecimal256CompareScaleOverflowPreservesOrdering(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	dec0 := types.New(types.T_decimal256, 65, 0)
 	dec2 := types.New(types.T_decimal256, 65, 2)
@@ -156,7 +156,7 @@ func TestDecimal256CompareScaleOverflowReturnsError(t *testing.T) {
 			NewFunctionTestInput(dec0, []types.Decimal256{left}, []bool{false}),
 			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_bool.ToType(), true, []bool{}, []bool{}),
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false}),
 		equalFn,
 	)
 	ok, info := tc.Run()

@@ -40,7 +40,7 @@ type planAuthorization struct {
 	dynamic                        bool
 }
 
-func derivePlanAuthorization(ses *Session, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
+func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
 	arr := extractPrivilegeTipsFromPlan(p)
 	if _, ok := stmt.(*tree.Replace); ok {
@@ -50,8 +50,17 @@ func derivePlanAuthorization(ses *Session, stmt tree.Statement, p *plan.Plan, ad
 		arr = appendMergeActionPrivilegeTips(ses, merge, p, arr)
 		result.dynamic = true
 	}
-	if len(arr) == 0 {
-		if ins, ok := stmt.(*tree.Insert); ok {
+	if ins, ok := stmt.(*tree.Insert); ok {
+		// Preserve the existing fallback when the plan has no concrete
+		// object requirements; view-only requirements are not targets.
+		hasConcreteRequirement := false
+		for _, tip := range arr {
+			if !tip.viewOnly {
+				hasConcreteRequirement = true
+				break
+			}
+		}
+		if !hasConcreteRequirement {
 			result.dynamic = true
 			if db, table, ok := getInsertTargetTableName(ins, ses); ok {
 				arr = append(arr, privilegeTips{typ: PrivilegeTypeInsert, objType: objectTypeTable, databaseName: db, tableName: table, isClusterTable: isClusterTable(db, table), clusterTableOperation: clusterTableModify})
@@ -87,8 +96,8 @@ func evaluatePlanAuthorization(ctx context.Context, ses *Session, requirement *p
 	if !requirement.required {
 		return true, stats, nil
 	}
-	if !checkProtectedDatabaseWrite(ctx, ses, requirement.writeTargets...) {
-		return false, stats, nil
+	if allowed, err := checkProtectedDatabaseWrite(ctx, ses, requirement.writeTargets...); !allowed || err != nil {
+		return false, stats, err
 	}
 	ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, &requirement.privilege)
 	return ok, stats, err
@@ -118,4 +127,66 @@ func (prepareStmt *PrepareStmt) authorizationRequirements(ses *Session, stmt tre
 	saved := &preparedAuthorization{source: p, statement: stmt, admission: admission, plan: derived}
 	prepareStmt.authorization = saved
 	return saved
+}
+
+// Prepared DDL keeps the database binding from PREPARE even if USE changes the
+// caller's current database. Check that binding rather than resolving an
+// unqualified target against the later session state.
+func bindPreparedWriteAuthorization(priv *privilege, p *plan.Plan, defaultDB string) *privilege {
+	if priv == nil || len(priv.writeDatabaseTargets) == 0 {
+		return priv
+	}
+	if target := resolvedDDLWriteDatabase(p); target != "" {
+		defaultDB = target
+	}
+	if defaultDB == "" {
+		return priv
+	}
+	copyPriv := *priv
+	copyPriv.writeDatabaseTargets = append([]string(nil), priv.writeDatabaseTargets...)
+	copyPriv.entries = append([]privilegeEntry(nil), priv.entries...)
+	for i, target := range copyPriv.writeDatabaseTargets {
+		if target == "" {
+			copyPriv.writeDatabaseTargets[i] = defaultDB
+		}
+	}
+	for i := range copyPriv.entries {
+		if copyPriv.entries[i].databaseName == "" {
+			copyPriv.entries[i].databaseName = defaultDB
+		}
+	}
+	return &copyPriv
+}
+
+// resolvedDDLWriteDatabase follows the target bound into the executable plan.
+// Multi-target statements retain their complete AST target list as well.
+func resolvedDDLWriteDatabase(p *plan.Plan) string {
+	ddl := p.GetDdl()
+	switch {
+	case ddl.GetCreateTable() != nil:
+		return ddl.GetCreateTable().GetDatabase()
+	case ddl.GetAlterTable() != nil:
+		return ddl.GetAlterTable().GetDatabase()
+	case ddl.GetDropTable() != nil:
+		return ddl.GetDropTable().GetDatabase()
+	case ddl.GetTruncateTable() != nil:
+		return ddl.GetTruncateTable().GetDatabase()
+	case ddl.GetCreateIndex() != nil:
+		return ddl.GetCreateIndex().GetDatabase()
+	case ddl.GetDropIndex() != nil:
+		return ddl.GetDropIndex().GetDatabase()
+	case ddl.GetCreateView() != nil:
+		return ddl.GetCreateView().GetDatabase()
+	case ddl.GetAlterView() != nil:
+		return ddl.GetAlterView().GetDatabase()
+	case ddl.GetCreateSequence() != nil:
+		return ddl.GetCreateSequence().GetDatabase()
+	case ddl.GetAlterSequence() != nil:
+		return ddl.GetAlterSequence().GetDatabase()
+	case ddl.GetDropSequence() != nil:
+		return ddl.GetDropSequence().GetDatabase()
+	case ddl.GetCloneTable() != nil:
+		return ddl.GetCloneTable().GetDstDatabaseName()
+	}
+	return ""
 }

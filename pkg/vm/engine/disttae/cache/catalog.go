@@ -837,13 +837,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				Name:       name,
 				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
-					Id:          int32(attr.Attr.Type.Oid),
-					Width:       attr.Attr.Type.Width,
-					Scale:       attr.Attr.Type.Scale,
-					AutoIncr:    attr.Attr.AutoIncrement,
-					Table:       tblItem.Name,
-					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:  attr.Attr.EnumVlaues,
+					Id:           int32(attr.Attr.Type.Oid),
+					Width:        attr.Attr.Type.Width,
+					Scale:        attr.Attr.Type.Scale,
+					AutoIncr:     attr.Attr.AutoIncrement,
+					Table:        tblItem.Name,
+					NotNullable:  attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:   attr.Attr.EnumVlaues,
+					EnumEncoding: attr.Attr.Type.GetEnumEncoding(),
 				},
 				Primary:      attr.Attr.Primary,
 				Default:      attr.Attr.Default,
@@ -901,7 +902,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 			}
 		}
 	}

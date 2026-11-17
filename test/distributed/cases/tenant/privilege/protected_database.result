@@ -52,6 +52,7 @@ protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 create database protected_bvt_db;
 create database protected_bvt_later;
+create database protected_bvt_proc;
 create table protected_bvt_db.t1(a int primary key, b int);
 insert into protected_bvt_db.t1 values(1, 1);
 create index protected_bvt_idx on protected_bvt_db.t1(b);
@@ -78,16 +79,28 @@ insert into protected_bvt_db.fk_child values(1, 1);
 create table protected_bvt_db.fk_self(id int primary key, parent_id int, constraint fk_self_parent foreign key(parent_id) references protected_bvt_db.fk_self(id));
 create table protected_bvt_later.t1(a int);
 insert into protected_bvt_later.t1 values(10);
+create table protected_bvt_proc.prepared_ctas(n int);
+create table protected_bvt_proc.prepared_create(n int);
+create sequence protected_bvt_proc.s_ok;
+create procedure protected_bvt_proc.write_later() 'begin insert into protected_bvt_later.t1 values (99); end';
 create role protected_bvt_writer;
 grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
 grant ownership on database protected_bvt_db to protected_bvt_writer;
 grant all on table protected_bvt_db.* to protected_bvt_writer with grant option;
+grant select on view protected_bvt_db.v1 to protected_bvt_writer;
 grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
+grant all on database protected_bvt_proc to protected_bvt_writer;
+grant all on table protected_bvt_proc.* to protected_bvt_writer;
 grant connect on account * to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
+set enable_privilege_cache = off;
+use protected_bvt_later;
+prepare protected_later_insert from 'insert into protected_bvt_later.t1 values(11)';
+prepare protected_later_ctas from 'create table prepared_ctas as select 1 as n';
+prepare protected_later_create from 'create table prepared_create(n int)';
 set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 set enable_privilege_cache = off;
@@ -102,6 +115,18 @@ select a from t1;
 ➤ a[4,32,0]  𝄀
 10
 set enable_privilege_cache = off;
+use protected_bvt_proc;
+select nextval('s_ok');
+➤ nextval(s_ok)[12,-1,0]  𝄀
+1
+execute protected_later_ctas;
+internal error: do not have privilege to execute the statement
+execute protected_later_create;
+internal error: do not have privilege to execute the statement
+call protected_bvt_proc.write_later();
+internal error: do not have privilege to execute the statement
+deallocate prepare protected_later_ctas;
+deallocate prepare protected_later_create;
 use protected_bvt_db;
 show tables;
 ➤ Tables_in_protected_bvt_db[12,-1,0]  𝄀
@@ -130,6 +155,10 @@ create sequence protected_bvt_db.s1;
 create function protected_bvt_db.f1(a int) returns int language sql as '$1 + 1';
 create procedure protected_bvt_db.p1() 'begin select 1; end';
 set enable_privilege_cache = off;
+select nextval('s1');
+internal error: do not have privilege to execute the statement
+select setval('s1', 88);
+internal error: do not have privilege to execute the statement
 create database protected_bvt_normal;
 drop database protected_bvt_normal;
 create database protected_bvt_new;
@@ -224,6 +253,9 @@ internal error: do not have privilege to execute the statement
 set enable_privilege_cache = off;
 insert into protected_bvt_later.t1 values(11);
 internal error: do not have privilege to execute the statement
+execute protected_later_insert;
+internal error: do not have privilege to execute the statement
+deallocate prepare protected_later_insert;
 drop database protected_bvt_later;
 internal error: do not have privilege to execute the statement
 create database `CamelDB`;
@@ -239,6 +271,18 @@ set enable_privilege_cache = off;
 select @@lower_case_table_names;
 ➤ @@lower_case_table_names[12,0,0]  𝄀
 1
+select @@global.protected_databases;
+➤ @@protected_databases[12,0,0]  𝄀
+ProtectedCaseDB
+select @@protected_databases;
+➤ @@protected_databases[12,0,0]  𝄀
+ProtectedCaseDB
+select @@session.protected_databases;
+➤ @@protected_databases[12,0,0]  𝄀
+ProtectedCaseDB
+show session variables like 'protected_databases';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+protected_databases  ¦  ProtectedCaseDB
 create database `protectedcasedb`;
 internal error: do not have privilege to execute the statement
 drop database `protectedcasedb`;
@@ -253,6 +297,7 @@ drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;
 drop database protected_bvt_db;
 drop database protected_bvt_later;
+drop database protected_bvt_proc;
 drop database if exists `CamelDB`;
 set global protected_databases = 'protected_bvt_unused';
 set global lower_case_table_names = 1;

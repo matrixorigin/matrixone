@@ -37,6 +37,7 @@ type controlledLogtailer struct {
 	now       timestamp.Timestamp
 	tableFn   func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error)
 	barrierFn func(context.Context) (timestamp.Timestamp, error)
+	targetFn  func(api.TableID) (timestamp.Timestamp, bool)
 }
 
 var _ taelogtail.Logtailer = (*controlledLogtailer)(nil)
@@ -82,6 +83,16 @@ func (l *controlledLogtailer) ReadBarrier(ctx context.Context) (timestamp.Timest
 		return fn(ctx)
 	}
 	return frontier, nil
+}
+
+func (l *controlledLogtailer) TableReadTarget(table api.TableID) (timestamp.Timestamp, bool) {
+	l.mu.Lock()
+	fn := l.targetFn
+	l.mu.Unlock()
+	if fn == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return fn(table)
 }
 
 func (l *controlledLogtailer) notify(
@@ -174,22 +185,27 @@ func newUnitLogtailServerWithStart(
 	)
 	require.NoError(t, err)
 	if start {
-		require.NoError(t, server.Start())
-		// The production manager always emits a metadata-only first event to
-		// establish the publisher's ordering barrier. Unit fixtures must honor
-		// the same producer contract before exercising later phases.
-		bootstrapped := make(chan struct{})
-		require.NoError(t, logtailer.notify(
-			timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
-		))
-		select {
-		case <-bootstrapped:
-		case <-time.After(10 * time.Second):
-			t.Fatal("logtail sender did not consume the bootstrap event")
-		}
+		startUnitLogtailServer(t, server, logtailer)
 	}
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	return server
+}
+
+func startUnitLogtailServer(t *testing.T, server *LogtailServer, logtailer *controlledLogtailer) {
+	t.Helper()
+	require.NoError(t, server.Start())
+	// The production manager always emits a metadata-only first event to
+	// establish the publisher's ordering barrier. Unit fixtures must honor
+	// the same producer contract before exercising later phases.
+	bootstrapped := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
+	))
+	select {
+	case <-bootstrapped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("logtail sender did not consume the bootstrap event")
+	}
 }
 
 func newCaptureStream(session *captureSession) morpcStream {

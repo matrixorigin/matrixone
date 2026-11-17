@@ -98,6 +98,10 @@ func (m *IntHashMap) Cardinality() uint64 {
 }
 
 func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	// fillKeys advances keyOffs and writes through unsafe offsets, so every
+	// encoding must start with clean per-row scratch.
+	clear(itr.keys[:count])
+	copy(itr.keyOffs[:count], zeroUint32[:count])
 	for _, vec := range vecs {
 		switch vec.GetType().TypeSize() {
 		case 1:

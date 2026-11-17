@@ -344,6 +344,101 @@ tsestset
 SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo=concat('joce',char(0),'x');
 ➤ pseudo1[1,35,0]  𝄀
 nul_peer
+INSERT INTO t14(pseudo,pseudo1,same) VALUES('joce ','space_peer',1);
+SELECT mo_ctl('dn','flush','d1.t14');
+➤ mo_ctl(dn, flush, d1.t14)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT mo_ctl('dn','flush',cast(rel_id as varchar(32))) FROM mo_catalog.mo_tables
+WHERE reldatabase='d1' AND relname IN (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE name='pseudo');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+EXPLAIN SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo IN ('joce','joce ');
+-- @regex("Index Table Scan.*t14[.]pseudo", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo IN ('joce','joce ') ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+space_peer  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 IGNORE INDEX(pseudo) WHERE pseudo IN ('joce','joce ') ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+space_peer  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo >= 'joce' AND pseudo < 'jocf' ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+nul_peer  𝄀
+space_peer  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 IGNORE INDEX(pseudo) WHERE pseudo >= 'joce' AND pseudo < 'jocf' ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+nul_peer  𝄀
+space_peer  𝄀
+testtt  𝄀
+tsestset
+CREATE TABLE t_char_join(id int PRIMARY KEY,k char(8),KEY idx_char_join(k));
+CREATE TABLE t_char_dim(id int PRIMARY KEY,k char(8));
+INSERT INTO t_char_join VALUES (1,'a'),(2,'a '),(3,concat('a',char(0),'x')),(4,'b'),(5,NULL),(6,'a');
+INSERT INTO t_char_join SELECT result+100,concat('z',lpad(cast(result as varchar(12)),6,'0')) FROM generate_series(1,10000) g;
+INSERT INTO t_char_dim VALUES (11,'a'),(12,'a '),(13,concat('a',char(0),'x')),(14,'b'),(15,NULL);
+SELECT mo_ctl('dn','flush','d1.t_char_join');
+➤ mo_ctl(dn, flush, d1.t_char_join)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT mo_ctl('dn','flush',cast(rel_id as varchar(32))) FROM mo_catalog.mo_tables
+WHERE reldatabase='d1' AND relname IN (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE name='idx_char_join');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+EXPLAIN SELECT t.id,d.id FROM t_char_join t FORCE INDEX FOR JOIN(idx_char_join) STRAIGHT_JOIN t_char_dim d ON t.k=d.k;
+-- @regex("Index Table Scan.*idx_char_join", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+SELECT t.id,d.id FROM t_char_join t FORCE INDEX FOR JOIN(idx_char_join) STRAIGHT_JOIN t_char_dim d ON t.k=d.k;
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  13  𝄀
+4  ¦  14  𝄀
+6  ¦  11
+SELECT t.id,d.id FROM t_char_join t IGNORE INDEX FOR JOIN(idx_char_join) STRAIGHT_JOIN t_char_dim d ON t.k=d.k;
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  13  𝄀
+4  ¦  14  𝄀
+6  ¦  11
 drop table t1;
 create table t1(a bigint, b bigint default null, c int, primary key(a), key(b));
 insert into t1(a,b,c) select result,result%10, result from generate_series(1,3000000)g;

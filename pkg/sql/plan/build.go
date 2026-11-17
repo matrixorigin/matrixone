@@ -38,7 +38,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	skipStats bool,
-	validate func(*Query) error,
+	validate func(*Query, *BindContext) error,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -61,7 +61,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if validate != nil {
-		if err = validate(builder.qry); err != nil {
+		if err = validate(builder.qry, bindCtx); err != nil {
 			return nil, err
 		}
 	}

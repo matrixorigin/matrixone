@@ -233,6 +233,179 @@ execute zm_commuted using @zm_lower;
 200  𝄀
 201
 deallocate prepare zm_commuted;
+select k from clustered where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from clustered where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=2 (min=2, max=2) InputSize=8 bytes OutputSize=8 bytes ReadSize=48 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: clustered.k in ([100 150])  𝄀
+              Block Filter Cond: clustered.k in ([100 150])
+select k from interleaved where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from interleaved where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.interleaved  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: interleaved.k in ([100 150])  𝄀
+              Block Filter Cond: interleaved.k in ([100 150])
+create table period_values (id int primary key, period varchar(16), amount decimal(20,7));
+insert into period_values values (1,'2026.12',999),(2,null,999);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into period_values values (3,'2024.12',10),(4,'2024.12',20);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into period_values values (5,'2025.12',30),(6,'2025.12',40);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+explain analyze select count(*) from period_values where period in ('2025.12',null,'2024.12','2025.12');
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.period_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=4 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=96 bytes ReadSize=134 bytes|0 bytes|0 bytes MemorySize=100 bytes (min=100 bytes, max=100 bytes)  𝄀
+              Filter Cond: period_values.period in ([2025.12 2024.12 2025.12 ]-[3])  𝄀
+              Block Filter Cond: period_values.period in ([2025.12 2024.12 2025.12 ]-[3])
+select count(*) from period_values where period in (null,null);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from period_values where period not in ('2024.12',null);
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare zm_in from 'select id from period_values where period in (?,?) order by id';
+set @zm_first='2024.12';
+set @zm_second='2025.12';
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+set @zm_first=null;
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+set @zm_first='2024.12';
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+deallocate prepare zm_in;
+create table period_snapshot as
+with raw_data as (select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period)
+select row_number() over () as row_no, period, total from raw_data limit 2;
+select period,total from period_snapshot order by period;
+➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
+create table binary_in_values (id int primary key, k varbinary(128));
+insert into binary_in_values values (1,unhex(repeat('ff',31))),(2,unhex(repeat('ff',30))),(3,repeat('z',31)),(4,null);
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.binary_in_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+3
+select count(*) from binary_in_values where k in (null,null);
+➤ count(*)[-5,64,0]  𝄀
+0
+explain analyze select count(*) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128)));
+-- @regex("Table Scan on non_primary_zonemap[.]binary_in_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=116 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.binary_in_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=4 outputRows=1 (min=1, max=1) InputSize=188 bytes OutputSize=116 bytes ReadSize=118 bytes|0 bytes|0 bytes MemorySize=308 bytes (min=308 bytes, max=308 bytes)  𝄀
+              Filter Cond: binary_in_values.k in ([\x00 \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff])  𝄀
+              Block Filter Cond: binary_in_values.k in ([\x00 \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff])
 create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
 insert into range_bound values (1),(11),(21);
 prepare zm_partition from 'select a from range_bound where a = ?';
@@ -248,7 +421,220 @@ execute zm_partition using @zm_partition_value;
 ➤ a[4,32,0]  𝄀
 11
 deallocate prepare zm_partition;
+set optimizer_hints='';
+create table bool_values (id int, enabled bool);
+insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from bool_values where enabled = false order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select id from bool_values where enabled is null order by id;
+➤ id[4,32,0]  𝄀
+6
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+➤ left_count[-5,64,0]  𝄀
+2
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+➤ right_count[-5,64,0]  𝄀
+2
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
+➤ left_id[4,32,0]  ¦  right_id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+null  ¦  3
+create table bool_aggregate (b bool);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+insert into bool_aggregate values (false),(false);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select max(b) from bool_aggregate;
+➤ max(b)[-7,1,0]  𝄀
+0
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  false
+select count(1), max(b) from bool_aggregate;
+➤ count(1)[-5,64,0]  ¦  max(b)[-7,1,0]  𝄀
+2  ¦  0
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+0  ¦  0
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+truncate table bool_aggregate;
+insert into bool_aggregate values (true),(true);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+1  ¦  1
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+true  ¦  true
+truncate table bool_aggregate;
+insert into bool_aggregate values (false),(true),(null);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+0  ¦  1
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  1  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  true
+truncate table bool_aggregate;
+insert into bool_aggregate values (null),(null);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+null  ¦  null
 set optimizer_hints='blockFilter=2';
+select id,hex(k) from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  ¦  hex(k)[12,-1,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+select id from binary_in_values where k in (cast(unhex(repeat('ff',31)) as varbinary(128)),null,cast(unhex(repeat('ff',31)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from binary_in_values where k in (cast(unhex(repeat('ff',30)) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from binary_in_values where k in (cast(repeat('z',31) as varbinary(128)),cast(x'00' as varbinary(128))) order by id;
+➤ id[4,32,0]  𝄀
+3
+select k from clustered where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from clustered where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=22 bytes (min=22 bytes, max=22 bytes)  𝄀
+              Filter Cond: clustered.k in ([100 150])
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+➤ period[12,-1,0]  ¦  total[3,38,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+explain analyze select count(*) from period_values where period in ('2024.12','2025.12');
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.period_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=227 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+              Filter Cond: period_values.period in ([2024.12 2025.12])
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+➤ left_count[-5,64,0]  𝄀
+2
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+➤ right_count[-5,64,0]  𝄀
+2
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
+➤ left_id[4,32,0]  ¦  right_id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+null  ¦  3
 prepare zm_partition from 'select a from range_bound where a = ?';
 execute zm_partition using @zm_partition_value;
 ➤ a[4,32,0]  𝄀

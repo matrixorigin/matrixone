@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -680,4 +681,52 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 		require.NotEqual(t, Datetime(0), result, "Result should not be zero for %d microseconds", tc.microseconds)
 		require.Equal(t, tc.expected, result.String2(6), "Result should match expected for %d microseconds", tc.microseconds)
 	}
+}
+
+func TestAddIntervalFixedUnitOverflow(t *testing.T) {
+	start := DatetimeFromClock(2024, 12, 20, 0, 0, 0, 0)
+	units := []struct {
+		name       string
+		unit       IntervalType
+		multiplier int64
+	}{
+		{name: "second", unit: Second, multiplier: MicroSecsPerSec},
+		{name: "minute", unit: Minute, multiplier: MicroSecsPerSec * SecsPerMinute},
+		{name: "hour", unit: Hour, multiplier: MicroSecsPerSec * SecsPerHour},
+		{name: "day", unit: Day, multiplier: MicroSecsPerSec * SecsPerDay},
+		{name: "week", unit: Week, multiplier: MicroSecsPerSec * SecsPerWeek},
+	}
+	for _, tc := range units {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, delta := range []int64{1 << 58, -(1 << 58)} {
+				_, valid := start.AddInterval(delta, tc.unit, DateTimeType)
+				require.False(t, valid, "delta %d must not overflow while scaling", delta)
+			}
+
+			got, valid := start.AddInterval(1, tc.unit, DateTimeType)
+			require.True(t, valid)
+			require.Equal(t, start+Datetime(tc.multiplier), got)
+
+			got, valid = start.AddInterval(-1, tc.unit, DateTimeType)
+			require.True(t, valid)
+			require.Equal(t, start-Datetime(tc.multiplier), got)
+		})
+	}
+
+	got, valid := start.AddInterval(0, Second, DateTimeType)
+	require.True(t, valid)
+	require.Equal(t, start, got)
+
+	minimum := DatetimeFromClock(MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+	_, valid = minimum.AddInterval(-1, Second, DateTimeType)
+	require.False(t, valid)
+
+	// This overflows to a nonzero microsecond delta; reject the scale overflow,
+	// not only the special case that wraps to zero.
+	_, valid = start.AddInterval(3_054_967_482_088, Week, DateTimeType)
+	require.False(t, valid)
+
+	// The scaled delta still fits int64, but adding it to a nonzero datetime does not.
+	_, valid = start.AddInterval(math.MaxInt64/MicroSecsPerSec, Second, DateTimeType)
+	require.False(t, valid)
 }

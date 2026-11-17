@@ -86,6 +86,32 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
 	bat.ExtraBuf = nil
+	cache := &b.bytesCache[id]
+	if cache.retainedLimit > 0 {
+		var retained int64
+		for _, bs := range cache.buffers {
+			retained += int64(bs.Capacity())
+		}
+		// Keep smaller reusable blocks. Wide historical allocations cannot make
+		// the cache grow with every distinct column's maximum over the import.
+		for retained > cache.retainedLimit {
+			largest := -1
+			for i, bs := range cache.buffers {
+				if largest < 0 || bs.Capacity() > cache.buffers[largest].Capacity() {
+					largest = i
+				}
+			}
+			if largest < 0 {
+				break
+			}
+			bs := cache.buffers[largest]
+			retained -= int64(bs.Capacity())
+			bs.Free(mp)
+			cache.buffers[largest] = cache.buffers[len(cache.buffers)-1]
+			cache.buffers[len(cache.buffers)-1] = vector.DetachedBuffer{}
+			cache.buffers = cache.buffers[:len(cache.buffers)-1]
+		}
+	}
 
 	// put id into free list.
 	b.Lock()

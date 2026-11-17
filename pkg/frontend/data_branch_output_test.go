@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/url"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -2715,4 +2717,48 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func TestDataBranchOutputStoredEnumInsert(t *testing.T) {
+	ses := &Session{}
+	for _, wantErr := range []bool{false, true} {
+		t.Run(fmt.Sprintf("execution-error-%t", wantErr), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			output := &diffOutputTable{
+				databaseName: "d", tableName: "diff",
+				columnNames: []string{"source", "flag", "e", "n"},
+				enumDomains: map[int]plan2.Type{2: {
+					Id: int32(types.T_enum), Enumvalues: "3#3:a,b1:c0:", EnumEncoding: 1,
+				}},
+			}
+			bh.EXPECT().ExecStmt(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, statement tree.Statement) error {
+					rows := statement.(*tree.Insert).Rows.Select.(*tree.ValuesClause).Rows
+					for i, ordinal := range []uint16{0, 3} {
+						value := rows[i][2].(*tree.StoredEnumValue)
+						require.Equal(t, ordinal, value.Ordinal)
+						require.Equal(t, "3#3:a,b1:c0:", value.EnumValues)
+						require.Equal(t, uint32(1), value.EnumEncoding)
+					}
+					require.Equal(t, tree.P_null, rows[2][2].(*tree.NumVal).ValType)
+					// Other column literals keep their original assignment semantics.
+					require.Equal(t, "7", rows[0][3].(*tree.NumVal).String())
+					if wantErr {
+						return errors.New("insert failed")
+					}
+					return nil
+				})
+			if !wantErr {
+				bh.EXPECT().ClearExecResultSet()
+			}
+			err := output.insert(t.Context(), ses, bh, bytes.NewBufferString(
+				"('t','INSERT',0,7),('t','INSERT',3,8),('t','INSERT',NULL,9)"))
+			if wantErr {
+				require.ErrorContains(t, err, "insert failed")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

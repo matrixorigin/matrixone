@@ -441,7 +441,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
-				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zm, err := maxAndMinColumnZoneMap(ctx, fs, location, meta, uint16(cols[idx].Seqnum), tbl.getTxn().proc.Mp())
+				if err != nil {
+					return err
+				}
 				if !zm.IsInited() {
 					continue
 				}
@@ -450,7 +453,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 			}
 		} else {
 			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zms[idx], err = maxAndMinColumnZoneMap(ctx, fs, location, meta, uint16(cols[idx].Seqnum), tbl.getTxn().proc.Mp())
+				if err != nil {
+					return err
+				}
 				tableTypes[idx] = uint8(cols[idx].Typ.Id)
 			}
 			inited = true
@@ -1466,13 +1472,14 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tbl.tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:  attr.Attr.EnumVlaues,
+						Id:           int32(attr.Attr.Type.Oid),
+						Width:        attr.Attr.Type.Width,
+						Scale:        attr.Attr.Type.Scale,
+						AutoIncr:     attr.Attr.AutoIncrement,
+						Table:        tbl.tableName,
+						NotNullable:  attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:   attr.Attr.EnumVlaues,
+						EnumEncoding: attr.Attr.Type.GetEnumEncoding(),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1535,7 +1542,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 				}
 			}
 		}

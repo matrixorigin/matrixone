@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -131,7 +132,9 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 			return frontier, nil
 		},
 	}
-	server := newUnitLogtailServer(t, logtailer)
+	server := newUnitLogtailServerWithStart(t, logtailer, false)
+	server.readBarrierSlots = make(chan struct{}, 1)
+	startUnitLogtailServer(t, server, logtailer)
 	transport := newCaptureSession()
 	stream := newCaptureStream(transport)
 	session, err := server.getSession(stream)
@@ -163,8 +166,48 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 	require.NotNil(t, barrier)
 	require.Equal(t, uint64(7), barrier.BarrierId)
 	require.Equal(t, frontier, *barrier.Timestamp)
-	require.Empty(t, server.readBarrierSlots,
-		"the end-to-end admission slot must be released after response hand-off")
+	// Receiving the response does not wait for the publisher's deferred release.
+	// Reacquire the sole slot to synchronize with release and detect a leak.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	select {
+	case server.readBarrierSlots <- struct{}{}:
+		<-server.readBarrierSlots
+	case <-ctx.Done():
+		t.Fatal("the end-to-end admission slot was not released after response hand-off")
+	}
+}
+
+func TestTableReadTargetReturnsBoundWithoutPublishingProgress(t *testing.T) {
+	target := timestamp.Timestamp{PhysicalTime: 31, LogicalTime: 4}
+	requested := mockTable(1, 2, 3)
+	barrierCalled := false
+	logtailer := &controlledLogtailer{
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			barrierCalled = true
+			return timestamp.Timestamp{}, errors.New("table target unexpectedly fell back")
+		},
+		targetFn: func(table api.TableID) (timestamp.Timestamp, bool) {
+			require.Equal(t, requested, table)
+			return target, true
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	req := &logtail.ReadBarrierRequest{BarrierId: 9, TableReadTarget: &requested}
+	require.NoError(t, server.onReadBarrier(t.Context(), stream, req))
+	response := receiveCapturedLogtailResponse(t, transport).GetReadBarrierResponse()
+	require.NotNil(t, response)
+	require.Equal(t, uint64(9), response.BarrierId)
+	require.Equal(t, target, *response.Timestamp)
+	require.False(t, barrierCalled)
+	require.Empty(t, server.readBarrierSlots)
+	select {
+	case extra := <-transport.writes:
+		t.Fatalf("table target published a progress event: %T", extra)
+	default:
+	}
 }
 
 func TestReadBarrierServerAdmissionHonorsCancellation(t *testing.T) {

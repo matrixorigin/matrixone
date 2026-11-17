@@ -2500,6 +2500,16 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 				return nil, err
 			}
 
+			members, err := result.GetString(ctx, i, 7)
+			if err != nil {
+				return nil, err
+			}
+			if typ.Oid == types.T_enum {
+				if _, err := types.DecodeEnumMembers(members, typ.GetEnumEncoding()); err != nil {
+					return nil, err
+				}
+			}
+
 			cols = append(cols, &plan.ColDef{
 				TblName:    table,
 				DbName:     dbName,
@@ -2508,11 +2518,13 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 				OriginName: colName,
 				Hidden:     isHidden == 1,
 				Typ: plan.Type{
-					Id:          int32(typ.Oid),
-					Width:       typ.Width,
-					Scale:       typ.Scale,
-					Table:       table,
-					NotNullable: !def.NullAbility,
+					Id:           int32(typ.Oid),
+					Width:        typ.Width,
+					Scale:        typ.Scale,
+					Table:        table,
+					Enumvalues:   members,
+					EnumEncoding: typ.GetEnumEncoding(),
+					NotNullable:  !def.NullAbility,
 				},
 				Default: def,
 			})

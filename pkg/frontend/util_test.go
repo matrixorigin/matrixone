@@ -2001,6 +2001,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 				string(defBytes),
 				nil,
 				1,
+				"",
 			},
 		})
 		bh.sql2result[sql] = mrs
@@ -2048,6 +2049,10 @@ func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
 	mrs.AddColumn(col5)
 	mrs.AddColumn(col6)
 	mrs.AddColumn(col7)
+	col8 := &MysqlColumn{}
+	col8.SetName("attr_enum")
+	col8.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col8)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -2426,4 +2431,24 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
+}
+
+func TestExtractEnumDomainFromMoColumns(t *testing.T) {
+	typ := types.T_enum.ToType()
+	typ.SetEnumEncoding(1)
+	typeBytes, err := typ.Marshal()
+	require.NoError(t, err)
+	defaults, err := types.Encode(&plan2.Default{NullAbility: true})
+	require.NoError(t, err)
+	for _, payload := range []string{"2#3:a,b1:c", "2#7:a"} {
+		result := newMrsForTableColumnDef([][]interface{}{{"e", string(typeBytes), uint64(1), uint8(0), string(defaults), uint8(0), uint8(0), payload}})
+		cols, err := extractTableDefColumns([]ExecResult{result}, t.Context(), "db", "tbl")
+		if payload == "2#7:a" {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, uint32(1), cols[0].Typ.EnumEncoding)
+		require.Equal(t, payload, cols[0].Typ.Enumvalues)
+	}
 }

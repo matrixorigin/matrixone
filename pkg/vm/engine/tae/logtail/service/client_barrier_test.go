@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,55 @@ func TestLogtailClientReadBarrierCorrelatesConcurrentResponses(t *testing.T) {
 	first := <-firstC
 	require.NoError(t, first.err)
 	require.Equal(t, firstTS, first.ts)
+}
+
+func TestLogtailClientReadTableTargetCarriesTableIdentity(t *testing.T) {
+	requests := make(chan *logtail.ReadBarrierRequest, 1)
+	client := newBarrierTestClient(t, func(request *LogtailRequest) error {
+		requests <- request.GetReadBarrier()
+		return nil
+	})
+	table := api.TableID{DbId: 1, TbId: 2, AccId: 3, DbName: "mo_catalog", TbName: "policy"}
+	done := make(chan readBarrierResult, 1)
+	go func() {
+		ts, err := client.ReadTableTarget(t.Context(), table)
+		done <- readBarrierResult{timestamp: ts, err: err}
+	}()
+	request := <-requests
+	require.Equal(t, &table, request.GetTableReadTarget())
+	want := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 5}
+	client.completeReadBarrier(&logtail.ReadBarrierResponse{BarrierId: request.BarrierId, Timestamp: &want})
+	got := <-done
+	require.NoError(t, got.err)
+	require.Equal(t, want, got.timestamp)
+}
+
+func TestLogtailClientPeerTableReadTargetCapability(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(fmt.Sprintf("supported_%t", supported), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			recvC := make(chan morpc.Message, 1)
+			stream.EXPECT().Receive().Return(recvC, nil)
+			stream.EXPECT().Close(true).AnyTimes().Return(nil)
+			peer, err := NewLogtailClient(t.Context(), stream)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			response := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+				Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{
+					SupportsReadBarrier: true, SupportsTableReadTarget: supported,
+				}},
+			}}
+			segment, err := encodeBarrierTestResponse(response)
+			require.NoError(t, err)
+			recvC <- segment
+			_, err = peer.Receive(t.Context())
+			require.NoError(t, err)
+			got, err := peer.PeerSupportsTableReadTarget(t.Context())
+			require.NoError(t, err)
+			require.Equal(t, supported, got)
+		})
+	}
 }
 
 func TestLogtailClientReadBarrierBoundsPendingCorrelationState(t *testing.T) {

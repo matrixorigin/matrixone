@@ -5996,14 +5996,14 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1}
-			makeSql := func(entry privilegeEntry) {
+			makeSql := func(entry privilegeEntry, grantRole1 bool) {
 				pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
 					for _, roleId := range roles {
 						sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
 						convey.So(err, convey.ShouldBeNil)
-						if roleId == 1 {
+						if roleId == 1 && grantRole1 {
 							rows = [][]interface{}{
 								{1, true},
 							}
@@ -6017,7 +6017,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
-					makeSql(entry)
+					makeSql(entry, true)
 				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
@@ -6025,7 +6025,11 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.tableName = mi.tableName
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
-						makeSql(tempEntry)
+						makeSql(tempEntry, true)
+						for _, cover := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = cover
+							makeSql(tempEntry, false)
+						}
 					}
 				}
 			}
@@ -6112,6 +6116,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, cover := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = cover
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -11421,6 +11429,8 @@ type backgroundExecTest struct {
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	dropDatabaseIgnoresForeignKeys bool
+	executionAccountIDs            []uint32
+	executionDatabaseTypes         []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -11457,6 +11467,10 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	accountID, _ := defines.GetAccountId(ctx)
+	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
@@ -11471,6 +11485,8 @@ func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sql
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	return bt.sql2err[s]
 }
 
@@ -14829,7 +14845,7 @@ func TestDoCreateStage(t *testing.T) {
 }
 
 func TestDoAlterStage(t *testing.T) {
-	convey.Convey("doAlterStage success", t, func() {
+	convey.Convey("doAlterStage combined options success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -14868,13 +14884,16 @@ func TestDoAlterStage(t *testing.T) {
 				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
-				Exist: false,
+				Exist:       true,
+				Credentials: []string{"AWS_SECRET_KEY", "quoted'value"},
 			},
 			StatusOption: tree.StageStatus{
-				Exist: false,
+				Exist:  true,
+				Option: tree.StageStatusEnabled,
 			},
 			Comment: tree.StageComment{
-				Exist: false,
+				Exist:   true,
+				Comment: "quoted'comment",
 			},
 		}
 
@@ -15081,7 +15100,7 @@ func TestDoAlterStage(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("doAlterStage fail", t, func() {
+	convey.Convey("doAlterStage IF EXISTS missing combined options is a no-op", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -15141,7 +15160,7 @@ func TestDoAlterStage(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err := doAlterStage(ctx, ses, as)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
 	convey.Convey("doAlterStage fail", t, func() {

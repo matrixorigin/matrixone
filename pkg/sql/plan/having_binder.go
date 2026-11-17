@@ -107,7 +107,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if hasCorrCol(expr) {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
@@ -118,7 +118,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if hasCorrCol(expr) {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 

@@ -17,10 +17,64 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckAggOptimizeBoolMax(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		typ      types.T
+		aggs     []string
+		notNull  bool
+		eligible bool
+	}{
+		{"nullable max", types.T_bool, []string{"max"}, false, false},
+		{"not null max", types.T_bool, []string{"max"}, true, false},
+		{"min before max", types.T_bool, []string{"min", "max"}, false, false},
+		{"max before min", types.T_bool, []string{"max", "min"}, false, false},
+		{"count before max", types.T_bool, []string{"count", "max"}, false, false},
+		{"literal count before max", types.T_bool, []string{"literal count", "max"}, false, false},
+		{"bool min", types.T_bool, []string{"min"}, false, true},
+		{"integer max", types.T_int64, []string{"max"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &plan.Node{TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+				{Seqnum: 3, Typ: plan.Type{Id: int32(tc.typ), NotNullable: tc.notNull}},
+			}}}
+			for _, name := range tc.aggs {
+				if name == "literal count" {
+					node.AggList = append(node.AggList, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "count"},
+						Args: []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}},
+					}}})
+					continue
+				}
+				node.AggList = append(node.AggList, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{{Typ: plan.Type{Id: int32(tc.typ)}, Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 0},
+					}}},
+				}}})
+			}
+			results, resultTypes, columns := checkAggOptimize(node)
+			if tc.eligible {
+				require.Len(t, results, len(tc.aggs))
+				require.Len(t, resultTypes, len(tc.aggs))
+				require.Equal(t, map[int]int{0: 3}, columns)
+			} else {
+				require.Nil(t, results)
+				require.Nil(t, resultTypes)
+				require.Nil(t, columns)
+				if tc.name == "literal count before max" {
+					require.Equal(t, "count", node.AggList[0].GetF().Func.ObjName, "回落前不应部分改写聚合")
+				}
+			}
+		})
+	}
+}
 
 // wantObj: expected overload id after rewrite; 0 means do not assert (e.g. count unchanged).
 var wantCountStarObj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)

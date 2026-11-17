@@ -45,6 +45,7 @@ select @@global.protected_databases;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 create database protected_bvt_db;
 create database protected_bvt_later;
+create database protected_bvt_proc;
 create table protected_bvt_db.t1(a int primary key, b int);
 insert into protected_bvt_db.t1 values(1, 1);
 create index protected_bvt_idx on protected_bvt_db.t1(b);
@@ -71,17 +72,33 @@ insert into protected_bvt_db.fk_child values(1, 1);
 create table protected_bvt_db.fk_self(id int primary key, parent_id int, constraint fk_self_parent foreign key(parent_id) references protected_bvt_db.fk_self(id));
 create table protected_bvt_later.t1(a int);
 insert into protected_bvt_later.t1 values(10);
+create table protected_bvt_proc.prepared_ctas(n int);
+create table protected_bvt_proc.prepared_create(n int);
+create sequence protected_bvt_proc.s_ok;
+create procedure protected_bvt_proc.write_later() 'begin insert into protected_bvt_later.t1 values (99); end';
 create role protected_bvt_writer;
 grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
 grant ownership on database protected_bvt_db to protected_bvt_writer;
 grant all on table protected_bvt_db.* to protected_bvt_writer with grant option;
+grant select on view protected_bvt_db.v1 to protected_bvt_writer;
 grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
+grant all on database protected_bvt_proc to protected_bvt_writer;
+grant all on table protected_bvt_proc.* to protected_bvt_writer;
 grant connect on account * to protected_bvt_writer;
 
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
+
+-- Prepare while the target is writable, then reuse the same session after the policy changes.
+-- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
+use protected_bvt_later;
+prepare protected_later_insert from 'insert into protected_bvt_later.t1 values(11)';
+prepare protected_later_ctas from 'create table prepared_ctas as select 1 as n';
+prepare protected_later_create from 'create table prepared_create(n int)';
+-- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
 set enable_privilege_cache = off;
@@ -98,6 +115,13 @@ select a from t1;
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
+use protected_bvt_proc;
+select nextval('s_ok');
+execute protected_later_ctas;
+execute protected_later_create;
+call protected_bvt_proc.write_later();
+deallocate prepare protected_later_ctas;
+deallocate prepare protected_later_create;
 use protected_bvt_db;
 show tables;
 select a from t1;
@@ -114,6 +138,8 @@ create procedure protected_bvt_db.p1() 'begin select 1; end';
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
+select nextval('s1');
+select setval('s1', 88);
 create database protected_bvt_normal;
 drop database protected_bvt_normal;
 create database protected_bvt_new;
@@ -167,6 +193,8 @@ create table t_ctas as select * from t1;
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
 insert into protected_bvt_later.t1 values(11);
+execute protected_later_insert;
+deallocate prepare protected_later_insert;
 drop database protected_bvt_later;
 create database `CamelDB`;
 create database `cameldb`;
@@ -183,6 +211,10 @@ set global protected_databases = 'ProtectedCaseDB';
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
 select @@lower_case_table_names;
+select @@global.protected_databases;
+select @@protected_databases;
+select @@session.protected_databases;
+show session variables like 'protected_databases';
 create database `protectedcasedb`;
 drop database `protectedcasedb`;
 create database `ProtectedCaseDB`;
@@ -196,6 +228,7 @@ drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;
 drop database protected_bvt_db;
 drop database protected_bvt_later;
+drop database protected_bvt_proc;
 drop database if exists `CamelDB`;
 set global protected_databases = 'protected_bvt_unused';
 -- @session

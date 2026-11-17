@@ -55,9 +55,9 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 
-	// latestKnownDMLPrepare is the greatest visibility timestamp of accepted
-	// epoch-aware DML. An AUTO_INCREMENT reset uses it to reject a snapshot
-	// that did not observe a later durable write.
+	// latestKnownDMLPrepare bounds accepted epoch-aware DML prepares and
+	// committed table-data changes. An AUTO_INCREMENT reset uses it to reject
+	// a snapshot that did not observe a later durable write.
 	latestKnownDMLPrepare atomic.Pointer[types.TS]
 	replayedPreparedDML   struct {
 		sync.Mutex

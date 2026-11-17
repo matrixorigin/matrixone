@@ -686,6 +686,10 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 
 	if length > 0 {
 		err = SetConstBytes(vec, val, length, mp)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
 	}
 
 	return vec, err
@@ -699,6 +703,10 @@ func NewConstArray[T types.ArrayElement](typ types.Type, val []T, length int, mp
 
 	if length > 0 {
 		err = SetConstArray[T](vec, val, length, mp)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
 	}
 
 	return vec, err
@@ -1040,6 +1048,9 @@ type vectorPrimitiveWriter interface {
 }
 
 func writeVectorMarshalByte(w io.Writer, value byte) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		return buffer.WriteByte(value)
+	}
 	if typed, ok := w.(vectorPrimitiveWriter); ok {
 		return typed.WriteByte(value)
 	}
@@ -1049,6 +1060,10 @@ func writeVectorMarshalByte(w io.Writer, value byte) error {
 }
 
 func writeVectorMarshalUint32(w io.Writer, value uint32) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint32(buffer.AvailableBuffer(), uint32(value)))
+		return nil
+	}
 	if typed, ok := w.(vectorPrimitiveWriter); ok {
 		return typed.WriteUint32(value)
 	}
@@ -2073,7 +2088,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	}
 }
 
-// Shuffle use to shrink vectors, sels can be disordered
+// Shuffle selects rows in sels order. It preserves ascending metadata only for
+// nondecreasing selections; arbitrary permutations cannot certify value order.
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -2082,6 +2098,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		return nil
 	}
 
+	// sels can share the input data, so check before replacing it.
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheck[bool](v, sels, mp)
@@ -2140,6 +2158,10 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
+	if err == nil && clearSorted {
+		v.sorted = false
+	}
+
 	return err
 }
 
@@ -2165,6 +2187,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		return v.Shuffle(sels, mp)
 	}
 
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -2221,6 +2244,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	if err == nil && clearSorted {
+		v.sorted = false
 	}
 
 	return err
@@ -3051,62 +3078,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
-		return func(v, w *Vector) error {
-			if w.IsConstNull() {
-				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
-					return err
-				}
-				return nil
-			}
-			ws := MustFixedColNoTypeCheck[types.Varlena](w)
-			if w.IsConst() {
-				if err := appendMultiBytes(v, ws[0].GetByteSlice(w.area), false, w.length, mp); err != nil {
-					return err
-				}
-				return nil
-			}
-			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
-				return err
-			}
-			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := v.growArea(mp, sz)
-				if err != nil {
-					return err
-				}
-				v.area = area[:len(v.area)]
-			}
-
-			var err error
-			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
-			if w.gsp.Any() {
-				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
-			}
-
-			bm := w.nsp.GetBitmap()
-			if bm != nil && !bm.EmptyByFlag() {
-				for i := range ws {
-					if bm.Contains(uint64(i)) {
-						vs[v.length] = types.Varlena{}
-						nulls.Add(&v.nsp, uint64(v.length))
-					} else {
-						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
-						if err != nil {
-							return err
-						}
-					}
-					v.length++
-				}
-			} else {
-				for i := range ws {
-					err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
-					if err != nil {
-						return err
-					}
-					v.length++
-				}
-			}
-			return nil
-		}
+		return func(v, w *Vector) error { return v.UnionBatch(w, 0, w.length, nil, mp) }
 	case types.T_Blockid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -3886,12 +3858,10 @@ func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, pay
 		return err
 	}
 
+	appendBatchGrouping(v, w, v.length, offset, cnt, flags)
 	if w.IsConst() {
 		oldLen := v.length
 		v.length += addCnt
-		if w.IsGrouping() {
-			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
-		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
@@ -3914,7 +3884,6 @@ func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, pay
 
 		return nil
 	}
-	appendBatchGrouping(v, w, v.length, offset, cnt, flags)
 
 	if v.GetType().IsVarlen() {
 		var err error
@@ -4614,29 +4583,12 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 		areaEnd = len(w.area)
 		hasArea = areaEnd > 0
 	} else {
-		for i := offset; i < offset+cnt; i++ {
-			if hasNull && w.nsp.Contains(uint64(i)) {
-				continue
-			}
-			s := &wCol[i]
-			if s.IsSmall() {
-				continue
-			}
-			off, length := s.OffsetLen()
-			end := uint64(off) + uint64(length)
-			if end > uint64(len(w.area)) {
-				return false, nil
-			}
-			if !hasArea {
-				areaStart, areaEnd = int(off), int(end)
-				hasArea = true
-				continue
-			}
-			if int(off) != areaEnd {
-				return false, nil
-			}
-			areaEnd = int(end)
+		var connected bool
+		areaStart, areaEnd, connected = w.connectedWindowArea(offset, offset+cnt)
+		if !connected {
+			return false, nil
 		}
+		hasArea = areaEnd > areaStart
 	}
 
 	oldLen := v.length
@@ -5326,9 +5278,10 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	copy(v.data[:needed], *buf)
+	// Consume selectors before copying over data they may reference.
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
+	copy(v.data[:needed], *buf)
 	v.length = ns
 	return nil
 }
@@ -5654,14 +5607,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					first = false
 				} else {
 					minVal = minVal && col[i]
-					maxVal = maxVal && col[i]
+					maxVal = maxVal || col[i]
 				}
 			}
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
 				minVal = minVal && col[i]
-				maxVal = maxVal && col[i]
+				maxVal = maxVal || col[i]
 			}
 		}
 		minv = types.EncodeBool(&minVal)
@@ -6019,6 +5972,27 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 }
 
 // InplaceSortAndCompact @todo optimization in the future
+// varlenaSorter compares descriptors in place so each comparison does not
+// copy two 24-byte descriptors. The area remains owned by the vector.
+type varlenaSorter struct {
+	col  []types.Varlena
+	area []byte
+}
+
+func (s varlenaSorter) Len() int { return len(s.col) }
+
+func (s varlenaSorter) Less(i, j int) bool {
+	return bytes.Compare(s.col[i].GetByteSlice(s.area), s.col[j].GetByteSlice(s.area)) < 0
+}
+
+func (s varlenaSorter) Swap(i, j int) { s.col[i], s.col[j] = s.col[j], s.col[i] }
+
+func sortVarlena(col []types.Varlena, area []byte) {
+	if len(col) > 1 {
+		sort.Sort(varlenaSorter{col: col, area: area})
+	}
+}
+
 func (v *Vector) InplaceSortAndCompact() {
 	cleanDataNotResetArea := func() {
 		if v.data != nil {
@@ -6332,9 +6306,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
@@ -6569,9 +6541,7 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)

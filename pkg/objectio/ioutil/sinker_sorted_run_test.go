@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,7 +38,7 @@ import (
 func TestSpillBoundedRunsReadBack(t *testing.T) {
 	for _, pipeline := range []bool{false, true} {
 		for _, sortKey := range []int{0, -1} {
-			for _, shape := range []string{"disjoint", "constant", "constant_short", "aliased"} {
+			for _, shape := range []string{"disjoint", "constant", "constant_short", "aliased", "byte_window"} {
 				t.Run(fmt.Sprintf("pipeline=%t/sortKey=%d/%s", pipeline, sortKey, shape), func(t *testing.T) {
 					ctx := context.Background()
 					fs := testutil.NewSharedFS()
@@ -87,7 +88,20 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 					}
 					input.SetRowCount(rows)
 					const limit = 1024
+					objectLimit := limit
 					opts := []SinkerOption{WithMemorySizeThreshold(limit), WithByteBoundedRuns(), WithTailSizeCap(0)}
+					var workspace *rscthrottler.WorkingSet
+					if shape == "byte_window" {
+						objectLimit = limit / 2
+						bound, err := IOEnvelope([][]types.Type{typs}, int64(objectLimit), int64(objectLimit))
+						require.NoError(t, err)
+						m := rscthrottler.NewMemThrottler("spill-byte-window", 1, rscthrottler.WithConstLimit(8<<30))
+						workspace, err = m.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx,
+							[]rscthrottler.WorkingSetSpec{{UnitBytes: int64(objectLimit), IOBytes: 3 * bound}})
+						require.NoError(t, err)
+						t.Cleanup(workspace.Close)
+						opts = append(opts, WithBufferBytes(int64(objectLimit)), WithMemoryWorkspace(workspace))
+					}
 					if pipeline {
 						opts = append(opts, WithPipelineFlush())
 					}
@@ -128,11 +142,17 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 							}
 							return true
 						}, stat)
-						require.LessOrEqual(t, objectBytes, limit, "each complete object must fit the run budget")
+						require.LessOrEqual(t, objectBytes, objectLimit, "each complete object must fit the run and IO window budgets")
 					}
 					require.Len(t, seen, rows)
 					for i := int32(0); i < rows; i++ {
 						require.True(t, seen[i])
+					}
+					if workspace != nil {
+						lease, err := workspace.TryAcquireIO(ctx, workspace.IOBytes())
+						require.NoError(t, err)
+						require.NotNil(t, lease, "all spill IO reservations must be returned after Sync")
+						lease.Release()
 					}
 				})
 			}
@@ -1004,12 +1024,15 @@ func TestFetchBufferDetachesAccountedBorrowedVectors(t *testing.T) {
 	view.SetRowCount(4)
 	buffer := containers.NewBatchFreeList(attrs, typs, true)
 	buffer.Putback(view, mp)
-	sink := NewSinker(0, attrs, typs, nil, mp, nil, WithBuffer(buffer, false), WithByteBoundedRuns())
+	sink := NewSinker(0, attrs, typs, nil, mp, nil, WithBuffer(buffer, false), WithByteBoundedRuns(), WithBufferBytes(1<<20))
 	input := batch.NewWithSchema(false, attrs, typs)
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(9), false, mp))
 	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("new"), false, mp))
 	input.SetRowCount(1)
+	predicted := sink.AppendAllocation(input)
+	before := mp.AllocatedBytes()
 	require.NoError(t, sink.Write(context.Background(), input))
+	require.GreaterOrEqual(t, predicted, mp.AllocatedBytes()-before, "forecast must account for detaching borrowed destinations")
 	require.Same(t, selection, sink.staged.inMemory[0].Vecs[1].AllocationAccountSelection())
 	require.Equal(t, "source-0", string(source.Vecs[1].GetBytesAt(0)))
 	require.True(t, source.Vecs[1].GetNulls().Contains(1))

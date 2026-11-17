@@ -1377,9 +1377,15 @@ func generateConstExpressionExecutor(
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		if err == nil {
-			vec.SetIsBin(con.IsBin)
+		if err != nil {
+			// A failed constructor may already own its header allocation.
+			// Retire any partial result before the executor is published.
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+			return nil, err
 		}
+		vec.SetIsBin(con.IsBin)
 	}
 	return vec, err
 }
@@ -1620,6 +1626,10 @@ func getConstZM(
 	return
 }
 
+// EvaluateFilterByZoneMap reuses caller-owned scratch for one immutable
+// expression/AuxId generation and one mpool. The owner must serialize evaluations
+// and free every non-nil vecs entry on success, error, cancellation and rebind.
+// Only immutable IN candidates are cached; function temporaries are call-local.
 func EvaluateFilterByZoneMap(
 	ctx context.Context, // why we need a context here, to escape trace?
 	proc *process.Process,
@@ -1657,13 +1667,6 @@ func EvaluateFilterByZoneMap(
 		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
 
-	// clean the vector.
-	for i := range vecs {
-		if vecs[i] != nil {
-			vecs[i].Free(proc.Mp())
-			vecs[i] = nil
-		}
-	}
 	return
 }
 
@@ -1746,6 +1749,13 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
+				valueType := vecs[rid].GetType()
+				if lhs.GetType().IsDecimal() &&
+					(lhs.GetType() != valueType.Oid || lhs.GetScale() != valueType.Scale) {
+					// AnyIn compares raw decimal coefficients.
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 
@@ -1798,10 +1808,9 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
-						vecs[rid] = vec
-					} else {
+						vecs[rid], _ = vector.UnmarshalPrefixInVector(data.Vec.Data)
+					}
+					if vecs[rid] == nil {
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
@@ -1985,23 +1994,16 @@ func GetExprZoneMap(
 
 			default:
 				ivecs := make([]*vector.Vector, len(args))
+				defer func() {
+					for _, v := range ivecs {
+						if v != nil {
+							v.Free(proc.Mp())
+						}
+					}
+				}()
 				if isAllConst(args) { // constant fold
-					defer func() {
-						for _, v := range ivecs {
-							if v != nil {
-								v.Free(proc.Mp())
-							}
-						}
-					}()
 					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
-						}
-						if vecs[arg.AuxId], _, err = GetReadonlyResultFromNoColumnExpression(proc, arg); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
-						}
-						if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
+						if ivecs[i], err = GetWritableResultFromNoColumnExpression(proc, arg); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
 						}
@@ -2011,14 +2013,11 @@ func GetExprZoneMap(
 						return zms[expr.AuxId]
 					}
 					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
-						}
-						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+						// Select the current metadata type/scale, never a previous block's.
+						if ivecs[i], err = index.ZMToVector(zms[arg.AuxId], nil, proc.Mp()); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
 						}
-						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
 				fn, _, fnFree, _ := overload.GetExecuteMethod()

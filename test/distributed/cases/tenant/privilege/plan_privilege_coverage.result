@@ -1,0 +1,88 @@
+drop account if exists plan_privilege_coverage;
+create account plan_privilege_coverage admin_name 'admin' identified by '111';
+create database plan_auth_src;
+create database plan_auth_dst;
+create table plan_auth_src.m(period int, amount int);
+insert into plan_auth_src.m values (1,10),(1,20),(2,60),(2,null);
+create view plan_auth_src.v as select period,amount from plan_auth_src.m;
+create table plan_auth_dst.t(v bigint);
+create table plan_auth_dst.r(id int primary key, v int);
+insert into plan_auth_dst.r values (1,1);
+create role plan_auth_writer;
+grant connect on account * to plan_auth_writer;
+grant select on table plan_auth_src.* to plan_auth_writer;
+grant select on view plan_auth_src.v to plan_auth_writer;
+grant all on table plan_auth_dst.* to plan_auth_writer;
+create user plan_auth_user identified by '111' default role plan_auth_writer;
+set enable_privilege_cache = on;
+prepare shared_write from 'insert into plan_auth_dst.t select u.v from (with grouped as (select period,sum(amount) total from plan_auth_src.m group by period), totals as (select max(total) mx,min(total) mn from grouped) select mx v from totals union all select mn v from totals) u limit 2';
+execute shared_write;
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+2  ¦  90
+revoke select on table plan_auth_src.* from plan_auth_writer;
+select count(*) from plan_auth_src.m;
+internal error: do not have privilege to execute the statement
+select count(*) from plan_auth_src.v;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from plan_auth_src.v v join plan_auth_src.m m on v.period=m.period;
+internal error: do not have privilege to execute the statement
+execute shared_write;
+internal error: do not have privilege to execute the statement
+insert into plan_auth_dst.t select amount from plan_auth_src.m;
+internal error: do not have privilege to execute the statement
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+2  ¦  90
+set enable_privilege_cache = off;
+select count(*) from plan_auth_src.v;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from plan_auth_src.v v join plan_auth_src.m m on v.period=m.period;
+internal error: do not have privilege to execute the statement
+execute shared_write;
+internal error: do not have privilege to execute the statement
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+2  ¦  90
+grant select on table plan_auth_src.* to plan_auth_writer;
+revoke select on view plan_auth_src.v from plan_auth_writer;
+execute shared_write;
+select count(*) from plan_auth_src.v;
+internal error: do not have privilege to execute the statement
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+4  ¦  180
+revoke select on table plan_auth_src.* from plan_auth_writer;
+grant all on table plan_auth_src.* to plan_auth_writer;
+revoke all on table plan_auth_dst.* from plan_auth_writer;
+select count(*) from plan_auth_src.v;
+internal error: do not have privilege to execute the statement
+execute shared_write;
+internal error: do not have privilege to execute the statement
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+4  ¦  180
+grant insert on table plan_auth_dst.* to plan_auth_writer;
+grant select on table plan_auth_dst.* to plan_auth_writer;
+execute shared_write;
+replace into plan_auth_dst.r values (1,2);
+internal error: do not have privilege to execute the statement
+select count(*),sum(v) from plan_auth_dst.t;
+➤ count(*)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+6  ¦  270
+select id,v from plan_auth_dst.r;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+grant delete on table plan_auth_dst.* to plan_auth_writer;
+replace into plan_auth_dst.r values (1,2);
+deallocate prepare shared_write;
+select id,v from plan_auth_dst.r;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  2
+drop user plan_auth_user;
+drop role plan_auth_writer;
+drop database plan_auth_src;
+drop database plan_auth_dst;
+drop account plan_privilege_coverage;

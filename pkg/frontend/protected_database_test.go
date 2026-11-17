@@ -16,11 +16,22 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,4 +208,401 @@ func TestCanWriteProtectedDatabase(t *testing.T) {
 
 func ptrTo[T any](v T) *T {
 	return &v
+}
+
+func TestReadProtectedPolicyCatalog(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{}
+	ses.SetTenantInfo(&TenantInfo{TenantID: 42})
+	sql := "select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = 42 and system_variables = true and variable_name = 'protected_databases'"
+	for _, tc := range []struct {
+		name     string
+		rows     [][]interface{}
+		queryErr error
+		want     string
+		fail     bool
+	}{
+		{name: "missing uses empty default"},
+		{name: "one policy", rows: [][]interface{}{{"db1,db2"}}, want: "db1,db2"},
+		{name: "null fails closed", rows: [][]interface{}{{nil}}, fail: true},
+		{name: "duplicate fails closed", rows: [][]interface{}{{"db1"}, {"db2"}}, fail: true},
+		{name: "query error", queryErr: errors.New("catalog unavailable"), fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[sql] = newMrsForSqlForShowDatabases(tc.rows)
+			bh.sql2err[sql] = tc.queryErr
+			got, err := readProtectedPolicy(ctx, ses, bh)
+			if tc.fail {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
+		})
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	bh := &backgroundExecTest{}
+	bh.init()
+	_, err := readProtectedPolicy(canceled, ses, bh)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, bh.executedSQLs)
+}
+
+func TestProtectedPolicyCertificateInvalidation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+	reader := &authorizationVersionReader{}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, reader, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	snapshot := timestamp.Timestamp{PhysicalTime: 100}
+	proof := protectedPolicyCertificate{account: 3, reusableFrom: snapshot}
+	require.True(t, proof.valid(t.Context(), ses, snapshot))
+	reader.versions[0].Revision++
+	require.False(t, proof.valid(t.Context(), ses, snapshot))
+	reader.versions[0].Revision--
+	require.False(t, proof.valid(t.Context(), ses, timestamp.Timestamp{PhysicalTime: 99}))
+	ses.SetTenantInfo(&TenantInfo{TenantID: 4})
+	require.False(t, proof.valid(t.Context(), ses, snapshot))
+	ses.SetTenantInfo(&TenantInfo{TenantID: 3})
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.False(t, proof.valid(canceled, ses, snapshot))
+}
+
+type protectedPolicyTargetEngine struct {
+	engine.Engine
+	snapshot   timestamp.Timestamp
+	frontier   timestamp.Timestamp
+	generation uint64
+	supported  bool
+	table      api.TableID
+	min        timestamp.Timestamp
+	waited     timestamp.Timestamp
+	versions   [4]engine.TableContentVersion
+}
+
+func (e *protectedPolicyTargetEngine) AcquirePeerLogtailReadBarrier(ctx context.Context) (timestamp.Timestamp, bool, error) {
+	return e.frontier, true, ctx.Err()
+}
+
+func (e *protectedPolicyTargetEngine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	e.waited = min
+	return min.Next(), ctx.Err()
+}
+
+func (e *protectedPolicyTargetEngine) AcquirePeerTableReadSnapshot(_ context.Context, table api.TableID, min timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error) {
+	e.table, e.min = table, min
+	return e.snapshot, e.generation, e.supported, nil
+}
+
+func (e *protectedPolicyTargetEngine) ReadTableContentVersions(_ context.Context, _ timestamp.Timestamp, deps []engine.TableContentDependency, versions []engine.TableContentVersion) bool {
+	if len(deps) != len(e.versions) || len(versions) != len(e.versions) {
+		return false
+	}
+	copy(versions, e.versions[:])
+	return true
+}
+
+func TestProtectedPolicyCachedSnapshotRequiresSameReplayGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+	min := timestamp.Timestamp{PhysicalTime: 10}
+	snapshot := timestamp.Timestamp{PhysicalTime: 20}
+	versions := [4]engine.TableContentVersion{
+		{Replay: 7, Revision: 1},
+		{Replay: 7, Revision: 2},
+		{Replay: 7, Revision: 3},
+		{Replay: 7, Revision: 4},
+	}
+	eng := &protectedPolicyTargetEngine{snapshot: snapshot, generation: 7, supported: true, versions: versions}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	proof := protectedPolicyCertificate{
+		account: 3,
+		dependency: [4]engine.TableContentDependency{
+			{DatabaseID: catalog.MO_CATALOG_ID, TableID: 400},
+			{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_DATABASE_ID},
+			{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_TABLES_ID},
+			{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_COLUMNS_ID},
+		},
+		version: versions, reusableFrom: min, value: "guarded",
+	}
+
+	got, supported, err := protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, snapshot, got)
+	require.Equal(t, api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: 400, AccId: 3, DbName: catalog.MO_CATALOG, TbName: "mo_mysql_compatibility_mode"}, eng.table)
+	require.Equal(t, ses.getLastCommitTS(), eng.min)
+
+	eng.generation++
+	got, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
+	require.NoError(t, err)
+	require.True(t, supported, "a supported but stale generation must use the stronger fallback")
+	require.True(t, got.IsEmpty())
+
+	eng.supported = false
+	_, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
+	require.NoError(t, err)
+	require.False(t, supported, "an older TN must select the existing ordered barrier")
+}
+
+type policySnapshotClient struct {
+	client.TxnClient
+	snapshot timestamp.Timestamp
+	err      error
+}
+
+func (c *policySnapshotClient) ReadSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return c.snapshot, c.err
+}
+
+func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
+	readErr := errors.New("authorization snapshot unavailable")
+	for _, tc := range []struct {
+		name      string
+		prior     bool
+		supported bool
+		commit    int64
+		target    int64
+		readErr   error
+		wantErr   bool
+	}{
+		{name: "fresh authorization", supported: true, target: 200},
+		{name: "prior authorization", prior: true, supported: true, target: 200},
+		{name: "session commit floor", supported: true, commit: 175, target: 200},
+		{name: "ordered fallback", supported: false},
+		{name: "authorization read fails", supported: true, readErr: readErr, wantErr: true},
+		{name: "target below floor fails closed", supported: true, target: 140, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+
+			general := timestamp.Timestamp{PhysicalTime: 150}
+			versions := [4]engine.TableContentVersion{{Replay: 7}, {Replay: 7}, {Replay: 7}, {Replay: 7}}
+			eng := &protectedPolicyTargetEngine{snapshot: timestamp.Timestamp{PhysicalTime: tc.target}, frontier: timestamp.Timestamp{PhysicalTime: 120}, generation: 7, supported: tc.supported, versions: versions}
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, nil, nil)
+			pu.SV.SetDefaultValues()
+			txnClient := &policySnapshotClient{snapshot: general, err: tc.readErr}
+			pu.TxnClient = txnClient
+			setPu("", pu)
+
+			ctx := t.Context()
+			execution := &ExecCtx{reqCtx: ctx, ses: ses}
+			if tc.prior {
+				general.PhysicalTime = 170
+				execution.authorizationSnapshot = general
+			}
+			if tc.commit != 0 {
+				ses.updateLastCommitTS(timestamp.Timestamp{PhysicalTime: tc.commit})
+			}
+			ses.GetTxnCompileCtx().SetExecCtx(execution)
+			ses.GetPrivilegeCache().protectedPolicy = protectedPolicyCertificate{
+				account: 3,
+				dependency: [4]engine.TableContentDependency{
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: 400},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_DATABASE_ID},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_TABLES_ID},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_COLUMNS_ID},
+				},
+				version: versions, reusableFrom: timestamp.Timestamp{PhysicalTime: 100}, value: "guarded",
+			}
+
+			value, err := protectedPolicyValueForStatement(ctx, ses)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.readErr != nil {
+					require.ErrorIs(t, err, tc.readErr)
+				}
+				require.False(t, execution.protectedPolicyLoaded)
+				require.True(t, execution.authorizationSnapshot.IsEmpty())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "guarded", value)
+			min := general.Prev()
+			if commit := ses.getLastCommitTS(); commit.Greater(min) {
+				min = commit
+			}
+			if tc.supported {
+				require.Equal(t, min, eng.min, "policy snapshot must include authorization visibility")
+				require.Equal(t, eng.snapshot, execution.authorizationSnapshot)
+			} else {
+				require.Equal(t, min, eng.waited, "fallback must retain authorization visibility")
+				require.Equal(t, min.Next(), execution.authorizationSnapshot)
+			}
+		})
+	}
+}
+
+type observedCancelContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *observedCancelContext) Err() error {
+	c.once.Do(func() { close(c.checked) })
+	return c.Context.Err()
+}
+
+func TestAuthorizationWaitHonorsCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		read func(context.Context, *Session) error
+	}{
+		{name: "policy", read: func(ctx context.Context, ses *Session) error {
+			_, err := protectedPolicyValueForStatement(ctx, ses)
+			return err
+		}},
+		{name: "authorization", read: func(ctx context.Context, ses *Session) error {
+			_, err := authorizationReadSnapshot(ctx, ses)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.TxnClient = &authorizationSnapshotReader{snapshot: timestamp.Timestamp{PhysicalTime: 100}}
+			setPu("", pu)
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &observedCancelContext{Context: base, checked: make(chan struct{})}
+			execution := &ExecCtx{
+				reqCtx: ctx, ses: ses, authorizationSnapshot: timestamp.Timestamp{PhysicalTime: 100},
+				protectedPolicyLoaded: true, protectedPolicyRaw: "guarded",
+			}
+			ses.GetTxnCompileCtx().SetExecCtx(execution)
+			execution.authorizationMu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- tc.read(ctx, ses) }()
+			<-ctx.checked
+			cancel()
+			execution.authorizationMu.Unlock()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
+}
+
+type policyConcurrentEngine struct {
+	engine.Engine
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (e *policyConcurrentEngine) AcquirePeerLogtailReadBarrier(ctx context.Context) (timestamp.Timestamp, bool, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.entered)
+	}
+	select {
+	case <-e.release:
+		return timestamp.Timestamp{PhysicalTime: 100}, true, nil
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, true, ctx.Err()
+	}
+}
+
+func (*policyConcurrentEngine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return min.Next(), ctx.Err()
+}
+
+func (*policyConcurrentEngine) ReadTableContentVersions(ctx context.Context, _ timestamp.Timestamp, _ []engine.TableContentDependency, out []engine.TableContentVersion) bool {
+	out[0] = engine.TableContentVersion{}
+	return ctx.Err() == nil
+}
+
+type policyConcurrentTxnClient struct{ client.TxnClient }
+
+func (*policyConcurrentTxnClient) ReadSnapshot(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{PhysicalTime: 100}, ctx.Err()
+}
+
+func TestProtectedPolicyConcurrentStatementReads(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+	ses.SetFromRealUser(true)
+	eng := &policyConcurrentEngine{entered: make(chan struct{}), release: make(chan struct{})}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.TxnClient = &policyConcurrentTxnClient{}
+	setPu("", pu)
+	ctx := t.Context()
+	execution := &ExecCtx{reqCtx: ctx, ses: ses}
+	ses.GetTxnCompileCtx().SetExecCtx(execution)
+	ses.GetPrivilegeCache().protectedPolicy = protectedPolicyCertificate{account: 3, reusableFrom: timestamp.Timestamp{PhysicalTime: 99}, value: "guarded"}
+	const n = 24
+	var ready, done sync.WaitGroup
+	ready.Add(n)
+	done.Add(n)
+	start := make(chan struct{})
+	failures := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			value, err := ses.GetTxnCompileCtx().ResolveVariable(ProtectedDatabases, true, true)
+			if err != nil {
+				failures <- err
+			} else if value != "guarded" {
+				failures <- fmt.Errorf("unexpected policy %q", value)
+			}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	<-eng.entered
+	close(eng.release)
+	done.Wait()
+	close(failures)
+	for err := range failures {
+		t.Error(err)
+	}
+	require.EqualValues(t, 1, eng.calls.Load(), "a statement loads the policy once")
+}
+
+func TestProtectedPolicyCanceledLoadCanRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+	ses.SetFromRealUser(true)
+	eng := &policyConcurrentEngine{entered: make(chan struct{}), release: make(chan struct{})}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.TxnClient = &policyConcurrentTxnClient{}
+	setPu("", pu)
+	ctx, cancel := context.WithCancel(t.Context())
+	execution := &ExecCtx{reqCtx: ctx, ses: ses}
+	ses.GetTxnCompileCtx().SetExecCtx(execution)
+	ses.GetPrivilegeCache().protectedPolicy = protectedPolicyCertificate{account: 3, reusableFrom: timestamp.Timestamp{PhysicalTime: 99}, value: "guarded"}
+	done := make(chan error, 1)
+	go func() { _, err := ses.GetTxnCompileCtx().ResolveVariable(ProtectedDatabases, true, true); done <- err }()
+	<-eng.entered
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.False(t, execution.protectedPolicyLoaded)
+	execution.reqCtx = t.Context()
+	close(eng.release)
+	value, err := ses.GetTxnCompileCtx().ResolveVariable(ProtectedDatabases, true, true)
+	require.NoError(t, err)
+	require.Equal(t, "guarded", value)
 }

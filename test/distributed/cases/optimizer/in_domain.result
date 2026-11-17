@@ -11,7 +11,8 @@ explain select a from t1 where a in (1,2,3,4) and a not in (2,3);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 4])
+        Filter Cond: t1.a in ([1 4])  𝄀
+        Block Filter Cond: t1.a in ([1 4]), t1.a in ([1 2 3 4])
 select a from t1 where a in (1,2,3,4) and a != 2 and a != 3 order by a;
 ➤ a[4,32,0]  𝄀
 1  𝄀
@@ -20,14 +21,16 @@ explain select a from t1 where a in (1,2,3,4) and a != 2 and a != 3;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 4])
+        Filter Cond: t1.a in ([1 4])  𝄀
+        Block Filter Cond: t1.a in ([1 4]), t1.a in ([1 2 3 4])
 select a from t1 where a in (1,2) and a not in (1,2);
 ➤ a[4,32,0]
 explain select a from t1 where a in (1,2) and a not in (1,2);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: false
+        Filter Cond: false  𝄀
+        Block Filter Cond: t1.a in ([1 2])
 select a from t1 where a = 2 and a in (1,2,3);
 ➤ a[4,32,0]  𝄀
 2
@@ -36,14 +39,15 @@ explain select a from t1 where a = 2 and a in (1,2,3);
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
         Filter Cond: (t1.a = 2)  𝄀
-        Block Filter Cond: (t1.a = 2)
+        Block Filter Cond: (t1.a = 2), t1.a in ([1 2 3])
 select a from t1 where a in (1,2) and a in (3,4);
 ➤ a[4,32,0]
 explain select a from t1 where a in (1,2) and a in (3,4);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: false
+        Filter Cond: false  𝄀
+        Block Filter Cond: t1.a in ([1 2]), t1.a in ([3 4])
 select a from t1 where a in (1,2,3,4) and (a not in (2,3) or a = 99) order by a;
 ➤ a[4,32,0]  𝄀
 1  𝄀
@@ -52,7 +56,8 @@ explain select a from t1 where a in (1,2,3,4) and (a not in (2,3) or a = 99);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])
+        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])  𝄀
+        Block Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])
 select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6 order by a;
 ➤ a[4,32,0]  𝄀
 3  𝄀
@@ -64,7 +69,7 @@ explain select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6;
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
         Filter Cond: t1.a in ([1 2 3 4 5 6 7 8]), t1.a BETWEEN 3 AND 6  𝄀
-        Block Filter Cond: t1.a BETWEEN 3 AND 6
+        Block Filter Cond: t1.a in ([1 2 3 4 5 6 7 8]), t1.a BETWEEN 3 AND 6
 insert into t1 values (101, 2);
 insert into t1 values (102, 2);
 select a,b from t1 where a in (1,101,102) and b != 2 order by a;
@@ -74,7 +79,8 @@ explain select a,b from t1 where a in (1,101,102) and b != 2;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 101 102]), (t1.b <> 2)
+        Filter Cond: t1.a in ([1 101 102]), (t1.b <> 2)  𝄀
+        Block Filter Cond: t1.a in ([1 101 102])
 delete from t1 where a in (101, 102);
 create table t2(a int, b int);
 insert into t2 values (1,1),(2,2),(null,3);
@@ -84,7 +90,8 @@ explain select * from t2 where a in (1,2,3) and a is null;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t2  𝄀
-        Filter Cond: false
+        Filter Cond: false  𝄀
+        Block Filter Cond: t2.a in ([1 2 3])
 select a from t1 where a in (1,2,3,4) and (a <> 2 or a = 99) order by a;
 ➤ a[4,32,0]  𝄀
 1  𝄀
@@ -94,7 +101,8 @@ explain select a from t1 where a in (1,2,3,4) and (a <> 2 or a = 99);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 3 4 99])
+        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 3 4 99])  𝄀
+        Block Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 3 4 99])
 select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) or a = 99) order by a;
 ➤ a[4,32,0]  𝄀
 1  𝄀
@@ -103,7 +111,8 @@ explain select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) o
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])
+        Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])  𝄀
+        Block Filter Cond: t1.a in ([1 2 3 4]), t1.a in ([1 4 99])
 select a from t1 where a in (1,2,3,4) and a not in (2, null) order by a;
 ➤ a[4,32,0]
 select a from t1 where a in (1,2,3,4) and (a not in (2, null) or a = 99) order by a;
@@ -112,7 +121,8 @@ explain select a from t1 where a in (1,2,3,4) and a not in (2, null);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t1  𝄀
-        Filter Cond: (t1.a != (null)), t1.a in ([1 3 4])
+        Filter Cond: (t1.a != (null)), t1.a in ([1 3 4])  𝄀
+        Block Filter Cond: t1.a in ([1 3 4]), t1.a in ([1 2 3 4])
 create table t3 (
 code varchar(255) not null,
 id   bigint not null auto_increment,
@@ -142,7 +152,16 @@ or (code is not null and code not in (5001010000, 5001020000, 6401010000)));
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t3  𝄀
-        Filter Cond: prefix_in(t3.__mo_cpkey_col), ((((cast(t3.code AS DOUBLE) = 5001010000) or (cast(t3.code AS DOUBLE) = 5001020000) or (cast(t3.code AS DOUBLE) = 6401010000)) and (t3.bveh = 'TFUA1000')) or ((t3.code IS NOT NULL) and (cast(t3.code AS DOUBLE) != 5001010000) and (cast(t3.code AS DOUBLE) != 5001020000) and (cast(t3.code AS DOUBLE) != 6401010000)))
+        Filter Cond: prefix_in(t3.__mo_cpkey_col), ((((cast(t3.code AS DOUBLE) = 5001010000) or (cast(t3.code AS DOUBLE) = 5001020000) or (cast(t3.code AS DOUBLE) = 6401010000)) and (t3.bveh = 'TFUA1000')) or ((((t3.code IS NOT NULL) and (cast(t3.code AS DOUBLE) != 5001010000)) and (cast(t3.code AS DOUBLE) != 5001020000)) and (cast(t3.code AS DOUBLE) != 6401010000))), t3.code in ([4999999010 5001010000 5001020000 6401010000])
               -- HINT: Cast expression may prevent index usage  𝄀
-        Block Filter Cond: prefix_in(t3.__mo_cpkey_col), t3.code in ([4999999010 5001010000 5001020000 6401010000])
+        Block Filter Cond: t3.code in ([4999999010 5001010000 5001020000 6401010000]), prefix_in(t3.__mo_cpkey_col)
+insert into t3 (code, bveh) values (concat('4999999010',char(0),'x'),'NUL');
+explain select code,bveh from t3 where code in ('4999999010','5001010000');
+-- @regex("prefix_in", true)
+-- @regex("Filter Cond:.*t3[.]code in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+select code,bveh from t3 where code in ('4999999010','5001010000') order by code;
+➤ code[12,-1,0]  ¦  bveh[12,-1,0]  𝄀
+4999999010  ¦  OTHER  𝄀
+5001010000  ¦  TFUA1000
 drop database if exists d_indomain;

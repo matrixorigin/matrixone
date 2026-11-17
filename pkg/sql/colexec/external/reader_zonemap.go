@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +37,10 @@ type ZonemapReader struct {
 	param       *ExternalParam
 	zoneparam   *ZonemapFileparam
 	blockReader *ioutil.BlockReader
+	// Scratch belongs to one Open generation and its exact allocation pool.
+	zms  []objectio.ZoneMap
+	vecs []*vector.Vector
+	mp   *mpool.MPool
 }
 
 // NewZonemapReader creates a ZonemapReader.
@@ -50,15 +55,39 @@ func NewZonemapReader(param *ExternalParam, proc *process.Process) *ZonemapReade
 }
 
 func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
+	_ = r.Close()
 	r.param = param
+	// Block metadata (zone maps, null counts) is indexed by physical file
+	// column, but param.Filter.columnMap was resolved against the (possibly
+	// pruned) output schema. Translate it through the physical file indexes
+	// before block pruning (issue #30571 follow-up, filtered projections).
+	translateZonemapFilterColumnMap(param)
 	r.blockReader, err = ioutil.NewFileReader(
 		param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
+		_ = r.Close()
 		return false, err
 	}
 	r.zoneparam.offset = 0
 	r.zoneparam.bs = nil
 	return false, nil
+}
+
+// translateZonemapFilterColumnMap rewrites a filter columnMap that was
+// resolved against the scan output schema so each referenced column maps to
+// its physical file index. Zone maps and null counts in block metadata are
+// indexed by physical file column, and column projection may prune the
+// output schema without affecting the file layout.
+func translateZonemapFilterColumnMap(param *ExternalParam) {
+	if param.Filter == nil || len(param.Filter.columnMap) == 0 {
+		return
+	}
+	for _, attr := range param.Attrs {
+		key := int(attr.ColIndex)
+		if _, ok := param.Filter.columnMap[key]; ok {
+			param.Filter.columnMap[key] = int(attr.ColFieldIndex)
+		}
+	}
 }
 
 func (r *ZonemapReader) ReadBatch(
@@ -104,6 +133,7 @@ func (r *ZonemapReader) ReadBatch(
 }
 
 func (r *ZonemapReader) Close() error {
+	r.clearZoneMapScratch()
 	r.blockReader = nil
 	r.zoneparam.bs = nil
 	r.zoneparam.offset = 0
@@ -127,18 +157,26 @@ func (r *ZonemapReader) needRead(ctx context.Context, proc *process.Process) boo
 
 	meta := r.zoneparam.bs[r.zoneparam.offset]
 	columnMap := r.param.Filter.columnMap
-	var (
-		zms  []objectio.ZoneMap
-		vecs []*vector.Vector
-	)
-
-	if r.param.Filter.AuxIdCnt > 0 {
-		zms = make([]objectio.ZoneMap, r.param.Filter.AuxIdCnt)
-		vecs = make([]*vector.Vector, r.param.Filter.AuxIdCnt)
+	if r.mp != proc.Mp() {
+		r.clearZoneMapScratch()
+		r.mp = proc.Mp()
+		if r.param.Filter.AuxIdCnt > 0 {
+			r.zms = make([]objectio.ZoneMap, r.param.Filter.AuxIdCnt)
+			r.vecs = make([]*vector.Vector, r.param.Filter.AuxIdCnt)
+		}
 	}
 
 	return colexec.EvaluateFilterByZoneMap(
-		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
+		notReportErrCtx, proc, expr, meta, columnMap, r.zms, r.vecs)
+}
+
+func (r *ZonemapReader) clearZoneMapScratch() {
+	for _, vec := range r.vecs {
+		if vec != nil {
+			vec.Free(r.mp)
+		}
+	}
+	r.zms, r.vecs, r.mp = nil, nil, nil
 }
 
 // getBatchFromZonemapFile reads one block from the zonemap file into bat.
@@ -178,10 +216,16 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 	meta := r.zoneparam.bs[r.zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Attrs[i].ColIndex)
-		if idxs[i] >= colCnt {
-			idxs[i] = 0
+		// Column positions inside the file live in ColFieldIndex: the query
+		// may prune or projection-reorder the scan schema, remapping ColIndex
+		// to the position in the output schema. Using ColIndex here reads
+		// the wrong file column (issue #30571).
+		fieldIdx := param.Attrs[i].ColFieldIndex
+		if fieldIdx < 0 || fieldIdx >= int32(colCnt) {
+			idxs[i] = 0 // column absent from the file; an all-null column is produced below
+			continue
 		}
+		idxs[i] = uint16(fieldIdx)
 	}
 
 	var err error
@@ -194,8 +238,9 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 
 	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Attrs[i].ColIndex) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
+		attr := &param.Attrs[i]
+		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= int32(colCnt) {
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[attr.ColIndex].Typ, false), rows, nil)
 			if err != nil {
 				return err
 			}
