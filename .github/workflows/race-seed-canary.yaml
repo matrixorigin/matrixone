@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,25 @@ permissions:
   contents: read
 
 jobs:
+  node-cache-diagnose:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && contains(fromJSON('["mty-node-cache-diagnose","mnl2-node-cache-diagnose"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: ${{ format('cs-pvc-comparison-{0}', startsWith(inputs.coverage_comparison, 'mty-') && 'mty' || 'mnl2') }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    uses: matrixorigin/CI/.github/workflows/node-cache-diagnose.yaml@77ea629591c48dab72b15ca0f66247f98a945fad
+    with:
+      node_cache_environment: ${{ startsWith(inputs.coverage_comparison, 'mty-') && 'mty' || 'mnl2' }}
+      diagnostic_group: ${{ startsWith(inputs.coverage_comparison, 'mty-') && 1 || 0 }}
+      group_count: 2
+      source_sha: ${{ inputs.matrixone_sha }}
+      node_compile_cache: true
+      node_cache_candidate: true
+      coverage_compile_cache: false
+      cache_seed: false
+    secrets: inherit
   node-cache-full-acceptance:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && contains(fromJSON('["mty-node-cache-2","mty-node-cache-3","jed-node-cache-2","jed-node-cache-3","ruh-node-cache-2","ruh-node-cache-3","mnl2-node-cache-2","mnl2-node-cache-3"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
