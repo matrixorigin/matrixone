@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
@@ -301,6 +302,18 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 }
 
 func TestHandleGetChangedList(t *testing.T) {
+	originalLogger := logutil.GetGlobalLogger()
+	t.Cleanup(func() {
+		require.Same(t, originalLogger, logutil.GetGlobalLogger(), "test must restore the process-global logger")
+	})
+	var restoreLogger func() bool
+	// Register before fixture cleanup, so those cleanups still run with DEBUG.
+	t.Cleanup(func() {
+		if restoreLogger != nil && !restoreLogger() {
+			t.Error("the process-global logger was reconfigured during the test scope")
+		}
+	})
+
 	defer leaktest.AfterTest(t)()
 	var opts testutil.TestOptions
 
@@ -334,6 +347,32 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
+		// The original data size exercises CN-created multi-block objects.
+		// Check before compaction can replace those objects.
+		func() {
+			readTxn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, readTxn.Rollback(p.Ctx)) }()
+			readTxn.BindAccessInfo(0, 0, 0)
+			readDB, err := readTxn.GetDatabase(dbName)
+			require.NoError(t, err)
+			readRel, err := readDB.GetRelationByName(schema.Name)
+			require.NoError(t, err)
+			cnObjects := 0
+			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
+				if object.HasDropCommitted() {
+					continue
+				}
+				stats := object.GetObjectStats()
+				if stats.GetCNCreated() {
+					cnObjects++
+					require.EqualValues(t, rowsCnt, stats.Rows(), "table %s must retain the CN-created rows", schema.Name)
+					require.EqualValues(t, 2, stats.BlkCnt(), "table %s must retain the original two-block object", schema.Name)
+				}
+			}
+			require.Equal(t, 1, cnObjects, "table %s must retain one CN-created object", schema.Name)
+		}()
+
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		txn, _ := p.T.StartTxn()
 		ts := txn.GetStartTS()
@@ -360,9 +399,10 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
 
-	logutil.SetupMOLogger(&logutil.LogConfig{
+	restoreLogger = logutil.SetupMOLoggerForTest(&logutil.LogConfig{
 		Level: "debug",
 	})
+	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel))
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)

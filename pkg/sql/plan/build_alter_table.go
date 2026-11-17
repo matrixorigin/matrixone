@@ -526,6 +526,23 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 	}
 
+	// CHECK expressions retain the original catalog coordinates throughout the
+	// schema clauses. Validate them only against the final source-to-target
+	// replay, never against a reordered intermediate column slice. The same
+	// replay will preserve their bound identity in the internal CREATE.
+	var checkReplay *persistedDDLReplay
+	for _, check := range copyTableDef.Checks {
+		if !containsLegacyCRC32(check.GetCheck()) {
+			continue
+		}
+		if checkReplay == nil {
+			checkReplay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
+		}
+		if checkReplay == nil || checkReplay.checks[strings.ToLower(check.Name)] == nil {
+			return nil, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+		}
+	}
+
 	// Generated values are recomputed from the original table rows under the
 	// final schema. Rebuild indexes on every generated dependent, not just the
 	// directly modified column; otherwise COPY could clone stale index entries.
@@ -1492,6 +1509,27 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else if isKafka {
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
+	}
+
+	// A read-only file mapping (CSV/JSONLINE/Parquet) cannot take the
+	// copy-based ALTER route: the data-copy step fails only later with the
+	// generic insert/update/delete error, which misreports an unsupported
+	// ALTER as a DML problem (issue #31920). Reject it here so the diagnostic
+	// names the ALTER itself; writable file mappings keep their own
+	// INSERT/LOAD contract, and their ALTER behavior is unchanged here.
+	if IsFileExternalTableDef(tableDef) && !IsWritableFileExternalTableDef(tableDef) {
+		if AlterAddsIndexOrConstraint(stmt) {
+			// Constraint/index sub-actions keep their dedicated diagnostic:
+			// delegate to the established index type rejection. It rejects
+			// every external relation, and on an unexpected nil the typed
+			// read-only rejection below still fires, so a read-only file
+			// mapping is never admitted into the data-copy ALTER route.
+			if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+				return nil, err
+			}
+		}
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema")
 	}
 
 	if tableDef.IsTemporary {

@@ -25,15 +25,15 @@ import (
 // bootstrap. StartTestCluster only guarantees that the CN is listening; tenant
 // DDL must wait for these tables before it competes with bootstrap work.
 func WaitSystemBootstrap(ctx context.Context, db *sql.DB) error {
-	want := map[string]struct{}{
-		"sys_async_task":  {},
-		"sys_cron_task":   {},
-		"sys_daemon_task": {},
-		"sql_task":        {},
-		"sql_task_run":    {},
-	}
-
 	for {
+		want := map[string]struct{}{
+			"sys_async_task":  {},
+			"sys_cron_task":   {},
+			"sys_daemon_task": {},
+			"sql_task":        {},
+			"sql_task_run":    {},
+		}
+
 		rows, err := db.QueryContext(ctx, "show tables from mo_task")
 		if err == nil {
 			err = func() error {

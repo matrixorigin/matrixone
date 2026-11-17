@@ -123,6 +123,13 @@ func (e *decimalTypedExecutor) Eval(p *process.Process, b []*batch.Batch, s []bo
 	if !decimalMulSubSource(x, e.left, n) || !decimalMulSubSource(y, e.right, n) || x.IsConst() || y.IsConst() || x.HasNull() || y.HasNull() {
 		return e.root.Eval(p, b, s)
 	}
+	operands := [2]*vector.Vector{x, y}
+	flat, err := e.root.normalizeDictionaryParameters(operands[:], false)
+	if err != nil {
+		return nil, err
+	}
+	x, y = flat[0], flat[1]
+
 	e.root.resetResultType(e.root.resultVector)
 	if err = e.root.resultVector.PreExtendAndReset(n); err != nil {
 		return nil, err

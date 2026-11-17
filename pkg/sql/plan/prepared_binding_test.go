@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1585,11 +1586,26 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 	}
 }
 
+type preparedBitCountWarning struct {
+	code    uint16
+	message string
+}
+
+type preparedBitCountWarningSink struct {
+	warnings []preparedBitCountWarning
+}
+
+func (s *preparedBitCountWarningSink) AppendWarningDiagnostic(code uint16, message string) {
+	s.warnings = append(s.warnings, preparedBitCountWarning{code: code, message: message})
+}
+
 func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
+	decimal256 := types.New(types.T_decimal256, 65, 30)
 	for _, tc := range []struct {
 		name, sql, value, want   string
 		source, numeric, latch   types.Type
 		null, dependent, decimal bool
+		warningType              string
 	}{
 		{name: "prefix absent", sql: "coalesce(?, cast('7' as decimal(6,2)))", value: "abc", want: "abc", source: types.T_varchar.ToType(), dependent: true},
 		{name: "prefix zero", sql: "coalesce(?, cast('7' as decimal(6,2)))", value: "0xx", want: "0.00", source: types.T_varchar.ToType(), dependent: true, decimal: true},
@@ -1607,6 +1623,34 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 		{name: "bit count initial", sql: "bit_count(?)", value: "64", want: "7", source: types.T_varchar.ToType()},
 		{name: "bit count numeric", sql: "bit_count(?)", value: "64", want: "1", source: types.T_int32.ToType(), latch: types.T_int64.ToType()},
 		{name: "bit count latched", sql: "bit_count(?)", value: "65", want: "2", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count latched numeric prefix", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count latched binary numeric prefix", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varbinary.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed exponent", sql: "bit_count(?)", value: "1e2", want: "3", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed fraction", sql: "bit_count(?)", value: "2.5", want: "2", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed negative fraction", sql: "bit_count(?)", value: "-1.9", want: "63", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed suffix", sql: "bit_count(?)", value: "1.9x", want: "1", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed invalid", sql: "bit_count(?)", value: "abc", want: "0", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed empty", sql: "bit_count(?)", value: "", want: "0", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed overflow", sql: "bit_count(?)", value: "9223372036854775808", want: "63", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count signed negative overflow", sql: "bit_count(?)", value: "-9223372036854775809", want: "1", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count unsigned negative", sql: "bit_count(?)", value: "-1", want: "64", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType()},
+		{name: "bit count unsigned maximum", sql: "bit_count(?)", value: "18446744073709551615", want: "63", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count unsigned overflow", sql: "bit_count(?)", value: "18446744073709551616", want: "63", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count double fraction", sql: "bit_count(?)", value: "2.5", want: "1", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		// Extreme values retain the existing numeric DOUBLE consumer's behavior;
+		// changing direct numeric overflow semantics is outside this repair.
+		{name: "bit count double large finite", sql: "bit_count(?)", value: "1e20", want: "64", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		{name: "bit count double positive infinity", sql: "bit_count(?)", value: "1e309", want: "64", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count double negative infinity", sql: "bit_count(?)", value: "-1e309", want: "1", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count double underflow", sql: "bit_count(?)", value: "1e-4000", want: "0", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		{name: "bit count decimal exponent", sql: "bit_count(?)", value: "1e2", want: "3", source: types.T_varchar.ToType(), latch: decimal256},
+		{name: "bit count decimal fraction", sql: "bit_count(?)", value: "2.5", want: "2", source: types.T_varchar.ToType(), latch: decimal256},
+		{name: "bit count decimal suffix", sql: "bit_count(?)", value: "1.9x", want: "1", source: types.T_varchar.ToType(), latch: decimal256, warningType: "INTEGER"},
+		{name: "bit count decimal invalid", sql: "bit_count(?)", value: "abc", want: "0", source: types.T_varchar.ToType(), latch: decimal256, warningType: "INTEGER"},
+		{name: "bit count latched double fractional time", sql: "bit_count(?)", value: "00:00:00.500000", want: "1", source: types.T_time.ToTypeWithScale(6), latch: types.T_float64.ToType()},
+		{name: "bit count latched double datetime calendar carry", sql: "bit_count(?)", value: "2024-02-29 23:59:59.500000", want: "20", source: types.T_datetime.ToTypeWithScale(6), latch: types.T_float64.ToType()},
+		{name: "bit count latched double text after temporal", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count latched double null after temporal", sql: "bit_count(?)", null: true, source: types.T_any.ToType(), latch: types.T_float64.ToType()},
 		{name: "bit count null", sql: "bit_count(?)", null: true, source: types.T_any.ToType(), latch: types.T_int64.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1637,6 +1681,10 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			textType := types.T_varchar.ToType()
 			display, err := makePlan2CastExpr(proc.Ctx, expr, makePlan2Type(&textType))
 			require.NoError(t, err)
+			warnings := &preparedBitCountWarningSink{}
+			if tc.sql == "bit_count(?)" {
+				proc.WarningSink = warnings
+			}
 			result, free, err := colexec.GetReadonlyResultFromExpression(proc, display, []*batch.Batch{batch.EmptyForConstFoldBatch})
 			if free != nil {
 				defer free()
@@ -1645,6 +1693,16 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			require.Equal(t, tc.null, result.IsNull(0))
 			if !tc.null {
 				require.Equal(t, tc.want, result.GetStringAt(0))
+			}
+			if tc.sql == "bit_count(?)" {
+				if tc.warningType == "" {
+					require.Empty(t, warnings.warnings)
+				} else {
+					require.Equal(t, []preparedBitCountWarning{{
+						code:    moerr.ER_TRUNCATED_WRONG_VALUE,
+						message: fmt.Sprintf("Truncated incorrect %s value: '%s'", tc.warningType, tc.value),
+					}}, warnings.warnings)
+				}
 			}
 		})
 	}

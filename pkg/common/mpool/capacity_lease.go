@@ -37,11 +37,30 @@ type CapacityReservation struct {
 // CapacityLease is the sole release owner for committed non-MPool capacity.
 type CapacityLease struct {
 	account       *AllocationAccount
+	admission     func()
 	owner         AllocationOwner
 	site          AllocationSite
 	capacityClass AllocationCapacityClass
 	capacity      uint64
 	released      atomic.Bool
+}
+
+// NewAdmittedCapacityLease owns one opaque reservation until Release.
+func NewAdmittedCapacityLease(capacity uint64, admit PhysicalMemoryAdmission) (*CapacityLease, error) {
+	if admit == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	release, err := admit(capacity)
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return nil, err
+	}
+	if release == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	return &CapacityLease{admission: release, capacity: capacity}, nil
 }
 
 // ReserveCapacity reserves non-MPool capacity against the statement's default
@@ -149,7 +168,14 @@ func (l *CapacityLease) Site() AllocationSite {
 }
 
 func (l *CapacityLease) Release() {
-	if l == nil || l.account == nil || !l.released.CompareAndSwap(false, true) {
+	if l == nil || !l.released.CompareAndSwap(false, true) {
+		return
+	}
+	if l.admission != nil {
+		l.admission()
+		return
+	}
+	if l.account == nil {
 		return
 	}
 	l.account.registry.releaseCommittedCapacity(l.capacity)

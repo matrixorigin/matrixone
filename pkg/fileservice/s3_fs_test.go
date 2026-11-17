@@ -22,6 +22,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3162,10 +3163,19 @@ func TestS3FSFromSpecs(t *testing.T) {
 	for _, args := range objectStorageArgumentsForTest("test", t) {
 
 		t.Run(args.Name, func(t *testing.T) {
+			csPrefix := args.Name == "cs-s3"
+			fixturePrefix := args.KeyPrefix
+			if csPrefix {
+				prepareCITestStorage(t, args)
+			}
 
 			testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 				args.Name = name
-				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+				if csPrefix {
+					args.KeyPrefix = path.Join(fixturePrefix, time.Now().Format("2006-01-02.15:04:05.000000"))
+				} else {
+					args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+				}
 
 				fs, err := NewS3FS(
 					ctx,

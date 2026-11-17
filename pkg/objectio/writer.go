@@ -267,7 +267,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		fileName:      fileName,
 		name:          name,
 		object:        object,
-		buffer:        NewObjectBuffer(fileName),
+		buffer:        newObjectWriterBuffer(fileName),
 		blocks:        make([][]blockData, 2),
 		lastId:        0,
 		sortKeySeqnum: math.MaxUint16,
@@ -287,7 +287,7 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 		fileName:      fileName,
 		name:          name,
 		object:        object,
-		buffer:        NewObjectBuffer(fileName),
+		buffer:        newObjectWriterBuffer(fileName),
 		blocks:        make([][]blockData, 2),
 		lastId:        0,
 		sortKeySeqnum: math.MaxUint16,
@@ -814,6 +814,21 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 		return nil, extent, moerr.NewInternalErrorNoCtx("compressed column exceeds supported size")
 	}
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
+	// The unused arena tail can hold the whole compression bound. Compress
+	// directly there and commit only the bytes written, avoiding a temporary
+	// scratch allocation and copy. Aliased input must use the ordinary path.
+	if w.arena != nil && compressBlockBound <= len(w.arena.data)-w.arena.usedOffset {
+		out := w.arena.data[w.arena.usedOffset : w.arena.usedOffset+compressBlockBound]
+		if !compressionBuffersOverlap(buf, out) {
+			n, err := w.lz4c.CompressBlock(buf, out)
+			if err != nil {
+				return nil, extent, err
+			}
+			data = w.arena.Alloc(n)
+			extent = NewExtent(compress.Lz4, offset, uint32(n), uint32(dataLen))
+			return data, extent, nil
+		}
+	}
 	var compressBuf []byte
 	if w.arena != nil {
 		compressBuf, err = w.arena.compressBufChecked(compressBlockBound)

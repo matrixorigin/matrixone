@@ -10,7 +10,7 @@ This module provides enhanced JSON type that supports:
 import json
 from typing import Union
 
-from sqlalchemy import cast, String
+from sqlalchemy import and_, cast, func, or_, String
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.sql.expression import ColumnElement
@@ -134,39 +134,71 @@ class JSONPathElement(ColumnElement):
         # Extract value and compare
         extracted = json_extract(self.column, self._current_path)
 
-        # Smart quote handling
+        if isinstance(other, bool):
+            # SQL boolean literals would pair JSON with BOOL, which released
+            # MatrixOne servers cannot cast. Compare in the string domain,
+            # scoped to JSON booleans by json_type, so JSON booleans stay a
+            # separate category from JSON strings.
+            return and_(
+                func.json_type(extracted) == 'BOOLEAN',
+                cast(extracted, String) == ('true' if other else 'false'),
+            )
         if isinstance(other, str):
-            # Don't add quotes for boolean strings or if already quoted
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            if other in ('true', 'false', 'null'):
+                # Untyped JSON scalar keywords are ordinary strings for the
+                # caller: they match JSON strings holding these words, never
+                # the JSON literal true/false/null values. json_type keeps
+                # the categories apart; json_extract_string compares the
+                # unquoted string value.
+                return and_(
+                    func.json_type(extracted) == 'STRING',
+                    json_extract_string(
+                        self.column, self._current_path
+                    ) == other,
+                )
+            # Preserve explicitly quoted JSON inputs; normal Python strings
+            # are JSON strings
+            if other.startswith('"'):
                 other_value = other
             else:
                 # Add quotes for regular strings
                 other_value = json.dumps(other, ensure_ascii=False)
-        elif isinstance(other, bool):
-            # Convert Python bool to JSON boolean string
-            other_value = 'true' if other else 'false'
-        else:
-            # Numbers and other types: use as-is
-            other_value = other
-
-        return extracted == other_value
+            return extracted == other_value
+        # Numbers and other types: use as-is
+        return extracted == other
 
     def __ne__(self, other):
         """Support inequality comparison with smart quote handling."""
+        # Extract value and compare
         extracted = json_extract(self.column, self._current_path)
 
-        # Smart quote handling (same as __eq__)
+        if isinstance(other, bool):
+            # SQL boolean literals would pair JSON with BOOL, which released
+            # MatrixOne servers cannot cast. Negate the string-domain form:
+            # keep rows that are not JSON booleans, or whose serialized
+            # literal differs from the comparand.
+            return or_(
+                func.json_type(extracted) != 'BOOLEAN',
+                cast(extracted, String) != ('true' if other else 'false'),
+            )
         if isinstance(other, str):
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            if other in ('true', 'false', 'null'):
+                # Untyped JSON scalar keywords are ordinary strings for the
+                # caller: they match JSON strings holding these words, never
+                # the JSON literal true/false/null values.
+                return or_(
+                    func.json_type(extracted) != 'STRING',
+                    json_extract_string(
+                        self.column, self._current_path
+                    ) != other,
+                )
+            if other.startswith('"'):
                 other_value = other
             else:
                 other_value = json.dumps(other, ensure_ascii=False)
-        elif isinstance(other, bool):
-            other_value = 'true' if other else 'false'
-        else:
-            other_value = other
-
-        return extracted != other_value
+            return extracted != other_value
+        # Numbers and other types: use as-is
+        return extracted != other
 
     def __gt__(self, other):
         """Support greater than comparison."""

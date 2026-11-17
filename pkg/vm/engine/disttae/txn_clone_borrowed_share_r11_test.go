@@ -66,6 +66,20 @@ func newCloneBorrowTxnForR11(
 		},
 		op: txnOp,
 	}
+	// Hold the queue's existing per-engine drain-admission slot for the
+	// whole observation: the handoff under test still queues (and its
+	// queued>0 branch still calls scheduleUnpublishedPendingDrain), but
+	// the coalescing admission turns that scheduling into a no-op, so no
+	// background worker can consume the queued names before the test's own
+	// mutex-protected snapshots. The live gc pool stays available for the
+	// real gcObjsByIdxRange path ControlD exercises, and the real cleanup
+	// stays under test: every queue-holding control drives the synchronous
+	// deleteQueuedUnpublishedPendingOnce drain plus its physical oracles
+	// itself, so no pending name is leaked by holding the slot here.
+	engine := txn.engine
+	engine.unpublishedPending.mu.Lock()
+	engine.unpublishedPending.drainScheduled = true
+	engine.unpublishedPending.mu.Unlock()
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
 
@@ -175,7 +189,8 @@ func TestIssue25590CloneBorrowedNeverEntersRetainFunnelsR24ControlC(t *testing.T
 // This is the designed defense-in-depth second gate of the
 // one-predicate contract.
 func TestIssue25590CloneBorrowedNeverHandedOffToQueueR24ControlC(t *testing.T) {
-	txn, _, borrowed, txnLocalName, freshName := newCloneBorrowTxnForR11(t)
+	ctx := context.Background()
+	txn, fs, borrowed, txnLocalName, freshName := newCloneBorrowTxnForR11(t)
 
 	// Seed the list directly — the handoff cannot assume the retain
 	// funnels were the only writer (the exact scenario the round-24
@@ -206,10 +221,15 @@ func TestIssue25590CloneBorrowedNeverHandedOffToQueueR24ControlC(t *testing.T) {
 	// one explicit owner: with the LIVE pool back, the same terminal
 	// drain the B control exercises empties the queue and physically
 	// deletes both moved names (memory FS) — no unowned fixture resource.
-	ctx := context.Background()
 	require.NoError(t, txn.engine.deleteQueuedUnpublishedPendingOnce(ctx))
 	require.Empty(t, issue25590QueuedNames(txn.engine),
 		"control C terminal cleanup: the explicit drain empties the queue the parked schedule left owned")
+	require.False(t, objectExistsInFS(ctx, fs, txnLocalName),
+		"D1' control C: the synchronous terminal drain already collected the txn-local sibling")
+	require.False(t, objectExistsInFS(ctx, fs, freshName),
+		"D1' control C: the synchronous terminal drain already collected the fresh sibling")
+	require.True(t, objectExistsInFS(ctx, fs, borrowed.ObjectName().String()),
+		"D1' control C: the committed-borrowed witness never joined the queue and survives the drain")
 }
 
 // Control A: the intermediate retain — the failed-preparation class a

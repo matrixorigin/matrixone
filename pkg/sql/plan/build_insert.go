@@ -97,6 +97,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
+	if err = rejectLegacyCRC32GeneratedFallback(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with
