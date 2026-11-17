@@ -834,6 +834,29 @@ select count(*) as count_range from t9 where status >= 'active' and status <= 'e
 select count(*) as count_nullsafe from t9 where status <=> 'active';
 ➤ count_nullsafe[-5,64,0]  𝄀
 2
+explain select id from t9 force index (idx_ret) where status in ('active', 'expiring', NULL);
+-- @regex("prefix_in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t9.idx_ret  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 0, VARCHAR)) in ([active expiring ]-[2])  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+select id from t9 force index (idx_ret) where status in ('active', 'expiring', NULL) order by id;
+➤ id[12,-1,0]  𝄀
+a1  𝄀
+a3  𝄀
+a4
+select id from t9 ignore index (idx_ret) where status in ('active', 'expiring', NULL) order by id;
+➤ id[12,-1,0]  𝄀
+a1  𝄀
+a3  𝄀
+a4
+select id from t9 force index (idx_ret) where status in (NULL, 'active', 'active') order by id;
+➤ id[12,-1,0]  𝄀
+a1  𝄀
+a4
+select id from t9 force index (idx_ret) where status in (NULL, 'missing') order by id;
+➤ id[12,-1,0]
 select id, status, status = 'active' as row_eq, status <=> 'active' as row_nullsafe from t9 order by id;
 ➤ id[12,-1,0]  ¦  status[12,-1,0]  ¦  row_eq[-7,1,0]  ¦  row_nullsafe[-7,1,0]  𝄀
 a1  ¦  active  ¦  1  ¦  1  𝄀
@@ -858,6 +881,18 @@ execute stmt_t9_status_eq_null using @t9_null;
 deallocate prepare stmt_t9_status_eq_null;
 prepare stmt_t9_status_in_null from 'select count(*) as count_prepare_in_null from t9 where status in (?, ?)';
 execute stmt_t9_status_in_null using @t9_null,@t9_missing;
+➤ count_prepare_in_null[-5,64,0]  𝄀
+0
+execute stmt_t9_status_in_null using @t9_active,@t9_null;
+➤ count_prepare_in_null[-5,64,0]  𝄀
+2
+execute stmt_t9_status_in_null using @t9_null,@t9_expiring;
+➤ count_prepare_in_null[-5,64,0]  𝄀
+1
+execute stmt_t9_status_in_null using @t9_missing,@t9_missing;
+➤ count_prepare_in_null[-5,64,0]  𝄀
+0
+execute stmt_t9_status_in_null using @t9_null,@t9_null;
 ➤ count_prepare_in_null[-5,64,0]  𝄀
 0
 deallocate prepare stmt_t9_status_in_null;
@@ -905,4 +940,53 @@ a1  ¦  done  ¦  10  𝄀
 a2  ¦  active  ¦  20  𝄀
 a3  ¦  closed  ¦  55  𝄀
 a5  ¦  null  ¦  50
+create table t10(k varchar(64) primary key, id int);
+insert into t10 values ('', 1), ('abc', 2), ('az', 3), ('zebra', 4),
+(char(0), 5), (concat(char(0), 'xy'), 6);
+select id from t10 where prefix_in(k, ('', 'zz')) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select mo_ctl('dn', 'flush', 'd1.t10');
+➤ mo_ctl(dn, flush, d1.t10)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from t10 where prefix_in(k, ('', 'zz')) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+select id from t10 where prefix_in(k, ('a', 'aa', 'az')) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from t10 where prefix_in(k, (char(0), 'zz')) order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select id from t10 where prefix_in(k, ('ab', 'missing')) order by id;
+➤ id[4,32,0]  𝄀
+2
 drop database d1;
