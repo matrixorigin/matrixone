@@ -1957,9 +1957,10 @@ var (
 		}, {
 			// CAST(x AS CHAR) with an omitted length maps to the unbounded
 			// TEXT type instead of VARCHAR(65535) (issues #32336, #32374);
-			// the canonical "text" rendering must re-parse (CTAS relies on it).
+			// the canonical "char" rendering must re-parse through the same
+			// omitted-length action (CTAS relies on it, PR #32438 review).
 			input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-			output: "select (cast(0x7fffffffffffffff as text))",
+			output: "select (cast(0x7fffffffffffffff as char))",
 		}, {
 			input:  "select cast(-19999999999999999999 as signed);",
 			output: "select cast(-19999999999999999999 as signed)",

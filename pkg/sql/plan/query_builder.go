@@ -7841,6 +7841,20 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		if err != nil {
 			return nil, err
 		}
+	} else if numericTarget, matched := builder.projectedCeilFloorRenderDomain(ctx, projectExpr); matched {
+		// The same render crossing a derived-table/CTE projection is no
+		// longer a function expression in this scope: it binds as a plain
+		// column reference. Recover the base numeric domain from the
+		// defining scope's projection and hide this key the same way, so
+		// ORDER BY over the projected renderer keeps the base's numeric
+		// order across query boundaries (PR #32438 review).
+		var err error
+		orderKeyExpr, err = appendCastBeforeExpr(
+			builder.GetContext(), DeepCopyExpr(projectExpr), makePlan2Type(&numericTarget),
+		)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		return expr, nil
 	}
@@ -7850,6 +7864,23 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		return nil, err
 	}
 	return GetColExpr(orderKeyExpr.Typ, ctx.projectTag, colPos), nil
+}
+
+// projectedCeilFloorRenderDomain resolves the hidden numeric domain of a
+// digit-rendering one-argument CEIL/FLOOR result that a derived-table/CTE
+// projection exported as a plain column reference (#32336, #32374, PR
+// #32438 review). It reuses the binder's projection provenance descent, so
+// the ORDER BY hidden key above and the numeric retype in the binder keep
+// the same domain for the same projected column.
+func (builder *QueryBuilder) projectedCeilFloorRenderDomain(ctx *BindContext, expr *plan.Expr) (types.Type, bool) {
+	if expr.GetCol() == nil {
+		return types.Type{}, false
+	}
+	_, defining, _, ok := resolveProjectedColumnSource(builder, ctx, expr)
+	if !ok {
+		return types.Type{}, false
+	}
+	return ceilFloorTextRenderNumericTarget(defining)
 }
 
 // projectExprKey uses the full proto encoding so large ORDER BY expressions
@@ -8702,6 +8733,15 @@ func bindProjectionExprWithNumericTarget(
 	astExpr tree.Expr,
 	projectIdx int,
 ) (*plan.Expr, error) {
+	// #32336, #32374: record the omitted-length CAST/CONVERT-to-CHAR
+	// provenance of this projection position. The widened value carries the
+	// StringFamily TEXT signature only in this scope's AST; once a derived
+	// table or CTE exports it as a plain column reference, a composing
+	// CEIL/FLOOR in the outer scope can still recover the base domain from
+	// this record (resolveProjectedColumnSource, PR #32438 review).
+	if isOmittedLengthCharCastTree(astExpr) {
+		ctx.setOmittedCharWidenProject(int32(len(ctx.projects)))
+	}
 	if projectIdx < len(ctx.numericProjectionTypes) {
 		target := ctx.numericProjectionTypes[projectIdx]
 		if target.Id != 0 {

@@ -527,3 +527,102 @@ a  𝄀
 a,b  𝄀
 a,b
 drop table if exists func_cast_omit_char_si;
+create table func_cast_omit_char_bnd (v varchar(16));
+insert into func_cast_omit_char_bnd values ('2'), ('10'), ('2.5'), ('-1.5');
+select max(c), min(c), sum(c), avg(c)
+from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d;
+➤ max(c)[8,54,0]  ¦  min(c)[8,54,0]  ¦  sum(c)[8,54,0]  ¦  avg(c)[8,54,0]  𝄀
+10.0  ¦  -1.0  ¦  14.0  ¦  3.5
+select max(f), min(f), sum(f)
+from (select floor(cast(v as char)) as f from func_cast_omit_char_bnd) d;
+➤ max(f)[8,54,0]  ¦  min(f)[8,54,0]  ¦  sum(f)[8,54,0]  𝄀
+10.0  ¦  -2.0  ¦  12.0
+select c from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d order by c;
+➤ c[12,-1,0]  𝄀
+-1  𝄀
+2  𝄀
+3  𝄀
+10
+select c from (select ceil(convert(v, char)) as c from func_cast_omit_char_bnd) d order by c desc;
+➤ c[12,-1,0]  𝄀
+10  𝄀
+3  𝄀
+2  𝄀
+-1
+with w as (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd)
+select max(c), min(c), sum(c) from w;
+➤ max(c)[8,54,0]  ¦  min(c)[8,54,0]  ¦  sum(c)[8,54,0]  𝄀
+10.0  ¦  -1.0  ¦  14.0
+select max(c2), min(c2), sum(c2)
+from (select c as c2 from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d1) d2;
+➤ max(c2)[8,54,0]  ¦  min(c2)[8,54,0]  ¦  sum(c2)[8,54,0]  𝄀
+10.0  ¦  -1.0  ¦  14.0
+drop table if exists func_cast_omit_char_bnd;
+create table func_cast_omit_char_dom (v varchar(16));
+insert into func_cast_omit_char_dom values ('1e40'), ('2.5'), ('-3');
+select ceil(c) + 1 as dom_ceil, floor(c) - 1 as dom_floor
+from (select cast(v as char) as c from func_cast_omit_char_dom) d order by dom_ceil;
+➤ dom_ceil[8,54,0]  ¦  dom_floor[8,54,0]  𝄀
+-2.0  ¦  -4.0  𝄀
+4.0  ¦  1.0  𝄀
+1.0E40  ¦  1.0E40
+select ceil(c) + 1 as dom_ceil_conv
+from (select convert(v, char) as c from func_cast_omit_char_dom) d order by dom_ceil_conv;
+➤ dom_ceil_conv[8,54,0]  𝄀
+-2.0  𝄀
+4.0  𝄀
+1.0E40
+with wdom as (select cast(v as char) as c from func_cast_omit_char_dom)
+select ceil(c) + 1 as dom_ceil_cte from wdom order by dom_ceil_cte;
+➤ dom_ceil_cte[8,54,0]  𝄀
+-2.0  𝄀
+4.0  𝄀
+1.0E40
+select ceil(c2) + 1 as dom_ceil_nested
+from (select c as c2 from (select cast(v as char) as c from func_cast_omit_char_dom) d1) d2
+order by dom_ceil_nested;
+➤ dom_ceil_nested[8,54,0]  𝄀
+-2.0  𝄀
+4.0  𝄀
+1.0E40
+select ceil(cast(v as text)) + 1 as dom_text_exact,
+floor(cast(v as text)) as dom_text_floor
+from func_cast_omit_char_dom where v = '2.5';
+➤ dom_text_exact[3,38,0]  ¦  dom_text_floor[12,-1,0]  𝄀
+4  ¦  2
+create table func_cast_omit_char_bndtxt (vt text);
+insert into func_cast_omit_char_bndtxt values ('2'), ('10'), ('9007199254740993');
+select max(vt), min(vt) from (select vt from func_cast_omit_char_bndtxt) d;
+➤ max(vt)[12,0,0]  ¦  min(vt)[12,0,0]  𝄀
+9007199254740993  ¦  10
+select max(c), min(c), sum(c)
+from (select ceil(vt) as c from func_cast_omit_char_bndtxt) d;
+➤ max(c)[3,38,0]  ¦  min(c)[3,38,0]  ¦  sum(c)[3,38,0]  𝄀
+9007199254740993  ¦  2  ¦  9007199254741005
+drop table if exists func_cast_omit_char_bndtxt;
+create table func_cast_omit_char_ctas2
+as select ceil(cast('1e90' as char)) + 1 as dom_big;
+select dom_big from func_cast_omit_char_ctas2;
+➤ dom_big[8,54,0]  𝄀
+1.0E90
+show create table func_cast_omit_char_ctas2;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas2  ¦  CREATE TABLE `func_cast_omit_char_ctas2` (
+  `dom_big` double NOT NULL
+)
+drop table if exists func_cast_omit_char_ctas2;
+create table func_cast_omit_char_ctas3
+as select ceil(c) + 1 as dom_up
+from (select cast(v as char) as c from func_cast_omit_char_dom) d;
+select dom_up from func_cast_omit_char_ctas3 order by dom_up;
+➤ dom_up[8,54,0]  𝄀
+-2.0  𝄀
+4.0  𝄀
+1.0E40
+show create table func_cast_omit_char_ctas3;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas3  ¦  CREATE TABLE `func_cast_omit_char_ctas3` (
+  `dom_up` double DEFAULT NULL
+)
+drop table if exists func_cast_omit_char_ctas3;
+drop table if exists func_cast_omit_char_dom;

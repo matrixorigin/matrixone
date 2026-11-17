@@ -43,7 +43,9 @@ func castTargetOf(t *testing.T, sql string) *tree.T {
 // TestCastOmittedCharLengthTargetIsUnbounded verifies that every CAST syntax
 // recognizing an omitted CHAR length materializes the unbounded string
 // (TEXT) target instead of the VARCHAR(65535) default, so the cast never
-// truncates large values.
+// truncates large values. The omitted-length signature (family "char",
+// DisplayWith -1) stays visible on the tree so the canonical rendering
+// prints "char" instead of an explicit TEXT cast.
 func TestCastOmittedCharLengthTargetIsUnbounded(t *testing.T) {
 	for _, sql := range []string{
 		"select cast(a as char)",
@@ -52,9 +54,9 @@ func TestCastOmittedCharLengthTargetIsUnbounded(t *testing.T) {
 		"select convert(a, char)",
 	} {
 		target := castTargetOf(t, sql)
-		require.Equal(t, "text", strings.ToLower(target.InternalType.FamilyString), sql)
+		require.Equal(t, "char", strings.ToLower(target.InternalType.FamilyString), sql)
 		require.Equal(t, uint32(defines.MYSQL_TYPE_TEXT), target.InternalType.Oid, sql)
-		require.Equal(t, int32(0), target.InternalType.DisplayWith, sql)
+		require.Equal(t, int32(-1), target.InternalType.DisplayWith, sql)
 		require.Equal(t, tree.StringFamily, target.InternalType.Family, sql)
 	}
 
@@ -66,17 +68,19 @@ func TestCastOmittedCharLengthTargetIsUnbounded(t *testing.T) {
 	serial := clause.Exprs[0].Expr.(*tree.SerialExtractExpr)
 	target, ok := serial.ResultType.(*tree.T)
 	require.True(t, ok)
-	require.Equal(t, "text", strings.ToLower(target.InternalType.FamilyString))
+	require.Equal(t, "char", strings.ToLower(target.InternalType.FamilyString))
 	require.Equal(t, uint32(defines.MYSQL_TYPE_TEXT), target.InternalType.Oid)
 }
 
-// TestCastOmittedCharLengthRendersReparseableText pins the CTAS contract at
+// TestCastOmittedCharLengthRendersReparseableChar pins the CTAS contract at
 // the grammar layer: CTAS rebuilds its INSERT ... SELECT by formatting the
 // AsSource select and re-parsing the produced SQL, so the canonical rendering
-// of an omitted-length CHAR cast must be exactly the rendering of a TEXT
-// cast target (a bare "text", never "text(0)"), and that rendering must
-// parse back to the same unbounded TEXT target.
-func TestCastOmittedCharLengthRendersReparseableText(t *testing.T) {
+// of an omitted-length CHAR cast must be the omitted "char" spelling itself.
+// It re-parses through the same omitted-length action and keeps the
+// StringFamily TEXT target that base_binder.go distinguishes from explicit
+// TEXT casts; a "text" rendering would silently turn the CTAS source into an
+// explicit TEXT cast and lose the omitted-CHAR provenance (PR #32438 review).
+func TestCastOmittedCharLengthRendersReparseableChar(t *testing.T) {
 	render := func(sql string) string {
 		t.Helper()
 		st, err := ParseOne(t.Context(), sql, 1)
@@ -85,18 +89,28 @@ func TestCastOmittedCharLengthRendersReparseableText(t *testing.T) {
 	}
 
 	rendered := render("select cast(a as char)")
-	require.Equal(t, render("select cast(a as text)"), rendered)
-	require.Equal(t, "select cast(a as text)", rendered)
+	require.Equal(t, "select cast(a as char)", rendered)
 
-	// The rendered SQL re-parses to the same unbounded TEXT target.
+	// The rendered SQL re-parses to the same omitted-length signature.
 	target := castTargetOf(t, rendered)
-	require.Equal(t, "text", strings.ToLower(target.InternalType.FamilyString))
+	require.Equal(t, "char", strings.ToLower(target.InternalType.FamilyString))
 	require.Equal(t, uint32(defines.MYSQL_TYPE_TEXT), target.InternalType.Oid)
-	require.Equal(t, int32(0), target.InternalType.DisplayWith)
+	require.Equal(t, int32(-1), target.InternalType.DisplayWith)
+	require.Equal(t, tree.StringFamily, target.InternalType.Family)
+
+	// An explicit TEXT cast keeps its explicit spelling and the BlobFamily
+	// TIM signature: the two remain distinguishable after a round trip.
+	textTarget := castTargetOf(t, render("select cast(a as text)"))
+	require.Equal(t, "text", strings.ToLower(textTarget.InternalType.FamilyString))
+	require.Equal(t, uint32(defines.MYSQL_TYPE_TEXT), textTarget.InternalType.Oid)
+	require.Equal(t, tree.BlobFamily, textTarget.InternalType.Family)
 
 	// CONVERT(expr, CHAR) parses to the same cast expression and must render
-	// the same re-parseable unbounded TEXT target.
+	// the same re-parseable omitted-length "char" spelling.
 	require.Equal(t, rendered, render("select convert(a, char)"))
+
+	// Explicit CHAR(N) keeps its width in the rendering.
+	require.Equal(t, "select cast(a as char(3))", render("select cast(a as char(3))"))
 }
 
 // TestCastExplicitCharLengthTargetKeepsWidth verifies that an explicit

@@ -531,3 +531,70 @@ insert into func_cast_omit_char_si values ('2'), ('2.9'), ('1.4'), ('1');
 select substring_index('a,b,c', ',', ct) as stored_count
 from func_cast_omit_char_si order by ct;
 drop table if exists func_cast_omit_char_si;
+
+-- [review round #32438 follow-up] CEIL/FLOOR results of omitted-length
+-- CHAR casts keep their numeric contract across query boundaries. The
+-- provenance-blind head exported the digit render as a plain VARCHAR
+-- column reference, so outer MAX/MIN compared it as text ('10' before '2'),
+-- SUM/AVG rejected the VARCHAR argument during binding, and ORDER BY
+-- sorted '10' before '2'; a projected omitted-CHAR input likewise lost its
+-- origin for an outer CEIL/FLOOR, which composed through DECIMAL128(38,0)
+-- and rejected the 41-digit render of '1e40'; CTAS re-parsed its rendered
+-- source as TEXT, losing the same semantics for '1e90'. Explicit TEXT
+-- columns and casts keep the exact DECIMAL128 domain through the very
+-- same boundaries.
+create table func_cast_omit_char_bnd (v varchar(16));
+insert into func_cast_omit_char_bnd values ('2'), ('10'), ('2.5'), ('-1.5');
+select max(c), min(c), sum(c), avg(c)
+from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d;
+select max(f), min(f), sum(f)
+from (select floor(cast(v as char)) as f from func_cast_omit_char_bnd) d;
+select c from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d order by c;
+select c from (select ceil(convert(v, char)) as c from func_cast_omit_char_bnd) d order by c desc;
+with w as (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd)
+select max(c), min(c), sum(c) from w;
+select max(c2), min(c2), sum(c2)
+from (select c as c2 from (select ceil(cast(v as char)) as c from func_cast_omit_char_bnd) d1) d2;
+drop table if exists func_cast_omit_char_bnd;
+
+-- projected omitted-CHAR inputs keep the FLOAT64 domain for an outer
+-- CEIL/FLOOR; explicit TEXT through the same boundary stays DECIMAL128.
+create table func_cast_omit_char_dom (v varchar(16));
+insert into func_cast_omit_char_dom values ('1e40'), ('2.5'), ('-3');
+select ceil(c) + 1 as dom_ceil, floor(c) - 1 as dom_floor
+from (select cast(v as char) as c from func_cast_omit_char_dom) d order by dom_ceil;
+select ceil(c) + 1 as dom_ceil_conv
+from (select convert(v, char) as c from func_cast_omit_char_dom) d order by dom_ceil_conv;
+with wdom as (select cast(v as char) as c from func_cast_omit_char_dom)
+select ceil(c) + 1 as dom_ceil_cte from wdom order by dom_ceil_cte;
+select ceil(c2) + 1 as dom_ceil_nested
+from (select c as c2 from (select cast(v as char) as c from func_cast_omit_char_dom) d1) d2
+order by dom_ceil_nested;
+select ceil(cast(v as text)) + 1 as dom_text_exact,
+       floor(cast(v as text)) as dom_text_floor
+from func_cast_omit_char_dom where v = '2.5';
+
+-- TEXT-column renders through a boundary keep the exact DECIMAL128 digits
+-- (9007199254740993 survives) while plain TEXT columns keep plain string
+-- comparison.
+create table func_cast_omit_char_bndtxt (vt text);
+insert into func_cast_omit_char_bndtxt values ('2'), ('10'), ('9007199254740993');
+select max(vt), min(vt) from (select vt from func_cast_omit_char_bndtxt) d;
+select max(c), min(c), sum(c)
+from (select ceil(vt) as c from func_cast_omit_char_bndtxt) d;
+drop table if exists func_cast_omit_char_bndtxt;
+
+-- CTAS re-renders its source: the omitted-CHAR cast must survive the
+-- round trip with the FLOAT64 domain, in direct and projected forms.
+create table func_cast_omit_char_ctas2
+as select ceil(cast('1e90' as char)) + 1 as dom_big;
+select dom_big from func_cast_omit_char_ctas2;
+show create table func_cast_omit_char_ctas2;
+drop table if exists func_cast_omit_char_ctas2;
+create table func_cast_omit_char_ctas3
+as select ceil(c) + 1 as dom_up
+  from (select cast(v as char) as c from func_cast_omit_char_dom) d;
+select dom_up from func_cast_omit_char_ctas3 order by dom_up;
+show create table func_cast_omit_char_ctas3;
+drop table if exists func_cast_omit_char_ctas3;
+drop table if exists func_cast_omit_char_dom;

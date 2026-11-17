@@ -12425,13 +12425,16 @@ mo_cast_type:
    	// omitted, so the cast never truncates the value (issue #32336,
    	// #32374). The plan's unbounded string type (TEXT) carries that
    	// contract; explicit CHAR(N) keeps width-enforced truncation.
-   	// DisplayWith 0 mirrors the TEXT column type so the canonical SQL
-   	// rendering is "text" (re-parseable), not "text(0)": CTAS rebuilds its
-   	// INSERT ... SELECT by rendering and re-parsing the select.
+   	// FamilyString and DisplayWith keep the omitted-length CHAR
+   	// signature, so the canonical SQL rendering is a re-parseable
+   	// "char": CTAS rebuilds its INSERT ... SELECT by rendering and
+   	// re-parsing the source select, and "char" re-enters this same
+   	// action. A "text" rendering parsed back through the column_type
+   	// TEXT rule instead, losing the omitted-CHAR provenance that
+   	// base_binder.go distinguishes from explicit TEXT casts (PR
+   	// #32438 review).
    	if t.InternalType.DisplayWith == -1 {
-   		t.InternalType.FamilyString = "text"
    		t.InternalType.Oid = uint32(defines.MYSQL_TYPE_TEXT)
-   		t.InternalType.DisplayWith = 0
    	}
    }
 }
@@ -12504,10 +12507,11 @@ mysql_cast_type:
         if $2 == -1 {
             // CONVERT(expr, CHAR) with omitted N shares the CAST(expr AS CHAR)
             // contract: no target-length truncation (issues #32336, #32374).
-            // DisplayWith 0 renders as re-parseable "text" for CTAS.
+            // The omitted-length signature (FamilyString "char", DisplayWith
+            // -1) renders as the re-parseable "char" so a CTAS round trip
+            // re-enters this action instead of binding an explicit TEXT cast
+            // (PR #32438 review).
             oid = uint32(defines.MYSQL_TYPE_TEXT)
-            familyString = "text"
-            displayWith = 0
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{

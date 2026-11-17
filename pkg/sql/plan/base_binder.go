@@ -2820,11 +2820,32 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	// (bindUnaryMathOmittedCharTextExpr). Only here the widening is still
 	// recognizable in the AST; the bound plan works downstream from the
 	// marker's overload id, keeping every composition on its base route.
+	// A derived-table/CTE projection exported the same widening as a plain
+	// column reference: its defining scope recorded the provenance, and
+	// the marker must survive the query boundary exactly like the direct
+	// tree form (PR #32438 review), or the outer composition loses the
+	// base FLOAT64 domain (CEIL(c)+1 over a projected widening).
 	if (name == "ceil" || name == "ceiling" || name == "floor") &&
 		len(astArgs) == 1 && len(args) == 1 &&
 		args[0].Typ.Id == int32(types.T_text) &&
-		isOmittedLengthCharCastTree(astArgs[0]) {
+		(isOmittedLengthCharCastTree(astArgs[0]) ||
+			b.isProjectedOmittedCharWidenColumn(args[0])) {
 		return b.bindUnaryMathOmittedCharTextExpr(name, args[0])
+	}
+
+	// #32336, #32374: the digit-rendering one-argument CEIL/FLOOR results a
+	// derived-table/CTE projection exported as plain column references must
+	// retype into their base numeric domain for every numeric consumer of
+	// this scope, mirroring the direct-provenance retype inside
+	// BindFuncExprImplByPlanExpr (PR #32438 review): MAX/MIN/SUM/AVG,
+	// arithmetic, comparison and nested scalar consumers over the projected
+	// column keep the base's numeric binding instead of byte-comparing the
+	// rendered digits. Runs before the delegation below so aggregates
+	// accept the numeric type at their own bind.
+	if b.builder != nil {
+		if err := retypeProjectedCeilFloorRenderArgs(b, name, args); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.builder != nil {
@@ -3575,7 +3596,104 @@ func (b *baseBinder) bindUnaryMathOmittedCharTextExpr(name string, arg *Expr) (*
 	}, nil
 }
 
-// retypeCeilFloorTextRenderArgs restores the numeric semantics the composed the composed
+// maxProjectedProvenanceWalk bounds the derived-table/CTE descent of
+// resolveProjectedColumnSource: a cyclic or pathological chain must
+// terminate without provenance instead of looping the binder.
+const maxProjectedProvenanceWalk = 16
+
+// resolveProjectedColumnSource walks a bound expression that a query
+// boundary exported as a plain column reference back to the projection that
+// defines it (#32336, #32374, PR #32438 review). It returns the defining
+// scope's BindContext, the defining bound expression and its project
+// position. The descent follows derived-table and CTE bindings (they carry
+// no database name), reading each defining scope's own project list; a real
+// table, an index outside the source project list or any non-column
+// expression terminates the walk with ok=false, so consumers keep the
+// ordinary unprovenanced binding everywhere the provenance is genuinely
+// lost (union branches, recursive members and opaque sources).
+func resolveProjectedColumnSource(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	expr *plan.Expr,
+) (srcCtx *BindContext, defining *Expr, colPos int32, ok bool) {
+	if builder == nil || ctx == nil {
+		return nil, nil, 0, false
+	}
+	walkCtx := ctx
+	for range maxProjectedProvenanceWalk {
+		col := expr.GetCol()
+		if col == nil {
+			return nil, nil, 0, false
+		}
+		binding, bound := walkCtx.bindingByTag[col.RelPos]
+		if !bound || binding == nil || binding.db != "" {
+			// Real tables have a database name; subquery/CTE bindings do not.
+			return nil, nil, 0, false
+		}
+		srcCtx = builder.ctxByNode[binding.nodeId]
+		if srcCtx == nil {
+			return nil, nil, 0, false
+		}
+		if col.ColPos < 0 || int(col.ColPos) >= len(srcCtx.projects) {
+			return nil, nil, 0, false
+		}
+		defining = srcCtx.projects[col.ColPos]
+		if defining == nil {
+			return nil, nil, 0, false
+		}
+		if inner := defining.GetCol(); inner != nil {
+			// A pure passthrough column (e.g. a nested derived table)
+			// hides the original projection one level deeper.
+			expr = defining
+			walkCtx = srcCtx
+			continue
+		}
+		return srcCtx, defining, col.ColPos, true
+	}
+	return nil, nil, 0, false
+}
+
+// isProjectedOmittedCharWidenColumn reports whether a bound CEIL/FLOOR
+// argument that a derived table or CTE exported as a plain column reference
+// is still the omitted-length CAST/CONVERT-to-CHAR widening of
+// #32336/#32374: the defining scope recorded the AST provenance at the
+// projection position (BindContext.setOmittedCharWidenProject), which is
+// the only place the omitted-CHAR signature survives the query boundary.
+func (b *baseBinder) isProjectedOmittedCharWidenColumn(arg *plan.Expr) bool {
+	if arg.GetCol() == nil {
+		return false
+	}
+	srcCtx, _, colPos, ok := resolveProjectedColumnSource(b.builder, b.ctx, arg)
+	return ok && srcCtx.isOmittedCharWidenProject(colPos)
+}
+
+// retypeProjectedCeilFloorRenderArgs extends the direct-provenance retype
+// of retypeCeilFloorTextRenderArgs across derived-table/CTE boundaries: the
+// rendered one-argument CEIL/FLOOR results that a projection exported as a
+// plain column reference resolve back to their defining function
+// expression, and numeric consumers in the outer scope retype them into the
+// same base domain (FLOAT64 for the omitted-length CAST/CONVERT-to-CHAR
+// provenance, exact-integer DECIMAL128 for TEXT inputs) that the defining
+// scope's compositions use. Direct function arguments keep taking the
+// shared free-function path, never double-casting.
+func retypeProjectedCeilFloorRenderArgs(b *baseBinder, name string, args []*plan.Expr) error {
+	if b.builder == nil || b.ctx == nil {
+		return nil
+	}
+	return retypeCeilFloorTextRenderArgs(b.GetContext(), name, args, func(expr *plan.Expr) (types.Type, bool) {
+		if expr.GetCol() == nil {
+			// Direct renders are the free-function path's job above.
+			return types.Type{}, false
+		}
+		_, defining, _, ok := resolveProjectedColumnSource(b.builder, b.ctx, expr)
+		if !ok {
+			return types.Type{}, false
+		}
+		return ceilFloorTextRenderNumericTarget(defining)
+	})
+}
+
+// retypeCeilFloorTextRenderArgs restores the numeric semantics the composed
 // one-argument CEIL/FLOOR results keep on the base (#32336, #32374): their
 // values left the functions as FLOAT64 there for the omitted-length
 // CAST/CONVERT-to-CHAR widths, and as the UINT64 route's exact integers for
@@ -3588,12 +3706,20 @@ func (b *baseBinder) bindUnaryMathOmittedCharTextExpr(name string, arg *Expr) (*
 // aggregates over VARCHAR regress as well: MAX/MIN compare the rendered
 // bytes (returning 2 for {'2', '10'}) and SUM/AVG reject the VARCHAR
 // argument during binding. Wrapping only these provenance expressions in
-// the base-domain cast of ceilFloorTextRenderNumericTarget restores the
+// the base-domain cast of resolveCeilFloorDomain restores the
 // base binding and results for every operator composition plus the numeric
 // aggregates and nested numeric scalar functions the same regression
-// reaches through their VARCHAR coercions. Plain strings, temporal
+// reaches through their VARCHAR coercions. The direct-free path passes
+// ceilFloorTextRenderNumericTarget; the binder path also resolves the
+// rendered values a derived-table/CTE projection exported as plain column
+// references (PR #32438 review). Plain strings, temporal
 // operands and INTERVAL compositions keep their existing rules unchanged.
-func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Expr) error {
+func retypeCeilFloorTextRenderArgs(
+	ctx context.Context,
+	name string,
+	args []*plan.Expr,
+	resolveCeilFloorDomain func(*Expr) (types.Type, bool),
+) error {
 	// JSON builders embed the base's numeric result as a JSON number: the
 	// base's FLOAT64 (omitted-CHAR compositions) and UINT64 (TEXT inputs)
 	// results entered json_object/json_array values as numbers, while the
@@ -3626,7 +3752,7 @@ func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Exp
 			// key position; MySQL requires string keys.
 			continue
 		}
-		target, matched := ceilFloorTextRenderNumericTarget(args[i])
+		target, matched := resolveCeilFloorDomain(args[i])
 		if !matched {
 			continue
 		}
@@ -3635,7 +3761,7 @@ func retypeCeilFloorTextRenderArgs(ctx context.Context, name string, args []*Exp
 				if j == i {
 					continue
 				}
-				if _, otherRender := ceilFloorTextRenderNumericTarget(args[j]); otherRender {
+				if _, otherRender := resolveCeilFloorDomain(args[j]); otherRender {
 					continue
 				}
 				other := makeTypeByPlan2Expr(args[j])
@@ -3684,7 +3810,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
-	if err := retypeCeilFloorTextRenderArgs(ctx, name, args); err != nil {
+	if err := retypeCeilFloorTextRenderArgs(ctx, name, args, ceilFloorTextRenderNumericTarget); err != nil {
 		return nil, err
 	}
 

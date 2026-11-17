@@ -466,6 +466,16 @@ type BindContext struct {
 	// numeric sort expression, so this metadata never crosses the plan wire.
 	mysqlSpecialOrderTypes map[int32]*plan.Type
 
+	// omittedCharWidenProjects records the select-list positions whose
+	// defining AST expression is the omitted-length CAST/CONVERT-to-CHAR
+	// widening to the unbounded TEXT type (#32336, #32374, PR #32438
+	// review). Like mysqlSpecialOrderTypes this is planner-local provenance
+	// that never crosses the plan wire: the binder reads it back when a
+	// derived table or CTE exported the widened value as a plain column
+	// reference, so the outer scope's one-argument CEIL/FLOOR still binds
+	// the omitted-CHAR provenance marker instead of an explicit TEXT cast.
+	omittedCharWidenProjects map[int32]struct{}
+
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte

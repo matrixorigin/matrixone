@@ -1592,7 +1592,7 @@ const yyEofCode = 1
 const yyErrCode = 2
 const yyInitialStackSize = 16
 
-//line mysql_sql.y:15684
+//line mysql_sql.y:15688
 
 //line yacctab:1
 var yyExca = [...]int{
@@ -10569,7 +10569,7 @@ var yyPgo = [...]int{
 	4377, 287, 255, 4376, 4335,
 }
 
-//line mysql_sql.y:15684
+//line mysql_sql.y:15688
 type yySymType struct {
 	union interface{}
 	id    int
@@ -29749,20 +29749,23 @@ yydefault:
 				// omitted, so the cast never truncates the value (issue #32336,
 				// #32374). The plan's unbounded string type (TEXT) carries that
 				// contract; explicit CHAR(N) keeps width-enforced truncation.
-				// DisplayWith 0 mirrors the TEXT column type so the canonical SQL
-				// rendering is "text" (re-parseable), not "text(0)": CTAS rebuilds its
-				// INSERT ... SELECT by rendering and re-parsing the select.
+				// FamilyString and DisplayWith keep the omitted-length CHAR
+				// signature, so the canonical SQL rendering is a re-parseable
+				// "char": CTAS rebuilds its INSERT ... SELECT by rendering and
+				// re-parsing the source select, and "char" re-enters this same
+				// action. A "text" rendering parsed back through the column_type
+				// TEXT rule instead, losing the omitted-CHAR provenance that
+				// base_binder.go distinguishes from explicit TEXT casts (PR
+				// #32438 review).
 				if t.InternalType.DisplayWith == -1 {
-					t.InternalType.FamilyString = "text"
 					t.InternalType.Oid = uint32(defines.MYSQL_TYPE_TEXT)
-					t.InternalType.DisplayWith = 0
 				}
 			}
 		}
 	case 1878:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12438
+//line mysql_sql.y:12441
 		{
 			name := yyDollar[1].str
 			if yyDollar[2].str != "" {
@@ -29783,7 +29786,7 @@ yydefault:
 	case 1879:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12455
+//line mysql_sql.y:12458
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29801,7 +29804,7 @@ yydefault:
 	case 1881:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12472
+//line mysql_sql.y:12475
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29817,7 +29820,7 @@ yydefault:
 	case 1882:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12484
+//line mysql_sql.y:12487
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29835,7 +29838,7 @@ yydefault:
 	case 1883:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12498
+//line mysql_sql.y:12501
 		{
 			locale := ""
 			oid := uint32(defines.MYSQL_TYPE_STRING)
@@ -29844,10 +29847,11 @@ yydefault:
 			if yyDollar[2].lengthOptUnion() == -1 {
 				// CONVERT(expr, CHAR) with omitted N shares the CAST(expr AS CHAR)
 				// contract: no target-length truncation (issues #32336, #32374).
-				// DisplayWith 0 renders as re-parseable "text" for CTAS.
+				// The omitted-length signature (FamilyString "char", DisplayWith
+				// -1) renders as the re-parseable "char" so a CTAS round trip
+				// re-enters this action instead of binding an explicit TEXT cast
+				// (PR #32438 review).
 				oid = uint32(defines.MYSQL_TYPE_TEXT)
-				familyString = "text"
-				displayWith = 0
 			}
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
@@ -29863,7 +29867,7 @@ yydefault:
 	case 1884:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12522
+//line mysql_sql.y:12526
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29879,7 +29883,7 @@ yydefault:
 	case 1885:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12534
+//line mysql_sql.y:12538
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29897,7 +29901,7 @@ yydefault:
 	case 1886:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12548
+//line mysql_sql.y:12552
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29916,7 +29920,7 @@ yydefault:
 	case 1887:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12563
+//line mysql_sql.y:12567
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29935,7 +29939,7 @@ yydefault:
 	case 1888:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12578
+//line mysql_sql.y:12582
 		{
 			name := yyDollar[1].str
 			if yyDollar[2].str != "" {
@@ -29956,7 +29960,7 @@ yydefault:
 	case 1889:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:12595
+//line mysql_sql.y:12599
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -29973,14 +29977,14 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 1890:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:12611
+//line mysql_sql.y:12615
 		{
 			yyVAL.str = ""
 		}
 	case 1894:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12620
+//line mysql_sql.y:12624
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Following, UnBounded: true}
 		}
@@ -29988,7 +29992,7 @@ yydefault:
 	case 1895:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12624
+//line mysql_sql.y:12628
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Following, Expr: yyDollar[1].exprUnion()}
 		}
@@ -29996,7 +30000,7 @@ yydefault:
 	case 1896:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12628
+//line mysql_sql.y:12632
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Following, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
 		}
@@ -30004,7 +30008,7 @@ yydefault:
 	case 1897:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12632
+//line mysql_sql.y:12636
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Following, Expr: yyDollar[1].exprUnion()}
 		}
@@ -30012,7 +30016,7 @@ yydefault:
 	case 1898:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12638
+//line mysql_sql.y:12642
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.CurrentRow}
 		}
@@ -30020,7 +30024,7 @@ yydefault:
 	case 1899:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12642
+//line mysql_sql.y:12646
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
 		}
@@ -30028,7 +30032,7 @@ yydefault:
 	case 1900:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12646
+//line mysql_sql.y:12650
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Preceding, Expr: yyDollar[1].exprUnion()}
 		}
@@ -30036,7 +30040,7 @@ yydefault:
 	case 1901:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12650
+//line mysql_sql.y:12654
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Preceding, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
 		}
@@ -30044,7 +30048,7 @@ yydefault:
 	case 1902:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameBound
-//line mysql_sql.y:12654
+//line mysql_sql.y:12658
 		{
 			yyLOCAL = &tree.FrameBound{Type: tree.Preceding, Expr: yyDollar[1].exprUnion()}
 		}
@@ -30052,7 +30056,7 @@ yydefault:
 	case 1903:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.FrameType
-//line mysql_sql.y:12660
+//line mysql_sql.y:12664
 		{
 			yyLOCAL = tree.Rows
 		}
@@ -30060,7 +30064,7 @@ yydefault:
 	case 1904:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.FrameType
-//line mysql_sql.y:12664
+//line mysql_sql.y:12668
 		{
 			yyLOCAL = tree.Range
 		}
@@ -30068,7 +30072,7 @@ yydefault:
 	case 1905:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.FrameType
-//line mysql_sql.y:12668
+//line mysql_sql.y:12672
 		{
 			yyLOCAL = tree.Groups
 		}
@@ -30076,7 +30080,7 @@ yydefault:
 	case 1906:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FrameClause
-//line mysql_sql.y:12674
+//line mysql_sql.y:12678
 		{
 			yyLOCAL = &tree.FrameClause{
 				Type:  yyDollar[1].frameTypeUnion(),
@@ -30088,7 +30092,7 @@ yydefault:
 	case 1907:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL *tree.FrameClause
-//line mysql_sql.y:12682
+//line mysql_sql.y:12686
 		{
 			yyLOCAL = &tree.FrameClause{
 				Type:   yyDollar[1].frameTypeUnion(),
@@ -30101,7 +30105,7 @@ yydefault:
 	case 1908:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL *tree.FrameClause
-//line mysql_sql.y:12692
+//line mysql_sql.y:12696
 		{
 			yyLOCAL = nil
 		}
@@ -30109,7 +30113,7 @@ yydefault:
 	case 1909:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.FrameClause
-//line mysql_sql.y:12696
+//line mysql_sql.y:12700
 		{
 			yyLOCAL = yyDollar[1].frameClauseUnion()
 		}
@@ -30117,7 +30121,7 @@ yydefault:
 	case 1910:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:12702
+//line mysql_sql.y:12706
 		{
 			yyLOCAL = yyDollar[3].exprsUnion()
 		}
@@ -30125,7 +30129,7 @@ yydefault:
 	case 1911:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:12707
+//line mysql_sql.y:12711
 		{
 			yyLOCAL = nil
 		}
@@ -30133,39 +30137,39 @@ yydefault:
 	case 1912:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:12711
+//line mysql_sql.y:12715
 		{
 			yyLOCAL = yyDollar[1].exprsUnion()
 		}
 		yyVAL.union = yyLOCAL
 	case 1913:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:12716
+//line mysql_sql.y:12720
 		{
 			yyVAL.str = ","
 		}
 	case 1914:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line mysql_sql.y:12720
+//line mysql_sql.y:12724
 		{
 			yyVAL.str = yyDollar[2].str
 		}
 	case 1915:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:12725
+//line mysql_sql.y:12729
 		{
 			yyVAL.str = "1,vector_l2_ops,random,false"
 		}
 	case 1916:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line mysql_sql.y:12729
+//line mysql_sql.y:12733
 		{
 			yyVAL.str = yyDollar[2].str
 		}
 	case 1917:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL *tree.WindowSpec
-//line mysql_sql.y:12734
+//line mysql_sql.y:12738
 		{
 			yyLOCAL = nil
 		}
@@ -30173,7 +30177,7 @@ yydefault:
 	case 1919:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.WindowSpec
-//line mysql_sql.y:12741
+//line mysql_sql.y:12745
 		{
 			hasFrame := true
 			var f *tree.FrameClause
@@ -30201,7 +30205,7 @@ yydefault:
 	case 1920:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12767
+//line mysql_sql.y:12771
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30217,7 +30221,7 @@ yydefault:
 	case 1921:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12779
+//line mysql_sql.y:12783
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30233,7 +30237,7 @@ yydefault:
 	case 1922:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12791
+//line mysql_sql.y:12795
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30248,7 +30252,7 @@ yydefault:
 	case 1923:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12802
+//line mysql_sql.y:12806
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30263,7 +30267,7 @@ yydefault:
 	case 1924:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12813
+//line mysql_sql.y:12817
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			es := tree.NewNumVal("*", "*", false, tree.P_star)
@@ -30278,7 +30282,7 @@ yydefault:
 	case 1925:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12824
+//line mysql_sql.y:12828
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30292,7 +30296,7 @@ yydefault:
 	case 1926:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12834
+//line mysql_sql.y:12838
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30306,7 +30310,7 @@ yydefault:
 	case 1927:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12844
+//line mysql_sql.y:12848
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30321,7 +30325,7 @@ yydefault:
 	case 1928:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12855
+//line mysql_sql.y:12859
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30336,7 +30340,7 @@ yydefault:
 	case 1929:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12866
+//line mysql_sql.y:12870
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30351,7 +30355,7 @@ yydefault:
 	case 1930:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12877
+//line mysql_sql.y:12881
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30366,7 +30370,7 @@ yydefault:
 	case 1931:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12888
+//line mysql_sql.y:12892
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			es := tree.NewNumVal("*", "*", false, tree.P_star)
@@ -30381,7 +30385,7 @@ yydefault:
 	case 1932:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12899
+//line mysql_sql.y:12903
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30396,7 +30400,7 @@ yydefault:
 	case 1933:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12910
+//line mysql_sql.y:12914
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30411,7 +30415,7 @@ yydefault:
 	case 1934:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12921
+//line mysql_sql.y:12925
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30426,7 +30430,7 @@ yydefault:
 	case 1935:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12932
+//line mysql_sql.y:12936
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30441,7 +30445,7 @@ yydefault:
 	case 1936:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12943
+//line mysql_sql.y:12947
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30456,7 +30460,7 @@ yydefault:
 	case 1937:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12954
+//line mysql_sql.y:12958
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30471,7 +30475,7 @@ yydefault:
 	case 1938:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12965
+//line mysql_sql.y:12969
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30486,7 +30490,7 @@ yydefault:
 	case 1939:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12976
+//line mysql_sql.y:12980
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30501,7 +30505,7 @@ yydefault:
 	case 1940:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12987
+//line mysql_sql.y:12991
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30516,7 +30520,7 @@ yydefault:
 	case 1941:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:12998
+//line mysql_sql.y:13002
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30531,7 +30535,7 @@ yydefault:
 	case 1942:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13009
+//line mysql_sql.y:13013
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			var columnList tree.Exprs
@@ -30552,7 +30556,7 @@ yydefault:
 	case 1943:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13026
+//line mysql_sql.y:13030
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30567,7 +30571,7 @@ yydefault:
 	case 1944:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13037
+//line mysql_sql.y:13041
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30582,7 +30586,7 @@ yydefault:
 	case 1948:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13055
+//line mysql_sql.y:13059
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30595,7 +30599,7 @@ yydefault:
 	case 1949:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13064
+//line mysql_sql.y:13068
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			exprs := tree.Exprs{yyDollar[3].exprUnion()}
@@ -30610,7 +30614,7 @@ yydefault:
 	case 1950:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13075
+//line mysql_sql.y:13079
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30623,7 +30627,7 @@ yydefault:
 	case 1951:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13084
+//line mysql_sql.y:13088
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30636,7 +30640,7 @@ yydefault:
 	case 1952:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13093
+//line mysql_sql.y:13097
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30649,7 +30653,7 @@ yydefault:
 	case 1953:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13102
+//line mysql_sql.y:13106
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
@@ -30664,7 +30668,7 @@ yydefault:
 	case 1954:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13113
+//line mysql_sql.y:13117
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30677,7 +30681,7 @@ yydefault:
 	case 1955:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13122
+//line mysql_sql.y:13126
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30690,7 +30694,7 @@ yydefault:
 	case 1956:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13131
+//line mysql_sql.y:13135
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30705,7 +30709,7 @@ yydefault:
 	case 1957:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13142
+//line mysql_sql.y:13146
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30718,7 +30722,7 @@ yydefault:
 	case 1958:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13151
+//line mysql_sql.y:13155
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30731,7 +30735,7 @@ yydefault:
 	case 1959:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13160
+//line mysql_sql.y:13164
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30744,7 +30748,7 @@ yydefault:
 	case 1960:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13169
+//line mysql_sql.y:13173
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30757,7 +30761,7 @@ yydefault:
 	case 1961:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13178
+//line mysql_sql.y:13182
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			arg0 := tree.NewNumVal(int64(0), "0", false, tree.P_int64)
@@ -30773,7 +30777,7 @@ yydefault:
 	case 1962:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13190
+//line mysql_sql.y:13194
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			arg0 := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
@@ -30788,7 +30792,7 @@ yydefault:
 	case 1963:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13201
+//line mysql_sql.y:13205
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			arg0 := tree.NewNumVal(int64(2), "2", false, tree.P_int64)
@@ -30805,7 +30809,7 @@ yydefault:
 	case 1964:
 		yyDollar = yyS[yypt-7 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13214
+//line mysql_sql.y:13218
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			arg0 := tree.NewNumVal(int64(3), "3", false, tree.P_int64)
@@ -30821,7 +30825,7 @@ yydefault:
 	case 1965:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13226
+//line mysql_sql.y:13230
 		{
 			column := tree.NewUnresolvedColName(yyDollar[3].str)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
@@ -30834,14 +30838,14 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 1972:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line mysql_sql.y:13248
+//line mysql_sql.y:13252
 		{
 			yyVAL.str = yyDollar[1].str
 		}
 	case 2005:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13290
+//line mysql_sql.y:13294
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			var es tree.Exprs = nil
@@ -30858,7 +30862,7 @@ yydefault:
 	case 2006:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13303
+//line mysql_sql.y:13307
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			var es tree.Exprs = nil
@@ -30875,7 +30879,7 @@ yydefault:
 	case 2007:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13316
+//line mysql_sql.y:13320
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
@@ -30890,7 +30894,7 @@ yydefault:
 	case 2008:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13327
+//line mysql_sql.y:13331
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
@@ -30905,7 +30909,7 @@ yydefault:
 	case 2009:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13338
+//line mysql_sql.y:13342
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToUpper(yyDollar[3].str)
@@ -30920,7 +30924,7 @@ yydefault:
 	case 2010:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13350
+//line mysql_sql.y:13354
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30933,7 +30937,7 @@ yydefault:
 	case 2011:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13359
+//line mysql_sql.y:13363
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30945,7 +30949,7 @@ yydefault:
 	case 2012:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13367
+//line mysql_sql.y:13371
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30957,7 +30961,7 @@ yydefault:
 	case 2013:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13375
+//line mysql_sql.y:13379
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			var es tree.Exprs = nil
@@ -30974,7 +30978,7 @@ yydefault:
 	case 2014:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13388
+//line mysql_sql.y:13392
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -30987,7 +30991,7 @@ yydefault:
 	case 2015:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13397
+//line mysql_sql.y:13401
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			exprs := make([]tree.Expr, 1)
@@ -31002,7 +31006,7 @@ yydefault:
 	case 2016:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13408
+//line mysql_sql.y:13412
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			exprs := make([]tree.Expr, 1)
@@ -31017,7 +31021,7 @@ yydefault:
 	case 2017:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13419
+//line mysql_sql.y:13423
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31030,7 +31034,7 @@ yydefault:
 	case 2018:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13428
+//line mysql_sql.y:13432
 		{
 			cn := tree.NewNumVal(yyDollar[5].str, yyDollar[5].str, false, tree.P_char)
 			es := yyDollar[3].exprsUnion()
@@ -31046,7 +31050,7 @@ yydefault:
 	case 2019:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13440
+//line mysql_sql.y:13444
 		{
 			val := tree.NewNumVal(yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
@@ -31060,7 +31064,7 @@ yydefault:
 	case 2020:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13450
+//line mysql_sql.y:13454
 		{
 			val := tree.NewNumVal(yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
@@ -31074,7 +31078,7 @@ yydefault:
 	case 2021:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13460
+//line mysql_sql.y:13464
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31087,7 +31091,7 @@ yydefault:
 	case 2022:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13469
+//line mysql_sql.y:13473
 		{
 			es := tree.Exprs{yyDollar[3].exprUnion()}
 			es = append(es, yyDollar[5].exprUnion())
@@ -31102,7 +31106,7 @@ yydefault:
 	case 2023:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13480
+//line mysql_sql.y:13484
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31115,7 +31119,7 @@ yydefault:
 	case 2024:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13489
+//line mysql_sql.y:13493
 		{
 			val := tree.NewNumVal(yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
@@ -31129,7 +31133,7 @@ yydefault:
 	case 2025:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13499
+//line mysql_sql.y:13503
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31142,7 +31146,7 @@ yydefault:
 	case 2026:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13508
+//line mysql_sql.y:13512
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31155,7 +31159,7 @@ yydefault:
 	case 2027:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.FuncExpr
-//line mysql_sql.y:13517
+//line mysql_sql.y:13521
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
@@ -31168,7 +31172,7 @@ yydefault:
 	case 2028:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13527
+//line mysql_sql.y:13531
 		{
 			yyLOCAL = nil
 		}
@@ -31176,7 +31180,7 @@ yydefault:
 	case 2029:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13531
+//line mysql_sql.y:13535
 		{
 			yyLOCAL = yyDollar[1].exprUnion()
 		}
@@ -31184,7 +31188,7 @@ yydefault:
 	case 2030:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13537
+//line mysql_sql.y:13541
 		{
 			yyLOCAL = nil
 		}
@@ -31192,7 +31196,7 @@ yydefault:
 	case 2031:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13541
+//line mysql_sql.y:13545
 		{
 			ival, errStr := util.GetInt64(yyDollar[2].item)
 			if errStr != "" {
@@ -31205,18 +31209,18 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 2038:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:13560
+//line mysql_sql.y:13564
 		{
 		}
 	case 2039:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line mysql_sql.y:13562
+//line mysql_sql.y:13566
 		{
 		}
 	case 2073:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13603
+//line mysql_sql.y:13607
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
@@ -31231,7 +31235,7 @@ yydefault:
 	case 2074:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.FuncType
-//line mysql_sql.y:13615
+//line mysql_sql.y:13619
 		{
 			yyLOCAL = tree.FUNC_TYPE_DEFAULT
 		}
@@ -31239,7 +31243,7 @@ yydefault:
 	case 2075:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.FuncType
-//line mysql_sql.y:13619
+//line mysql_sql.y:13623
 		{
 			yyLOCAL = tree.FUNC_TYPE_DISTINCT
 		}
@@ -31247,7 +31251,7 @@ yydefault:
 	case 2076:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.FuncType
-//line mysql_sql.y:13623
+//line mysql_sql.y:13627
 		{
 			yyLOCAL = tree.FUNC_TYPE_ALL
 		}
@@ -31255,7 +31259,7 @@ yydefault:
 	case 2077:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL *tree.Tuple
-//line mysql_sql.y:13629
+//line mysql_sql.y:13633
 		{
 			yyLOCAL = tree.NewTuple(yyDollar[2].exprsUnion())
 		}
@@ -31263,7 +31267,7 @@ yydefault:
 	case 2078:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13634
+//line mysql_sql.y:13638
 		{
 			yyLOCAL = nil
 		}
@@ -31271,7 +31275,7 @@ yydefault:
 	case 2079:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13638
+//line mysql_sql.y:13642
 		{
 			yyLOCAL = yyDollar[1].exprsUnion()
 		}
@@ -31279,7 +31283,7 @@ yydefault:
 	case 2080:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13644
+//line mysql_sql.y:13648
 		{
 			yyLOCAL = tree.Exprs{yyDollar[1].exprUnion()}
 		}
@@ -31287,7 +31291,7 @@ yydefault:
 	case 2081:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13648
+//line mysql_sql.y:13652
 		{
 			yyLOCAL = append(yyDollar[1].exprsUnion(), yyDollar[3].exprUnion())
 		}
@@ -31295,7 +31299,7 @@ yydefault:
 	case 2082:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13654
+//line mysql_sql.y:13658
 		{
 			yyLOCAL = tree.Exprs{yyDollar[1].exprUnion()}
 		}
@@ -31303,7 +31307,7 @@ yydefault:
 	case 2083:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Exprs
-//line mysql_sql.y:13658
+//line mysql_sql.y:13662
 		{
 			yyLOCAL = append(yyDollar[1].exprsUnion(), yyDollar[3].exprUnion())
 		}
@@ -31311,7 +31315,7 @@ yydefault:
 	case 2084:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13665
+//line mysql_sql.y:13669
 		{
 			yyLOCAL = tree.NewAndExpr(yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31319,7 +31323,7 @@ yydefault:
 	case 2085:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13669
+//line mysql_sql.y:13673
 		{
 			yyLOCAL = tree.NewOrExpr(yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31327,7 +31331,7 @@ yydefault:
 	case 2086:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13673
+//line mysql_sql.y:13677
 		{
 			yyLOCAL = tree.NewXorExpr(yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31335,7 +31339,7 @@ yydefault:
 	case 2087:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13677
+//line mysql_sql.y:13681
 		{
 			yyLOCAL = tree.NewNotExpr(yyDollar[2].exprUnion())
 		}
@@ -31343,7 +31347,7 @@ yydefault:
 	case 2088:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13681
+//line mysql_sql.y:13685
 		{
 			yyLOCAL = yyDollar[1].exprUnion()
 		}
@@ -31351,7 +31355,7 @@ yydefault:
 	case 2089:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13686
+//line mysql_sql.y:13690
 		{
 			yyLOCAL = yyDollar[1].exprUnion()
 		}
@@ -31359,7 +31363,7 @@ yydefault:
 	case 2090:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13690
+//line mysql_sql.y:13694
 		{
 			yyLOCAL = tree.NewMaxValue()
 		}
@@ -31367,7 +31371,7 @@ yydefault:
 	case 2091:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13696
+//line mysql_sql.y:13700
 		{
 			yyLOCAL = tree.NewIsNullExpr(yyDollar[1].exprUnion())
 		}
@@ -31375,7 +31379,7 @@ yydefault:
 	case 2092:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13700
+//line mysql_sql.y:13704
 		{
 			yyLOCAL = tree.NewIsNotNullExpr(yyDollar[1].exprUnion())
 		}
@@ -31383,7 +31387,7 @@ yydefault:
 	case 2093:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13704
+//line mysql_sql.y:13708
 		{
 			yyLOCAL = tree.NewIsUnknownExpr(yyDollar[1].exprUnion())
 		}
@@ -31391,7 +31395,7 @@ yydefault:
 	case 2094:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13708
+//line mysql_sql.y:13712
 		{
 			yyLOCAL = tree.NewIsNotUnknownExpr(yyDollar[1].exprUnion())
 		}
@@ -31399,7 +31403,7 @@ yydefault:
 	case 2095:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13712
+//line mysql_sql.y:13716
 		{
 			yyLOCAL = tree.NewIsTrueExpr(yyDollar[1].exprUnion())
 		}
@@ -31407,7 +31411,7 @@ yydefault:
 	case 2096:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13716
+//line mysql_sql.y:13720
 		{
 			yyLOCAL = tree.NewIsNotTrueExpr(yyDollar[1].exprUnion())
 		}
@@ -31415,7 +31419,7 @@ yydefault:
 	case 2097:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13720
+//line mysql_sql.y:13724
 		{
 			yyLOCAL = tree.NewIsFalseExpr(yyDollar[1].exprUnion())
 		}
@@ -31423,7 +31427,7 @@ yydefault:
 	case 2098:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13724
+//line mysql_sql.y:13728
 		{
 			yyLOCAL = tree.NewIsNotFalseExpr(yyDollar[1].exprUnion())
 		}
@@ -31431,7 +31435,7 @@ yydefault:
 	case 2099:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13728
+//line mysql_sql.y:13732
 		{
 			yyLOCAL = tree.NewComparisonExpr(yyDollar[2].comparisonOpUnion(), yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31439,7 +31443,7 @@ yydefault:
 	case 2100:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13732
+//line mysql_sql.y:13736
 		{
 			yyLOCAL = tree.NewSubqueryComparisonExpr(yyDollar[2].comparisonOpUnion(), yyDollar[3].comparisonOpUnion(), yyDollar[1].exprUnion(), yyDollar[4].subqueryUnion())
 			yyLOCAL = tree.NewSubqueryComparisonExpr(yyDollar[2].comparisonOpUnion(), yyDollar[3].comparisonOpUnion(), yyDollar[1].exprUnion(), yyDollar[4].subqueryUnion())
@@ -31448,7 +31452,7 @@ yydefault:
 	case 2102:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13740
+//line mysql_sql.y:13744
 		{
 			yyLOCAL = tree.NewComparisonExpr(tree.IN, yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31456,7 +31460,7 @@ yydefault:
 	case 2103:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13744
+//line mysql_sql.y:13748
 		{
 			yyLOCAL = tree.NewComparisonExpr(tree.NOT_IN, yyDollar[1].exprUnion(), yyDollar[4].exprUnion())
 		}
@@ -31464,7 +31468,7 @@ yydefault:
 	case 2104:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13748
+//line mysql_sql.y:13752
 		{
 			yyLOCAL = tree.NewComparisonExprWithEscape(tree.LIKE, yyDollar[1].exprUnion(), yyDollar[3].exprUnion(), yyDollar[4].exprUnion())
 		}
@@ -31472,7 +31476,7 @@ yydefault:
 	case 2105:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13752
+//line mysql_sql.y:13756
 		{
 			yyLOCAL = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, yyDollar[1].exprUnion(), yyDollar[4].exprUnion(), yyDollar[5].exprUnion())
 		}
@@ -31480,7 +31484,7 @@ yydefault:
 	case 2106:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13756
+//line mysql_sql.y:13760
 		{
 			yyLOCAL = tree.NewComparisonExprWithEscape(tree.ILIKE, yyDollar[1].exprUnion(), yyDollar[3].exprUnion(), yyDollar[4].exprUnion())
 		}
@@ -31488,7 +31492,7 @@ yydefault:
 	case 2107:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13760
+//line mysql_sql.y:13764
 		{
 			yyLOCAL = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, yyDollar[1].exprUnion(), yyDollar[4].exprUnion(), yyDollar[5].exprUnion())
 		}
@@ -31496,7 +31500,7 @@ yydefault:
 	case 2108:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13764
+//line mysql_sql.y:13768
 		{
 			yyLOCAL = tree.NewComparisonExpr(tree.REG_MATCH, yyDollar[1].exprUnion(), yyDollar[3].exprUnion())
 		}
@@ -31504,7 +31508,7 @@ yydefault:
 	case 2109:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13768
+//line mysql_sql.y:13772
 		{
 			yyLOCAL = tree.NewComparisonExpr(tree.NOT_REG_MATCH, yyDollar[1].exprUnion(), yyDollar[4].exprUnion())
 		}
@@ -31512,7 +31516,7 @@ yydefault:
 	case 2110:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13772
+//line mysql_sql.y:13776
 		{
 			yyLOCAL = tree.NewRangeCond(false, yyDollar[1].exprUnion(), yyDollar[3].exprUnion(), yyDollar[5].exprUnion())
 		}
@@ -31520,7 +31524,7 @@ yydefault:
 	case 2111:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13776
+//line mysql_sql.y:13780
 		{
 			yyLOCAL = tree.NewRangeCond(true, yyDollar[1].exprUnion(), yyDollar[4].exprUnion(), yyDollar[6].exprUnion())
 		}
@@ -31528,7 +31532,7 @@ yydefault:
 	case 2113:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13782
+//line mysql_sql.y:13786
 		{
 			yyLOCAL = nil
 		}
@@ -31536,7 +31540,7 @@ yydefault:
 	case 2114:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13786
+//line mysql_sql.y:13790
 		{
 			yyLOCAL = yyDollar[2].exprUnion()
 		}
@@ -31544,7 +31548,7 @@ yydefault:
 	case 2115:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13792
+//line mysql_sql.y:13796
 		{
 			yyLOCAL = yyDollar[1].tupleUnion()
 		}
@@ -31552,7 +31556,7 @@ yydefault:
 	case 2116:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13796
+//line mysql_sql.y:13800
 		{
 			yyLOCAL = yyDollar[1].subqueryUnion()
 		}
@@ -31560,7 +31564,7 @@ yydefault:
 	case 2117:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13803
+//line mysql_sql.y:13807
 		{
 			yyLOCAL = tree.ALL
 		}
@@ -31568,7 +31572,7 @@ yydefault:
 	case 2118:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13807
+//line mysql_sql.y:13811
 		{
 			yyLOCAL = tree.ANY
 		}
@@ -31576,7 +31580,7 @@ yydefault:
 	case 2119:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13811
+//line mysql_sql.y:13815
 		{
 			yyLOCAL = tree.SOME
 		}
@@ -31584,7 +31588,7 @@ yydefault:
 	case 2120:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13817
+//line mysql_sql.y:13821
 		{
 			yyLOCAL = tree.EQUAL
 		}
@@ -31592,7 +31596,7 @@ yydefault:
 	case 2121:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13821
+//line mysql_sql.y:13825
 		{
 			yyLOCAL = tree.LESS_THAN
 		}
@@ -31600,7 +31604,7 @@ yydefault:
 	case 2122:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13825
+//line mysql_sql.y:13829
 		{
 			yyLOCAL = tree.GREAT_THAN
 		}
@@ -31608,7 +31612,7 @@ yydefault:
 	case 2123:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13829
+//line mysql_sql.y:13833
 		{
 			yyLOCAL = tree.LESS_THAN_EQUAL
 		}
@@ -31616,7 +31620,7 @@ yydefault:
 	case 2124:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13833
+//line mysql_sql.y:13837
 		{
 			yyLOCAL = tree.GREAT_THAN_EQUAL
 		}
@@ -31624,7 +31628,7 @@ yydefault:
 	case 2125:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13837
+//line mysql_sql.y:13841
 		{
 			yyLOCAL = tree.NOT_EQUAL
 		}
@@ -31632,7 +31636,7 @@ yydefault:
 	case 2126:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ComparisonOp
-//line mysql_sql.y:13841
+//line mysql_sql.y:13845
 		{
 			yyLOCAL = tree.NULL_SAFE_EQUAL
 		}
@@ -31640,7 +31644,7 @@ yydefault:
 	case 2127:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.ColumnAttribute
-//line mysql_sql.y:13847
+//line mysql_sql.y:13851
 		{
 			yyLOCAL = tree.NewAttributePrimaryKey()
 		}
@@ -31648,7 +31652,7 @@ yydefault:
 	case 2128:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.ColumnAttribute
-//line mysql_sql.y:13851
+//line mysql_sql.y:13855
 		{
 			yyLOCAL = tree.NewAttributeUniqueKey()
 		}
@@ -31656,7 +31660,7 @@ yydefault:
 	case 2129:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ColumnAttribute
-//line mysql_sql.y:13855
+//line mysql_sql.y:13859
 		{
 			yyLOCAL = tree.NewAttributeUnique()
 		}
@@ -31664,7 +31668,7 @@ yydefault:
 	case 2130:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.ColumnAttribute
-//line mysql_sql.y:13859
+//line mysql_sql.y:13863
 		{
 			yyLOCAL = tree.NewAttributeKey()
 		}
@@ -31672,7 +31676,7 @@ yydefault:
 	case 2131:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13865
+//line mysql_sql.y:13869
 		{
 			str := fmt.Sprintf("%v", yyDollar[1].item)
 			switch v := yyDollar[1].item.(type) {
@@ -31689,7 +31693,7 @@ yydefault:
 	case 2132:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13878
+//line mysql_sql.y:13882
 		{
 			fval := yyDollar[1].item.(float64)
 			yyLOCAL = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
@@ -31698,7 +31702,7 @@ yydefault:
 	case 2133:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13883
+//line mysql_sql.y:13887
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[1].str, yyDollar[1].str, false, tree.P_decimal)
 		}
@@ -31706,7 +31710,7 @@ yydefault:
 	case 2134:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13889
+//line mysql_sql.y:13893
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[1].str, yyDollar[1].str, false, tree.P_char)
 		}
@@ -31714,7 +31718,7 @@ yydefault:
 	case 2135:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13893
+//line mysql_sql.y:13897
 		{
 			str := fmt.Sprintf("%v", yyDollar[1].item)
 			switch v := yyDollar[1].item.(type) {
@@ -31731,7 +31735,7 @@ yydefault:
 	case 2136:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13906
+//line mysql_sql.y:13910
 		{
 			fval := yyDollar[1].item.(float64)
 			yyLOCAL = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
@@ -31740,7 +31744,7 @@ yydefault:
 	case 2137:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13911
+//line mysql_sql.y:13915
 		{
 			yyLOCAL = tree.NewNumVal(true, "true", false, tree.P_bool)
 		}
@@ -31748,7 +31752,7 @@ yydefault:
 	case 2138:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13915
+//line mysql_sql.y:13919
 		{
 			yyLOCAL = tree.NewNumVal(false, "false", false, tree.P_bool)
 		}
@@ -31756,7 +31760,7 @@ yydefault:
 	case 2139:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13919
+//line mysql_sql.y:13923
 		{
 			yyLOCAL = tree.NewNumVal("null", "null", false, tree.P_null)
 		}
@@ -31764,7 +31768,7 @@ yydefault:
 	case 2140:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13923
+//line mysql_sql.y:13927
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[1].str, yyDollar[1].str, false, tree.P_hexnum)
 		}
@@ -31772,7 +31776,7 @@ yydefault:
 	case 2141:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13927
+//line mysql_sql.y:13931
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[2].str, yyDollar[2].str, false, tree.P_ScoreBinaryHexnum)
 		}
@@ -31780,7 +31784,7 @@ yydefault:
 	case 2142:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13931
+//line mysql_sql.y:13935
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[1].str, yyDollar[1].str, false, tree.P_decimal)
 		}
@@ -31788,7 +31792,7 @@ yydefault:
 	case 2143:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13935
+//line mysql_sql.y:13939
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[1].str, yyDollar[1].str, false, tree.P_bit)
 		}
@@ -31796,7 +31800,7 @@ yydefault:
 	case 2144:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13939
+//line mysql_sql.y:13943
 		{
 			yyLOCAL = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
 		}
@@ -31804,7 +31808,7 @@ yydefault:
 	case 2145:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Expr
-//line mysql_sql.y:13943
+//line mysql_sql.y:13947
 		{
 			yyLOCAL = tree.NewNumVal(yyDollar[2].str, yyDollar[2].str, false, tree.P_ScoreBinary)
 		}
@@ -31812,7 +31816,7 @@ yydefault:
 	case 2146:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13949
+//line mysql_sql.y:13953
 		{
 			yyLOCAL = yyDollar[1].columnTypeUnion()
 			yyLOCAL.InternalType.Unsigned = yyDollar[2].unsignedOptUnion()
@@ -31822,7 +31826,7 @@ yydefault:
 	case 2150:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13958
+//line mysql_sql.y:13962
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31839,7 +31843,7 @@ yydefault:
 	case 2151:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13973
+//line mysql_sql.y:13977
 		{
 			yyLOCAL = yyDollar[1].columnTypeUnion()
 			yyLOCAL.InternalType.DisplayWith = yyDollar[2].lengthOptUnion()
@@ -31848,7 +31852,7 @@ yydefault:
 	case 2152:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13978
+//line mysql_sql.y:13982
 		{
 			yyLOCAL = yyDollar[1].columnTypeUnion()
 		}
@@ -31856,7 +31860,7 @@ yydefault:
 	case 2153:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13984
+//line mysql_sql.y:13988
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31872,7 +31876,7 @@ yydefault:
 	case 2154:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:13996
+//line mysql_sql.y:14000
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31888,7 +31892,7 @@ yydefault:
 	case 2155:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14008
+//line mysql_sql.y:14012
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31904,7 +31908,7 @@ yydefault:
 	case 2156:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14020
+//line mysql_sql.y:14024
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31921,7 +31925,7 @@ yydefault:
 	case 2157:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14033
+//line mysql_sql.y:14037
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31938,7 +31942,7 @@ yydefault:
 	case 2158:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14046
+//line mysql_sql.y:14050
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31955,7 +31959,7 @@ yydefault:
 	case 2159:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14059
+//line mysql_sql.y:14063
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31972,7 +31976,7 @@ yydefault:
 	case 2160:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14072
+//line mysql_sql.y:14076
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -31989,7 +31993,7 @@ yydefault:
 	case 2161:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14085
+//line mysql_sql.y:14089
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32006,7 +32010,7 @@ yydefault:
 	case 2162:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14098
+//line mysql_sql.y:14102
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32023,7 +32027,7 @@ yydefault:
 	case 2163:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14111
+//line mysql_sql.y:14115
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32040,7 +32044,7 @@ yydefault:
 	case 2164:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14124
+//line mysql_sql.y:14128
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32057,7 +32061,7 @@ yydefault:
 	case 2165:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14137
+//line mysql_sql.y:14141
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32074,7 +32078,7 @@ yydefault:
 	case 2166:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14150
+//line mysql_sql.y:14154
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32091,7 +32095,7 @@ yydefault:
 	case 2167:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14165
+//line mysql_sql.y:14169
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 255 {
@@ -32122,7 +32126,7 @@ yydefault:
 	case 2168:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14192
+//line mysql_sql.y:14196
 		{
 			// DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
 			locale := ""
@@ -32154,7 +32158,7 @@ yydefault:
 	case 2169:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14220
+//line mysql_sql.y:14224
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 255 {
@@ -32199,7 +32203,7 @@ yydefault:
 	case 2170:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14262
+//line mysql_sql.y:14266
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
@@ -32251,7 +32255,7 @@ yydefault:
 	case 2171:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14310
+//line mysql_sql.y:14314
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
@@ -32303,7 +32307,7 @@ yydefault:
 	case 2172:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14358
+//line mysql_sql.y:14362
 		{
 			locale := ""
 			width := int32(64)
@@ -32328,7 +32332,7 @@ yydefault:
 	case 2173:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14381
+//line mysql_sql.y:14385
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32344,7 +32348,7 @@ yydefault:
 	case 2174:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14393
+//line mysql_sql.y:14397
 		{
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
@@ -32368,7 +32372,7 @@ yydefault:
 	case 2175:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14413
+//line mysql_sql.y:14417
 		{
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
@@ -32392,7 +32396,7 @@ yydefault:
 	case 2176:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14433
+//line mysql_sql.y:14437
 		{
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
@@ -32416,7 +32420,7 @@ yydefault:
 	case 2177:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14453
+//line mysql_sql.y:14457
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32434,7 +32438,7 @@ yydefault:
 	case 2178:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14469
+//line mysql_sql.y:14473
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32451,7 +32455,7 @@ yydefault:
 	case 2179:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14482
+//line mysql_sql.y:14486
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32468,7 +32472,7 @@ yydefault:
 	case 2180:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14495
+//line mysql_sql.y:14499
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32485,7 +32489,7 @@ yydefault:
 	case 2181:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14508
+//line mysql_sql.y:14512
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32502,7 +32506,7 @@ yydefault:
 	case 2182:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14521
+//line mysql_sql.y:14525
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32518,7 +32522,7 @@ yydefault:
 	case 2183:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14533
+//line mysql_sql.y:14537
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32534,7 +32538,7 @@ yydefault:
 	case 2184:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14545
+//line mysql_sql.y:14549
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32550,7 +32554,7 @@ yydefault:
 	case 2185:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14557
+//line mysql_sql.y:14561
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32566,7 +32570,7 @@ yydefault:
 	case 2186:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14569
+//line mysql_sql.y:14573
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32582,7 +32586,7 @@ yydefault:
 	case 2187:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14581
+//line mysql_sql.y:14585
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32598,7 +32602,7 @@ yydefault:
 	case 2188:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14593
+//line mysql_sql.y:14597
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32614,7 +32618,7 @@ yydefault:
 	case 2189:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14605
+//line mysql_sql.y:14609
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32630,7 +32634,7 @@ yydefault:
 	case 2190:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14617
+//line mysql_sql.y:14621
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32646,7 +32650,7 @@ yydefault:
 	case 2191:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14629
+//line mysql_sql.y:14633
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32662,7 +32666,7 @@ yydefault:
 	case 2192:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14641
+//line mysql_sql.y:14645
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32678,7 +32682,7 @@ yydefault:
 	case 2193:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14653
+//line mysql_sql.y:14657
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32694,7 +32698,7 @@ yydefault:
 	case 2194:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14665
+//line mysql_sql.y:14669
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32711,7 +32715,7 @@ yydefault:
 	case 2195:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14678
+//line mysql_sql.y:14682
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32728,7 +32732,7 @@ yydefault:
 	case 2196:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14691
+//line mysql_sql.y:14695
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32745,7 +32749,7 @@ yydefault:
 	case 2197:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14704
+//line mysql_sql.y:14708
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32762,7 +32766,7 @@ yydefault:
 	case 2198:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14717
+//line mysql_sql.y:14721
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32779,7 +32783,7 @@ yydefault:
 	case 2199:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14730
+//line mysql_sql.y:14734
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32796,7 +32800,7 @@ yydefault:
 	case 2200:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14743
+//line mysql_sql.y:14747
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32813,7 +32817,7 @@ yydefault:
 	case 2201:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14756
+//line mysql_sql.y:14760
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32830,7 +32834,7 @@ yydefault:
 	case 2202:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14769
+//line mysql_sql.y:14773
 		{
 			locale := ""
 			yyLOCAL = &tree.T{
@@ -32847,7 +32851,7 @@ yydefault:
 	case 2203:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Statement
-//line mysql_sql.y:14784
+//line mysql_sql.y:14788
 		{
 			yyLOCAL = &tree.Do{
 				Exprs: yyDollar[2].exprsUnion(),
@@ -32857,7 +32861,7 @@ yydefault:
 	case 2204:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.Statement
-//line mysql_sql.y:14792
+//line mysql_sql.y:14796
 		{
 			yyDollar[2].selectUnion().IsPerform = true
 			yyLOCAL = yyDollar[2].selectUnion()
@@ -32866,7 +32870,7 @@ yydefault:
 	case 2205:
 		yyDollar = yyS[yypt-7 : yypt+1]
 		var yyLOCAL *tree.Select
-//line mysql_sql.y:14799
+//line mysql_sql.y:14803
 		{
 			yyLOCAL = &tree.Select{Select: yyDollar[1].selectStatementUnion(), TimeWindow: yyDollar[2].timeWindowUnion(), OrderBy: yyDollar[3].orderByUnion(), Limit: yyDollar[4].limitUnion(), RankOption: yyDollar[5].rankOptionUnion(), Ep: yyDollar[6].exportParmUnion(), SelectLockInfo: yyDollar[7].selectLockInfoUnion()}
 		}
@@ -32874,7 +32878,7 @@ yydefault:
 	case 2206:
 		yyDollar = yyS[yypt-8 : yypt+1]
 		var yyLOCAL *tree.Select
-//line mysql_sql.y:14803
+//line mysql_sql.y:14807
 		{
 			yyLOCAL = &tree.Select{Select: yyDollar[2].selectStatementUnion(), TimeWindow: yyDollar[3].timeWindowUnion(), OrderBy: yyDollar[4].orderByUnion(), Limit: yyDollar[5].limitUnion(), RankOption: yyDollar[6].rankOptionUnion(), Ep: yyDollar[7].exportParmUnion(), SelectLockInfo: yyDollar[8].selectLockInfoUnion(), With: yyDollar[1].withClauseUnion()}
 		}
@@ -32882,7 +32886,7 @@ yydefault:
 	case 2207:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.Statement
-//line mysql_sql.y:14809
+//line mysql_sql.y:14813
 		{
 			yyLOCAL = &tree.Declare{
 				Variables:  yyDollar[2].strsUnion(),
@@ -32894,7 +32898,7 @@ yydefault:
 	case 2208:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.Statement
-//line mysql_sql.y:14818
+//line mysql_sql.y:14822
 		{
 			yyLOCAL = &tree.Declare{
 				Variables:  yyDollar[2].strsUnion(),
@@ -32906,7 +32910,7 @@ yydefault:
 	case 2209:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.T
-//line mysql_sql.y:14828
+//line mysql_sql.y:14832
 		{
 			yyLOCAL = tree.NewSpatialType(yyDollar[1].str)
 		}
@@ -32914,7 +32918,7 @@ yydefault:
 	case 2228:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL []string
-//line mysql_sql.y:14856
+//line mysql_sql.y:14860
 		{
 			yyLOCAL = make([]string, 0, 4)
 			yyLOCAL = append(yyLOCAL, yyDollar[1].str)
@@ -32923,7 +32927,7 @@ yydefault:
 	case 2229:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL []string
-//line mysql_sql.y:14861
+//line mysql_sql.y:14865
 		{
 			yyLOCAL = append(yyDollar[1].strsUnion(), yyDollar[3].str)
 		}
@@ -32931,7 +32935,7 @@ yydefault:
 	case 2230:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14867
+//line mysql_sql.y:14871
 		{
 			yyLOCAL = 0
 		}
@@ -32939,7 +32943,7 @@ yydefault:
 	case 2232:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14874
+//line mysql_sql.y:14878
 		{
 			yyLOCAL = 0
 		}
@@ -32947,7 +32951,7 @@ yydefault:
 	case 2233:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14878
+//line mysql_sql.y:14882
 		{
 			yyLOCAL = int32(yyDollar[2].item.(int64))
 		}
@@ -32955,7 +32959,7 @@ yydefault:
 	case 2234:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14883
+//line mysql_sql.y:14887
 		{
 			yyLOCAL = int32(-1)
 		}
@@ -32963,7 +32967,7 @@ yydefault:
 	case 2235:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14887
+//line mysql_sql.y:14891
 		{
 			yyLOCAL = int32(yyDollar[2].item.(int64))
 		}
@@ -32971,7 +32975,7 @@ yydefault:
 	case 2236:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL int32
-//line mysql_sql.y:14893
+//line mysql_sql.y:14897
 		{
 			yyLOCAL = tree.GetDisplayWith(int32(yyDollar[2].item.(int64)))
 		}
@@ -32979,7 +32983,7 @@ yydefault:
 	case 2237:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14899
+//line mysql_sql.y:14903
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.NotDefineDisplayWidth,
@@ -32990,7 +32994,7 @@ yydefault:
 	case 2238:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14906
+//line mysql_sql.y:14910
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
@@ -33001,7 +33005,7 @@ yydefault:
 	case 2239:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14913
+//line mysql_sql.y:14917
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
@@ -33012,7 +33016,7 @@ yydefault:
 	case 2240:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14922
+//line mysql_sql.y:14926
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: 38, // this is the default precision for decimal
@@ -33023,7 +33027,7 @@ yydefault:
 	case 2241:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14929
+//line mysql_sql.y:14933
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
@@ -33034,7 +33038,7 @@ yydefault:
 	case 2242:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		var yyLOCAL tree.LengthScaleOpt
-//line mysql_sql.y:14936
+//line mysql_sql.y:14940
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
@@ -33045,7 +33049,7 @@ yydefault:
 	case 2243:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL bool
-//line mysql_sql.y:14945
+//line mysql_sql.y:14949
 		{
 			yyLOCAL = false
 		}
@@ -33053,7 +33057,7 @@ yydefault:
 	case 2244:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL bool
-//line mysql_sql.y:14949
+//line mysql_sql.y:14953
 		{
 			yyLOCAL = true
 		}
@@ -33061,33 +33065,33 @@ yydefault:
 	case 2245:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL bool
-//line mysql_sql.y:14953
+//line mysql_sql.y:14957
 		{
 			yyLOCAL = false
 		}
 		yyVAL.union = yyLOCAL
 	case 2246:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:14959
+//line mysql_sql.y:14963
 		{
 		}
 	case 2247:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL bool
-//line mysql_sql.y:14961
+//line mysql_sql.y:14965
 		{
 			yyLOCAL = true
 		}
 		yyVAL.union = yyLOCAL
 	case 2251:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:14971
+//line mysql_sql.y:14975
 		{
 			yyVAL.str = ""
 		}
 	case 2252:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line mysql_sql.y:14975
+//line mysql_sql.y:14979
 		{
 			yyVAL.str = string(yyDollar[1].str)
 		}

@@ -822,3 +822,131 @@ func TestCeilFloorTextRenderCompositionsKeepBaseNumericDomains(t *testing.T) {
 		require.True(t, keptRender, "the visible projection must keep the digit render")
 	})
 }
+
+// TestCeilFloorOmittedCharWidenMarkerSurvivesQueryBoundaries pins the
+// provenance of a one-argument CEIL/FLOOR argument that a derived-table or
+// CTE projection exported as a plain column reference (PR #32438 review,
+// #32336, #32374): the defining scope recorded the omitted-length
+// CAST/CONVERT-to-CHAR widening, so the outer scope must still bind the
+// FLOAT64-domain marker overload — keeping every composed
+// CEIL(cast(v as char)) + 1 query on its base FLOAT64 route — instead of
+// the ordinary TEXT overload whose DECIMAL128(38,0) retype rejects
+// magnitudes above 38 integral digits such as 1e90.
+func TestCeilFloorOmittedCharWidenMarkerSurvivesQueryBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		sql      string
+		overload int32
+	}{
+		{"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t) d", function.CeilTextOmittedCharRenderOverload},
+		{"select floor(c) + 1 from (select convert(vrt, char) as c from text_render_t) d", function.FloorTextOmittedCharRenderOverload},
+		{"with w as (select cast(vrt as char) as c from text_render_t) select ceil(c) from w", function.CeilTextOmittedCharRenderOverload},
+		{"select ceil(c2) + 1 from (select c as c2 from (select cast(vrt as char) as c from text_render_t) d1) d2", function.CeilTextOmittedCharRenderOverload},
+	} {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+		require.NoError(t, err, tc.sql)
+		fns := collectPlanFuncs(t, logicPlan, ceilFloorRenderNames())
+		require.NotEmpty(t, fns, tc.sql)
+		requireRenderOverload(t, fns[0], tc.overload, tc.sql)
+	}
+
+	// The composed arithmetic keeps the same FLOAT64 domain the base used
+	// for the omitted-CHAR widths across the boundary.
+	requirePlanFnResultType(t,
+		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t) d",
+		"+", types.T_float64)
+
+	// Controls: an explicit TEXT cast target and a plain TEXT column lose the
+	// omitted-CHAR provenance at the very same boundary, so they keep the
+	// ordinary overload 13 and the exact-integer DECIMAL128 composition.
+	for _, tc := range []struct{ sql string }{
+		{"select ceil(c) + 1 from (select cast(vrt as text) as c from text_render_t) d"},
+		{"select ceil(c) + 1 from (select vt as c from text_render_t) d"},
+	} {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+		require.NoError(t, err, tc.sql)
+		fns := collectPlanFuncs(t, logicPlan, ceilFloorRenderNames())
+		require.NotEmpty(t, fns, tc.sql)
+		requireRenderOverload(t, fns[0], 13, tc.sql)
+	}
+	requirePlanFnResultType(t,
+		"select ceil(c) + 1 from (select cast(vrt as text) as c from text_render_t) d",
+		"+", types.T_decimal128)
+}
+
+// TestCeilFloorTextRenderNumbersSurviveQueryBoundaries pins the numeric
+// consumption of the rendered one-argument CEIL/FLOOR results once a
+// derived-table or CTE projection exported them as plain column references
+// (PR #32438 review, #32336, #32374): MAX/MIN and ORDER BY keep the base's
+// numeric comparison and SUM/AVG keep binding, on the exact same base
+// domains the direct compositions use — FLOAT64 for the omitted-length
+// CAST/CONVERT-to-CHAR provenance and the exact-integer DECIMAL128 for
+// TEXT columns and explicit TEXT casts.
+func TestCeilFloorTextRenderNumbersSurviveQueryBoundaries(t *testing.T) {
+	// Omitted-CHAR provenance composes through FLOAT64 across boundaries.
+	for _, tc := range []struct {
+		sql    string
+		fnName string
+	}{
+		{"select max(c), min(c) from (select ceil(cast(vrt as char)) as c from text_render_t) d", "max"},
+		{"select max(c), min(c) from (select floor(cast(vrt as char)) as c from text_render_t) d", "min"},
+		{"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t) d", "sum"},
+		{"select sum(c) from (select floor(convert(vrt, char)) as c from text_render_t) d", "sum"},
+		{"select avg(c) from (select ceil(cast(vrt as char)) as c from text_render_t) d", "avg"},
+		{"with w as (select ceil(cast(vrt as char)) as c from text_render_t) select max(c), min(c) from w", "max"},
+		{"with w as (select floor(cast(vrt as char)) as c from text_render_t) select sum(c) from w", "sum"},
+		{"select max(c) from (select c from (select ceil(cast(vrt as char)) as c from text_render_t) d1) d2", "max"},
+	} {
+		requirePlanFnResultType(t, tc.sql, tc.fnName, types.T_float64)
+	}
+	for _, tc := range []struct{ sql string }{
+		{"select c from (select ceil(cast(vrt as char)) as c from text_render_t) d order by c"},
+		{"select c from (select floor(convert(vrt, char)) as c from text_render_t) d order by c desc"},
+		{"with w as (select ceil(cast(vrt as char)) as c from text_render_t) select c from w order by c"},
+	} {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+		require.NoError(t, err, tc.sql)
+		requireSingleSortKeyType(t, logicPlan, types.T_float64, tc.sql)
+	}
+
+	// TEXT-column renders keep the exact-integer DECIMAL128 domain through
+	// the same boundary, so CEIL(CAST('9007199254740993' AS TEXT))-style rows
+	// never collapse through FLOAT64 rounding.
+	for _, tc := range []struct {
+		sql    string
+		fnName string
+	}{
+		{"select max(c), min(c) from (select ceil(vt) as c from text_render_t) d", "max"},
+		{"select sum(c) from (select floor(vt) as c from text_render_t) d", "sum"},
+	} {
+		requirePlanFnResultType(t, tc.sql, tc.fnName, types.T_decimal128)
+	}
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select c from (select ceil(vt) as c from text_render_t) d order by c")
+	require.NoError(t, err)
+	requireSingleSortKeyType(t, logicPlan, types.T_decimal128,
+		"TEXT renders must sort on the exact DECIMAL128 key through the boundary")
+
+	// The projected render keeps its digit-rendering VARCHAR display, and
+	// consumers of unprovenanced VARCHAR columns keep their ordinary string
+	// binding: the boundary retype never widens beyond the recorded domains.
+	displayPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select c from (select ceil(cast(vrt as char)) as c from text_render_t) d")
+	require.NoError(t, err)
+	keptRender := false
+	for _, node := range displayPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if fn := expr.GetF(); fn != nil && expr.Typ.Id == int32(types.T_varchar) {
+				switch fn.Func.GetObjName() {
+				case "ceil", "ceiling", "floor":
+					if len(fn.Args) == 1 && fn.Args[0].Typ.Id == int32(types.T_text) {
+						keptRender = true
+					}
+				}
+			}
+		}
+	}
+	require.True(t, keptRender, "the visible projection must keep the digit render")
+	requirePlanFnResultType(t,
+		"select max(vrt) from (select vrt from text_render_t where id > 0) d",
+		"max", types.T_varchar)
+}

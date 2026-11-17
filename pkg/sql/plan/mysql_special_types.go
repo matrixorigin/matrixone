@@ -441,6 +441,24 @@ func (bc *BindContext) setMySQLSpecialOrderType(colPos int32, typ *plan.Type) {
 	bc.mysqlSpecialOrderTypes[colPos] = typ
 }
 
+// setOmittedCharWidenProject records that the given select-list position's
+// defining AST expression is the omitted-length CAST/CONVERT-to-CHAR
+// widening (#32336, #32374, PR #32438 review). Planner-local provenance
+// only: see BindContext.omittedCharWidenProjects.
+func (bc *BindContext) setOmittedCharWidenProject(colPos int32) {
+	if bc.omittedCharWidenProjects == nil {
+		bc.omittedCharWidenProjects = make(map[int32]struct{})
+	}
+	bc.omittedCharWidenProjects[colPos] = struct{}{}
+}
+
+// isOmittedCharWidenProject reads back the omitted-length CAST/CONVERT-to-
+// CHAR provenance recorded for the given select-list position.
+func (bc *BindContext) isOmittedCharWidenProject(colPos int32) bool {
+	_, recorded := bc.omittedCharWidenProjects[colPos]
+	return recorded
+}
+
 func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type {
 	if typ, recorded := bc.mysqlSpecialOrderTypes[colPos]; recorded {
 		return DeepCopyType(typ)
