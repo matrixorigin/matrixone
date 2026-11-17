@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -51,12 +52,16 @@ import (
 
 const (
 	tableDumpFormatVersion = 1
-	tableDumpManifestName  = "manifest.json"
-	tableDumpReadyName     = "READY"
-	tableDumpMaxManifest   = 64 << 20
-	tableDumpMaxRelations  = 4_096
-	tableDumpMaxObjects    = 250_000
-	tableDumpMaxBlocks     = 1_000_000
+	// Version 1 schema hashes predate ENUM collation metadata. New dumps use
+	// version 2; manifests without this field are treated as version 1.
+	tableDumpSchemaHashVersionLegacy  = 1
+	tableDumpSchemaHashVersionCurrent = 2
+	tableDumpManifestName             = "manifest.json"
+	tableDumpReadyName                = "READY"
+	tableDumpMaxManifest              = 64 << 20
+	tableDumpMaxRelations             = 4_096
+	tableDumpMaxObjects               = 250_000
+	tableDumpMaxBlocks                = 1_000_000
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -65,13 +70,14 @@ const (
 )
 
 type tableDumpManifest struct {
-	Version        int                 `json:"version"`
-	SourceDatabase string              `json:"source_database"`
-	SourceTable    string              `json:"source_table"`
-	CreateSQL      string              `json:"create_sql,omitempty"`
-	SchemaHash     string              `json:"schema_hash"`
-	MetadataOnly   bool                `json:"metadata_only"`
-	Relations      []tableDumpRelation `json:"relations"`
+	Version           int                 `json:"version"`
+	SchemaHashVersion int                 `json:"schema_hash_version,omitempty"`
+	SourceDatabase    string              `json:"source_database"`
+	SourceTable       string              `json:"source_table"`
+	CreateSQL         string              `json:"create_sql,omitempty"`
+	SchemaHash        string              `json:"schema_hash"`
+	MetadataOnly      bool                `json:"metadata_only"`
+	Relations         []tableDumpRelation `json:"relations"`
 }
 
 type tableDumpRelation struct {
@@ -177,7 +183,15 @@ func getTableDumpRelations(
 	ses *Session,
 	dbName string,
 	master engine.Relation,
+	schemaHashVersion ...int,
 ) ([]tableDumpRelationRef, error) {
+	hashVersion := tableDumpSchemaHashVersionCurrent
+	if len(schemaHashVersion) > 1 {
+		return nil, moerr.NewInternalErrorNoCtx("multiple table dump schema hash versions")
+	}
+	if len(schemaHashVersion) == 1 {
+		hashVersion = schemaHashVersion[0]
+	}
 	def := master.GetTableDef(ctx)
 	if def == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table definition is unavailable")
@@ -186,7 +200,7 @@ func getTableDumpRelations(
 	if err != nil {
 		return nil, err
 	}
-	masterHash, err := tableSchemaHash(def)
+	masterHash, err := tableSchemaHashForVersion(def, hashVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +222,7 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHash(indexRel.GetTableDef(ctx))
+		indexHash, err := tableSchemaHashForVersion(indexRel.GetTableDef(ctx), hashVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -228,18 +242,129 @@ func getTableDumpRelations(
 }
 
 func tableSchemaHash(def *plan.TableDef) (string, error) {
+	return tableSchemaHashForVersion(def, tableDumpSchemaHashVersionCurrent)
+}
+
+func tableSchemaHashForVersion(def *plan.TableDef, version int) (string, error) {
+	switch version {
+	case 0, tableDumpSchemaHashVersionLegacy:
+		return tableSchemaHashLegacy42(def)
+	case tableDumpSchemaHashVersionCurrent:
+		return tableSchemaHashCurrent(def)
+	default:
+		return "", moerr.NewInvalidInputNoCtxf("unsupported table dump schema hash version %d", version)
+	}
+}
+
+func tableSchemaHashLegacy42(def *plan.TableDef) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if tableHasNewEnumCollationMetadata(def) {
+		return "", moerr.NewNotSupportedNoCtx("cannot verify a legacy table dump schema hash with newly authored ENUM collation metadata; recreate the target without COLLATE clauses that 4.2.8 ignored to preserve its legacy ENUM identity")
+	}
+
+	legacy := *def
+	legacy.DefaultCharset = types.EnumCollationLegacy
+	legacy.EnumUnsupportedDefault = ""
+	if tableSchemaCanReconstruct(def) {
+		clone := legacy
+		clone.Name = "__table_dump_target__"
+		clone.DbName = ""
+		clone.Createsql = ""
+		clone.Cols = make([]*plan.ColDef, len(def.Cols))
+		for i, col := range def.Cols {
+			if col == nil {
+				return "", moerr.NewInvalidInputNoCtx("cannot verify a legacy table dump schema with a missing column")
+			}
+			copy := *col
+			if types.T(copy.Typ.Id) == types.T_enum {
+				copy.Typ.EnumCollation = types.EnumCollationLegacy
+			}
+			clone.Cols[i] = &copy
+		}
+		canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, &clone, nil, false, nil)
+		if err != nil {
+			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct legacy table schema: %v", err)
+		}
+		sum := sha256.Sum256([]byte(canonical))
+		return hex.EncodeToString(sum[:]), nil
+	}
+	if createSQL := strings.TrimSpace(def.Createsql); createSQL != "" {
+		stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
+		if err != nil {
+			return "", moerr.NewInternalErrorNoCtxf("cannot normalize legacy table schema: %v", err)
+		}
+		defer stmt.Free()
+		create, ok := stmt.(*tree.CreateTable)
+		if !ok {
+			return "", moerr.NewInternalErrorNoCtx("catalog CREATE SQL is not a CREATE TABLE statement")
+		}
+		create.Table.ExplicitSchema = false
+		create.Table.SchemaName = ""
+		create.Table.ObjectName = "__table_dump_target__"
+		normalized := tree.String(create, dialect.MYSQL)
+		sum := sha256.Sum256([]byte(normalized))
+		return hex.EncodeToString(sum[:]), nil
+	}
+
+	clone := legacy
+	clone.TblId = 0
+	clone.Name = ""
+	clone.Createsql = ""
+	clone.DbName = ""
+	clone.DbId = 0
+	clone.Name2ColIndex = nil
+	clone.IsLocked = false
+	clone.AutoIncrOffset = 0
+	clone.LogicalId = 0
+	clone.OriginalName = ""
+	data, err := clone.Marshal()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func tableHasNewEnumCollationMetadata(def *plan.TableDef) bool {
+	if def == nil {
+		return true
+	}
+	hasEnum := false
+	for _, col := range def.Cols {
+		if col == nil || types.T(col.Typ.Id) != types.T_enum {
+			continue
+		}
+		hasEnum = true
+		if col.Typ.EnumCollation != types.EnumCollationLegacy {
+			return true
+		}
+	}
+	return hasEnum && (def.DefaultCharset != types.EnumCollationLegacy || def.EnumUnsupportedDefault != "")
+}
+
+func tableSchemaCanReconstruct(def *plan.TableDef) bool {
+	if def == nil || def.TableType == catalog.SystemClusterRel || def.TableType == catalog.SystemExternalRel ||
+		def.Partition != nil || len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func tableSchemaHashCurrent(def *plan.TableDef) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
-	canReconstruct := def.TableType != catalog.SystemClusterRel &&
-		def.TableType != catalog.SystemExternalRel &&
-		def.Partition == nil && len(def.Fkeys) == 0 && def.ViewSql == nil && def.TblFunc == nil
-	for _, col := range def.Cols {
-		canReconstruct = canReconstruct && col != nil && col.Default != nil
-	}
+	canReconstruct := tableSchemaCanReconstruct(def)
 	if canReconstruct {
 		clone := *def
 		clone.Name = "__table_dump_target__"
@@ -268,6 +393,9 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 		create.Table.SchemaName = ""
 		create.Table.ObjectName = "__table_dump_target__"
 		normalized := tree.String(create, dialect.MYSQL)
+		if tableHasNewEnumCollationMetadata(def) {
+			normalized = appendEnumCollationHashMetadata(normalized, def)
+		}
 		sum := sha256.Sum256([]byte(normalized))
 		return hex.EncodeToString(sum[:]), nil
 	}
@@ -290,6 +418,28 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func appendEnumCollationHashMetadata(canonical string, def *plan.TableDef) string {
+	var builder strings.Builder
+	builder.Grow(len(canonical) + 64)
+	builder.WriteString(canonical)
+	builder.WriteString("\x00table-enum-default:")
+	builder.WriteString(strconv.FormatUint(uint64(def.DefaultCharset), 10))
+	builder.WriteString("\x00table-enum-unsupported:")
+	builder.WriteString(def.EnumUnsupportedDefault)
+	for i, col := range def.Cols {
+		if col == nil || types.T(col.Typ.Id) != types.T_enum {
+			continue
+		}
+		builder.WriteString("\x00enum-column:")
+		builder.WriteString(strconv.Itoa(i))
+		builder.WriteByte(':')
+		builder.WriteString(col.Name)
+		builder.WriteByte(':')
+		builder.WriteString(strconv.FormatUint(uint64(col.Typ.EnumCollation), 10))
+	}
+	return builder.String()
 }
 
 func validateTableDumpSchema(def *plan.TableDef) error {
@@ -577,6 +727,9 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if manifest.Version != tableDumpFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
 	}
+	if manifest.SchemaHashVersion != 0 && manifest.SchemaHashVersion != tableDumpSchemaHashVersionLegacy && manifest.SchemaHashVersion != tableDumpSchemaHashVersionCurrent {
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump schema hash version %d", manifest.SchemaHashVersion)
+	}
 	return manifest, nil
 }
 
@@ -601,6 +754,8 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 		switch name {
 		case "version":
 			err = decoder.Decode(&manifest.Version)
+		case "schema_hash_version":
+			err = decoder.Decode(&manifest.SchemaHashVersion)
 		case "source_database":
 			err = decoder.Decode(&manifest.SourceDatabase)
 		case "source_table":
@@ -879,7 +1034,8 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	}
 
 	manifest := &tableDumpManifest{
-		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
+		Version: tableDumpFormatVersion, SchemaHashVersion: tableDumpSchemaHashVersionCurrent,
+		SourceDatabase: dbName, SourceTable: tableName,
 		CreateSQL: manifestCreateSQL, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
@@ -1173,14 +1329,14 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewInvalidInputNoCtx("table dump is incomplete: READY marker is missing")
 		}
 	}
-	targetHash, err := tableSchemaHash(targetDef)
+	targetHash, err := tableSchemaHashForVersion(targetDef, manifest.SchemaHashVersion)
 	if err != nil {
 		return err
 	}
 	if targetHash != manifest.SchemaHash {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
-	targetRefs, err := getTableDumpRelations(ctx, ses, dbName, rel)
+	targetRefs, err := getTableDumpRelations(ctx, ses, dbName, rel, manifest.SchemaHashVersion)
 	if err != nil {
 		return err
 	}

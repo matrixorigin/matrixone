@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1734,29 +1736,12 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 		return fail("view definition is not CREATE VIEW")
 	}
 	if defaultDB == "" {
-		// A qualified view with only literal projections has no database
-		// dependencies. It can be recreated in the destination database even
-		// if the original session did not select one.
-		q := viewStmt.AsSource
-		if viewStmt.Name == nil || viewStmt.Name.SchemaName == "" || q == nil || q.With != nil || q.IsPerform || q.TimeWindow != nil || len(q.OrderBy) != 0 || q.Limit != nil || q.RankOption != nil || q.Ep != nil || q.SelectLockInfo != nil {
-			return fail("view without default database is not a self-contained literal SELECT")
-		}
-		clause, ok := q.Select.(*tree.SelectClause)
-		if !ok || clause.Distinct || clause.Option != 0 || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) == 0 {
-			return fail("view without default database is not a self-contained literal SELECT")
-		}
-		alias, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
-		if !ok || alias.As.Alias != "" || len(alias.IndexHints) != 0 {
-			return fail("view without default database is not a self-contained literal SELECT")
-		}
-		from, ok := alias.Expr.(*tree.TableName)
-		if !ok || from.ObjectName != "" {
-			return fail("view without default database is not a self-contained literal SELECT")
-		}
-		for _, projection := range clause.Exprs {
-			if _, ok := projection.Expr.(*tree.NumVal); !ok {
-				return fail("view without default database is not a self-contained literal SELECT")
-			}
+		// A view created without a selected database is safe to replay only
+		// when every relation is explicitly qualified and the query does not
+		// inspect the session's current database. The restore session may
+		// already have selected a database for an earlier table.
+		if viewStmt.Name == nil || viewStmt.Name.SchemaName == "" || viewStmt.AsSource == nil || !checkpointViewUsesNoImplicitDatabase(viewStmt.AsSource) {
+			return fail("view without default database has an unqualified or unsupported relation")
 		}
 		defaultDB = table.DatabaseName
 	}
@@ -1786,31 +1771,122 @@ func prepareCheckpointViewRestore(ctx context.Context, table checkpointtool.Tabl
 }
 
 func checkpointReplaySQLMode(mode string) (string, error) {
-	if len(mode) > 4096 {
-		return "", fmt.Errorf("view SQL mode is too long")
-	}
-	allowed := map[string]bool{
-		"TRADITIONAL": true, "ALLOW_INVALID_DATES": true, "ANSI_QUOTES": true,
-		"ERROR_FOR_DIVISION_BY_ZERO": true, "HIGH_NOT_PRECEDENCE": true, "IGNORE_SPACE": true,
-		"MATRIXONE_NATIVE": true, "NO_AUTO_VALUE_ON_ZERO": true, "NO_BACKSLASH_ESCAPES": true,
-		"NO_DIR_IN_CREATE": true, "NO_ENGINE_SUBSTITUTION": true, "NO_UNSIGNED_SUBTRACTION": true,
-		"NO_ZERO_DATE": true, "NO_ZERO_IN_DATE": true, "ONLY_FULL_GROUP_BY": true,
-		"PAD_CHAR_TO_FULL_LENGTH": true, "PIPES_AS_CONCAT": true, "REAL_AS_FLOAT": true,
-		"STRICT_ALL_TABLES": true, "STRICT_TRANS_TABLES": true, "TIME_TRUNCATE_FRACTIONAL": true,
-	}
-	if mode == "" {
-		return "", nil
-	}
-	parts := strings.Split(mode, ",")
-	for i, part := range parts {
-		parts[i] = strings.ToUpper(strings.TrimSpace(part))
-		if !allowed[parts[i]] {
-			return "", fmt.Errorf("unsupported view SQL mode %q", parts[i])
-		}
-	}
-	return strings.Join(parts, ","), nil
+	return frontend.NormalizePersistedSQLMode(mode)
 }
 
+func checkpointViewUsesNoImplicitDatabase(source *tree.Select) bool {
+	if source == nil {
+		return false
+	}
+	selectType := reflect.TypeOf((*tree.Select)(nil))
+	tableNameType := reflect.TypeOf((*tree.TableName)(nil))
+	withType := reflect.TypeOf((*tree.With)(nil))
+	funcExprType := reflect.TypeOf((*tree.FuncExpr)(nil))
+	seen := make(map[uintptr]struct{})
+	var walk func(reflect.Value, map[string]struct{}) bool
+	var walkStructFields func(reflect.Value, map[string]struct{}, string) bool
+	walkStructFields = func(value reflect.Value, cteScope map[string]struct{}, skip string) bool {
+		for i := 0; i < value.NumField(); i++ {
+			if value.Type().Field(i).Name == skip {
+				continue
+			}
+			if !walk(value.Field(i), cteScope) {
+				return false
+			}
+		}
+		return true
+	}
+	walk = func(value reflect.Value, cteScope map[string]struct{}) bool {
+		if !value.IsValid() {
+			return true
+		}
+		switch value.Kind() {
+		case reflect.Interface:
+			if value.IsNil() {
+				return true
+			}
+			return walk(value.Elem(), cteScope)
+		case reflect.Pointer:
+			if value.IsNil() {
+				return true
+			}
+			if value.Type() == tableNameType {
+				if !value.CanInterface() {
+					return false
+				}
+				name := value.Interface().(*tree.TableName)
+				if name.ObjectName == "" || name.SchemaName != "" {
+					return true
+				}
+				_, isCTE := cteScope[strings.ToLower(string(name.ObjectName))]
+				return isCTE
+			}
+			if value.Type() == withType {
+				return false
+			}
+			if value.Type() == funcExprType {
+				if !value.CanInterface() {
+					return false
+				}
+				function := value.Interface().(*tree.FuncExpr)
+				if function.FuncName != nil {
+					switch strings.ToLower(function.FuncName.Origin()) {
+					case "database", "schema", "current_database", "current_schema":
+						return false
+					}
+				}
+			}
+			pointer := value.Pointer()
+			if _, ok := seen[pointer]; ok {
+				return true
+			}
+			seen[pointer] = struct{}{}
+			defer delete(seen, pointer)
+			if value.Type() == selectType {
+				selectNode := value.Interface().(*tree.Select)
+				if selectNode.With == nil {
+					return walkStructFields(value.Elem(), cteScope, "")
+				}
+				localScope := make(map[string]struct{}, len(cteScope)+len(selectNode.With.CTEs))
+				for name := range cteScope {
+					localScope[name] = struct{}{}
+				}
+				for _, cte := range selectNode.With.CTEs {
+					if cte == nil || cte.Name == nil || cte.Name.Alias == "" || cte.Stmt == nil {
+						return false
+					}
+					name := strings.ToLower(string(cte.Name.Alias))
+					if selectNode.With.IsRecursive {
+						localScope[name] = struct{}{}
+					}
+					if !walk(reflect.ValueOf(cte.Stmt), localScope) {
+						return false
+					}
+					localScope[name] = struct{}{}
+				}
+				return walkStructFields(value.Elem(), localScope, "With")
+			}
+			return walk(value.Elem(), cteScope)
+		case reflect.Struct:
+			return walkStructFields(value, cteScope, "")
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				if !walk(value.Index(i), cteScope) {
+					return false
+				}
+			}
+		case reflect.Map:
+			iterator := value.MapRange()
+			for iterator.Next() {
+				if !walk(iterator.Key(), cteScope) || !walk(iterator.Value(), cteScope) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return walk(reflect.ValueOf(source), nil)
+}
 func isLocalInfileExternalTableDDL(ddl string) bool {
 	if !hasSQLKeywordSequence(ddl, "CREATE", "EXTERNAL", "TABLE") {
 		return false

@@ -47,6 +47,23 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	})
 }
 
+func TestNormalizePersistedSQLModeUsesSystemVariableSet(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"ANS", "ANSI"},
+		{" ans , pipes_as_concat ", "ANSI,PIPES_AS_CONCAT"},
+		{"ANSI_QUOTES,NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"},
+	} {
+		got, err := NormalizePersistedSQLMode(tc.input)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.want, got)
+	}
+	_, err := NormalizePersistedSQLMode("NOT_A_SQL_MODE")
+	assert.Error(t, err)
+}
+
 func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]

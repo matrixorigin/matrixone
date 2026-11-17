@@ -40,12 +40,17 @@ func TestCheckpointViewRestoreCreationContext(t *testing.T) {
 		{"no backslash escapes", `CREATE VIEW old AS SELECT 'a\b' AS value`, "NO_BACKSLASH_ESCAPES"},
 		{"ansi quotes", `CREATE VIEW "old" AS SELECT "col" FROM source`, "ANSI_QUOTES"},
 		{"pipes", `CREATE VIEW old AS SELECT 'a'||'b' AS value`, "PIPES_AS_CONCAT"},
+		{"legacy ANSI alias", `CREATE VIEW old AS SELECT 1`, "ANS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := checkpointViewTestData(t, tc.stmt, tc.mode, "source_db", "INVOKER")
 			view, err := prepareCheckpointViewRestore(context.Background(), table, data)
 			require.NoError(t, err)
-			require.Equal(t, tc.mode, view.sqlMode)
+			wantMode := tc.mode
+			if wantMode == "ANS" {
+				wantMode = "ANSI"
+			}
+			require.Equal(t, wantMode, view.sqlMode)
 			require.Equal(t, "source_db", view.defaultDB)
 			require.Equal(t, "INVOKER", view.security)
 			require.Contains(t, view.ddl, "VIEW `view_db`.`actual` AS")
@@ -72,14 +77,30 @@ func TestCheckpointViewRestoreRejectsUnverifiedMetadata(t *testing.T) {
 
 func TestCheckpointViewWithoutDefaultDatabase(t *testing.T) {
 	table := checkpointtool.TableCatalogEntry{TableID: 1, DatabaseName: "db", TableName: "v", RelKind: "v"}
-	view, err := prepareCheckpointViewRestore(context.Background(), table,
-		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT 1 AS n", "", "", "DEFINER"))
-	require.NoError(t, err)
-	require.Equal(t, "db", view.defaultDB)
-	require.Equal(t, "CREATE VIEW `db`.`v` AS SELECT 1 AS n", view.ddl)
-	_, err = prepareCheckpointViewRestore(context.Background(), table,
-		checkpointViewTestData(t, "CREATE VIEW db.old AS SELECT * FROM source", "", "", "DEFINER"))
-	require.ErrorContains(t, err, "not a self-contained literal SELECT")
+	for _, tc := range []struct {
+		stmt, want, mode string
+	}{
+		{"CREATE VIEW db.expression_v AS SELECT 1 + 1 AS n", "CREATE VIEW `db`.`v` AS SELECT 1 + 1 AS n", "ANS"},
+		{"CREATE VIEW db.qualified_v AS SELECT n FROM db.t", "CREATE VIEW `db`.`v` AS SELECT n FROM db.t", "ANS"},
+		{"CREATE VIEW db.cte_v AS WITH q AS (SELECT n FROM db.t) SELECT n FROM q", "CREATE VIEW `db`.`v` AS WITH q AS (SELECT n FROM db.t) SELECT n FROM q", "ANS"},
+	} {
+		view, err := prepareCheckpointViewRestore(context.Background(), table,
+			checkpointViewTestData(t, tc.stmt, tc.mode, "", "DEFINER"))
+		require.NoError(t, err)
+		require.Equal(t, "db", view.defaultDB)
+		require.Equal(t, "ANSI", view.sqlMode)
+		require.Equal(t, tc.want, view.ddl)
+	}
+	for _, stmt := range []string{
+		"CREATE VIEW db.old AS SELECT * FROM source",
+		"CREATE VIEW db.old AS SELECT (SELECT n FROM source) AS n",
+		"CREATE VIEW db.old AS SELECT DATABASE() AS db_name",
+		"CREATE VIEW db.old AS WITH q AS (SELECT n FROM source) SELECT n FROM q",
+	} {
+		_, err := prepareCheckpointViewRestore(context.Background(), table,
+			checkpointViewTestData(t, stmt, "", "", "DEFINER"))
+		require.ErrorContains(t, err, "unqualified or unsupported relation")
+	}
 }
 
 func TestCheckpointViewScriptRestoresModeAndDatabase(t *testing.T) {
