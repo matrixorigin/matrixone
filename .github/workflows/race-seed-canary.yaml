@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,24 @@ permissions:
   contents: read
 
 jobs:
+  cs-mty-two-group-reuse:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && inputs.coverage_comparison == 'mty-two-group-reuse' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-pvc-comparison-mty
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    uses: matrixorigin/CI/.github/workflows/coverage-mty-two-group-pvc-consumer.yaml@7572552dba0b403d7762387624554f83ee42fbb7
+    with:
+      cache_seed: false
+      coverage_compile_cache: true
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   node-cache-contract:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && inputs.coverage_comparison == 'node-cache-contract' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     permissions:
