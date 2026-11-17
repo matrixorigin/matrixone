@@ -3030,6 +3030,15 @@ var supportedOperators = []FuncNew{
 				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
 			},
+			{
+				// Internal prepared BIT_COUNT string-to-latched-numeric conversion.
+				// User-written CAST and every other prepared consumer keep their
+				// existing conversion and diagnostic ownership.
+				overloadId:           int(PreparedBitCountCastOverload),
+				rowScopedDiagnostics: true,
+				retType:              func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:                func() executeLogicOfOverload { return NewPreparedBitCountCast },
+			},
 		},
 	},
 
@@ -3434,10 +3443,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `&`
 	{
-		functionId: OP_BIT_AND,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_AND,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3503,10 +3513,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `|`
 	{
-		functionId: OP_BIT_OR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_OR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3572,10 +3583,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `^`
 	{
-		functionId: OP_BIT_XOR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_XOR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3641,10 +3653,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `<<`
 	{
-		functionId: OP_BIT_SHIFT_LEFT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_LEFT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3740,10 +3753,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `>>`
 	{
-		functionId: OP_BIT_SHIFT_RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_RIGHT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
