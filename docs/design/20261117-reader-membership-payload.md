@@ -120,3 +120,25 @@ First prove the permission is derived from the final executable predicates and r
 
 Require actual native Q10/Q19 predicate-input reduction and lower instructions than current main before another full reader comparison. If that gate fails, retain the evidence and propose the next decision; do not push or relax acceptance. The independent join PR continues all22 local acceptance now.
 
+
+## Approved revision 5: mask consumption and lazy identity coordinates
+
+Requester approved this revision with “go on” before implementation. Earlier source, ownership, lifecycle and acceptance contracts remain. No native Bloom hash/vector kernel, cache policy, API or persistent state change.
+
+## Verified contracts
+
+cgo/bloom.c:bloomfilter_test_fixed explicitly writesfalse for NULL positions before hashing. CBloomFilter.testFixedVector passes the null bitmap, clears const-NULL output and broadcasts the physical result over the vector's logical length. selectLocalDomains nevertheless repeats Vector.IsNull for every returned byte. Its constant broadcast is redundant only when vector.Length equals batch.RowCount; the existing one-value constant header with a larger batch still requires the outer broadcast.
+
+The reader already records an identity boolean when there are no storage selections or tombstones. It nevertheless calls deleted.Contains and writes row0..N into Physical for every row before either callback. Identity coordinates are derivable at the first selection composition. The total-reader path overwrites that initial map when membership is selective.
+
+## Bounded implementation
+
+1. Consume the NULL-correct mask from the unchanged Bloom API. Preserve unsupported-shape refusal and the short-constant-header broadcast. Remove the duplicate Go NULL scan. For the common single active domain, count rejected rows and collect selected logical indexes in one pass; preserve per-domain tested/rejected/bypass decisions and current-batch mask application. Multiple domains retain their order, per-domain statistics and AND semantics, combining counters and AND where possible. No new scratch, state, allocation, API or native kernel.
+2. With no tombstones/storage selection, set live row count without testing or filling identity rows. At first composition, derive the original index directly from the logical index; keep Physical lazy until a real nonidentity selection exists. Native exact and predicate-first paths explicitly write their first composed map using the identity flag. In total membership-first execution, partial membership copies its selected original indexes; identity membership plus partial predicates copies the predicate indexes; both identity stages use existing full-column publication without reading map contents. Tombstone/storage maps retain their existing population. Keep allocation/refusal/ownership and I/O scope unchanged.
+3. Preserve row and error order, NULL/constant semantics, original-row coordinates, low-rejection bypass and counters. Existing masks/maps remain lane-owned and cleared/freed by the same owners. Unsupported cache formats still decline before callbacks/copies.
+
+## Evidence before delivery
+
+Extend existing NULL/short-constant/multiple-domain controls and original-row mapping fixtures. Prefill reusable map storage with invalid indexes to prove identity cases do not consume stale contents; cover empty/all/partial stages and tombstones/storage rows. Require a component instruction/cycle win and unchanged allocations using the actual existing Bloom API. Reuse unchanged stream/cache lifetime evidence; run the changed owning packages and static closure.
+
+Then screen Q7 and Q10 at both SF10 and SF100 against current main, not only the small scale. No full reader campaign until those foreground instruction/resource signals improve. Finish all22 qualification with the approved one-process six-suite protocol, preserve exclusions and keep draft if any introduced regression remains. The independent join PR continues separately.
