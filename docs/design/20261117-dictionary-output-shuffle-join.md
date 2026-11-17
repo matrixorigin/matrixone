@@ -102,3 +102,14 @@ restrictions and the upstream owned-input preference. No selector or lease is
 added. Prove nested join negotiation, original header identity, first mismatch
 fallback and source lifetime before native Q9 activation and isolated all22
 qualification. Existing benchmark tables remain current until replaced.
+
+## Approved revision 4: bounded nonunique INNER payload gathering
+
+The requester authorized extending residual-free nonunique INNER projection to
+the existing bounded tuple scratch and vector gather kernels. Collect resolved
+probe/build ordinals in stream order, including repeats, at most one Find chunk
+per gather. Preserve current probe state/selection continuations, NULL handling
+and output boundaries. Keep lookup/join placement and residual/outer/single-row
+error modes unchanged; spill remains on its established route. No new dictionary
+constructor, multi-base vector, allocation state or hash/routing kernel. Require
+component instructions/copy benefit and native Q9 activation before all22 timing.
