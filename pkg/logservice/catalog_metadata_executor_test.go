@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -249,6 +250,10 @@ func TestCatalogExecutorLifecycle(t *testing.T) {
 	hb = s.getHeartbeatMessage()
 	require.Equal(t, p.Token, hb.CatalogMetadataStartResult.Token)
 	require.True(t, hb.CatalogMetadataStartResult.Completed)
+	nid := nodeID{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: p.ReplicaID}
+	testPrepareSnapshot(t, s.snapshotMgr, nid, snapshotIndex(123))
+	require.NoError(t, s.snapshotMgr.Init(nid.shardID, nid.replicaID))
+	exportPath := s.snapshotMgr.exportPath(nid.shardID, nid.replicaID)
 	revoke := p
 	revoke.RevocationPending = true
 	var wg sync.WaitGroup
@@ -261,6 +266,8 @@ func TestCatalogExecutorLifecycle(t *testing.T) {
 	wg.Wait()
 	require.NoError(t, <-errs)
 	require.False(t, s.catalogReplicaPresent(p, false))
+	_, err = s.cfg.FS.Stat(exportPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.Error(t, s.executeCatalogStart(p))
 	require.True(t, s.getHeartbeatMessage().CatalogMetadataStartResult.Revoked)
 	require.NoError(t, s.close())

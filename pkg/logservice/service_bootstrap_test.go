@@ -613,6 +613,46 @@ func TestBootstrapChecksInitialReplicaMissingFromMetadata(t *testing.T) {
 	require.False(t, running)
 }
 
+func TestBootstrapSkipsRetiringInitialHAKeeperAfterRestart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	const initialID uint64 = 131072
+	files := newFS()
+	first, err := NewService(cfg, files, nil)
+	require.NoError(t, err)
+	defer func() {
+		if first != nil {
+			require.NoError(t, first.Close())
+		}
+	}()
+	require.NoError(t, first.store.startHAKeeperReplica(initialID,
+		map[uint64]dragonboat.Target{initialID: cfg.UUID}, false))
+	first.store.markReplicaRetiring(hakeeper.DefaultHAKeeperShardID, initialID)
+	require.NoError(t, first.store.stopReplica(hakeeper.DefaultHAKeeperShardID, initialID))
+	require.NoError(t, first.Close())
+	first = nil
+
+	cfg.BootstrapConfig.BootstrapCluster = true
+	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
+	restarted, err := NewService(cfg, files, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, restarted.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, restarted.store.processTruncateLog(ctx))
+	has, err := hasMetadataRec(cfg.DataDir, logMetadataFilename,
+		hakeeper.DefaultHAKeeperShardID, initialID, cfg.FS)
+	require.NoError(t, err)
+	require.False(t, has, "cleanup may finish before initial bootstrap")
+	require.NoError(t, restarted.BootstrapHAKeeper(ctx, cfg))
+	require.Zero(t, atomic.LoadUint64(&restarted.store.haKeeperReplicaID))
+	info := restarted.store.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true})
+	for _, shard := range info.ShardInfoList {
+		require.NotEqual(t, initialID, shard.ReplicaID)
+	}
+}
+
 func TestColdBootstrapWithUnknownMembership(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()

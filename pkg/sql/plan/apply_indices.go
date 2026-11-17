@@ -4437,6 +4437,17 @@ func regularIndexBackfillPrepareWork(keys, packedWidth, readers float64) float64
 // the build keys. A small build can match most of a non-unique probe index and
 // overflow the backfill filter, leaving a full scan behind an extra dependency.
 func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *IndexDef, buildRows float64) bool {
+	numKeyParts := len(idxDef.Parts)
+	if !idxDef.Unique {
+		numKeyParts--
+	}
+	return ctx.shouldSkipJoinIndexBackfillForPrefix(idxDef, numKeyParts, buildRows)
+}
+
+// shouldSkipJoinIndexBackfillForPrefix estimates fanout from the matched
+// leading key parts. A partial unique key can match many rows; uniqueness
+// bounds fanout only when equality covers the complete declared key.
+func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfillForPrefix(idxDef *IndexDef, matchedParts int, buildRows float64) bool {
 	if !ctx.valid || ctx.force || IsDefaultStats(ctx.node.Stats) || !finitePositive(buildRows) {
 		return false
 	}
@@ -4445,17 +4456,25 @@ func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *I
 	if !regularIndexFiltersHaveStableEvaluation(ctx.node) {
 		return false
 	}
-	matches := min(ctx.node.Stats.TableCnt, buildRows)
+	declaredKeyParts := len(idxDef.Parts)
 	if !idxDef.Unique {
+		declaredKeyParts--
+	}
+	if matchedParts <= 0 || matchedParts > declaredKeyParts {
+		return false
+	}
+	matches := min(ctx.node.Stats.TableCnt, buildRows)
+	if !idxDef.Unique || matchedParts < declaredKeyParts {
 		wrapper := ctx.builder.getStatsInfoByTableID(ctx.node.TableDef.TblId)
 		if wrapper == nil || wrapper.GetStats() == nil || !finitePositive(wrapper.GetStats().TableCnt) {
 			return false
 		}
 		stats := wrapper.GetStats()
 		keyNDV := 1.0
-		// The final part of a non-unique index is the appended PK, not a
-		// lookup key. Do not multiply component NDVs: they can be correlated.
-		for _, part := range idxDef.Parts[:len(idxDef.Parts)-1] {
+		// matchedParts excludes the appended PK of a non-unique index. Only
+		// the matched leading parts bound this lookup. Do not multiply
+		// component NDVs: they can be correlated.
+		for _, part := range idxDef.Parts[:matchedParts] {
 			ndv := stats.NdvMap[catalog.ResolveAlias(part)]
 			if !finitePositive(ndv) || ndv > stats.TableCnt {
 				return false // Unknown statistics retain the established fallback.
@@ -6203,7 +6222,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (resultNodeID int32, err error) {
 	sid := builder.compCtx.GetProcess().GetService()
 
 	if changed, err := builder.applyFullTextFiltersForJoinChildren(nodeID, node, colRefCnt, idxColMap); err != nil || changed {
@@ -6222,6 +6241,32 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			return -1, err
 		}
 		node.Children[0] = leftAccess
+	}
+	if _, normalized := builder.normalizedForcedJoins[nodeID]; normalized && leftForcesJoin && !rightForcesJoin {
+		forcedAccessID := node.Children[0]
+		if builder.qry.Nodes[forcedAccessID].NodeType == plan.Node_TABLE_SCAN {
+			originalOnList := DeepCopyExprList(node.OnList)
+			defer func() {
+				// A normalized hint still has its legacy generic access contract.
+				// Install it only when bounded admission made no access-path change;
+				// metadata errors retain the original atomic error behavior.
+				if err != nil {
+					node.Children[0] = forcedAccessID
+					node.OnList = originalOnList
+					return
+				}
+				if resultNodeID != nodeID || node.Children[0] != forcedAccessID {
+					return
+				}
+				forcedID, fallbackErr := builder.applyForcedJoinAccess(forcedAccessID)
+				if fallbackErr != nil {
+					node.OnList = originalOnList
+					resultNodeID, err = -1, fallbackErr
+					return
+				}
+				node.Children[0] = forcedID
+			}()
+		}
 	}
 	if node.JoinType == plan.Node_INNER && rightForcesJoin {
 		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1])
@@ -6245,12 +6290,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	//----------------------------------------------------------------------
 	//ts2 := leftChild.GetScanTS()
 
-	scanSnapshot := leftChild.ScanSnapshot
-	if scanSnapshot == nil {
-		scanSnapshot = &Snapshot{}
-	}
-	//----------------------------------------------------------------------
-
 	rightChild := builder.qry.Nodes[node.Children[1]]
 	forceJoinIndex := false
 	if hintSet := builder.indexHintsByScan[leftChild.NodeId]; hintSet != nil {
@@ -6265,23 +6304,146 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID, nil
 	}
 
+	candidate, err := builder.findJoinIndexCandidate(
+		node, leftChild, rightChild, node.Children[0], node.Children[1],
+		colRefCnt, forceJoinIndex, false)
+	if err != nil {
+		return -1, err
+	}
+	if candidate == nil {
+		return nodeID, nil
+	}
+	pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
+	idxDef := candidate.idxDef
+	idxObjRef := candidate.idxObjRef
+	idxTableDef := candidate.idxTableDef
+	idxTag := candidate.idxTag
+	nodeProbeRuntimeFilter := candidate.probeRuntimeFilter
+	nodeBuildRuntimeFilter := candidate.buildRuntimeFilter
+	hasRuntimeFilter := candidate.hasRuntimeFilter
+
+	// recod index table scan info
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  leftChild.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
+	}
+
+	idxTableNode := &plan.Node{
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		ObjRef:        idxObjRef,
+		IndexScanInfo: idxScanInfo,
+		ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  leftChild.ScanSnapshot,
+		ViewPath:      append([]*plan.ViewStep(nil), leftChild.ViewPath...),
+	}
+	if hasRuntimeFilter {
+		idxTableNode.RuntimeFilterProbeList =
+			[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
+	}
+	// The index is another access path for the left scan. A JOIN context
+	// can be absent or belong to an enclosing view, so authorization must
+	// follow the original scan's complete view path.
+	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
+	builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
+
+	if hasRuntimeFilter {
+		node.RuntimeFilterBuildList = append(
+			node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
+		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+	}
+
+	pkExpr := &plan.Expr{
+		Typ: leftChild.TableDef.Cols[pkIdx].Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: leftChild.BindingTags[0],
+				ColPos: pkIdx,
+			},
+		},
+	}
+	pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		pkExpr,
+		{
+			Typ: pkExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag,
+					ColPos: 1,
+				},
+			},
+		},
+	})
+
+	idxJoinNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{node.Children[0], idxTableNodeID},
+		JoinType: plan.Node_INDEX,
+		Limit:    leftChild.Limit,
+		Offset:   leftChild.Offset,
+		OnList:   []*plan.Expr{pkJoinCond},
+	}, builder.ctxByNode[leftChild.NodeId])
+
+	leftChild.Limit, leftChild.Offset = nil, nil
+
+	node.Children[0] = idxJoinNodeID
+
+	return nodeID, nil
+}
+
+type indexJoinCondition struct {
+	exprIdx  int
+	hashSlot int
+}
+
+type joinIndexCandidate struct {
+	idxDef             *IndexDef
+	idxObjRef          *ObjectRef
+	idxTableDef        *TableDef
+	idxTag             int32
+	probeRuntimeFilter *plan.RuntimeFilterSpec
+	buildRuntimeFilter *plan.RuntimeFilterSpec
+	hasRuntimeFilter   bool
+}
+
+// findJoinIndexCandidate selects and validates the access path used by both
+// forced-orientation preflight and the actual index rewrite. Preflight copies
+// the ON expressions and uses local tag placeholders, so a rejected candidate
+// cannot reorder predicates, consume plan tags, or publish planner metadata.
+func (builder *QueryBuilder) findJoinIndexCandidate(
+	node *plan.Node,
+	leftChild, rightChild *plan.Node,
+	leftInputID, rightInputID int32,
+	colRefCnt map[[2]int32]int,
+	forceJoinIndex, preflight bool,
+) (*joinIndexCandidate, error) {
+	sid := builder.compCtx.GetProcess().GetService()
+	scanSnapshot := leftChild.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+	onList := node.OnList
+	if preflight {
+		onList = DeepCopyExprList(onList)
+	}
 	leftTags := make(map[int32]bool)
-	for _, tag := range builder.enumerateTags(node.Children[0]) {
+	for _, tag := range builder.enumerateTags(leftInputID) {
 		leftTags[tag] = true
 	}
 
 	rightTags := make(map[int32]bool)
-	for _, tag := range builder.enumerateTags(node.Children[1]) {
+	for _, tag := range builder.enumerateTags(rightInputID) {
 		rightTags[tag] = true
 	}
 
-	type indexJoinCondition struct {
-		exprIdx  int
-		hashSlot int
-	}
 	col2Cond := make(map[int32]indexJoinCondition)
 	hashSlot := 0
-	for i, expr := range node.OnList {
+	for i, expr := range onList {
 		if !isEquiCond(expr, leftTags, rightTags) {
 			continue
 		}
@@ -6300,7 +6462,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	if leftChild.TableDef == nil || leftChild.TableDef.Pkey == nil {
-		return nodeID, nil
+		return nil, nil
 	}
 
 	joinOnPK := true
@@ -6314,223 +6476,236 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	if joinOnPK {
-		return nodeID, nil
+		return nil, nil
 	}
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
 	var costCtx *encodedRegularIndexCostContext
-	for _, idxDef := range indexes {
-		if idxDef == nil || !idxDef.TableExist ||
-			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
-			isSpatialIndexDef(idxDef) ||
-			indexUnsafeForRead(idxDef, leftChild.TableDef) ||
-			!regularIndexPrefixMetadataUsable(idxDef) ||
-			regularIndexHasDeclaredPrefix(idxDef) {
-			continue
-		}
-
-		numParts := len(idxDef.Parts)
-		numKeyParts := numParts
-		if !idxDef.Unique {
-			numKeyParts--
-		}
-		if numKeyParts == 0 || numKeyParts > len(col2Cond) {
-			continue
-		}
-
-		condIdx = condIdx[:0]
-		for i := 0; i < numKeyParts; i++ {
-			tmpName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
-			idx, ok := col2Cond[colIdx]
-			if !ok {
-				break
-			}
-
-			condIdx = append(condIdx, idx)
-		}
-
-		if len(condIdx) < numKeyParts {
-			continue
-		}
-		if !forceJoinIndex {
-			if costCtx == nil {
-				costCtx = builder.newEncodedRegularIndexCostContext(leftChild, colRefCnt)
-			}
-			if costCtx.shouldSkipJoinIndexBackfill(idxDef, rightChild.Stats.Outcnt) {
+	// Preserve the existing priority of complete-key candidates. Partial
+	// prefixes are fallbacks and must not displace them by catalog order.
+	for _, completeKey := range []bool{true, false} {
+		for _, idxDef := range indexes {
+			if idxDef == nil || !idxDef.TableExist ||
+				!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
+				isSpatialIndexDef(idxDef) ||
+				indexUnsafeForRead(idxDef, leftChild.TableDef) ||
+				!regularIndexPrefixMetadataUsable(idxDef) ||
+				regularIndexHasDeclaredPrefix(idxDef) {
 				continue
 			}
-		}
 
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
-		if err != nil {
-			return -1, err
-		}
-		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
-			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
-		}
-		pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
-		if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
-		}
-
-		idxTag := builder.genNewBindTag()
-		builder.addNameByColRef(idxTag, idxTableDef)
-
-		rfTag := builder.genNewMsgTag()
-
-		var rfBuildExpr *plan.Expr
-		var componentProbeExprs []*plan.Expr
-		if numParts == 1 {
-			condition := node.OnList[condIdx[0].exprIdx].GetF()
-			rfBuildExpr = &plan.Expr{
-				Typ: condition.Args[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(condIdx[0].hashSlot),
-					},
-				},
+			numParts := len(idxDef.Parts)
+			numKeyParts := numParts
+			if !idxDef.Unique {
+				numKeyParts--
 			}
-		} else {
-			serialArgs := make([]*plan.Expr, len(condIdx))
-			componentProbeExprs = make([]*plan.Expr, len(condIdx))
-			for i := range condIdx {
-				componentProbeExprs[i] =
-					node.OnList[condIdx[i].exprIdx].GetF().Args[0]
-				serialArgs[i] = &plan.Expr{
-					Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+			if numKeyParts == 0 {
+				continue
+			}
+
+			condIdx = condIdx[:0]
+			for i := 0; i < numKeyParts; i++ {
+				tmpName := catalog.ResolveAlias(idxDef.Parts[i])
+				colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
+				idx, ok := col2Cond[colIdx]
+				if !ok {
+					break
+				}
+
+				condIdx = append(condIdx, idx)
+			}
+
+			// Only a contiguous leading prefix can prune the serialized index key.
+			if len(condIdx) == 0 {
+				continue
+			}
+			if (len(condIdx) == numKeyParts) != completeKey {
+				continue
+			}
+			if !forceJoinIndex {
+				if costCtx == nil {
+					costCtx = builder.newEncodedRegularIndexCostContext(leftChild, colRefCnt)
+				}
+				if costCtx.shouldSkipJoinIndexBackfillForPrefix(idxDef, len(condIdx), rightChild.Stats.Outcnt) {
+					continue
+				}
+			}
+
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
+			if err != nil {
+				return nil, err
+			}
+			if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
+				leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
+				return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
+			}
+			pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
+			if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
+				return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
+			}
+
+			idxTag, rfTag := int32(0), int32(0)
+			if !preflight {
+				idxTag = builder.genNewBindTag()
+				builder.addNameByColRef(idxTag, idxTableDef)
+				rfTag = builder.genNewMsgTag()
+			}
+
+			var rfBuildExpr *plan.Expr
+			var componentProbeExprs []*plan.Expr
+			if numParts == 1 {
+				condition := onList[condIdx[0].exprIdx].GetF()
+				rfBuildExpr = &plan.Expr{
+					Typ: condition.Args[1].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
-							ColPos: int32(condIdx[i].hashSlot),
+							ColPos: int32(condIdx[0].hashSlot),
 						},
 					},
 				}
+			} else {
+				serialArgs := make([]*plan.Expr, len(condIdx))
+				componentProbeExprs = make([]*plan.Expr, len(condIdx))
+				for i := range condIdx {
+					componentProbeExprs[i] =
+						onList[condIdx[i].exprIdx].GetF().Args[0]
+					serialArgs[i] = &plan.Expr{
+						Typ: onList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: -1,
+								ColPos: int32(condIdx[i].hashSlot),
+							},
+						},
+					}
+				}
+				rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableStoredKeySerialFunc(idxDef), serialArgs)
 			}
-			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableStoredKeySerialFunc(idxDef), serialArgs)
-		}
 
-		probeExpr := &plan.Expr{
-			Typ: idxTableDef.Cols[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 0,
-				},
-			},
-		}
-		var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
-		var hasRuntimeFilter bool
-		if len(componentProbeExprs) == 0 {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					false,
-				)
-		} else {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeSerializedExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					componentProbeExprs,
-					false,
-				)
-		}
-		if !hasRuntimeFilter && !forceJoinIndex {
-			// The index lookup cost model assumes targeted runtime-filter
-			// pruning.  Without a materializable exact pair this rewrite would
-			// scan the index table under a no-op PASS dependency.
-			continue
-		}
-		// FORCE INDEX remains an explicit request to use the index even when
-		// its serialized lookup key has no proven exact-filter contract. Honor
-		// the hint without publishing a no-op dependency or optimistic stats.
-
-		// recod index table scan info
-		idxScanInfo := plan.IndexScanInfo{
-			IsIndexScan:    true,
-			IndexName:      idxDef.IndexName,
-			BelongToTable:  leftChild.ObjRef.ObjName,
-			Parts:          slices.Clone(idxDef.Parts),
-			IsUnique:       idxDef.Unique,
-			IndexTableName: idxDef.IndexTableName,
-		}
-
-		idxTableNode := &plan.Node{
-			NodeType:      plan.Node_TABLE_SCAN,
-			TableDef:      idxTableDef,
-			ObjRef:        idxObjRef,
-			IndexScanInfo: idxScanInfo,
-			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:   []int32{idxTag},
-			ScanSnapshot:  leftChild.ScanSnapshot,
-			ViewPath:      append([]*plan.ViewStep(nil), leftChild.ViewPath...),
-		}
-		if hasRuntimeFilter {
-			idxTableNode.RuntimeFilterProbeList =
-				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
-		}
-		// The index is another access path for the left scan. A JOIN context
-		// can be absent or belong to an enclosing view, so authorization must
-		// follow the original scan's complete view path.
-		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
-		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
-
-		if hasRuntimeFilter {
-			node.RuntimeFilterBuildList = append(
-				node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
-			recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
-		}
-
-		pkExpr := &plan.Expr{
-			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: leftChild.BindingTags[0],
-					ColPos: pkIdx,
-				},
-			},
-		}
-		pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			pkExpr,
-			{
-				Typ: pkExpr.Typ,
+			probeExpr := &plan.Expr{
+				Typ: idxTableDef.Cols[0].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag,
-						ColPos: 1,
+						ColPos: 0,
 					},
 				},
-			},
-		})
+			}
+			var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
+			var hasRuntimeFilter bool
+			if len(componentProbeExprs) == 0 {
+				nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+					builder.makeExactRuntimeFilterPair(
+						rfTag,
+						len(condIdx) < numParts,
+						GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+						probeExpr,
+						rfBuildExpr,
+						false,
+					)
+			} else {
+				nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+					builder.makeSerializedExactRuntimeFilterPair(
+						rfTag,
+						len(condIdx) < numParts,
+						GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+						probeExpr,
+						rfBuildExpr,
+						componentProbeExprs,
+						false,
+					)
+			}
+			if !hasRuntimeFilter {
+				if preflight && forceJoinIndex && len(condIdx) == numKeyParts {
+					// Complete forced keys retain their legacy generic fallback priority.
+					// Do not displace one with a lower-priority partial prefix merely to
+					// justify changing the physical join orientation.
+					return nil, nil
+				}
+				if preflight || !forceJoinIndex || len(condIdx) < numKeyParts {
+					// The index lookup cost model assumes targeted runtime-filter
+					// pruning. Without a materializable exact pair this rewrite would
+					// scan the index table under a no-op PASS dependency. A partial key
+					// has no bounded access without its exact prefix filter.
+					continue
+				}
+			}
+			// Full-key FORCE INDEX remains an explicit request to use the index even
+			// when its serialized lookup key has no proven exact-filter contract. Honor
+			// the hint without publishing a no-op dependency or optimistic stats.
 
-		idxJoinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{node.Children[0], idxTableNodeID},
-			JoinType: plan.Node_INDEX,
-			Limit:    leftChild.Limit,
-			Offset:   leftChild.Offset,
-			OnList:   []*plan.Expr{pkJoinCond},
-		}, builder.ctxByNode[leftChild.NodeId])
+			return &joinIndexCandidate{
+				idxDef:             idxDef,
+				idxObjRef:          idxObjRef,
+				idxTableDef:        idxTableDef,
+				idxTag:             idxTag,
+				probeRuntimeFilter: nodeProbeRuntimeFilter,
+				buildRuntimeFilter: nodeBuildRuntimeFilter,
+				hasRuntimeFilter:   hasRuntimeFilter,
+			}, nil
+		}
+	}
+	return nil, nil
+}
 
-		leftChild.Limit, leftChild.Offset = nil, nil
-
-		node.Children[0] = idxJoinNodeID
-
-		break
+// normalizeForcedJoinProbeSide runs with the established physical right-join
+// swap, before final statistics and shuffle decisions. Runtime filters flow
+// from child 1 to child 0, so a forced table with lookup keys from the other
+// input must be the probe side to use a bounded index join.
+func (builder *QueryBuilder) normalizeForcedJoinProbeSide(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
+		node.IsRightJoin || len(node.Children) != 2 || len(node.RuntimeFilterBuildList) > 0 {
+		return
+	}
+	if _, ok := builder.fulltextBoundableJoins[nodeID]; ok {
+		return
+	}
+	if builder.scanForcesJoinIndex(node.Children[0]) || !builder.scanForcesJoinIndex(node.Children[1]) {
+		return
 	}
 
-	return nodeID, nil
+	forcedScan := builder.qry.Nodes[node.Children[1]]
+	if forcedScan == nil || forcedScan.NodeType != plan.Node_TABLE_SCAN || forcedScan.TableDef == nil ||
+		forcedScan.IndexScanInfo.IsIndexScan {
+		return
+	}
+	hints := builder.indexHintsByScan[forcedScan.NodeId]
+	if hints == nil || indexAllowedByHintScope(PrimaryKeyName, hints.join) {
+		return
+	}
+
+	// These inputs own physical build direction independently of cardinality.
+	// Moving them here would invalidate their drain or recursive-evaluation contract.
+	for _, childID := range node.Children {
+		if builder.joinInputContainsCTEHashBuildScan(childID, make(map[int32]bool)) ||
+			builder.hasRecursiveScan(builder.qry.Nodes[childID]) {
+			return
+		}
+	}
+	if builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_FUNCTION_SCAN {
+		return
+	}
+
+	if builder.isScanProtected(forcedScan.NodeId) {
+		return
+	}
+	candidate, err := builder.findJoinIndexCandidate(
+		node, forcedScan, builder.qry.Nodes[node.Children[0]],
+		forcedScan.NodeId, node.Children[0], nil, true, true)
+	if err != nil || candidate == nil {
+		// Without a constructible exact lookup this remains generic forced-index
+		// access. Preserve the build/probe orientation chosen by cardinality.
+		return
+	}
+
+	node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	if builder.normalizedForcedJoins == nil {
+		builder.normalizedForcedJoins = make(map[int32]struct{})
+	}
+	builder.normalizedForcedJoins[nodeID] = struct{}{}
 }
 
 func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {

@@ -600,6 +600,7 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 			node.JoinType = plan.Node_RIGHT
 		}
 	}
+	builder.normalizeForcedJoinProbeSide(nodeID)
 }
 
 func (builder *QueryBuilder) remapHavingClause(
