@@ -375,7 +375,7 @@ diff_special_types  ¦  CREATE TABLE `diff_special_types` (
   `id` int NOT NULL,
   `bit_value` bit(10) DEFAULT NULL,
   `uuid_value` uuid DEFAULT NULL,
-  `enum_value` enum('red','blue','green') DEFAULT NULL,
+  `enum_value` enum('red','blue','green') COLLATE utf8mb4_general_ci DEFAULT NULL,
   `datalink_value` datalink DEFAULT NULL,
   `geometry_value` geometry DEFAULT NULL
 )

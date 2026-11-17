@@ -1458,12 +1458,10 @@ func satisfyDiffOutputOpt(
 		if first != nil {
 			return first
 		}
-		if first == nil {
-			if err = dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
-				return err
-			}
+		if err = dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
+			return err
 		}
-		if first == nil && writeFile != nil {
+		if writeFile != nil {
 			if err = writeFile([]byte("COMMIT;\n")); err != nil {
 				return err
 			}

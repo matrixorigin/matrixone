@@ -1,9 +1,14 @@
 DROP TABLE IF EXISTS ces0010;
+DROP TABLE IF EXISTS t_enum;
+DROP TABLE IF EXISTS enum_utf8_rejected;
+-- utf8 is utf8mb3, whose ENUM collation semantics are not supported.
+CREATE TABLE enum_utf8_rejected (e enum('T','E')) DEFAULT CHARSET=utf8;
+DROP TABLE IF EXISTS enum_utf8_rejected;
 CREATE TABLE ces0010 (
   `CPBPDIV` varchar(10) NOT NULL DEFAULT '',
   `CPBPCD` varchar(10) NOT NULL DEFAULT '',
   `CPBPNM` varchar(50) NOT NULL DEFAULT '',
-  `CPBPVTYP` enum('T','E') NOT NULL DEFAULT 'T',
+  `CPBPVTYP` enum('T','E') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'T',
   `CPBPV` varchar(200) DEFAULT '',
   `CLEVEL` decimal(1,0) NOT NULL DEFAULT '1',
   `PUNIT` varchar(50) NOT NULL DEFAULT '',
@@ -54,3 +59,5 @@ select * from ces0010;
 
 create table t_enum(a int,b enum('1','2','3','4','5'));
 show create table t_enum;
+drop table t_enum;
+drop table ces0010;

@@ -18,7 +18,7 @@ Tables_in_test
 table01
 show create table table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `c1` bigint NOT NULL AUTO_INCREMENT,\n  `c2` varchar(200) DEFAULT NULL,\n  `c3` varchar(200) DEFAULT NULL,\n  `c4` varchar(200) DEFAULT NULL,\n  `c5` varchar(200) DEFAULT NULL,\n  `c6` tinyint DEFAULT NULL,\n  `c7` datetime DEFAULT NULL,\n  `c8` varchar(200) DEFAULT NULL,\n  `c9` tinyint NOT NULL,\n  PRIMARY KEY (`c1`)\n)
+table01    CREATE TABLE `table01` (\n  `c1` bigint NOT NULL AUTO_INCREMENT,\n  `c2` varchar(200) DEFAULT NULL,\n  `c3` varchar(200) DEFAULT NULL,\n  `c4` varchar(200) DEFAULT NULL,\n  `c5` varchar(200) DEFAULT NULL,\n  `c6` tinyint DEFAULT NULL,\n  `c7` datetime DEFAULT NULL,\n  `c8` varchar(200) DEFAULT NULL,\n  `c9` tinyint NOT NULL,\n  PRIMARY KEY (`c1`)\n) COLLATE=`utf8mb3_general_ci`
 drop table table01;
 drop table if exists table02;
 create table table02(id int PRIMARY KEY,name VARCHAR(255),age int);

@@ -114,7 +114,7 @@ green
 show create table enum01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 enum01  ¦  CREATE TABLE `enum01` (
-  `col1` enum('red','blue','green') DEFAULT NULL
+  `col1` enum('red','blue','green') COLLATE utf8mb4_general_ci DEFAULT NULL
 )
 drop snapshot if exists sp04;
 create snapshot sp04 for account;

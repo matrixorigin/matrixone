@@ -58,11 +58,11 @@ ci VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_general_ci,
 bin VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_bin
 ) DEFAULT CHARSET=utf32;
 SHOW CREATE TABLE t_utf32_alias;
-➤ Table[12,13,0]  ¦  Create Table[12,116,0]  𝄀
+➤ Table[12,13,0]  ¦  Create Table[12,143,0]  𝄀
 t_utf32_alias  ¦  CREATE TABLE `t_utf32_alias` (
   `ci` varchar(1) DEFAULT NULL,
   `bin` varchar(1) COLLATE utf8mb4_bin DEFAULT NULL
-)
+) COLLATE=`utf32_general_ci`
 INSERT INTO t_utf32_alias VALUES ('😀', '😀');
 SELECT HEX(ci), HEX(bin) FROM t_utf32_alias;
 ➤ HEX(ci)[12,8,0]  ¦  HEX(bin)[12,8,0]  𝄀
@@ -155,13 +155,13 @@ name VARCHAR(100),
 name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci
 ) CHARACTER SET utf8;
 SHOW CREATE TABLE t_utf8;
-➤ Table[12,6,0]  ¦  Create Table[12,141,0]  𝄀
+➤ Table[12,6,0]  ¦  Create Table[12,170,0]  𝄀
 t_utf8  ¦  CREATE TABLE `t_utf8` (
   `id` int NOT NULL,
   `name` varchar(100) DEFAULT NULL,
   `name_mb3` varchar(1) DEFAULT NULL,
   PRIMARY KEY (`id`)
-)
+) COLLATE=`utf8mb3_general_ci`
 INSERT INTO t_utf8 VALUES (1, '😀', '😀');
 SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name)[12,800,0]  ¦  HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀

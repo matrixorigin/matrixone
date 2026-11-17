@@ -166,7 +166,7 @@ create table table03(type enum('1','2','3','4','5') not null comment 'type');
 show create table table03;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table03  ¦  CREATE TABLE `table03` (
-  `type` enum('1','2','3','4','5') NOT NULL COMMENT 'type'
+  `type` enum('1','2','3','4','5') COLLATE utf8mb4_general_ci NOT NULL COMMENT 'type'
 )
 desc table03;
 ➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀

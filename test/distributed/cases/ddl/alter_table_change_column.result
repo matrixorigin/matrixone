@@ -2164,7 +2164,7 @@ C    null
 insert into t1 values('D', 29);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `name` enum('A','B','C','D') DEFAULT NULL,\n  `age` int DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `name` enum('A','B','C','D') COLLATE utf8mb4_general_ci DEFAULT NULL,\n  `age` int DEFAULT NULL\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 name    enum('A','B','C','D')    YES        null        

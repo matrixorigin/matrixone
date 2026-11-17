@@ -978,10 +978,10 @@ create table index01(col1 int,key key1(col1));
 insert into index01 values (1);
 insert into index01 values (2);
 show create table db07.table02;
-➤ Table[12,7,0]  ¦  Create Table[12,123,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
   `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL,
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL,
   UNIQUE KEY `col1` (`col1`)
 )
 drop snapshot if exists sp14;
@@ -990,18 +990,18 @@ use db07;
 drop table table01;
 alter table table02 add column newC int first;
 show create table table02;
-➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,177,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
   `newC` int DEFAULT NULL,
   `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL,
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL,
   UNIQUE KEY `col1` (`col1`)
 )
 show create table table02 {snapshot = 'sp14'};
-➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,177,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
   `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL,
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL,
   UNIQUE KEY `col1` (`col1`)
 ) COLLATE=utf8mb4_general_ci
 drop database db08;
@@ -1022,16 +1022,16 @@ show tables;
 table01  𝄀
 table02
 show create table table01 {snapshot = 'sp14'};
+➤ Table[12,7,0]  ¦  Create Table[12,147,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
+show create table table01;
 ➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
 table01  ¦  CREATE TABLE `table01` (
   `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
-show create table table01;
-➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
-table01  ¦  CREATE TABLE `table01` (
-  `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL
 )
 select * from table01;
 ➤ col1[4,32,0]  ¦  col2[12,65535,0]  𝄀
@@ -1061,16 +1061,16 @@ show tables;
 table01  𝄀
 table02
 show create table table01 {snapshot = 'sp14'};
+➤ Table[12,7,0]  ¦  Create Table[12,147,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
+show create table table01;
 ➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
 table01  ¦  CREATE TABLE `table01` (
   `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
-show create table table01;
-➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
-table01  ¦  CREATE TABLE `table01` (
-  `col1` int DEFAULT NULL,
-  `col2` enum('a','b','c') DEFAULT NULL
+  `col2` enum('a','b','c') COLLATE utf8mb4_general_ci DEFAULT NULL
 )
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀

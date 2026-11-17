@@ -1981,7 +1981,7 @@ alter table t1 modify column b enum('abc','def','database') first;
 show create table t1;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (
-  `b` enum('abc','def','database') DEFAULT NULL,
+  `b` enum('abc','def','database') COLLATE utf8mb4_general_ci DEFAULT NULL,
   `a` int DEFAULT NULL
 )
 select * from t1;
