@@ -94,7 +94,7 @@ func TestViewPrivilegePrincipal(t *testing.T) {
 				convertPrivilegeTipsToPrivilege(priv, privilegeTipsArray{{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "sub", tableName: "t", viewPath: []*plan.ViewStep{step("outer"), step("inner")}, objectRef: ref}})
 				roles := &btree.Set[int64]{}
 				roles.Insert(50)
-				allowed, role, err := determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, cached)
+				allowed, role, err := determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, cached, nil)
 				require.NoError(t, err)
 				require.Equal(t, tc.allowed, allowed)
 				if allowed {
@@ -102,6 +102,25 @@ func TestViewPrivilegePrincipal(t *testing.T) {
 				}
 				require.Equal(t, "sub", ref.SubscriptionName)
 				require.False(t, ses.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseTable, "publisher", "t", PrivilegeTypeSelect))
+
+				// A complete view check cannot also authorize a direct table item,
+				// even when its database, table and numeric role IDs coincide.
+				priv.entries[0].compound.items = append(priv.entries[0].compound.items, privilegeItem{
+					privilegeTyp: PrivilegeTypeSelect, objType: objectTypeTable, dbName: "publisher", tableName: "t",
+				})
+				roles.Insert(51)
+				allowed, _, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, cached, newCompoundPrivilegeChecks(priv))
+				require.NoError(t, err)
+				require.False(t, allowed)
+
+				// Another caller role can supply the sibling grant, but it cannot
+				// repair an invalid DEFINER/INVOKER chain for the original item.
+				sql, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, 51, PrivilegeTypeSelect, "publisher", "t")
+				require.NoError(t, err)
+				results[queryKey{7, sql}] = positive
+				allowed, _, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, cached, newCompoundPrivilegeChecks(priv))
+				require.NoError(t, err)
+				require.Equal(t, tc.allowed, allowed)
 			})
 		}
 	}

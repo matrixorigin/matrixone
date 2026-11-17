@@ -786,13 +786,55 @@ func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, sna
 	if obj != nil && obj.ObjName != "" {
 		physical = obj.ObjName
 	}
-	if err = checkResolvedIndexRelation(tcc.execCtx, tableName, physical, def.TableType, def.FeatureFlag); err != nil {
+	if err = tcc.checkUserRelationIndexAccess(tableName, physical, obj, def, snapshot); err != nil {
 		return nil, nil, err
 	}
 	if result != nil {
 		result.Borrow = resolved.Borrow
 	}
 	return obj, def, nil
+}
+
+// checkUserRelationIndexAccess tests the read exception before constructing a
+// denial. Constructing a moerr reports it, even if the caller later discards it.
+func (tcc *TxnCompilerContext) checkUserRelationIndexAccess(requested, physical string, obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) error {
+	if (catalog.RequiresPrivilegedRelationAccess(requested, def.TableType, def.FeatureFlag) ||
+		catalog.RequiresPrivilegedRelationAccess(physical, def.TableType, def.FeatureFlag)) &&
+		tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
+		tcc.execCtx.directIndexReadAdmitted = true
+		return nil
+	}
+	return checkResolvedIndexRelation(tcc.execCtx, requested, physical, def.TableType, def.FeatureFlag)
+}
+
+// mayReadOwnIndexForDirectSelect admits only a real tenant administrator's
+// direct SELECT in its own catalog. Other statement types and catalog scopes
+// stay on the existing restrictive path.
+func (tcc *TxnCompilerContext) mayReadOwnIndexForDirectSelect(obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) bool {
+	if tcc == nil || tcc.execCtx == nil || tcc.execCtx.ses == nil || obj == nil || def == nil ||
+		snapshot != nil || obj.PubInfo != nil || tcc.viewSchemaRead || hiddenIndexCaller(tcc.execCtx.reqCtx) != nil {
+		return false
+	}
+	ses := tcc.execCtx.ses
+	if ses.IsBackgroundSession() || !ses.GetFromRealUser() {
+		return false
+	}
+	stmt := tcc.execCtx.stmt
+	if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+		stmt = prepare.Stmt
+	}
+	if _, ok := stmt.(*tree.Select); !ok {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || tenant.GetUser() == "" || !tenant.IsAccountAdminRole() {
+		return false
+	}
+	accountID, err := defines.GetAccountId(tcc.GetContext())
+	if err != nil || accountID != tenant.GetTenantID() {
+		return false
+	}
+	return tcc.resolvePhysicalObjectAccount(obj, def, snapshot) == tenant.GetTenantID()
 }
 
 // resolveForCatalogValidation checks a cached plan's object identity/version.
@@ -852,7 +894,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary && resolveTemporaryAlias {
+	if useSessionTemporary && resolveTemporaryAlias && !defines.IsPersistentViewBinding(tcc.GetContext()) {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
@@ -1598,11 +1640,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
+	// Only session-owned temporary references may need alias translation.
+	// Statistics can run after leaving the View binding scope; translating a
+	// bound permanent source here would read/cache the shadow's statistics.
+	if obj.NotLockMeta {
+		if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+			tableName = realName
+		}
 	}
 
 	// 1. Check database and subscription

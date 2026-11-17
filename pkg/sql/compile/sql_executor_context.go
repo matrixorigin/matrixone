@@ -472,8 +472,26 @@ func (c *compilerContext) GetProcess() *process.Process {
 	return c.proc
 }
 
+// GetQueryResultMeta resolves saved-result metadata for result_scan plans.
+// The stored metadata is account-scoped (frontend.BuildQueryResultMetaPath),
+// and access is authorized separately by re-checking the saved source AST/plan
+// against the CURRENT calling role (frontend checkResultQueryPrivilege); the
+// delegate below carries the calling session's compiler identity and imposes
+// no producer-session ownership on the saved result. The internal executor has
+// no account/session identity of its own, so it consults the calling frontend
+// session's compiler context, which CTAS populate installs via
+// attachInternalExecutorCompilerContext. Without such a delegate nothing can
+// be resolved here: return a clean typed error instead of panicking.
 func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
-	panic("not supported in internal sql executor")
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.GetQueryResultMeta(uuid)
+	}
+	errCtx := c.ctx
+	if errCtx == nil {
+		errCtx = context.Background()
+	}
+	return nil, "", moerr.NewInternalError(errCtx,
+		"query result metadata requires a session compiler context in internal sql executor")
 }
 
 func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
@@ -708,6 +726,13 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
 	if delegate := c.resolveDelegate(); delegate != nil {
+		if defines.IsPersistentViewBinding(c.GetContext()) && !defines.IsPersistentViewBinding(delegate.GetContext()) {
+			// The delegate owns the catalog domain, but this binder owns whether
+			// a name occurs inside persisted SQL. Do not use its DDL-only lookup.
+			previous := delegate.GetContext()
+			delegate.SetContext(defines.WithPersistentViewBinding(previous))
+			defer delegate.SetContext(previous)
+		}
 		if !resolveTemporaryAlias {
 			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
 		}
@@ -730,7 +755,7 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	// Resolve temporary table alias in current session for internal SQL execution.
 	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
 	isTmpTable := false
-	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias {
+	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias && !defines.IsPersistentViewBinding(c.GetContext()) {
 		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
 			tableName = realName
 			isTmpTable = true

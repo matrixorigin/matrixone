@@ -91,6 +91,11 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 
 	// optimize rule for some special case.
 	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
+		if fold == likeFoldGeneralCI {
+			if optimized, err := tryGeneralCIPrefixLike(proc.Ctx, p1, p2, rs, length); optimized {
+				return err
+			}
+		}
 		specialFnForV := func(i []byte) []byte {
 			return i
 		}

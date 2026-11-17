@@ -1347,7 +1347,7 @@ func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(i, castTypes)
 		}
 	}
-	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
+	if target, hasVector, ok := commonVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}

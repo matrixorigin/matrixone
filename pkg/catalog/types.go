@@ -1061,7 +1061,7 @@ var (
 	MoColumnsBatchQuery = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s > %d order by %s, %s, %s",
 		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID, MO_RESERVED_MAX,
-		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
+		SystemColAttr_AccID, SystemColAttr_DBID, SystemColAttr_RelID)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s and %s = %%d order by %s",

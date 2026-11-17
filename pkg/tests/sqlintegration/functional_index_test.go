@@ -505,7 +505,10 @@ func TestFunctionalIndexLifecycle(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "show create table literal_source").Scan(&tableName, &ddl))
 			require.Contains(t, ddl, "lower('AbC')")
 			require.Contains(t, ddl, "lower('a''b')")
-			require.Contains(t, ddl, "lower(cast(0x615c62 as varchar))")
+			// Width-preserving persistence: the backslash literal keeps the
+			// hex-introducer spelling, so replays re-bind the authored
+			// character width instead of the widthless cast default.
+			require.Contains(t, ddl, "lower(_utf8mb4 X'615c62')")
 			count("select count(*) from information_schema.statistics where table_schema='functional_index_lifecycle' and table_name='literal_source' and expression is not null", 3)
 
 			// The persisted form must replay independently of the session's
@@ -516,7 +519,7 @@ func TestFunctionalIndexLifecycle(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "show create table literal_like").Scan(&tableName, &ddl))
 			require.Contains(t, ddl, "lower('AbC')")
 			require.Contains(t, ddl, "lower('a''b')")
-			require.Contains(t, ddl, "lower(cast(0x615c62 as varchar))")
+			require.Contains(t, ddl, "lower(_utf8mb4 X'615c62')")
 			_, err := conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'")
 			require.NoError(t, err)
 		})

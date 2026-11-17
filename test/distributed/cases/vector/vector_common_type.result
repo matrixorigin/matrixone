@@ -1,0 +1,1242 @@
+drop database if exists vec_common_type;
+create database vec_common_type;
+use vec_common_type;
+create table x (id int primary key, f32 vecf32(4), f64 vecf64(4), bf16 vecbf16(4), f16 vecf16(4), i8 vecint8(4), u8 vecuint8(4), f8 vecf8(4), f4 vecf4(4));
+create table y (id int primary key, f32 vecf32(4), f64 vecf64(4), bf16 vecbf16(4), f16 vecf16(4), i8 vecint8(4), u8 vecuint8(4), f8 vecf8(4), f4 vecf4(4));
+insert into x values (1, '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]', '[1,3,0,6]'), (2, null, null, null, null, null, null, null, null);
+insert into y values (1, '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]'), (2, '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]', '[6,2,1,0]');
+create table r_f32 as select x.id, case when x.id = 1 then x.f32 else y.f32 end case_f32, ifnull(x.f32, y.f32) ifnull_f32, if(x.id = 1, x.f32, y.f32) if_f32, coalesce(x.f32, y.f32) coalesce_f32, nullif(x.f32, y.f32) nullif_f32, greatest(x.f32, y.f32) greatest_f32, least(x.f32, y.f32) least_f32, x.f32 = y.f32 eq_f32, x.f32 <> y.f32 ne_f32, x.f32 < y.f32 lt_f32, x.f32 between y.f32 and y.f32 between_f32, x.f32 <=> y.f32 nullsafe_f32, x.f32 in (y.f32) in_f32, case when x.id = 1 then x.f32 else y.f64 end case_f64, ifnull(x.f32, y.f64) ifnull_f64, if(x.id = 1, x.f32, y.f64) if_f64, coalesce(x.f32, y.f64) coalesce_f64, nullif(x.f32, y.f64) nullif_f64, greatest(x.f32, y.f64) greatest_f64, least(x.f32, y.f64) least_f64, x.f32 = y.f64 eq_f64, x.f32 <> y.f64 ne_f64, x.f32 < y.f64 lt_f64, x.f32 between y.f64 and y.f64 between_f64, x.f32 <=> y.f64 nullsafe_f64, x.f32 in (y.f64) in_f64, case when x.id = 1 then x.f32 else y.bf16 end case_bf16, ifnull(x.f32, y.bf16) ifnull_bf16, if(x.id = 1, x.f32, y.bf16) if_bf16, coalesce(x.f32, y.bf16) coalesce_bf16, nullif(x.f32, y.bf16) nullif_bf16, greatest(x.f32, y.bf16) greatest_bf16, least(x.f32, y.bf16) least_bf16, x.f32 = y.bf16 eq_bf16, x.f32 <> y.bf16 ne_bf16, x.f32 < y.bf16 lt_bf16, x.f32 between y.bf16 and y.bf16 between_bf16, x.f32 <=> y.bf16 nullsafe_bf16, x.f32 in (y.bf16) in_bf16, case when x.id = 1 then x.f32 else y.f16 end case_f16, ifnull(x.f32, y.f16) ifnull_f16, if(x.id = 1, x.f32, y.f16) if_f16, coalesce(x.f32, y.f16) coalesce_f16, nullif(x.f32, y.f16) nullif_f16, greatest(x.f32, y.f16) greatest_f16, least(x.f32, y.f16) least_f16, x.f32 = y.f16 eq_f16, x.f32 <> y.f16 ne_f16, x.f32 < y.f16 lt_f16, x.f32 between y.f16 and y.f16 between_f16, x.f32 <=> y.f16 nullsafe_f16, x.f32 in (y.f16) in_f16, case when x.id = 1 then x.f32 else y.i8 end case_i8, ifnull(x.f32, y.i8) ifnull_i8, if(x.id = 1, x.f32, y.i8) if_i8, coalesce(x.f32, y.i8) coalesce_i8, nullif(x.f32, y.i8) nullif_i8, greatest(x.f32, y.i8) greatest_i8, least(x.f32, y.i8) least_i8, x.f32 = y.i8 eq_i8, x.f32 <> y.i8 ne_i8, x.f32 < y.i8 lt_i8, x.f32 between y.i8 and y.i8 between_i8, x.f32 <=> y.i8 nullsafe_i8, x.f32 in (y.i8) in_i8, case when x.id = 1 then x.f32 else y.u8 end case_u8, ifnull(x.f32, y.u8) ifnull_u8, if(x.id = 1, x.f32, y.u8) if_u8, coalesce(x.f32, y.u8) coalesce_u8, nullif(x.f32, y.u8) nullif_u8, greatest(x.f32, y.u8) greatest_u8, least(x.f32, y.u8) least_u8, x.f32 = y.u8 eq_u8, x.f32 <> y.u8 ne_u8, x.f32 < y.u8 lt_u8, x.f32 between y.u8 and y.u8 between_u8, x.f32 <=> y.u8 nullsafe_u8, x.f32 in (y.u8) in_u8, case when x.id = 1 then x.f32 else y.f8 end case_f8, ifnull(x.f32, y.f8) ifnull_f8, if(x.id = 1, x.f32, y.f8) if_f8, coalesce(x.f32, y.f8) coalesce_f8, nullif(x.f32, y.f8) nullif_f8, greatest(x.f32, y.f8) greatest_f8, least(x.f32, y.f8) least_f8, x.f32 = y.f8 eq_f8, x.f32 <> y.f8 ne_f8, x.f32 < y.f8 lt_f8, x.f32 between y.f8 and y.f8 between_f8, x.f32 <=> y.f8 nullsafe_f8, x.f32 in (y.f8) in_f8, case when x.id = 1 then x.f32 else y.f4 end case_f4, ifnull(x.f32, y.f4) ifnull_f4, if(x.id = 1, x.f32, y.f4) if_f4, coalesce(x.f32, y.f4) coalesce_f4, nullif(x.f32, y.f4) nullif_f4, greatest(x.f32, y.f4) greatest_f4, least(x.f32, y.f4) least_f4, x.f32 = y.f4 eq_f4, x.f32 <> y.f4 ne_f4, x.f32 < y.f4 lt_f4, x.f32 between y.f4 and y.f4 between_f4, x.f32 <=> y.f4 nullsafe_f4, x.f32 in (y.f4) in_f4, case when x.id = 1 then x.f32 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.f32 end case_str_rev, ifnull(x.f32, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.f32, '[0,0,0,0]') if_str, coalesce(x.f32, '[0,0,0,0]') coalesce_str, greatest(x.f32, '[0,0,0,0]') greatest_str, least(x.f32, '[0,0,0,0]') least_str, nullif(x.f32, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_f32;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECF32(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECF32(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_f32 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_f32 as select 1 o, f32 v_f32, f32 v_f64, f32 v_bf16, f32 v_f16, f32 v_i8, f32 v_u8, f32 v_f8, f32 v_f4, f32 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_f32;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_f32 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_f64 as select x.id, case when x.id = 1 then x.f64 else y.f32 end case_f32, ifnull(x.f64, y.f32) ifnull_f32, if(x.id = 1, x.f64, y.f32) if_f32, coalesce(x.f64, y.f32) coalesce_f32, nullif(x.f64, y.f32) nullif_f32, greatest(x.f64, y.f32) greatest_f32, least(x.f64, y.f32) least_f32, x.f64 = y.f32 eq_f32, x.f64 <> y.f32 ne_f32, x.f64 < y.f32 lt_f32, x.f64 between y.f32 and y.f32 between_f32, x.f64 <=> y.f32 nullsafe_f32, x.f64 in (y.f32) in_f32, case when x.id = 1 then x.f64 else y.f64 end case_f64, ifnull(x.f64, y.f64) ifnull_f64, if(x.id = 1, x.f64, y.f64) if_f64, coalesce(x.f64, y.f64) coalesce_f64, nullif(x.f64, y.f64) nullif_f64, greatest(x.f64, y.f64) greatest_f64, least(x.f64, y.f64) least_f64, x.f64 = y.f64 eq_f64, x.f64 <> y.f64 ne_f64, x.f64 < y.f64 lt_f64, x.f64 between y.f64 and y.f64 between_f64, x.f64 <=> y.f64 nullsafe_f64, x.f64 in (y.f64) in_f64, case when x.id = 1 then x.f64 else y.bf16 end case_bf16, ifnull(x.f64, y.bf16) ifnull_bf16, if(x.id = 1, x.f64, y.bf16) if_bf16, coalesce(x.f64, y.bf16) coalesce_bf16, nullif(x.f64, y.bf16) nullif_bf16, greatest(x.f64, y.bf16) greatest_bf16, least(x.f64, y.bf16) least_bf16, x.f64 = y.bf16 eq_bf16, x.f64 <> y.bf16 ne_bf16, x.f64 < y.bf16 lt_bf16, x.f64 between y.bf16 and y.bf16 between_bf16, x.f64 <=> y.bf16 nullsafe_bf16, x.f64 in (y.bf16) in_bf16, case when x.id = 1 then x.f64 else y.f16 end case_f16, ifnull(x.f64, y.f16) ifnull_f16, if(x.id = 1, x.f64, y.f16) if_f16, coalesce(x.f64, y.f16) coalesce_f16, nullif(x.f64, y.f16) nullif_f16, greatest(x.f64, y.f16) greatest_f16, least(x.f64, y.f16) least_f16, x.f64 = y.f16 eq_f16, x.f64 <> y.f16 ne_f16, x.f64 < y.f16 lt_f16, x.f64 between y.f16 and y.f16 between_f16, x.f64 <=> y.f16 nullsafe_f16, x.f64 in (y.f16) in_f16, case when x.id = 1 then x.f64 else y.i8 end case_i8, ifnull(x.f64, y.i8) ifnull_i8, if(x.id = 1, x.f64, y.i8) if_i8, coalesce(x.f64, y.i8) coalesce_i8, nullif(x.f64, y.i8) nullif_i8, greatest(x.f64, y.i8) greatest_i8, least(x.f64, y.i8) least_i8, x.f64 = y.i8 eq_i8, x.f64 <> y.i8 ne_i8, x.f64 < y.i8 lt_i8, x.f64 between y.i8 and y.i8 between_i8, x.f64 <=> y.i8 nullsafe_i8, x.f64 in (y.i8) in_i8, case when x.id = 1 then x.f64 else y.u8 end case_u8, ifnull(x.f64, y.u8) ifnull_u8, if(x.id = 1, x.f64, y.u8) if_u8, coalesce(x.f64, y.u8) coalesce_u8, nullif(x.f64, y.u8) nullif_u8, greatest(x.f64, y.u8) greatest_u8, least(x.f64, y.u8) least_u8, x.f64 = y.u8 eq_u8, x.f64 <> y.u8 ne_u8, x.f64 < y.u8 lt_u8, x.f64 between y.u8 and y.u8 between_u8, x.f64 <=> y.u8 nullsafe_u8, x.f64 in (y.u8) in_u8, case when x.id = 1 then x.f64 else y.f8 end case_f8, ifnull(x.f64, y.f8) ifnull_f8, if(x.id = 1, x.f64, y.f8) if_f8, coalesce(x.f64, y.f8) coalesce_f8, nullif(x.f64, y.f8) nullif_f8, greatest(x.f64, y.f8) greatest_f8, least(x.f64, y.f8) least_f8, x.f64 = y.f8 eq_f8, x.f64 <> y.f8 ne_f8, x.f64 < y.f8 lt_f8, x.f64 between y.f8 and y.f8 between_f8, x.f64 <=> y.f8 nullsafe_f8, x.f64 in (y.f8) in_f8, case when x.id = 1 then x.f64 else y.f4 end case_f4, ifnull(x.f64, y.f4) ifnull_f4, if(x.id = 1, x.f64, y.f4) if_f4, coalesce(x.f64, y.f4) coalesce_f4, nullif(x.f64, y.f4) nullif_f4, greatest(x.f64, y.f4) greatest_f4, least(x.f64, y.f4) least_f4, x.f64 = y.f4 eq_f4, x.f64 <> y.f4 ne_f4, x.f64 < y.f4 lt_f4, x.f64 between y.f4 and y.f4 between_f4, x.f64 <=> y.f4 nullsafe_f4, x.f64 in (y.f4) in_f4, case when x.id = 1 then x.f64 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.f64 end case_str_rev, ifnull(x.f64, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.f64, '[0,0,0,0]') if_str, coalesce(x.f64, '[0,0,0,0]') coalesce_str, greatest(x.f64, '[0,0,0,0]') greatest_str, least(x.f64, '[0,0,0,0]') least_str, nullif(x.f64, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_f64;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECF64(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECF64(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_f64 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_f64 as select 1 o, f64 v_f32, f64 v_f64, f64 v_bf16, f64 v_f16, f64 v_i8, f64 v_u8, f64 v_f8, f64 v_f4, f64 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_f64;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_f64 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_bf16 as select x.id, case when x.id = 1 then x.bf16 else y.f32 end case_f32, ifnull(x.bf16, y.f32) ifnull_f32, if(x.id = 1, x.bf16, y.f32) if_f32, coalesce(x.bf16, y.f32) coalesce_f32, nullif(x.bf16, y.f32) nullif_f32, greatest(x.bf16, y.f32) greatest_f32, least(x.bf16, y.f32) least_f32, x.bf16 = y.f32 eq_f32, x.bf16 <> y.f32 ne_f32, x.bf16 < y.f32 lt_f32, x.bf16 between y.f32 and y.f32 between_f32, x.bf16 <=> y.f32 nullsafe_f32, x.bf16 in (y.f32) in_f32, case when x.id = 1 then x.bf16 else y.f64 end case_f64, ifnull(x.bf16, y.f64) ifnull_f64, if(x.id = 1, x.bf16, y.f64) if_f64, coalesce(x.bf16, y.f64) coalesce_f64, nullif(x.bf16, y.f64) nullif_f64, greatest(x.bf16, y.f64) greatest_f64, least(x.bf16, y.f64) least_f64, x.bf16 = y.f64 eq_f64, x.bf16 <> y.f64 ne_f64, x.bf16 < y.f64 lt_f64, x.bf16 between y.f64 and y.f64 between_f64, x.bf16 <=> y.f64 nullsafe_f64, x.bf16 in (y.f64) in_f64, case when x.id = 1 then x.bf16 else y.bf16 end case_bf16, ifnull(x.bf16, y.bf16) ifnull_bf16, if(x.id = 1, x.bf16, y.bf16) if_bf16, coalesce(x.bf16, y.bf16) coalesce_bf16, nullif(x.bf16, y.bf16) nullif_bf16, greatest(x.bf16, y.bf16) greatest_bf16, least(x.bf16, y.bf16) least_bf16, x.bf16 = y.bf16 eq_bf16, x.bf16 <> y.bf16 ne_bf16, x.bf16 < y.bf16 lt_bf16, x.bf16 between y.bf16 and y.bf16 between_bf16, x.bf16 <=> y.bf16 nullsafe_bf16, x.bf16 in (y.bf16) in_bf16, case when x.id = 1 then x.bf16 else y.f16 end case_f16, ifnull(x.bf16, y.f16) ifnull_f16, if(x.id = 1, x.bf16, y.f16) if_f16, coalesce(x.bf16, y.f16) coalesce_f16, nullif(x.bf16, y.f16) nullif_f16, greatest(x.bf16, y.f16) greatest_f16, least(x.bf16, y.f16) least_f16, x.bf16 = y.f16 eq_f16, x.bf16 <> y.f16 ne_f16, x.bf16 < y.f16 lt_f16, x.bf16 between y.f16 and y.f16 between_f16, x.bf16 <=> y.f16 nullsafe_f16, x.bf16 in (y.f16) in_f16, case when x.id = 1 then x.bf16 else y.i8 end case_i8, ifnull(x.bf16, y.i8) ifnull_i8, if(x.id = 1, x.bf16, y.i8) if_i8, coalesce(x.bf16, y.i8) coalesce_i8, nullif(x.bf16, y.i8) nullif_i8, greatest(x.bf16, y.i8) greatest_i8, least(x.bf16, y.i8) least_i8, x.bf16 = y.i8 eq_i8, x.bf16 <> y.i8 ne_i8, x.bf16 < y.i8 lt_i8, x.bf16 between y.i8 and y.i8 between_i8, x.bf16 <=> y.i8 nullsafe_i8, x.bf16 in (y.i8) in_i8, case when x.id = 1 then x.bf16 else y.u8 end case_u8, ifnull(x.bf16, y.u8) ifnull_u8, if(x.id = 1, x.bf16, y.u8) if_u8, coalesce(x.bf16, y.u8) coalesce_u8, nullif(x.bf16, y.u8) nullif_u8, greatest(x.bf16, y.u8) greatest_u8, least(x.bf16, y.u8) least_u8, x.bf16 = y.u8 eq_u8, x.bf16 <> y.u8 ne_u8, x.bf16 < y.u8 lt_u8, x.bf16 between y.u8 and y.u8 between_u8, x.bf16 <=> y.u8 nullsafe_u8, x.bf16 in (y.u8) in_u8, case when x.id = 1 then x.bf16 else y.f8 end case_f8, ifnull(x.bf16, y.f8) ifnull_f8, if(x.id = 1, x.bf16, y.f8) if_f8, coalesce(x.bf16, y.f8) coalesce_f8, nullif(x.bf16, y.f8) nullif_f8, greatest(x.bf16, y.f8) greatest_f8, least(x.bf16, y.f8) least_f8, x.bf16 = y.f8 eq_f8, x.bf16 <> y.f8 ne_f8, x.bf16 < y.f8 lt_f8, x.bf16 between y.f8 and y.f8 between_f8, x.bf16 <=> y.f8 nullsafe_f8, x.bf16 in (y.f8) in_f8, case when x.id = 1 then x.bf16 else y.f4 end case_f4, ifnull(x.bf16, y.f4) ifnull_f4, if(x.id = 1, x.bf16, y.f4) if_f4, coalesce(x.bf16, y.f4) coalesce_f4, nullif(x.bf16, y.f4) nullif_f4, greatest(x.bf16, y.f4) greatest_f4, least(x.bf16, y.f4) least_f4, x.bf16 = y.f4 eq_f4, x.bf16 <> y.f4 ne_f4, x.bf16 < y.f4 lt_f4, x.bf16 between y.f4 and y.f4 between_f4, x.bf16 <=> y.f4 nullsafe_f4, x.bf16 in (y.f4) in_f4, case when x.id = 1 then x.bf16 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.bf16 end case_str_rev, ifnull(x.bf16, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.bf16, '[0,0,0,0]') if_str, coalesce(x.bf16, '[0,0,0,0]') coalesce_str, greatest(x.bf16, '[0,0,0,0]') greatest_str, least(x.bf16, '[0,0,0,0]') least_str, nullif(x.bf16, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_bf16;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECBF16(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECBF16(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_bf16 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_bf16 as select 1 o, bf16 v_f32, bf16 v_f64, bf16 v_bf16, bf16 v_f16, bf16 v_i8, bf16 v_u8, bf16 v_f8, bf16 v_f4, bf16 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_bf16;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECBF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_bf16 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_f16 as select x.id, case when x.id = 1 then x.f16 else y.f32 end case_f32, ifnull(x.f16, y.f32) ifnull_f32, if(x.id = 1, x.f16, y.f32) if_f32, coalesce(x.f16, y.f32) coalesce_f32, nullif(x.f16, y.f32) nullif_f32, greatest(x.f16, y.f32) greatest_f32, least(x.f16, y.f32) least_f32, x.f16 = y.f32 eq_f32, x.f16 <> y.f32 ne_f32, x.f16 < y.f32 lt_f32, x.f16 between y.f32 and y.f32 between_f32, x.f16 <=> y.f32 nullsafe_f32, x.f16 in (y.f32) in_f32, case when x.id = 1 then x.f16 else y.f64 end case_f64, ifnull(x.f16, y.f64) ifnull_f64, if(x.id = 1, x.f16, y.f64) if_f64, coalesce(x.f16, y.f64) coalesce_f64, nullif(x.f16, y.f64) nullif_f64, greatest(x.f16, y.f64) greatest_f64, least(x.f16, y.f64) least_f64, x.f16 = y.f64 eq_f64, x.f16 <> y.f64 ne_f64, x.f16 < y.f64 lt_f64, x.f16 between y.f64 and y.f64 between_f64, x.f16 <=> y.f64 nullsafe_f64, x.f16 in (y.f64) in_f64, case when x.id = 1 then x.f16 else y.bf16 end case_bf16, ifnull(x.f16, y.bf16) ifnull_bf16, if(x.id = 1, x.f16, y.bf16) if_bf16, coalesce(x.f16, y.bf16) coalesce_bf16, nullif(x.f16, y.bf16) nullif_bf16, greatest(x.f16, y.bf16) greatest_bf16, least(x.f16, y.bf16) least_bf16, x.f16 = y.bf16 eq_bf16, x.f16 <> y.bf16 ne_bf16, x.f16 < y.bf16 lt_bf16, x.f16 between y.bf16 and y.bf16 between_bf16, x.f16 <=> y.bf16 nullsafe_bf16, x.f16 in (y.bf16) in_bf16, case when x.id = 1 then x.f16 else y.f16 end case_f16, ifnull(x.f16, y.f16) ifnull_f16, if(x.id = 1, x.f16, y.f16) if_f16, coalesce(x.f16, y.f16) coalesce_f16, nullif(x.f16, y.f16) nullif_f16, greatest(x.f16, y.f16) greatest_f16, least(x.f16, y.f16) least_f16, x.f16 = y.f16 eq_f16, x.f16 <> y.f16 ne_f16, x.f16 < y.f16 lt_f16, x.f16 between y.f16 and y.f16 between_f16, x.f16 <=> y.f16 nullsafe_f16, x.f16 in (y.f16) in_f16, case when x.id = 1 then x.f16 else y.i8 end case_i8, ifnull(x.f16, y.i8) ifnull_i8, if(x.id = 1, x.f16, y.i8) if_i8, coalesce(x.f16, y.i8) coalesce_i8, nullif(x.f16, y.i8) nullif_i8, greatest(x.f16, y.i8) greatest_i8, least(x.f16, y.i8) least_i8, x.f16 = y.i8 eq_i8, x.f16 <> y.i8 ne_i8, x.f16 < y.i8 lt_i8, x.f16 between y.i8 and y.i8 between_i8, x.f16 <=> y.i8 nullsafe_i8, x.f16 in (y.i8) in_i8, case when x.id = 1 then x.f16 else y.u8 end case_u8, ifnull(x.f16, y.u8) ifnull_u8, if(x.id = 1, x.f16, y.u8) if_u8, coalesce(x.f16, y.u8) coalesce_u8, nullif(x.f16, y.u8) nullif_u8, greatest(x.f16, y.u8) greatest_u8, least(x.f16, y.u8) least_u8, x.f16 = y.u8 eq_u8, x.f16 <> y.u8 ne_u8, x.f16 < y.u8 lt_u8, x.f16 between y.u8 and y.u8 between_u8, x.f16 <=> y.u8 nullsafe_u8, x.f16 in (y.u8) in_u8, case when x.id = 1 then x.f16 else y.f8 end case_f8, ifnull(x.f16, y.f8) ifnull_f8, if(x.id = 1, x.f16, y.f8) if_f8, coalesce(x.f16, y.f8) coalesce_f8, nullif(x.f16, y.f8) nullif_f8, greatest(x.f16, y.f8) greatest_f8, least(x.f16, y.f8) least_f8, x.f16 = y.f8 eq_f8, x.f16 <> y.f8 ne_f8, x.f16 < y.f8 lt_f8, x.f16 between y.f8 and y.f8 between_f8, x.f16 <=> y.f8 nullsafe_f8, x.f16 in (y.f8) in_f8, case when x.id = 1 then x.f16 else y.f4 end case_f4, ifnull(x.f16, y.f4) ifnull_f4, if(x.id = 1, x.f16, y.f4) if_f4, coalesce(x.f16, y.f4) coalesce_f4, nullif(x.f16, y.f4) nullif_f4, greatest(x.f16, y.f4) greatest_f4, least(x.f16, y.f4) least_f4, x.f16 = y.f4 eq_f4, x.f16 <> y.f4 ne_f4, x.f16 < y.f4 lt_f4, x.f16 between y.f4 and y.f4 between_f4, x.f16 <=> y.f4 nullsafe_f4, x.f16 in (y.f4) in_f4, case when x.id = 1 then x.f16 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.f16 end case_str_rev, ifnull(x.f16, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.f16, '[0,0,0,0]') if_str, coalesce(x.f16, '[0,0,0,0]') coalesce_str, greatest(x.f16, '[0,0,0,0]') greatest_str, least(x.f16, '[0,0,0,0]') least_str, nullif(x.f16, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_f16;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECF16(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECF16(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_f16 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_f16 as select 1 o, f16 v_f32, f16 v_f64, f16 v_bf16, f16 v_f16, f16 v_i8, f16 v_u8, f16 v_f8, f16 v_f4, f16 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_f16;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECF16(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_f16 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_i8 as select x.id, case when x.id = 1 then x.i8 else y.f32 end case_f32, ifnull(x.i8, y.f32) ifnull_f32, if(x.id = 1, x.i8, y.f32) if_f32, coalesce(x.i8, y.f32) coalesce_f32, nullif(x.i8, y.f32) nullif_f32, greatest(x.i8, y.f32) greatest_f32, least(x.i8, y.f32) least_f32, x.i8 = y.f32 eq_f32, x.i8 <> y.f32 ne_f32, x.i8 < y.f32 lt_f32, x.i8 between y.f32 and y.f32 between_f32, x.i8 <=> y.f32 nullsafe_f32, x.i8 in (y.f32) in_f32, case when x.id = 1 then x.i8 else y.f64 end case_f64, ifnull(x.i8, y.f64) ifnull_f64, if(x.id = 1, x.i8, y.f64) if_f64, coalesce(x.i8, y.f64) coalesce_f64, nullif(x.i8, y.f64) nullif_f64, greatest(x.i8, y.f64) greatest_f64, least(x.i8, y.f64) least_f64, x.i8 = y.f64 eq_f64, x.i8 <> y.f64 ne_f64, x.i8 < y.f64 lt_f64, x.i8 between y.f64 and y.f64 between_f64, x.i8 <=> y.f64 nullsafe_f64, x.i8 in (y.f64) in_f64, case when x.id = 1 then x.i8 else y.bf16 end case_bf16, ifnull(x.i8, y.bf16) ifnull_bf16, if(x.id = 1, x.i8, y.bf16) if_bf16, coalesce(x.i8, y.bf16) coalesce_bf16, nullif(x.i8, y.bf16) nullif_bf16, greatest(x.i8, y.bf16) greatest_bf16, least(x.i8, y.bf16) least_bf16, x.i8 = y.bf16 eq_bf16, x.i8 <> y.bf16 ne_bf16, x.i8 < y.bf16 lt_bf16, x.i8 between y.bf16 and y.bf16 between_bf16, x.i8 <=> y.bf16 nullsafe_bf16, x.i8 in (y.bf16) in_bf16, case when x.id = 1 then x.i8 else y.f16 end case_f16, ifnull(x.i8, y.f16) ifnull_f16, if(x.id = 1, x.i8, y.f16) if_f16, coalesce(x.i8, y.f16) coalesce_f16, nullif(x.i8, y.f16) nullif_f16, greatest(x.i8, y.f16) greatest_f16, least(x.i8, y.f16) least_f16, x.i8 = y.f16 eq_f16, x.i8 <> y.f16 ne_f16, x.i8 < y.f16 lt_f16, x.i8 between y.f16 and y.f16 between_f16, x.i8 <=> y.f16 nullsafe_f16, x.i8 in (y.f16) in_f16, case when x.id = 1 then x.i8 else y.i8 end case_i8, ifnull(x.i8, y.i8) ifnull_i8, if(x.id = 1, x.i8, y.i8) if_i8, coalesce(x.i8, y.i8) coalesce_i8, nullif(x.i8, y.i8) nullif_i8, greatest(x.i8, y.i8) greatest_i8, least(x.i8, y.i8) least_i8, x.i8 = y.i8 eq_i8, x.i8 <> y.i8 ne_i8, x.i8 < y.i8 lt_i8, x.i8 between y.i8 and y.i8 between_i8, x.i8 <=> y.i8 nullsafe_i8, x.i8 in (y.i8) in_i8, case when x.id = 1 then x.i8 else y.u8 end case_u8, ifnull(x.i8, y.u8) ifnull_u8, if(x.id = 1, x.i8, y.u8) if_u8, coalesce(x.i8, y.u8) coalesce_u8, nullif(x.i8, y.u8) nullif_u8, greatest(x.i8, y.u8) greatest_u8, least(x.i8, y.u8) least_u8, x.i8 = y.u8 eq_u8, x.i8 <> y.u8 ne_u8, x.i8 < y.u8 lt_u8, x.i8 between y.u8 and y.u8 between_u8, x.i8 <=> y.u8 nullsafe_u8, x.i8 in (y.u8) in_u8, case when x.id = 1 then x.i8 else y.f8 end case_f8, ifnull(x.i8, y.f8) ifnull_f8, if(x.id = 1, x.i8, y.f8) if_f8, coalesce(x.i8, y.f8) coalesce_f8, nullif(x.i8, y.f8) nullif_f8, greatest(x.i8, y.f8) greatest_f8, least(x.i8, y.f8) least_f8, x.i8 = y.f8 eq_f8, x.i8 <> y.f8 ne_f8, x.i8 < y.f8 lt_f8, x.i8 between y.f8 and y.f8 between_f8, x.i8 <=> y.f8 nullsafe_f8, x.i8 in (y.f8) in_f8, case when x.id = 1 then x.i8 else y.f4 end case_f4, ifnull(x.i8, y.f4) ifnull_f4, if(x.id = 1, x.i8, y.f4) if_f4, coalesce(x.i8, y.f4) coalesce_f4, nullif(x.i8, y.f4) nullif_f4, greatest(x.i8, y.f4) greatest_f4, least(x.i8, y.f4) least_f4, x.i8 = y.f4 eq_f4, x.i8 <> y.f4 ne_f4, x.i8 < y.f4 lt_f4, x.i8 between y.f4 and y.f4 between_f4, x.i8 <=> y.f4 nullsafe_f4, x.i8 in (y.f4) in_f4, case when x.id = 1 then x.i8 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.i8 end case_str_rev, ifnull(x.i8, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.i8, '[0,0,0,0]') if_str, coalesce(x.i8, '[0,0,0,0]') coalesce_str, greatest(x.i8, '[0,0,0,0]') greatest_str, least(x.i8, '[0,0,0,0]') least_str, nullif(x.i8, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_i8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECINT8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECINT8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_i8 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_i8 as select 1 o, i8 v_f32, i8 v_f64, i8 v_bf16, i8 v_f16, i8 v_i8, i8 v_u8, i8 v_f8, i8 v_f4, i8 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_i8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_i8 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_u8 as select x.id, case when x.id = 1 then x.u8 else y.f32 end case_f32, ifnull(x.u8, y.f32) ifnull_f32, if(x.id = 1, x.u8, y.f32) if_f32, coalesce(x.u8, y.f32) coalesce_f32, nullif(x.u8, y.f32) nullif_f32, greatest(x.u8, y.f32) greatest_f32, least(x.u8, y.f32) least_f32, x.u8 = y.f32 eq_f32, x.u8 <> y.f32 ne_f32, x.u8 < y.f32 lt_f32, x.u8 between y.f32 and y.f32 between_f32, x.u8 <=> y.f32 nullsafe_f32, x.u8 in (y.f32) in_f32, case when x.id = 1 then x.u8 else y.f64 end case_f64, ifnull(x.u8, y.f64) ifnull_f64, if(x.id = 1, x.u8, y.f64) if_f64, coalesce(x.u8, y.f64) coalesce_f64, nullif(x.u8, y.f64) nullif_f64, greatest(x.u8, y.f64) greatest_f64, least(x.u8, y.f64) least_f64, x.u8 = y.f64 eq_f64, x.u8 <> y.f64 ne_f64, x.u8 < y.f64 lt_f64, x.u8 between y.f64 and y.f64 between_f64, x.u8 <=> y.f64 nullsafe_f64, x.u8 in (y.f64) in_f64, case when x.id = 1 then x.u8 else y.bf16 end case_bf16, ifnull(x.u8, y.bf16) ifnull_bf16, if(x.id = 1, x.u8, y.bf16) if_bf16, coalesce(x.u8, y.bf16) coalesce_bf16, nullif(x.u8, y.bf16) nullif_bf16, greatest(x.u8, y.bf16) greatest_bf16, least(x.u8, y.bf16) least_bf16, x.u8 = y.bf16 eq_bf16, x.u8 <> y.bf16 ne_bf16, x.u8 < y.bf16 lt_bf16, x.u8 between y.bf16 and y.bf16 between_bf16, x.u8 <=> y.bf16 nullsafe_bf16, x.u8 in (y.bf16) in_bf16, case when x.id = 1 then x.u8 else y.f16 end case_f16, ifnull(x.u8, y.f16) ifnull_f16, if(x.id = 1, x.u8, y.f16) if_f16, coalesce(x.u8, y.f16) coalesce_f16, nullif(x.u8, y.f16) nullif_f16, greatest(x.u8, y.f16) greatest_f16, least(x.u8, y.f16) least_f16, x.u8 = y.f16 eq_f16, x.u8 <> y.f16 ne_f16, x.u8 < y.f16 lt_f16, x.u8 between y.f16 and y.f16 between_f16, x.u8 <=> y.f16 nullsafe_f16, x.u8 in (y.f16) in_f16, case when x.id = 1 then x.u8 else y.i8 end case_i8, ifnull(x.u8, y.i8) ifnull_i8, if(x.id = 1, x.u8, y.i8) if_i8, coalesce(x.u8, y.i8) coalesce_i8, nullif(x.u8, y.i8) nullif_i8, greatest(x.u8, y.i8) greatest_i8, least(x.u8, y.i8) least_i8, x.u8 = y.i8 eq_i8, x.u8 <> y.i8 ne_i8, x.u8 < y.i8 lt_i8, x.u8 between y.i8 and y.i8 between_i8, x.u8 <=> y.i8 nullsafe_i8, x.u8 in (y.i8) in_i8, case when x.id = 1 then x.u8 else y.u8 end case_u8, ifnull(x.u8, y.u8) ifnull_u8, if(x.id = 1, x.u8, y.u8) if_u8, coalesce(x.u8, y.u8) coalesce_u8, nullif(x.u8, y.u8) nullif_u8, greatest(x.u8, y.u8) greatest_u8, least(x.u8, y.u8) least_u8, x.u8 = y.u8 eq_u8, x.u8 <> y.u8 ne_u8, x.u8 < y.u8 lt_u8, x.u8 between y.u8 and y.u8 between_u8, x.u8 <=> y.u8 nullsafe_u8, x.u8 in (y.u8) in_u8, case when x.id = 1 then x.u8 else y.f8 end case_f8, ifnull(x.u8, y.f8) ifnull_f8, if(x.id = 1, x.u8, y.f8) if_f8, coalesce(x.u8, y.f8) coalesce_f8, nullif(x.u8, y.f8) nullif_f8, greatest(x.u8, y.f8) greatest_f8, least(x.u8, y.f8) least_f8, x.u8 = y.f8 eq_f8, x.u8 <> y.f8 ne_f8, x.u8 < y.f8 lt_f8, x.u8 between y.f8 and y.f8 between_f8, x.u8 <=> y.f8 nullsafe_f8, x.u8 in (y.f8) in_f8, case when x.id = 1 then x.u8 else y.f4 end case_f4, ifnull(x.u8, y.f4) ifnull_f4, if(x.id = 1, x.u8, y.f4) if_f4, coalesce(x.u8, y.f4) coalesce_f4, nullif(x.u8, y.f4) nullif_f4, greatest(x.u8, y.f4) greatest_f4, least(x.u8, y.f4) least_f4, x.u8 = y.f4 eq_f4, x.u8 <> y.f4 ne_f4, x.u8 < y.f4 lt_f4, x.u8 between y.f4 and y.f4 between_f4, x.u8 <=> y.f4 nullsafe_f4, x.u8 in (y.f4) in_f4, case when x.id = 1 then x.u8 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.u8 end case_str_rev, ifnull(x.u8, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.u8, '[0,0,0,0]') if_str, coalesce(x.u8, '[0,0,0,0]') coalesce_str, greatest(x.u8, '[0,0,0,0]') greatest_str, least(x.u8, '[0,0,0,0]') least_str, nullif(x.u8, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_u8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECUINT8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECUINT8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_u8 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_u8 as select 1 o, u8 v_f32, u8 v_f64, u8 v_bf16, u8 v_f16, u8 v_i8, u8 v_u8, u8 v_f8, u8 v_f4, u8 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_u8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECUINT8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_u8 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_f8 as select x.id, case when x.id = 1 then x.f8 else y.f32 end case_f32, ifnull(x.f8, y.f32) ifnull_f32, if(x.id = 1, x.f8, y.f32) if_f32, coalesce(x.f8, y.f32) coalesce_f32, nullif(x.f8, y.f32) nullif_f32, greatest(x.f8, y.f32) greatest_f32, least(x.f8, y.f32) least_f32, x.f8 = y.f32 eq_f32, x.f8 <> y.f32 ne_f32, x.f8 < y.f32 lt_f32, x.f8 between y.f32 and y.f32 between_f32, x.f8 <=> y.f32 nullsafe_f32, x.f8 in (y.f32) in_f32, case when x.id = 1 then x.f8 else y.f64 end case_f64, ifnull(x.f8, y.f64) ifnull_f64, if(x.id = 1, x.f8, y.f64) if_f64, coalesce(x.f8, y.f64) coalesce_f64, nullif(x.f8, y.f64) nullif_f64, greatest(x.f8, y.f64) greatest_f64, least(x.f8, y.f64) least_f64, x.f8 = y.f64 eq_f64, x.f8 <> y.f64 ne_f64, x.f8 < y.f64 lt_f64, x.f8 between y.f64 and y.f64 between_f64, x.f8 <=> y.f64 nullsafe_f64, x.f8 in (y.f64) in_f64, case when x.id = 1 then x.f8 else y.bf16 end case_bf16, ifnull(x.f8, y.bf16) ifnull_bf16, if(x.id = 1, x.f8, y.bf16) if_bf16, coalesce(x.f8, y.bf16) coalesce_bf16, nullif(x.f8, y.bf16) nullif_bf16, greatest(x.f8, y.bf16) greatest_bf16, least(x.f8, y.bf16) least_bf16, x.f8 = y.bf16 eq_bf16, x.f8 <> y.bf16 ne_bf16, x.f8 < y.bf16 lt_bf16, x.f8 between y.bf16 and y.bf16 between_bf16, x.f8 <=> y.bf16 nullsafe_bf16, x.f8 in (y.bf16) in_bf16, case when x.id = 1 then x.f8 else y.f16 end case_f16, ifnull(x.f8, y.f16) ifnull_f16, if(x.id = 1, x.f8, y.f16) if_f16, coalesce(x.f8, y.f16) coalesce_f16, nullif(x.f8, y.f16) nullif_f16, greatest(x.f8, y.f16) greatest_f16, least(x.f8, y.f16) least_f16, x.f8 = y.f16 eq_f16, x.f8 <> y.f16 ne_f16, x.f8 < y.f16 lt_f16, x.f8 between y.f16 and y.f16 between_f16, x.f8 <=> y.f16 nullsafe_f16, x.f8 in (y.f16) in_f16, case when x.id = 1 then x.f8 else y.i8 end case_i8, ifnull(x.f8, y.i8) ifnull_i8, if(x.id = 1, x.f8, y.i8) if_i8, coalesce(x.f8, y.i8) coalesce_i8, nullif(x.f8, y.i8) nullif_i8, greatest(x.f8, y.i8) greatest_i8, least(x.f8, y.i8) least_i8, x.f8 = y.i8 eq_i8, x.f8 <> y.i8 ne_i8, x.f8 < y.i8 lt_i8, x.f8 between y.i8 and y.i8 between_i8, x.f8 <=> y.i8 nullsafe_i8, x.f8 in (y.i8) in_i8, case when x.id = 1 then x.f8 else y.u8 end case_u8, ifnull(x.f8, y.u8) ifnull_u8, if(x.id = 1, x.f8, y.u8) if_u8, coalesce(x.f8, y.u8) coalesce_u8, nullif(x.f8, y.u8) nullif_u8, greatest(x.f8, y.u8) greatest_u8, least(x.f8, y.u8) least_u8, x.f8 = y.u8 eq_u8, x.f8 <> y.u8 ne_u8, x.f8 < y.u8 lt_u8, x.f8 between y.u8 and y.u8 between_u8, x.f8 <=> y.u8 nullsafe_u8, x.f8 in (y.u8) in_u8, case when x.id = 1 then x.f8 else y.f8 end case_f8, ifnull(x.f8, y.f8) ifnull_f8, if(x.id = 1, x.f8, y.f8) if_f8, coalesce(x.f8, y.f8) coalesce_f8, nullif(x.f8, y.f8) nullif_f8, greatest(x.f8, y.f8) greatest_f8, least(x.f8, y.f8) least_f8, x.f8 = y.f8 eq_f8, x.f8 <> y.f8 ne_f8, x.f8 < y.f8 lt_f8, x.f8 between y.f8 and y.f8 between_f8, x.f8 <=> y.f8 nullsafe_f8, x.f8 in (y.f8) in_f8, case when x.id = 1 then x.f8 else y.f4 end case_f4, ifnull(x.f8, y.f4) ifnull_f4, if(x.id = 1, x.f8, y.f4) if_f4, coalesce(x.f8, y.f4) coalesce_f4, nullif(x.f8, y.f4) nullif_f4, greatest(x.f8, y.f4) greatest_f4, least(x.f8, y.f4) least_f4, x.f8 = y.f4 eq_f4, x.f8 <> y.f4 ne_f4, x.f8 < y.f4 lt_f4, x.f8 between y.f4 and y.f4 between_f4, x.f8 <=> y.f4 nullsafe_f4, x.f8 in (y.f4) in_f4, case when x.id = 1 then x.f8 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.f8 end case_str_rev, ifnull(x.f8, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.f8, '[0,0,0,0]') if_str, coalesce(x.f8, '[0,0,0,0]') coalesce_str, greatest(x.f8, '[0,0,0,0]') greatest_str, least(x.f8, '[0,0,0,0]') least_str, nullif(x.f8, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_f8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECF8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECF8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_f8 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_f8 as select 1 o, f8 v_f32, f8 v_f64, f8 v_bf16, f8 v_f16, f8 v_i8, f8 v_u8, f8 v_f8, f8 v_f4, f8 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_f8;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_f8 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+create table r_f4 as select x.id, case when x.id = 1 then x.f4 else y.f32 end case_f32, ifnull(x.f4, y.f32) ifnull_f32, if(x.id = 1, x.f4, y.f32) if_f32, coalesce(x.f4, y.f32) coalesce_f32, nullif(x.f4, y.f32) nullif_f32, greatest(x.f4, y.f32) greatest_f32, least(x.f4, y.f32) least_f32, x.f4 = y.f32 eq_f32, x.f4 <> y.f32 ne_f32, x.f4 < y.f32 lt_f32, x.f4 between y.f32 and y.f32 between_f32, x.f4 <=> y.f32 nullsafe_f32, x.f4 in (y.f32) in_f32, case when x.id = 1 then x.f4 else y.f64 end case_f64, ifnull(x.f4, y.f64) ifnull_f64, if(x.id = 1, x.f4, y.f64) if_f64, coalesce(x.f4, y.f64) coalesce_f64, nullif(x.f4, y.f64) nullif_f64, greatest(x.f4, y.f64) greatest_f64, least(x.f4, y.f64) least_f64, x.f4 = y.f64 eq_f64, x.f4 <> y.f64 ne_f64, x.f4 < y.f64 lt_f64, x.f4 between y.f64 and y.f64 between_f64, x.f4 <=> y.f64 nullsafe_f64, x.f4 in (y.f64) in_f64, case when x.id = 1 then x.f4 else y.bf16 end case_bf16, ifnull(x.f4, y.bf16) ifnull_bf16, if(x.id = 1, x.f4, y.bf16) if_bf16, coalesce(x.f4, y.bf16) coalesce_bf16, nullif(x.f4, y.bf16) nullif_bf16, greatest(x.f4, y.bf16) greatest_bf16, least(x.f4, y.bf16) least_bf16, x.f4 = y.bf16 eq_bf16, x.f4 <> y.bf16 ne_bf16, x.f4 < y.bf16 lt_bf16, x.f4 between y.bf16 and y.bf16 between_bf16, x.f4 <=> y.bf16 nullsafe_bf16, x.f4 in (y.bf16) in_bf16, case when x.id = 1 then x.f4 else y.f16 end case_f16, ifnull(x.f4, y.f16) ifnull_f16, if(x.id = 1, x.f4, y.f16) if_f16, coalesce(x.f4, y.f16) coalesce_f16, nullif(x.f4, y.f16) nullif_f16, greatest(x.f4, y.f16) greatest_f16, least(x.f4, y.f16) least_f16, x.f4 = y.f16 eq_f16, x.f4 <> y.f16 ne_f16, x.f4 < y.f16 lt_f16, x.f4 between y.f16 and y.f16 between_f16, x.f4 <=> y.f16 nullsafe_f16, x.f4 in (y.f16) in_f16, case when x.id = 1 then x.f4 else y.i8 end case_i8, ifnull(x.f4, y.i8) ifnull_i8, if(x.id = 1, x.f4, y.i8) if_i8, coalesce(x.f4, y.i8) coalesce_i8, nullif(x.f4, y.i8) nullif_i8, greatest(x.f4, y.i8) greatest_i8, least(x.f4, y.i8) least_i8, x.f4 = y.i8 eq_i8, x.f4 <> y.i8 ne_i8, x.f4 < y.i8 lt_i8, x.f4 between y.i8 and y.i8 between_i8, x.f4 <=> y.i8 nullsafe_i8, x.f4 in (y.i8) in_i8, case when x.id = 1 then x.f4 else y.u8 end case_u8, ifnull(x.f4, y.u8) ifnull_u8, if(x.id = 1, x.f4, y.u8) if_u8, coalesce(x.f4, y.u8) coalesce_u8, nullif(x.f4, y.u8) nullif_u8, greatest(x.f4, y.u8) greatest_u8, least(x.f4, y.u8) least_u8, x.f4 = y.u8 eq_u8, x.f4 <> y.u8 ne_u8, x.f4 < y.u8 lt_u8, x.f4 between y.u8 and y.u8 between_u8, x.f4 <=> y.u8 nullsafe_u8, x.f4 in (y.u8) in_u8, case when x.id = 1 then x.f4 else y.f8 end case_f8, ifnull(x.f4, y.f8) ifnull_f8, if(x.id = 1, x.f4, y.f8) if_f8, coalesce(x.f4, y.f8) coalesce_f8, nullif(x.f4, y.f8) nullif_f8, greatest(x.f4, y.f8) greatest_f8, least(x.f4, y.f8) least_f8, x.f4 = y.f8 eq_f8, x.f4 <> y.f8 ne_f8, x.f4 < y.f8 lt_f8, x.f4 between y.f8 and y.f8 between_f8, x.f4 <=> y.f8 nullsafe_f8, x.f4 in (y.f8) in_f8, case when x.id = 1 then x.f4 else y.f4 end case_f4, ifnull(x.f4, y.f4) ifnull_f4, if(x.id = 1, x.f4, y.f4) if_f4, coalesce(x.f4, y.f4) coalesce_f4, nullif(x.f4, y.f4) nullif_f4, greatest(x.f4, y.f4) greatest_f4, least(x.f4, y.f4) least_f4, x.f4 = y.f4 eq_f4, x.f4 <> y.f4 ne_f4, x.f4 < y.f4 lt_f4, x.f4 between y.f4 and y.f4 between_f4, x.f4 <=> y.f4 nullsafe_f4, x.f4 in (y.f4) in_f4, case when x.id = 1 then x.f4 else '[0,0,0,0]' end case_str, case when x.id <> 1 then '[0,0,0,0]' else x.f4 end case_str_rev, ifnull(x.f4, '[0,0,0,0]') ifnull_str, if(x.id = 1, x.f4, '[0,0,0,0]') if_str, coalesce(x.f4, '[0,0,0,0]') coalesce_str, greatest(x.f4, '[0,0,0,0]') greatest_str, least(x.f4, '[0,0,0,0]') least_str, nullif(x.f4, '[1,3,0,6]') nullif_str from x join y on x.id = y.id;
+desc r_f4;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f32  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f32  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f32  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f64  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f64  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f64  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_bf16  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_bf16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_bf16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f16  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f16  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f16  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_i8  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_i8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_i8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_u8  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_u8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_u8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f8  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f8  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f8  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+if_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_f4  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ne_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lt_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+between_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullsafe_f4  ¦  boolean  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+in_f4  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_str_rev  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_str  ¦  VECF4(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_str  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str  ¦  VECF4(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+least_str  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+nullif_str  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from r_f4 order by id;
+➤ id[4,32,0]  ¦  case_f32[12,4,0]  ¦  ifnull_f32[12,4,0]  ¦  if_f32[12,4,0]  ¦  coalesce_f32[12,4,0]  ¦  nullif_f32[12,4,0]  ¦  greatest_f32[12,4,0]  ¦  least_f32[12,4,0]  ¦  eq_f32[-7,1,0]  ¦  ne_f32[-7,1,0]  ¦  lt_f32[-7,1,0]  ¦  between_f32[-7,1,0]  ¦  nullsafe_f32[-7,1,0]  ¦  in_f32[-7,1,0]  ¦  case_f64[12,4,0]  ¦  ifnull_f64[12,4,0]  ¦  if_f64[12,4,0]  ¦  coalesce_f64[12,4,0]  ¦  nullif_f64[12,4,0]  ¦  greatest_f64[12,4,0]  ¦  least_f64[12,4,0]  ¦  eq_f64[-7,1,0]  ¦  ne_f64[-7,1,0]  ¦  lt_f64[-7,1,0]  ¦  between_f64[-7,1,0]  ¦  nullsafe_f64[-7,1,0]  ¦  in_f64[-7,1,0]  ¦  case_bf16[12,4,0]  ¦  ifnull_bf16[12,4,0]  ¦  if_bf16[12,4,0]  ¦  coalesce_bf16[12,4,0]  ¦  nullif_bf16[12,4,0]  ¦  greatest_bf16[12,4,0]  ¦  least_bf16[12,4,0]  ¦  eq_bf16[-7,1,0]  ¦  ne_bf16[-7,1,0]  ¦  lt_bf16[-7,1,0]  ¦  between_bf16[-7,1,0]  ¦  nullsafe_bf16[-7,1,0]  ¦  in_bf16[-7,1,0]  ¦  case_f16[12,4,0]  ¦  ifnull_f16[12,4,0]  ¦  if_f16[12,4,0]  ¦  coalesce_f16[12,4,0]  ¦  nullif_f16[12,4,0]  ¦  greatest_f16[12,4,0]  ¦  least_f16[12,4,0]  ¦  eq_f16[-7,1,0]  ¦  ne_f16[-7,1,0]  ¦  lt_f16[-7,1,0]  ¦  between_f16[-7,1,0]  ¦  nullsafe_f16[-7,1,0]  ¦  in_f16[-7,1,0]  ¦  case_i8[12,4,0]  ¦  ifnull_i8[12,4,0]  ¦  if_i8[12,4,0]  ¦  coalesce_i8[12,4,0]  ¦  nullif_i8[12,4,0]  ¦  greatest_i8[12,4,0]  ¦  least_i8[12,4,0]  ¦  eq_i8[-7,1,0]  ¦  ne_i8[-7,1,0]  ¦  lt_i8[-7,1,0]  ¦  between_i8[-7,1,0]  ¦  nullsafe_i8[-7,1,0]  ¦  in_i8[-7,1,0]  ¦  case_u8[12,4,0]  ¦  ifnull_u8[12,4,0]  ¦  if_u8[12,4,0]  ¦  coalesce_u8[12,4,0]  ¦  nullif_u8[12,4,0]  ¦  greatest_u8[12,4,0]  ¦  least_u8[12,4,0]  ¦  eq_u8[-7,1,0]  ¦  ne_u8[-7,1,0]  ¦  lt_u8[-7,1,0]  ¦  between_u8[-7,1,0]  ¦  nullsafe_u8[-7,1,0]  ¦  in_u8[-7,1,0]  ¦  case_f8[12,4,0]  ¦  ifnull_f8[12,4,0]  ¦  if_f8[12,4,0]  ¦  coalesce_f8[12,4,0]  ¦  nullif_f8[12,4,0]  ¦  greatest_f8[12,4,0]  ¦  least_f8[12,4,0]  ¦  eq_f8[-7,1,0]  ¦  ne_f8[-7,1,0]  ¦  lt_f8[-7,1,0]  ¦  between_f8[-7,1,0]  ¦  nullsafe_f8[-7,1,0]  ¦  in_f8[-7,1,0]  ¦  case_f4[12,4,0]  ¦  ifnull_f4[12,4,0]  ¦  if_f4[12,4,0]  ¦  coalesce_f4[12,4,0]  ¦  nullif_f4[12,4,0]  ¦  greatest_f4[12,4,0]  ¦  least_f4[12,4,0]  ¦  eq_f4[-7,1,0]  ¦  ne_f4[-7,1,0]  ¦  lt_f4[-7,1,0]  ¦  between_f4[-7,1,0]  ¦  nullsafe_f4[-7,1,0]  ¦  in_f4[-7,1,0]  ¦  case_str[12,4,0]  ¦  case_str_rev[12,4,0]  ¦  ifnull_str[12,4,0]  ¦  if_str[12,4,0]  ¦  coalesce_str[12,4,0]  ¦  greatest_str[12,4,0]  ¦  least_str[12,4,0]  ¦  nullif_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [6, 2, 1, 0]  ¦  [1, 3, 0, 6]  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [0, 0, 0, 0]  ¦  null  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  null  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  [0, 0, 0, 0]  ¦  null  ¦  null  ¦  null
+create table u_f4 as select 1 o, f4 v_f32, f4 v_f64, f4 v_bf16, f4 v_f16, f4 v_i8, f4 v_u8, f4 v_f8, f4 v_f4, f4 v_str from x where id = 1 union all select 2, f32, f64, bf16, f16, i8, u8, f8, f4, '[0,0,0,0]' from y where id = 1;
+desc u_f4;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+o  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v_f32  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f64  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_bf16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f16  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_i8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_u8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f8  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_f4  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_str  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from u_f4 order by o;
+➤ o[-5,64,0]  ¦  v_f32[12,4,0]  ¦  v_f64[12,4,0]  ¦  v_bf16[12,4,0]  ¦  v_f16[12,4,0]  ¦  v_i8[12,4,0]  ¦  v_u8[12,4,0]  ¦  v_f8[12,4,0]  ¦  v_f4[12,4,0]  ¦  v_str[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]
+select x.id, case when x.id = 1 then x.bf16 when x.id = 2 then y.f16 else y.i8 end v from x join y on x.id = y.id order by x.id;
+➤ id[4,32,0]  ¦  v[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]
+select x.id, case when x.id = 1 then x.u8 when x.id = 2 then y.f64 else '[9,9,9,9]' end v from x join y on x.id = y.id order by x.id;
+➤ id[4,32,0]  ¦  v[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]
+prepare s1 from 'select coalesce(?, bf16) v from x order by id';
+set @v = '[2,2,2,2]';
+execute s1 using @v;
+➤ v[12,4,0]  𝄀
+[2, 2, 2, 2]  𝄀
+[2, 2, 2, 2]
+prepare s2 from 'select v from (select 1 o, bf16 v from x where id = 1 union all select 2, i8 from y where id = 1) t order by o';
+execute s2;
+➤ v[12,4,0]  𝄀
+[1, 3, 0, 6]  𝄀
+[6, 2, 1, 0]
+deallocate prepare s1;
+deallocate prepare s2;
+select cast(f8 as vecf64(4)) f8_to_f64, cast(f4 as vecf64(4)) f4_to_f64 from x order by id;
+➤ f8_to_f64[12,4,0]  ¦  f4_to_f64[12,4,0]  𝄀
+[1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+null  ¦  null
+select cast(f8 as vecf64(3)) from x where id = 1;
+invalid input: expected vector dimension 3 != actual dimension 4.
+select cast(f8 as vecbf16(4)) from x where id = 1;
+invalid argument operator cast, bad value [VECF8 VECBF16]
+select case when id = 1 then f32 else cast('[1,2,3]' as vecf64(3)) end from x;
+invalid argument operator case, bad value [BOOL VECF32 VECF64]
+select coalesce(bf16, cast('[1,2,3]' as vecint8(3))) from x;
+invalid argument function coalesce, bad value [VECBF16 VECINT8]
+select greatest(f16, cast('[1,2,3]' as vecf8(3))) from x;
+invalid argument function greatest, bad value [VECF16 VECF8]
+select f8 = cast('[1,2,3]' as vecf32(3)) from x;
+invalid argument operator =, bad value [VECF8 VECF32]
+select f32 = cast('[1,2,3]' as vecf64(3)) from x;
+invalid argument operator =, bad value [VECF32 VECF64]
+select f4 from x union all select cast('[1,2,3]' as vecf16(3));
+SQL parser error: the 0 column cann't cast to a same type
+select case when id = 1 then f32 else 7 end from x;
+invalid argument operator case, bad value [BOOL VECF32 BIGINT]
+select greatest(i8, 7) from x;
+invalid argument function greatest, bad value [VECINT8 BIGINT]
+select ifnull(u8, 7) from x;
+invalid argument operator case, bad value [BOOL BIGINT VECUINT8]
+select coalesce(f32, json_object('a', 1)) from x;
+invalid argument function coalesce, bad value [VECF32 JSON]
+select greatest(f32, cast('abc' as varbinary(12))) from x;
+invalid argument function greatest, bad value [VECF32 VARBINARY]
+select case when id = 1 then f8 else cast('abc' as binary(12)) end from x;
+invalid argument operator case, bad value [BOOL VECF8 BINARY]
+select id, f32 between cast('[0,0,0,0]' as vecf32(4)) and cast('[9,9,9,9]' as vecf32(4)) r from x order by id;
+➤ id[4,32,0]  ¦  r[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select id, bf16 between '[0,0,0,0]' and '[9,9,9,9]' r from x order by id;
+➤ id[4,32,0]  ¦  r[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select id, i8 between cast('[0,0,0,0]' as vecf64(4)) and cast('[1,3,0,6]' as vecf8(4)) r from x order by id;
+➤ id[4,32,0]  ¦  r[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select id, f4 between cast('[1,3,0,7]' as vecf16(4)) and cast('[9,9,9,9]' as vecuint8(4)) r from x order by id;
+➤ id[4,32,0]  ¦  r[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null
+prepare s3 from 'select id, f16 between ? and ? r from x order by id';
+set @lo = '[0,0,0,0]';
+set @hi = '[1,3,0,6]';
+execute s3 using @lo, @hi;
+➤ id[4,32,0]  ¦  r[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+deallocate prepare s3;
+select cast('[1,2,3]' as vecbf16(3)) = cast('[1,2,3,4]' as vecbf16(4)) r;
+➤ r[-6,8,0]  𝄀
+0
+select case when true then cast('[1,2,3]' as vecbf16(3)) else cast('[1,2,3,4]' as vecbf16(4)) end r;
+invalid argument operator case, bad value [BOOL VECBF16 VECBF16]
+select if(true, cast('[1,2,3]' as vecbf16(3)), cast('[1,2,3,4]' as vecbf16(4))) r;
+invalid argument function if, bad value [BOOL VECBF16 VECBF16]
+select ifnull(cast('[1,2,3]' as vecbf16(3)), cast('[1,2,3,4]' as vecbf16(4))) r;
+invalid argument operator case, bad value [BOOL VECBF16 VECBF16]
+select coalesce(cast('[1,2,3]' as vecbf16(3)), cast('[1,2,3,4]' as vecbf16(4))) r;
+invalid argument function coalesce, bad value [VECBF16 VECBF16]
+select greatest(cast('[1,2,3]' as vecbf16(3)), cast('[1,2,3,4]' as vecbf16(4))) r;
+invalid argument function greatest, bad value [VECBF16 VECBF16]
+select least(cast('[1,2,3]' as vecbf16(3)), cast('[1,2,3,4]' as vecbf16(4))) r;
+invalid argument function least, bad value [VECBF16 VECBF16]
+select cast('[1,2,3]' as vecbf16(3)) union all select cast('[1,2,3,4]' as vecbf16(4));
+SQL parser error: the 0 column cann't cast to a same type
+create table u_distinct as select f8 v from x where id = 1 union select f64 from y where id = 1 union select i8 from x where id = 1;
+desc u_distinct;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+v  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select count(*) from u_distinct;
+➤ count(*)[-5,64,0]  𝄀
+2
+set @saved_sql_mode = @@sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+create table native_r as select x.id, case when x.id = 1 then x.bf16 else y.f64 end c, if(x.id = 1, x.f8, y.i8) i, ifnull(x.u8, '[0,0,0,0]') n, coalesce(x.f8, y.f64) co from x join y on x.id = y.id;
+desc native_r;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+i  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+n  ¦  VECUINT8(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+co  ¦  VECF64(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from native_r order by id;
+➤ id[4,32,0]  ¦  c[12,4,0]  ¦  i[12,4,0]  ¦  n[12,4,0]  ¦  co[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  ¦  [1, 3, 0, 6]  𝄀
+2  ¦  [6, 2, 1, 0]  ¦  [6, 2, 1, 0]  ¦  [0, 0, 0, 0]  ¦  [6, 2, 1, 0]
+select case when id = 1 then f32 else cast('[1,2,3]' as vecf64(3)) end from x;
+invalid argument operator case, bad value [BOOL VECF32 VECF64]
+set session sql_mode = @saved_sql_mode;
+create table t (id int, a vecbf16(3), b vecint8(3), c vecf64(3));
+insert into t values (1, '[1,2,3]', null, '[4,5,6]');
+create table doc_r as select coalesce(b, a) ba, coalesce(b, a, c) bac, a = c eq, ifnull(b, '[0,0,0]') b_str, case when id = 1 then a else '[9,9,9]' end a_str from t;
+desc doc_r;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+ba  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+bac  ¦  VECF64(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+eq  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b_str  ¦  VECINT8(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+a_str  ¦  VECBF16(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from doc_r;
+➤ ba[12,3,0]  ¦  bac[12,3,0]  ¦  eq[-7,1,0]  ¦  b_str[12,3,0]  ¦  a_str[12,3,0]  𝄀
+[1, 2, 3]  ¦  [1, 2, 3]  ¦  0  ¦  [0, 0, 0]  ¦  [1, 2, 3]
+create table doc_u as select a v from t union all select b from t;
+desc doc_u;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+v  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select count(*) from doc_u;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database vec_common_type;

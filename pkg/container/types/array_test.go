@@ -320,17 +320,17 @@ func TestStringToArray(t *testing.T) {
 		{
 			name:    "Test3 - float64",
 			args:    args{input: "[1,2,3,", typ: T_array_float64},
-			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: [1,2,3,"),
+			wantErr: moerr.NewInvalidInputNoCtx("malformed vector input: [1,2,3,"),
 		},
 		{
 			name:    "Test4 - float64",
 			args:    args{input: "[]", typ: T_array_float64},
-			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: []"),
+			wantErr: moerr.NewInvalidInputNoCtx("malformed vector input: []"),
 		},
 		{
 			name:    "Test4 - float64",
 			args:    args{input: "[1,a]", typ: T_array_float64},
-			wantErr: moerr.NewInternalErrorNoCtx("error while casting a to DOUBLE"),
+			wantErr: moerr.NewInvalidInputNoCtx("error while casting a to DOUBLE"),
 		},
 		{
 			name:       "Test5 - float32",
@@ -340,7 +340,7 @@ func TestStringToArray(t *testing.T) {
 		{
 			name:    "Test6 - float64",
 			args:    args{input: "[   ]", typ: T_array_float64},
-			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: [   ]"),
+			wantErr: moerr.NewInvalidInputNoCtx("malformed vector input: [   ]"),
 		},
 	}
 	for _, tt := range tests {

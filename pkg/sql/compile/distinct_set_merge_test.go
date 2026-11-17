@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,7 @@ func TestCompileParallelUnionDistinct(t *testing.T) {
 				tc.edit(c, node, input)
 			}
 			before := proto.Clone(node)
-			result := c.compileUnion(node, input[:1], input[1:])
+			result := c.compileUnion(node, input[:1], input[1:], false)
 			t.Cleanup(func() {
 				for _, s := range result {
 					s.FreeOperator(c)
@@ -144,6 +145,61 @@ func TestMergeDistinctSetScopesAddsGlobalDedup(t *testing.T) {
 	c.proc.Free()
 }
 
+func TestAggregateConsumesCompleteParallelDistinctOwners(t *testing.T) {
+	c := newDistinctSetTestCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.isPrepare = false
+	c.addr = "127.0.0.1:18000"
+	c.ncpu = 16
+	c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 16}}
+	input := newDistinctSetTestScopes(c, 2)
+	owned := input
+	t.Cleanup(func() {
+		for _, s := range owned {
+			s.FreeOperator(c)
+			s.release()
+		}
+	})
+	for _, s := range input {
+		s.NodeInfo.Addr = c.addr
+	}
+	key := plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 0)
+	union := &plan.Node{NodeType: plan.Node_UNION, Children: []int32{0, 1},
+		SpillMem: 512 << 20, Stats: &plan.Stats{Dop: 16}, ProjectList: []*plan.Expr{
+			key, plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 1),
+		}}
+	aggregate := &plan.Node{NodeType: plan.Node_AGG, Children: []int32{2},
+		SpillMem: 128 << 20, GroupBy: []*plan.Expr{key}, GroupingFlag: []bool{true}}
+	require.True(t, canPreserveParallelUnionDistinctOwners(aggregate, union))
+	aggregate.GroupingFlag[0] = false
+	require.False(t, canPreserveParallelUnionDistinctOwners(aggregate, union))
+	aggregate.GroupingFlag[0] = true
+	union.Limit = plan2.MakePlan2Int64ConstExprWithType(1)
+	require.False(t, canPreserveParallelUnionDistinctOwners(aggregate, union))
+	union.Limit = nil
+	aggregate.ExtraOptions = "sort_rollup"
+	require.False(t, canPreserveParallelUnionDistinctOwners(aggregate, union))
+	aggregate.ExtraOptions = ""
+	owners := c.compileUnion(union, input[:1], input[1:], true)
+	owned = owners
+	require.Len(t, owners, 4)
+	for _, owner := range owners {
+		require.IsType(t, &group.Group{}, owner.RootOp,
+			"local aggregate must receive deduplicated tuples, not raw UNION branches")
+	}
+	// Different full UNION tuples can share the aggregate key: partials still
+	// need the ordinary final MergeGroup, not just a gather.
+	result := c.compileGroupWithoutShuffle(aggregate, owners, []*plan.Node{nil, nil, union}, false)
+	owned = result // cleanup owns the complete resulting scope tree
+	require.Len(t, result, 1)
+	require.Equal(t, vm.MergeGroup, result[0].RootOp.OpType())
+	require.Len(t, result[0].PreScopes, 4)
+	for _, owner := range result[0].PreScopes {
+		partial := owner.RootOp.GetOperatorBase().GetChildren(0).(*group.Group)
+		require.IsType(t, &group.Group{}, partial.GetOperatorBase().GetChildren(0))
+	}
+}
+
 func TestCompileUnionRetainsGlobalDistinctMerge(t *testing.T) {
 	c := newDistinctSetTestCompile(t)
 	node := &plan.Node{ProjectList: []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}}
@@ -152,6 +208,7 @@ func TestCompileUnionRetainsGlobalDistinctMerge(t *testing.T) {
 		node,
 		[]*Scope{newDistinctSetTestScope(c)},
 		[]*Scope{newDistinctSetTestScope(c)},
+		false,
 	)
 	require.Len(t, result, 1)
 	require.Len(t, result[0].PreScopes, 2)

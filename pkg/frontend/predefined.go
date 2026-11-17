@@ -602,6 +602,7 @@ var (
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
 			end_at                      bigint,
+			sql_task_run_id             bigint unsigned not null default 0,
 			index idx_task_parent_id (task_parent_id))`,
 		catalog.MOTaskDB)
 
@@ -656,6 +657,7 @@ var (
 				creator_role_id             int unsigned not null default 0,
 				created_at                  timestamp not null default current_timestamp,
 				updated_at                  timestamp not null default current_timestamp,
+				schedule_generation         bigint not null default 1,
 				unique key uk_task_name_account (task_name, account_id),
 				index idx_account_id (account_id))`,
 		catalog.MOTaskDB, catalog.MOSQLTask)
@@ -679,6 +681,7 @@ var (
 				runner_cn                   varchar(128) not null default '',
 				index idx_task_id (task_id),
 				index idx_account_id (account_id),
+				index idx_task_running (account_id, status, task_name),
 				index idx_status (status),
 				index idx_started_at (started_at))`,
 		catalog.MOTaskDB, catalog.MOSQLTaskRun)

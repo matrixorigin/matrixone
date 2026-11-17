@@ -36,6 +36,7 @@ func NewTableBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 func NewJoinOnBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 	b := NewTableBinder(builder, ctx)
 	b.allowSubquery = true
+	b.joinOn = true
 	return b
 }
 

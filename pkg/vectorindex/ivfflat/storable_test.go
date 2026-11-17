@@ -65,6 +65,9 @@ func TestStorageCheck(t *testing.T) {
 		{"f64 NaN", NewStorage(types.T_array_float64, "", 0, 0, false), f64(math.NaN()), moerr.ErrIndexVectorNonFinite, ""},
 		{"f64 infinity narrowed", NewStorage(types.T_array_float64, "float32", 0, 0, false), f64(math.Inf(1)), moerr.ErrIndexVectorNonFinite, ""},
 		{"int8 base is stored as it is", NewStorage(types.T_array_int8, "", 0, 0, false), types.ArrayToBytes([]int8{127, -128}), 0, ""},
+		{"int8 base empty", NewStorage(types.T_array_int8, "", 0, 0, false), types.ArrayToBytes([]int8{}), moerr.ErrIndexVectorDimension, ""},
+		{"uint8 base is stored as it is", NewStorage(types.T_array_uint8, "", 0, 0, false), types.ArrayToBytes([]uint8{255, 0}), 0, ""},
+		{"uint8 base empty", NewStorage(types.T_array_uint8, "", 0, 0, false), types.ArrayToBytes([]uint8{}), moerr.ErrIndexVectorDimension, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.s.Check(c.vec)

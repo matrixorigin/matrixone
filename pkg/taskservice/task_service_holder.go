@@ -16,22 +16,32 @@ package taskservice
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 var (
-	ErrNotReady = moerr.NewInvalidStateNoCtx("task store not ready")
+	ErrNotReady              = moerr.NewInvalidStateNoCtx("task store not ready")
+	errSQLTaskStoreBusy      = errutil.Wrap(ErrNotReady, "task store holder is busy")
+	taskStorageRefreshFailed = logutil.Event{Name: "task.storage.refresh.failed", Message: "task storage refresh failed"}
 )
 
 type taskServiceHolder struct {
@@ -234,20 +244,35 @@ func (s *refreshableTaskStorage) DeleteAsyncTask(ctx context.Context, conditions
 }
 
 func (s *refreshableTaskStorage) QueryAsyncTask(ctx context.Context, conditions ...Condition) ([]task.AsyncTask, error) {
+	if ctx.Value(sqlTaskFairFetchContextKey{}) == true {
+		return querySQLTaskAsync(ctx, s, conditions...)
+	}
+	v, err, _ := s.queryAsyncTaskPage(ctx, conditions...)
+	return v, err
+}
+
+// Classify the same store that serves the normal query; it may be replaced
+// on refresh. Keep the holder's normal ping and refresh behavior unchanged.
+func (s *refreshableTaskStorage) queryAsyncTaskPage(ctx context.Context, conditions ...Condition) ([]task.AsyncTask, error, bool) {
 	var v []task.AsyncTask
 	var err error
+	var trustedSource bool
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QueryAsyncTask(ctx, conditions...)
+		switch s.mu.store.(type) {
+		case *mysqlTaskStorage, *memTaskStorage:
+			trustedSource = true
+		}
 	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return v, err
+	return v, err, trustedSource
 }
 
 func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {
@@ -431,32 +456,36 @@ func (s *refreshableTaskStorage) QueryDaemonTask(ctx context.Context, conditions
 func (s *refreshableTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error) {
 	var v int
 	var err error
+	expected := false
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.AddSQLTask(ctx, tasks...)
+		expected = err == ErrSQLTaskAccountMissing
 	}
 	s.mu.RUnlock()
-	if err != nil {
+	if err != nil && !expected {
 		s.maybeRefresh(lastAddress)
 	}
 	return v, err
 }
 
-func (s *refreshableTaskStorage) UpdateSQLTask(ctx context.Context, tasks []SQLTask, conditions ...Condition) (int, error) {
+func (s *refreshableTaskStorage) AlterSQLTask(ctx context.Context, observed, updated SQLTask, action SQLTaskAlterAction) (int, error) {
 	var v int
 	var err error
+	var expected bool
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.UpdateSQLTask(ctx, tasks, conditions...)
+		v, err = s.mu.store.AlterSQLTask(ctx, observed, updated, action)
+		expected = err == ErrSQLTaskSequenceExhausted
 	}
 	s.mu.RUnlock()
-	if err != nil {
+	if err != nil && !expected {
 		s.maybeRefresh(lastAddress)
 	}
 	return v, err
@@ -488,40 +517,6 @@ func (s *refreshableTaskStorage) QuerySQLTask(ctx context.Context, conditions ..
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QuerySQLTask(ctx, conditions...)
-	}
-	s.mu.RUnlock()
-	if err != nil {
-		s.maybeRefresh(lastAddress)
-	}
-	return v, err
-}
-
-func (s *refreshableTaskStorage) AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error) {
-	var v int
-	var err error
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
-	if s.mu.store == nil {
-		err = ErrNotReady
-	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.AddSQLTaskRun(ctx, runs...)
-	}
-	s.mu.RUnlock()
-	if err != nil {
-		s.maybeRefresh(lastAddress)
-	}
-	return v, err
-}
-
-func (s *refreshableTaskStorage) UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conditions ...Condition) (int, error) {
-	var v int
-	var err error
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
-	if s.mu.store == nil {
-		err = ErrNotReady
-	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.UpdateSQLTaskRun(ctx, runs, conditions...)
 	}
 	s.mu.RUnlock()
 	if err != nil {
@@ -564,38 +559,135 @@ func (s *refreshableTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, acco
 	return v, err
 }
 
-func (s *refreshableTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error) {
+func (s *refreshableTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun, admission *SQLTaskRunAdmission) (uint64, error) {
 	var v uint64
-	var err error
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
-	if s.mu.store == nil {
-		err = ErrNotReady
-	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.AcquireSQLTaskRun(ctx, sqlTask, run)
-	}
-	s.mu.RUnlock()
-	if err != nil {
-		s.maybeRefresh(lastAddress)
-	}
+	err := s.withSQLTaskMetadataStore(ctx, func(store TaskStorage) error {
+		var err error
+		v, err = store.AcquireSQLTaskRun(ctx, sqlTask, run, admission)
+		return err
+	})
 	return v, err
 }
 
-func (s *refreshableTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error) {
-	var v int
-	var err error
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
+// withSQLTaskMetadataStore is used only by bounded SQL-task metadata
+// operations. A refresh or Close must not leave a caller waiting indefinitely
+// to acquire the holder lock or to signal another refresh.
+func (s *refreshableTaskStorage) withSQLTaskMetadataStore(ctx context.Context, fn func(TaskStorage) error) error {
+	return s.withSQLTaskStore(ctx, fn, true)
+}
+
+// Fetch decoding errors and the intentionally short fast-query deadline do
+// not mean the storage endpoint changed. Avoid reconnecting on every bad row.
+func (s *refreshableTaskStorage) withSQLTaskFetchStore(ctx context.Context, fn func(TaskStorage) error) error {
+	return s.withSQLTaskStore(ctx, fn, false)
+}
+
+func (s *refreshableTaskStorage) withSQLTaskStore(ctx context.Context, fn func(TaskStorage) error, refreshAll bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.mu.TryRLock() {
+		return errSQLTaskStoreBusy
+	}
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return ErrNotReady
+	}
 	if s.mu.store == nil {
-		err = ErrNotReady
-	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.CompleteSQLTaskRun(ctx, run)
+		s.signalSQLTaskRefreshLocked()
+		return ErrNotReady
 	}
-	s.mu.RUnlock()
-	if err != nil {
-		s.maybeRefresh(lastAddress)
+	err := fn(s.mu.store)
+	if err != nil && (refreshAll && !expectedSQLTaskMetadataError(err) ||
+		!refreshAll && sqlTaskFetchConnectionError(ctx, err)) {
+		s.signalSQLTaskRefreshLocked()
 	}
-	return v, err
+	return err
+}
+
+// Only a single chain of known semantic errors proves that reconnecting cannot
+// help. A joined error may also contain a rollback failure, even when one of
+// its causes is a known semantic error. Limit traversal so cyclic or overly
+// deep chains are treated as unknown.
+func expectedSQLTaskMetadataError(err error) bool {
+	for range 32 {
+		if err == nil {
+			return false
+		}
+		if _, ok := err.(net.Error); ok {
+			return false
+		}
+		switch err {
+		case ErrSQLTaskOverlap, ErrSQLTaskNotFound, ErrSQLTaskClaimed,
+			ErrSQLTaskStaleFiring, ErrSQLTaskRecoveryCapacity,
+			ErrSQLTaskSequenceExhausted, errSQLTaskReceiptConflict:
+			return true
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return true
+		}
+		// Custom identity hooks can expose an independent connection or commit
+		// error even when the unwrapped cause is an expected business error.
+		if _, ok := err.(interface{ Is(error) bool }); ok {
+			return false
+		}
+		if _, ok := err.(interface{ As(any) bool }); ok {
+			return false
+		}
+		switch cause := err.(type) {
+		case interface{ Unwrap() []error }:
+			errs := cause.Unwrap()
+			if len(errs) != 1 {
+				return false
+			}
+			err = errs[0]
+		case interface{ Unwrap() error }:
+			err = cause.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// Caller holds the read lock, so Close cannot close refreshC while signaling.
+func (s *refreshableTaskStorage) signalSQLTaskRefreshLocked() {
+	select {
+	case s.refreshC <- s.mu.lastAddress:
+	default:
+	}
+}
+
+func sqlTaskFetchConnectionError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, mysql.ErrInvalidConn) || errors.Is(err, mysql.ErrMalformPkt) {
+		return true
+	}
+	return sqlTaskFetchNetworkError(err)
+}
+
+func sqlTaskFetchNetworkError(err error) bool {
+	if err == nil || err == context.Canceled || err == context.DeadlineExceeded {
+		return false
+	}
+	if _, ok := err.(net.Error); ok {
+		return true
+	}
+	switch cause := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, nested := range cause.Unwrap() {
+			if sqlTaskFetchNetworkError(nested) {
+				return true
+			}
+		}
+	case interface{ Unwrap() error }:
+		return sqlTaskFetchNetworkError(cause.Unwrap())
+	}
+	return false
 }
 
 func (s *refreshableTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error) {
@@ -748,8 +840,7 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
-		s.rt.Logger().Error(
-			"taskservice.holder.refresh.failed",
+		s.rt.Logger().ErrorEvent(taskStorageRefreshFailed,
 			zap.String("address", lastAddress),
 			zap.Error(err))
 		return
@@ -761,15 +852,13 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 	)
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
-		s.rt.Logger().Error(
-			"taskservice.holder.refresh.failed",
+		s.rt.Logger().ErrorEvent(taskStorageRefreshFailed,
 			zap.String("address", connectAddress),
 			zap.Error(err))
 		return
 	}
-	if store == nil {
-		s.rt.Logger().Error(
-			"taskservice.holder.refresh.failed",
+	if isNilTaskValue(store) {
+		s.rt.Logger().ErrorEvent(taskStorageRefreshFailed,
 			zap.String("address", connectAddress),
 			zap.Error(ErrNotReady))
 		return

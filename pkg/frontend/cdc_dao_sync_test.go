@@ -34,11 +34,12 @@ import (
 
 // Mock QueryClient for testing
 type mockQueryClient struct {
-	cnResponses  map[string]*querypb.Response // CN address -> Response
-	sendError    map[string]error             // CN address -> Error
-	newReqCalls  int
-	sendCalls    int
-	releaseCalls int
+	cnResponses       map[string]*querypb.Response // CN address -> Response
+	sendError         map[string]error             // CN address -> Error
+	newReqCalls       int
+	sendCalls         int
+	releaseCalls      int
+	responseWithError bool
 }
 
 func newMockQueryClient() *mockQueryClient {
@@ -55,6 +56,9 @@ func (m *mockQueryClient) ServiceID() string {
 func (m *mockQueryClient) SendMessage(ctx context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
 	m.sendCalls++
 	if err, ok := m.sendError[address]; ok && err != nil {
+		if m.responseWithError {
+			return m.cnResponses[address], err
+		}
 		return nil, err
 	}
 	if resp, ok := m.cnResponses[address]; ok {
@@ -100,7 +104,7 @@ func (m *mockMOCluster) GetAllTNServices() []metadata.TNService {
 }
 
 func (m *mockMOCluster) GetCNServiceWithoutWorkingState(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
-	// Not used in syncCommitTimestamp
+	m.GetCNService(selector, apply)
 }
 
 func (m *mockMOCluster) ForceRefresh(sync bool) {
@@ -141,6 +145,11 @@ type mockTxnClient struct {
 func (m *mockTxnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	m.syncCalled = true
 	m.syncCalledWith = ts
+}
+
+func (m *mockTxnClient) SyncLatestCommitTSContext(_ context.Context, ts timestamp.Timestamp) error {
+	m.SyncLatestCommitTS(ts)
+	return nil
 }
 
 // Helper function to create a test timestamp

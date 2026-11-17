@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,6 +42,13 @@ func TestSetMembershipInputsAreTotal(t *testing.T) {
 			{NodeType: plan.Node_INTERSECT_ALL, Children: []int32{0, 1}, ProjectList: []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}},
 		}}
 	}
+	wrapDistinct := func(q *plan.Query) {
+		typ := q.Nodes[0].ProjectList[0].Typ
+		q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_AGG, Children: []int32{0},
+			GroupBy: []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}, GroupingFlag: []bool{true},
+			ProjectList: []*plan.Expr{plan2.GetColExpr(typ, -1, 0)}})
+		q.Nodes[2].Children[0] = 3
+	}
 	for _, tc := range []struct {
 		name string
 		edit func(*plan.Query)
@@ -57,8 +65,18 @@ func TestSetMembershipInputsAreTotal(t *testing.T) {
 			q.Nodes[1].TableDef.Cols[0].Typ.Id = int32(types.T_uint64)
 		}, false},
 		{"branch limit", func(q *plan.Query) { q.Nodes[0].Limit = plan2.MakePlan2Int64ConstExprWithType(1) }, false},
-		{"block metadata columns", func(q *plan.Query) {
+		{"constant block filter", func(q *plan.Query) {
 			q.Nodes[0].BlockFilterList = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+		}, true},
+		{"distinct producer", wrapDistinct, true},
+		{"rollup producer", func(q *plan.Query) { wrapDistinct(q); q.Nodes[3].GroupingFlag[0] = false }, false},
+		{"aggregate function producer", func(q *plan.Query) {
+			wrapDistinct(q)
+			q.Nodes[3].AggList = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
+		}, false},
+		{"invalid grouped output", func(q *plan.Query) {
+			wrapDistinct(q)
+			q.Nodes[3].ProjectList[0].GetCol().ColPos = 1
 		}, false},
 		{"deferred literal", func(q *plan.Query) {
 			literal := plan2.MakePlan2Int64ConstExprWithType(1)
@@ -77,6 +95,18 @@ func TestSetMembershipInputsAreTotal(t *testing.T) {
 			require.Equal(t, tc.want, setMembershipInputsAreTotal(query, 2))
 		})
 	}
+	t.Run("typed block filter origin", func(t *testing.T) {
+		query := newQuery()
+		predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+			plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 0),
+			plan2.MakePlan2Int64ConstExprWithType(1),
+		})
+		require.NoError(t, err)
+		query.Nodes[0].BlockFilterList = []*plan.Expr{predicate}
+		require.True(t, setMembershipInputsAreTotal(query, 2))
+		predicate.GetF().Args[0].GetCol().ColPos = 2
+		require.False(t, setMembershipInputsAreTotal(query, 2), "do not guess metadata-only column positions")
+	})
 	t.Run("invalid source in predicate", func(t *testing.T) {
 		query := newQuery()
 		predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
@@ -110,4 +140,26 @@ func TestSetMembershipRejectedExpressionIsNotReported(t *testing.T) {
 	invalid := plan2.GetColExpr(typ, 0, 1)
 	require.False(t, setMembershipExpressionsMatchInputs([]*plan.Expr{invalid}, [][]*plan.Expr{input}))
 	require.Zero(t, reports.Load(), "an optimizer fallback must not report an internal error")
+}
+
+func TestSetMembershipPrivateJoinWiring(t *testing.T) {
+	for _, scenario := range []string{"internal", "foreign-message", "external-filter", "executable-filter"} {
+		t.Run(scenario, func(t *testing.T) {
+			node := &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER,
+				SendMsgList:            []plan.MsgHeader{{MsgTag: 1, MsgType: int32(message.MsgJoinMap)}},
+				RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{{Tag: 2}},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: 2}}}
+			switch scenario {
+			case "foreign-message":
+				node.SendMsgList[0].MsgType = -1
+			case "external-filter":
+				node.RuntimeFilterProbeList[0].Tag = 3
+			case "executable-filter":
+				node.RuntimeFilterBuildList[0].Expr = plan2.MakePlan2Int64ConstExprWithType(1)
+			}
+			require.Equal(t, scenario == "internal", setMembershipPhysicalInputIsTotal(node, make(map[int32]bool), make(map[int32]bool)))
+			require.Len(t, node.SendMsgList, 1, "the proof must not strip execution metadata")
+			require.Len(t, node.RuntimeFilterBuildList, 1)
+		})
+	}
 }

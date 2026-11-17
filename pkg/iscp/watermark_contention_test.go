@@ -78,8 +78,16 @@ func TestWatermarkBatchYieldsToRetirement(t *testing.T) {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", peer.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	defer db.Close()
+	_, err = db.ExecContext(ctx, "create database watermark_contention")
+	require.NoError(t, err)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cleanupCancel()
+		if _, err := db.ExecContext(cleanupCtx, "drop database watermark_contention"); err != nil {
+			t.Errorf("drop watermark contention database: %v", err)
+		}
+	}()
 	for _, statement := range []string{
-		"create database watermark_contention",
 		"create table watermark_contention.jobs(account_id int unsigned,table_id bigint unsigned,job_name varchar(100),job_id bigint unsigned,job_state int,watermark varchar(100),job_status json,drop_at timestamp null,primary key(account_id,table_id,job_name,job_id))",
 		`insert into watermark_contention.jobs values(1,3,'first',1,3,'1-0','{"LSN":5,"Stage":1}',null),(1,4,'second',1,3,'1-0','{"LSN":5,"Stage":1}',null)`,
 	} {
@@ -147,6 +155,4 @@ func TestWatermarkBatchYieldsToRetirement(t *testing.T) {
 	syncCommit(peerService, service)
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from watermark_contention.jobs where watermark='2-0' and cast(json_extract(job_status,'$.LSN') as unsigned)=6").Scan(&rows))
 	require.Equal(t, 2, rows)
-	_, err = db.ExecContext(ctx, "drop database watermark_contention")
-	require.NoError(t, err)
 }

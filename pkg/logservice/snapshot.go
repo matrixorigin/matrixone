@@ -106,10 +106,16 @@ type snapshotRecord struct {
 	nodeID nodeID
 	// items are sorted by .index
 	items []*snapshotItem
-	// An export request can time out while Dragonboat is still completing it.
+	// An export request can return before Dragonboat finishes writing it.
 	// Keep checking disk on later truncation ticks after that result is unknown.
 	uncertainExport bool
+	// An admitted export can outlive its RPC. A request that returned early may still
+	// publish a final directory, even after StopReplica returns.
+	activeExports      int
+	lateExportPossible bool
 }
+
+var errSnapshotExportPending = moerr.NewInternalErrorNoCtx("exported snapshot may still be written")
 
 func newNodeSnapshot(fs vfs.FS, nodeID nodeID) *snapshotRecord {
 	return &snapshotRecord{
@@ -277,9 +283,10 @@ func (sm *snapshotManager) prepareDir(path string) error {
 	return nil
 }
 
-// ReconcileInterruptedExport removes exported snapshots left after Dragonboat
-// renamed a completed snapshot but before it removed its completion flag.
-// Call this only during store startup, before the replica can export again.
+// ReconcileInterruptedExport removes exports abandoned by a crashed replica:
+// temporary generating directories and final directories still carrying the
+// Dragonboat completion flag. Call this only during store startup, before the
+// replica can export again.
 func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
@@ -291,7 +298,16 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 	}
 	for _, name := range names {
 		var index uint64
-		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+		var from uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern+"-%d.generating", &index, &from)
+		if err == nil && count == 2 && from == replicaID &&
+			name == fmt.Sprintf(snapshotPathPattern+"-%d.generating", index, replicaID) {
+			if err := sm.cfg.FS.RemoveAll(sm.cfg.FS.PathJoin(path, name)); err != nil {
+				return err
+			}
+			continue
+		}
+		count, err = fmt.Sscanf(name, snapshotPathPattern, &index)
 		if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, index) {
 			continue
 		}
@@ -325,6 +341,8 @@ func (sm *snapshotManager) initLocked(shardID uint64, replicaID uint64) error {
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if current, ok := sm.snapshots[nid]; ok {
 		snapshots.uncertainExport = current.uncertainExport
+		snapshots.activeExports = current.activeExports
+		snapshots.lateExportPossible = current.lateExportPossible
 		current.release()
 	}
 	sm.snapshots[nid] = snapshots
@@ -402,8 +420,34 @@ func (sm *snapshotManager) MarkExportUncertain(shardID, replicaID uint64) {
 	ss.uncertainExport = true
 }
 
+// BeginExport is called while store.mu protects the local retirement marker.
+func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		ss = newNodeSnapshot(sm.cfg.FS, nid)
+		sm.snapshots[nid] = ss
+	}
+	ss.activeExports++
+}
+
+// FinishExport keeps an uncertain request fenced until process restart. The
+// Dragonboat API does not expose completion after returning an early error.
+func (sm *snapshotManager) FinishExport(shardID, replicaID uint64, mayFinishLater bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	if mayFinishLater {
+		ss.uncertainExport = true
+		ss.lateExportPossible = true
+	}
+	ss.activeExports--
+}
+
 // ReconcileUncertainExports reloads completed snapshots after an export with
-// an unknown result. The flag remains set because a timed-out request may
+// an unknown result. The flag remains set because an early-returned request may
 // finish after any individual scan. Ordinary replicas avoid the disk scan.
 func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, maxCount int) (uint64, bool, error) {
 	sm.mu.Lock()
@@ -432,6 +476,8 @@ func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, 
 		trimmed = true
 	}
 	next.uncertainExport = true
+	next.activeExports = ss.activeExports
+	next.lateExportPossible = ss.lateExportPossible
 	sm.snapshots[nid] = next
 	ss.release()
 	if last := next.last(); last != nil {
@@ -488,8 +534,14 @@ func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	if ss, ok := sm.snapshots[nid]; ok && (ss.activeExports > 0 || ss.lateExportPossible) {
+		return errSnapshotExportPending
+	}
 	if err := sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID)); err != nil {
 		return err
+	}
+	if ss, ok := sm.snapshots[nid]; ok {
+		ss.release()
 	}
 	delete(sm.snapshots, nid)
 	return nil

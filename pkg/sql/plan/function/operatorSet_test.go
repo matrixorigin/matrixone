@@ -782,26 +782,15 @@ func TestCaseCheckVectorResultTypes(t *testing.T) {
 				types.New(types.T_array_float32, 3, 0)},
 		},
 		{
-			name: "different vector oid",
-			inputs: []types.Type{types.T_bool.ToType(),
-				types.New(types.T_array_float32, 2, 0),
-				types.New(types.T_array_float64, 2, 0)},
-		},
-		{
-			name: "vector and string",
-			inputs: []types.Type{types.T_bool.ToType(),
-				types.New(types.T_array_float32, 2, 0), types.T_varchar.ToType()},
-		},
-		{
 			name: "vector and numeric",
 			inputs: []types.Type{types.T_bool.ToType(),
 				types.New(types.T_array_float32, 2, 0), types.T_int64.ToType()},
 		},
 		{
-			name: "later when mismatch",
+			name: "later when dimension mismatch",
 			inputs: []types.Type{types.T_bool.ToType(),
 				types.New(types.T_array_float32, 2, 0),
-				types.T_bool.ToType(), types.New(types.T_array_float64, 2, 0),
+				types.T_bool.ToType(), types.New(types.T_array_float64, 3, 0),
 				types.New(types.T_array_float32, 2, 0)},
 		},
 	}
@@ -1049,37 +1038,6 @@ func TestIffCheck_VectorCommonType(t *testing.T) {
 	require.Equal(t, succeedWithCast, result.status)
 	require.Equal(t, vecf64, result.finalType[1])
 	require.Equal(t, vecf64, result.finalType[2])
-
-	vectorTypes := []types.T{
-		types.T_array_float32,
-		types.T_array_float64,
-		types.T_array_bf16,
-		types.T_array_float16,
-		types.T_array_int8,
-		types.T_array_uint8,
-	}
-	for i := 0; i < len(vectorTypes); i++ {
-		for j := i + 1; j < len(vectorTypes); j++ {
-			for _, branches := range [][2]types.T{
-				{vectorTypes[i], vectorTypes[j]},
-				{vectorTypes[j], vectorTypes[i]},
-			} {
-				result = iffCheck(nil, []types.Type{
-					types.T_bool.ToType(),
-					types.New(branches[0], 2, 0),
-					types.New(branches[1], 2, 0),
-				})
-				if (branches[0] == types.T_array_float32 && branches[1] == types.T_array_float64) ||
-					(branches[0] == types.T_array_float64 && branches[1] == types.T_array_float32) {
-					require.Equal(t, succeedWithCast, result.status)
-					require.Equal(t, types.T_array_float64, result.finalType[1].Oid)
-					continue
-				}
-				require.Equal(t, failedFunctionParametersWrong, result.status,
-					"%s and %s must not pick an order-dependent lossy type", branches[0], branches[1])
-			}
-		}
-	}
 }
 
 func TestIffConditionTruthyAt(t *testing.T) {
@@ -2023,15 +1981,18 @@ func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
 	}
 }
 
-func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
+func TestBinaryStringCommonTypePreservesUTF8MB4ByteBound(t *testing.T) {
 	tests := []struct {
 		name         string
 		varcharWidth int32
+		wantOID      types.T
 		wantWidth    int32
 	}{
-		{name: "one character", varcharWidth: 1, wantWidth: utf8.UTFMax},
-		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantWidth: types.MaxVarBinaryLen},
-		{name: "unknown varchar", varcharWidth: -1, wantWidth: types.MaxVarBinaryLen},
+		{name: "one character", varcharWidth: 1, wantOID: types.T_varbinary, wantWidth: utf8.UTFMax},
+		{name: "last bounded character width", varcharWidth: types.MaxVarBinaryLen / utf8.UTFMax, wantOID: types.T_varbinary, wantWidth: types.MaxVarBinaryLen / utf8.UTFMax * utf8.UTFMax},
+		{name: "first large character width", varcharWidth: types.MaxVarBinaryLen/utf8.UTFMax + 1, wantOID: types.T_blob},
+		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantOID: types.T_blob},
+		{name: "unknown varchar", varcharWidth: -1, wantOID: types.T_blob},
 	}
 
 	for _, test := range tests {
@@ -2041,7 +2002,7 @@ func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 				types.New(types.T_varchar, test.varcharWidth, 0),
 			})
 			require.True(t, ok)
-			require.Equal(t, types.T_varbinary, result.Oid)
+			require.Equal(t, test.wantOID, result.Oid)
 			require.Equal(t, test.wantWidth, result.Width)
 		})
 	}

@@ -283,6 +283,7 @@ type descViewProviderRecorder struct {
 	events                []string
 	querying              *SubscriptionMeta
 	childBoundAccounts    []uint32
+	childPersistentScopes []bool
 	childBoundSubs        int
 }
 
@@ -316,6 +317,7 @@ type descViewProviderChild struct {
 func (c *descViewProviderChild) SetContext(ctx context.Context) {
 	if id, acctErr := defines.GetAccountId(ctx); acctErr == nil {
 		c.rec.childBoundAccounts = append(c.rec.childBoundAccounts, id)
+		c.rec.childPersistentScopes = append(c.rec.childPersistentScopes, defines.IsPersistentViewBinding(ctx))
 	}
 	c.rec.events = append(c.rec.events, "bind-account")
 	c.MockCompilerContext.SetContext(ctx)
@@ -365,7 +367,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		rec := &descViewProviderRecorder{MockCompilerContext: mock.ctxt}
 		return mock, rec
 	}
-	fullEventOrder := []string{"parent-bind", "bind-account", "bind-sub", "cleanup", "parent-restore"}
+	fullEventOrder := []string{"parent-bind", "bind-account", "bind-sub", "bind-account", "bind-account", "cleanup", "parent-restore"}
 
 	t.Run("success binds publisher then cleans up", func(t *testing.T) {
 		_, rec := newRecorder(t)
@@ -381,8 +383,9 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.False(t, queryContainsStringLiteral(got.GetQuery(), "LiveName"))
 		require.Equal(t, 1, rec.openCount, "one authoritative description per build")
 		require.Equal(t, 1, rec.closeCount, "the child description binding closes exactly once")
-		require.Equal(t, []uint32{17}, rec.childBoundAccounts,
-			"publisher account attaches before the live description")
+		require.Equal(t, []uint32{17, 17, 17}, rec.childBoundAccounts,
+			"publisher account is preserved while entering and leaving the stored body")
+		require.Equal(t, []bool{false, true, false}, rec.childPersistentScopes)
 		require.Equal(t, 1, rec.childBoundSubs,
 			"publisher subscription attaches before the live description")
 		require.Equal(t, fullEventOrder, rec.events)
@@ -403,7 +406,8 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.Equal(t, []uint32{17}, rec.childBoundAccounts,
 			"publisher binding precedes the failed description")
 		require.Equal(t, 1, rec.childBoundSubs)
-		require.Equal(t, fullEventOrder, rec.events,
+		require.Equal(t, []bool{false}, rec.childPersistentScopes, "parse failure never enters the stored body")
+		require.Equal(t, []string{"parent-bind", "bind-account", "bind-sub", "cleanup", "parent-restore"}, rec.events,
 			"caller subscription is restored on the description failure path")
 		require.Nil(t, rec.querying)
 		require.Nil(t, sc.Like, "the saved AST stays original after the failed description")
@@ -421,7 +425,8 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 1, rec.closeCount,
 			"the successful child description closes exactly once before the binding failure")
-		require.Equal(t, []uint32{17}, rec.childBoundAccounts)
+		require.Equal(t, []uint32{17, 17, 17}, rec.childBoundAccounts)
+		require.Equal(t, []bool{false, true, false}, rec.childPersistentScopes)
 		require.Equal(t, 1, rec.childBoundSubs)
 		require.Equal(t, fullEventOrder, rec.events,
 			"caller subscription is restored after the rewritten-sql failure")
@@ -469,4 +474,60 @@ type descNoProviderSubscribedContext struct {
 
 func (c *descNoProviderSubscribedContext) GetQueryingSubscription() *SubscriptionMeta {
 	return c.sub
+}
+
+// The quoted wildcard argument is the SHOW COLUMNS LIKE filter: the
+// DESCRIBE form derives the identical bound predicate and the repository
+// expression executor keeps exactly the genuinely matching current
+// columns, with the escaped forms behaving verbatim like the authored
+// LIKE comparison.
+func TestDescQuotedWildcardFiltersThroughRealLikeEvaluation(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := newPlanTestProcess(t)
+	ctx := mock.CurrentContext()
+	fields := []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}
+
+	// Start from the parse: the quoted argument must reach the planner as
+	// a LIKE comparison, never as a named column.
+	stmt := descParseOne(t, ctx, "desc nation 'n_na%'")
+	defer stmt.Free()
+	sc := descShowColumns(t, stmt)
+	require.NotNil(t, sc.Like)
+	require.Nil(t, sc.ColName)
+
+	descStmt, err := runOneStmt(mock, t, "desc nation 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, descStmt, "n_na%", fields),
+		"the quoted prefix filter keeps the genuinely matching columns")
+
+	showStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, showStmt, "n_na%", fields),
+		"the authored SHOW COLUMNS LIKE form keeps the same rows")
+
+	allStmt, err := runOneStmt(mock, t, "desc nation '%'")
+	require.NoError(t, err)
+	require.Equal(t, fields,
+		descKeptByFilterPattern(t, proc, allStmt, "%", fields),
+		"the bare wildcard keeps every column")
+
+	missStmt, err := runOneStmt(mock, t, "desc nation 'nosuch%'")
+	require.NoError(t, err)
+	require.Empty(t,
+		descKeptByFilterPattern(t, proc, missStmt, "nosuch%", fields),
+		"a non-matching pattern keeps zero rows")
+
+	escStmt, err := runOneStmt(mock, t, "desc nation 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escStmt, `n\_name`, fields),
+		"the escaped underscore matches the literal column name only")
+
+	escShowStmt, err := runOneStmt(mock, t, "show columns from nation like 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escShowStmt, `n\_name`, fields),
+		"the authored escaped LIKE form keeps the same single row")
 }

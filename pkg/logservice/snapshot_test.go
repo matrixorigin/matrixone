@@ -150,13 +150,21 @@ func TestReconcileInterruptedExport(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	// Temporary exports and unrelated names may contain the same flag. Only
-	// an exact final snapshot directory belongs to startup reconciliation.
+	// A crash may leave a partially written temporary export. Startup owns
+	// cleanup before this replica is allowed to export again.
 	temporary := mgr.snapshotPath(nid, snapshotIndex(300)) + "-2.generating"
 	require.NoError(t, mgr.cfg.FS.MkdirAll(temporary, defaultExportedDirMode))
 	f, err = mgr.cfg.FS.Create(mgr.cfg.FS.PathJoin(temporary, "dragonboat.snapshot.message"))
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+	emptyTemporary := mgr.snapshotPath(nid, snapshotIndex(304)) + "-2.generating"
+	require.NoError(t, mgr.cfg.FS.MkdirAll(emptyTemporary, defaultExportedDirMode))
+	otherReplica := mgr.snapshotPath(nid, snapshotIndex(301)) + "-3.generating"
+	unrelated := mgr.snapshotPath(nid, snapshotIndex(302)) + "-2.receiving"
+	malformed := mgr.snapshotPath(nid, snapshotIndex(303)) + "-2.generating.old"
+	for _, dir := range []string{otherReplica, unrelated, malformed} {
+		require.NoError(t, mgr.cfg.FS.MkdirAll(dir, defaultExportedDirMode))
+	}
 
 	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
 	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
@@ -165,7 +173,13 @@ func TestReconcileInterruptedExport(t *testing.T) {
 	_, err = mgr.cfg.FS.Stat(mgr.snapshotPath(nid, good))
 	require.NoError(t, err)
 	_, err = mgr.cfg.FS.Stat(temporary)
-	require.NoError(t, err)
+	require.True(t, os.IsNotExist(err), "a crashed export must not accumulate on restart")
+	_, err = mgr.cfg.FS.Stat(emptyTemporary)
+	require.True(t, os.IsNotExist(err), "an empty generating directory must be removed")
+	for _, dir := range []string{otherReplica, unrelated, malformed} {
+		_, err = mgr.cfg.FS.Stat(dir)
+		require.NoError(t, err)
+	}
 
 	require.NoError(t, mgr.Init(shardID, replicaID))
 	require.Equal(t, 1, mgr.Count(shardID, replicaID))
@@ -196,22 +210,32 @@ func (fs listErrorFS) List(path string) ([]string, error) {
 }
 
 func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
-	fs := vfs.NewStrictMem()
-	mgr := newSnapshotManager(&Config{
-		FS:                removeErrorFS{FS: fs},
-		SnapshotExportDir: "/tmp/exported",
-	})
-	nid := nodeID{shardID: 1, replicaID: 2}
-	dir := mgr.snapshotPath(nid, 100)
-	require.NoError(t, fs.MkdirAll(dir, defaultExportedDirMode))
-	f, err := fs.Create(fs.PathJoin(dir, "dragonboat.snapshot.message"))
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	for _, tc := range []struct {
+		name string
+		dir  string
+	}{
+		{"final", "snapshot-0000000000000064"},
+		{"generating", "snapshot-0000000000000064-2.generating"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := vfs.NewStrictMem()
+			mgr := newSnapshotManager(&Config{
+				FS:                removeErrorFS{FS: fs},
+				SnapshotExportDir: "/tmp/exported",
+			})
+			nid := nodeID{shardID: 1, replicaID: 2}
+			dir := fs.PathJoin(mgr.exportPath(nid.shardID, nid.replicaID), tc.dir)
+			require.NoError(t, fs.MkdirAll(dir, defaultExportedDirMode))
+			f, err := fs.Create(fs.PathJoin(dir, "dragonboat.snapshot.message"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
 
-	err = mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID)
-	require.ErrorIs(t, err, os.ErrPermission)
-	_, err = fs.Stat(dir)
-	require.NoError(t, err, "a failed cleanup must leave the directory visible")
+			err = mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID)
+			require.ErrorIs(t, err, os.ErrPermission)
+			_, err = fs.Stat(dir)
+			require.NoError(t, err, "a failed cleanup must leave the directory visible")
+		})
+	}
 }
 
 func TestReconcileUncertainExportsRetriesFailedQuotaCleanup(t *testing.T) {

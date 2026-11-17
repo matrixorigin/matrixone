@@ -444,12 +444,42 @@ class TestBooleanHandling:
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Monitor'
 
-    def test_string_boolean_comparison(self, client, test_table):
-        """Test filtering with string 'true'/'false'."""
-        results = client.query(Product).filter(Product.specifications['verified'] == 'true').execute()
+    def test_string_boolean_comparison(self, client):
+        """Python string 'true' matches JSON STRING values, not JSON booleans."""
+        # Dedicated mixed fixture: the shared Product table stores verified as
+        # booleans, which the STRING guard must not select for == 'true'.
+        class MixedVerified(Base):
+            __tablename__ = 'test_json_verified_string_bool_online'
+            product_id = Column(Integer, primary_key=True)
+            product_name = Column(String(200))
+            specifications = Column(JSON)
 
-        # Laptop and Monitor are verified
-        assert len(results.rows) == 2
+        try:
+            client.drop_table(MixedVerified)
+        except Exception:
+            pass
+        client.create_table(MixedVerified)
+        try:
+            client.batch_insert(
+                MixedVerified,
+                [
+                    {'product_id': 1, 'product_name': 'BoolTrue', 'specifications': {'verified': True}},
+                    {'product_id': 2, 'product_name': 'StringTrue', 'specifications': {'verified': 'true'}},
+                    {'product_id': 3, 'product_name': 'BoolFalse', 'specifications': {'verified': False}},
+                ],
+            )
+            equal = client.query(MixedVerified).filter(MixedVerified.specifications['verified'] == 'true').execute()
+            unequal = client.query(MixedVerified).filter(MixedVerified.specifications['verified'] != 'true').execute()
+            equal_ids = sorted(row[0] for row in equal.rows)
+            unequal_ids = sorted(row[0] for row in unequal.rows)
+            assert equal_ids == [2]
+            assert unequal_ids == [1, 3]
+            assert set(equal_ids).isdisjoint(unequal_ids)
+        finally:
+            try:
+                client.drop_table(MixedVerified)
+            except Exception:
+                pass
 
     def test_asbool_property(self, client, test_table):
         """Test .asbool property."""
