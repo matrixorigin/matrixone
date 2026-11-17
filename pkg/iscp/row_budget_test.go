@@ -19,10 +19,12 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -145,6 +147,98 @@ func TestRowBudgetTwoIterationsKeepDeferredPhysicalCommit(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, upper, watermark)
 	require.Equal(t, 130_000, firstRows+secondRows)
+}
+
+type indexCatchupRecordingConsumer struct {
+	rows []int64
+}
+
+func (c *indexCatchupRecordingConsumer) Consume(ctx context.Context, retriever DataRetriever) error {
+	for {
+		data := retriever.Next()
+		if data == nil {
+			return ctx.Err()
+		}
+		if data.err != nil {
+			err := data.err
+			data.Done()
+			return err
+		}
+		if data.noMoreData {
+			data.Done()
+			return nil
+		}
+		iter := data.insertBatch.Rows.Iter()
+		for iter.Next() {
+			row := iter.Item()
+			c.rows = append(c.rows, vector.MustFixedColWithTypeCheck[int64](row.Src.Vecs[0])[row.Offset])
+		}
+		iter.Release()
+		data.Done()
+	}
+}
+
+func TestIndexCatchupDeliversDeferredCommitAcrossIterations(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
+	spec := &JobSpec{ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync)},
+		TriggerSpec: TriggerSpec{JobType: TriggerType_Default, TargetRows: 1}}
+	_, err := table.AddOrUpdateSinker(ctx, "index", spec, &JobStatus{Stage: JobStage_Running}, 1,
+		types.BuildTS(19, math.MaxUint32), ISCPJobState_Completed, 0)
+	require.NoError(t, err)
+	commits := []struct {
+		ts types.TS
+		pk int64
+	}{{types.BuildTS(20, 0), 1}, {types.BuildTS(30, 0), 2}}
+	probe := func(_ context.Context, from, to types.TS, _ int) (int, error) {
+		rows := 0
+		for _, commit := range commits {
+			if commit.ts.GE(&from) && commit.ts.LE(&to) {
+				rows++
+			}
+		}
+		return rows, nil
+	}
+	sink := new(indexCatchupRecordingConsumer)
+	for i, expectedFrom := range []types.TS{types.BuildTS(20, 0), types.BuildTS(30, 0)} {
+		iterations, _ := table.getCandidate()
+		require.Len(t, iterations, 1)
+		iteration := iterations[0]
+		require.True(t, iteration.indexJob)
+		require.Equal(t, expectedFrom, iteration.fromTS)
+		iteration.toTS = types.BuildTS(30, 0)
+		rows, err := selectRowBudgetForIteration(ctx, iteration, 1, probe)
+		require.NoError(t, err)
+		require.Equal(t, 1, rows)
+		step := 0
+		changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+			for step < len(commits) {
+				commit := commits[step]
+				step++
+				if commit.ts.GE(&iteration.fromTS) && commit.ts.LE(&iteration.toTS) {
+					return tailGroupBatch(mp, commit.pk, commit.ts.Physical()), nil, engine.ChangesHandle_Tail_done, nil
+				}
+			}
+			return nil, nil, engine.ChangesHandle_Tail_done, nil
+		}}
+		done, statuses := runIterationConsumersWithStatusesForTest(ctx, iteration, changes, []Consumer{sink}, ISCPDataType_Tail, mp)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("index catch-up iteration did not finish")
+		}
+		require.Zero(t, statuses[0].ErrorCode)
+		require.Equal(t, i+1, len(sink.rows))
+		require.Equal(t, commits[i].pk, sink.rows[i])
+		require.NoError(t, table.UpdateWatermark(iteration))
+	}
+	require.Equal(t, []int64{1, 2}, sink.rows)
+	watermark, ok := table.GetWatermark("index")
+	require.True(t, ok)
+	require.Equal(t, types.BuildTS(30, 0), watermark)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestRowBudgetProbeFailurePreservesRetryRange(t *testing.T) {
