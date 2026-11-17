@@ -508,6 +508,7 @@ type HashBuild struct {
 	DedupColName              string
 	DedupColTypes             []plan.Type
 	DedupKeyExprs             []*plan.Expr
+	WarningSuppressNullColIdx int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 

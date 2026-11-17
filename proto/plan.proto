@@ -863,6 +863,9 @@ message DedupJoinCtx {
   ColRef odku_generated_col = 14;
   ColRef odku_ordinal_col = 15;
   ColRef odku_generated_auto_increment_col = 16;
+  // Optional build-side marker for internal arbitration rows. A NULL value
+  // suppresses only the duplicate warning; duplicate filtering is unchanged.
+  ColRef warning_suppress_null_col = 17;
 }
 
 message UpdateCtx {

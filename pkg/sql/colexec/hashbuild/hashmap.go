@@ -58,6 +58,8 @@ type HashmapBuilder struct {
 	DedupColName       string
 	DedupColTypes      []plan.Type
 	DedupKeyExprs      []*plan.Expr
+	// WarningSuppressNullColIdx is one-based; zero disables suppression.
+	WarningSuppressNullColIdx int32
 
 	IgnoreRows *bitmap.Bitmap
 
@@ -528,6 +530,17 @@ func (hb *HashmapBuilder) buildHashmap(
 	recordDuplicateWarning := func(vec *vector.Vector, row int, inputRow int) {
 		if !warningsEnabled {
 			return
+		}
+		if hb.WarningSuppressNullColIdx > 0 {
+			batIdx := inputRow / colexec.DefaultBatchSize
+			colIdx := hb.WarningSuppressNullColIdx - 1
+			if batIdx < 0 || batIdx >= len(hb.Batches.Buf) || int(colIdx) >= len(hb.Batches.Buf[batIdx].Vecs) {
+				duplicateWarnings.AddCount()
+				return
+			}
+			if hb.Batches.Buf[batIdx].Vecs[colIdx].IsNull(uint64(inputRow % colexec.DefaultBatchSize)) {
+				return
+			}
 		}
 		if !duplicateWarnings.NeedsDiagnostic() {
 			duplicateWarnings.AddCount()
