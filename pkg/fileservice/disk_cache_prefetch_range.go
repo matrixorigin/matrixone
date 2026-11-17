@@ -577,56 +577,66 @@ func (d *DiskCache) readRanges(
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchObjects
 	budget := d.flightBytes()
-	f.mu.Lock()
 	var (
-		closing context.Context
-		now     time.Time
-		missing []PrefetchRange
-		waits   []prefetchObject
+		objects []prefetchObject
+		started bool
 	)
-	for {
-		var ok bool
-		if closing, ok = f.openLocked(); !ok {
+	for len(ranges) > 0 {
+		f.mu.Lock()
+		closing, ok := f.openLocked()
+		if !ok {
 			f.mu.Unlock()
+			if started {
+				break
+			}
 			return false, nil
 		}
-		now = time.Now()
-		missing, waits = missing[:0], waits[:0]
-		var need int64
+		now := time.Now()
+		var (
+			flights []*memoryPrefetchObject
+			rest    []PrefetchRange
+		)
 		for _, r := range ranges {
 			if fl := f.fastestLocked(diskPath, r.Offset, r.Offset+r.Size, now, d.downloadMaxExtraWait, true); fl != nil {
-				waits = append(waits, fl)
+				objects = append(objects, fl)
 				continue
 			}
-			missing = append(missing, r)
-			need += flightBufSize(r.Size)
+			// Past the bytes of the flights under way, a range waits for flights to end;
+			// with none under way, one range starts.
+			if f.bytes > 0 && f.bytes+flightBufSize(r.Size) > budget {
+				rest = append(rest, r)
+				continue
+			}
+			fl := d.startFlightLocked(ctx, diskPath, r.Offset, r.Offset+r.Size, now)
+			flights = append(flights, fl)
+			objects = append(objects, fl)
 		}
-		// Past the bytes of the flights under way, the ranges wait for flights to end.
-		if need == 0 || f.bytes == 0 || f.bytes+need <= budget {
+		var freed chan struct{}
+		if len(rest) > 0 {
+			if f.freed == nil {
+				f.freed = make(chan struct{})
+			}
+			freed = f.freed
+		}
+		f.mu.Unlock()
+		for _, fl := range flights {
+			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing)
+		}
+		if len(objects) > 0 && !started {
+			started = true
+			downloadStarted(ctx)
+		}
+		ranges = rest
+		if len(rest) == 0 {
 			break
 		}
-		if f.freed == nil {
-			f.freed = make(chan struct{})
-		}
-		freed := f.freed
-		f.mu.Unlock()
 		select {
 		case <-freed:
 		case <-ctx.Done():
 			return true, ctx.Err()
 		}
-		f.mu.Lock()
+		budget = d.flightBytes()
 	}
-	objects := waits
-	for _, r := range missing {
-		fl := d.startFlightLocked(ctx, diskPath, r.Offset, r.Offset+r.Size, now)
-		objects = append(objects, fl)
-	}
-	f.mu.Unlock()
-	for _, o := range objects[len(waits):] {
-		go d.runFlight(ctx, filePath, diskPath, policy, o.(*memoryPrefetchObject), open, closing)
-	}
-	downloadStarted(ctx)
 	if err := waitFlights(ctx, objects); err != nil {
 		return true, err
 	}
@@ -884,12 +894,11 @@ func (f *memoryPrefetchObject) read(ctx context.Context, open rangeOpener) error
 	defer idle.Close()
 	f.idle.add(idle)
 	t0 := time.Now()
-	r, err := open(ctx, f.start, f.end)
+	r, err := idle.open(func() (io.ReadCloser, error) { return open(ctx, f.start, f.end) })
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-	idle.r = r
 	rangeReadCosts.observeLatency(time.Since(t0))
 	for pos := 0; pos < len(buf); {
 		n, err := idle.Read(buf[pos:min(pos+prefetchChunk, len(buf))])

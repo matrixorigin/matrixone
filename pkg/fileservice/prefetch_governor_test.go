@@ -15,7 +15,9 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"runtime"
 	"slices"
@@ -256,4 +258,56 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	}
 	vec.Release()
 	require.Equal(t, int64(runs), storage.opens.Load(), "no run is read twice")
+}
+
+// A cold column prefetch of more ranges than the flight bytes hold reads only the ranges
+// that fit, the first one at least; the others wait, and once storage answers every range
+// is read once.
+func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
+	const (
+		unit   = 64 << 10
+		ranges = 8
+		size   = 16 << 10
+	)
+	fs, _, data := newPrefetchRangeFS(t, unit, 2*ranges*unit)
+	budget := 2 * flightBufSize(size)
+	fs.diskCache.prefetchFlightBytes = budget
+	f := &fs.diskCache.prefetchObjects
+	var opens atomic.Int64
+	release := make(chan struct{})
+	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		opens.Add(1)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return io.NopCloser(bytes.NewReader(data[start:end])), nil
+	}
+	rs := make([]PrefetchRange, ranges)
+	for i := range rs {
+		rs[i] = PrefetchRange{Offset: int64(2*i) * unit, Size: size}
+	}
+	done := make(chan error, 1)
+	go func() {
+		ok, err := fs.diskCache.readRanges(context.Background(), "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, open)
+		if err == nil && !ok {
+			err = errors.New("the ranges were not read")
+		}
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return opens.Load() == 2 }, 10*time.Second, time.Millisecond)
+	f.mu.Lock()
+	inMemory := f.bytes
+	f.mu.Unlock()
+	require.LessOrEqual(t, inMemory, budget)
+
+	close(release)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the prefetch did not return")
+	}
+	require.Equal(t, int64(ranges), opens.Load(), "no range is read twice")
 }

@@ -749,3 +749,22 @@ func TestS3FSRangeReadCachesItsEntriesNotItsPrefetchObject(t *testing.T) {
 		filepath.Base(fs.diskCache.pathForIOEntry("object", IOEntry{Offset: 5010, Size: 10})),
 	}, cacheFiles(), "the entries, not the prefetch object's range")
 }
+
+// A flight whose source does not open fails after the idle timeout.
+func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
+	shortIdle(t, 20*time.Millisecond)
+	fl := newMemoryPrefetchObject(0, 10, time.Now())
+	readErr := make(chan error, 1)
+	go func() {
+		readErr <- fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+	}()
+	select {
+	case err := <-readErr:
+		require.ErrorIs(t, err, errSourceIdle)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the stalled open was not stopped")
+	}
+}

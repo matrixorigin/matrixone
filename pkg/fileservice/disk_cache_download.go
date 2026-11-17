@@ -367,18 +367,38 @@ type idleReader struct {
 }
 
 // newIdleReader returns a context to open the source through and the reader that guards
-// it once its r is set. Close releases the context.
+// it once open opens it. Close releases the context.
 func newIdleReader(ctx context.Context) (context.Context, *idleReader) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	return ctx, &idleReader{ctx: ctx, cancel: cancel}
 }
 
+// open opens the source through fn, timed as a Read is, and reads it from then.
+func (r *idleReader) open(fn func() (io.ReadCloser, error)) (io.ReadCloser, error) {
+	r.begin()
+	rc, err := fn()
+	err = r.end(err)
+	if err != nil {
+		return nil, err
+	}
+	r.r = rc
+	return rc, nil
+}
+
 func (r *idleReader) Read(b []byte) (int, error) {
+	r.begin()
+	n, err := r.r.Read(b)
+	return n, r.end(err)
+}
+
+func (r *idleReader) begin() {
 	r.mu.Lock()
 	r.reading = true
 	r.armLocked()
 	r.mu.Unlock()
-	n, err := r.r.Read(b)
+}
+
+func (r *idleReader) end(err error) error {
 	r.mu.Lock()
 	r.reading = false
 	r.stopLocked()
@@ -386,7 +406,7 @@ func (r *idleReader) Read(b []byte) (int, error) {
 	if err != nil && err != io.EOF && errors.Is(context.Cause(r.ctx), errSourceIdle) {
 		err = errSourceIdle
 	}
-	return n, err
+	return err
 }
 
 // attach stops timing reads until the matching detach.
@@ -597,12 +617,11 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, open ra
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
 	download.idle.add(idle)
-	r, err := open(ctx, start, openEnd)
+	r, err := idle.open(func() (io.ReadCloser, error) { return open(ctx, start, openEnd) })
 	if err != nil {
 		return &diskCacheSourceError{err: err}
 	}
 	defer r.Close()
-	idle.r = r
 	source := &diskCacheSourceReader{Reader: idle}
 	var buf []byte
 	put := ioBufferPool.Get(&buf)

@@ -1142,12 +1142,11 @@ func (d *DiskCache) writeFileTo(
 	if download != nil {
 		download.idle.add(idle)
 	}
-	from, err := openReader(readCtx)
+	from, err := idle.open(func() (io.ReadCloser, error) { return openReader(readCtx) })
 	if err != nil {
 		return false, &diskCacheSourceError{err: err}
 	}
 	defer from.Close()
-	idle.r = from
 	source := &diskCacheSourceReader{Reader: idle}
 
 	// do eviction before write
