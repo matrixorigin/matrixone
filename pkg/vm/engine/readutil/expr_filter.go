@@ -1362,6 +1362,24 @@ func compileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
+			if vec.IsConstNull() || vec.GetNulls().Any() {
+				canCompile = false
+				return
+			}
+			{
+				col, area := vector.MustVarlenaRawData(vec)
+				for i := range col {
+					key := col[i].GetByteSlice(area)
+					if len(key) > 0 && key[0] == 0 {
+						// serial_full encodes SQL NULL with a leading zero byte
+						// without setting the vector null bitmap. Prefix pruning
+						// cannot use that entry as an SQL IN value; fail open and
+						// let the decoded residual predicate decide.
+						canCompile = false
+						return
+					}
+				}
+			}
 			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
