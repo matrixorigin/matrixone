@@ -162,10 +162,18 @@ func TestIntegerOverDecimal256DivisionBindingControls(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("bool dividend stays unbound for a decimal256 divisor", func(t *testing.T) {
-		_, err := GetFunctionByName(context.Background(), "/", []types.Type{
+	t.Run("bool dividend binds through the same shared row", func(t *testing.T) {
+		// TRUE/FALSE carry the exact one-digit 0/1 span: the derivation
+		// mirrors the int8 cell with BOOL's one digit in place of INT8's.
+		bound, err := GetFunctionByName(context.Background(), "/", []types.Type{
 			types.T_bool.ToType(), divisor})
-		require.Error(t, err)
+		require.NoError(t, err)
+		require.Equal(t,
+			types.New(types.T_decimal256, 35, 4), bound.GetReturnType())
+		targets, cast := bound.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_decimal256.ToType(), targets[0])
+		require.Equal(t, types.New(types.T_decimal256, 65, 30), targets[1])
 	})
 
 	t.Run("existing DIV cells keep their contracts", func(t *testing.T) {
@@ -277,6 +285,86 @@ func TestIntegerOverDecimal256DivisionColumns(t *testing.T) {
 			}, []bool{false, false, true, true}),
 			exec)
 		succeed, info := columnCase.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("bool column fixture", func(t *testing.T) {
+		// Producer: the implicit cast turns TRUE/FALSE into the exact
+		// one-digit decimal 1/0 domain and keeps the masked NULL row null.
+		casted := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+				NewFunctionTestInput(castTarget, []types.Decimal256{}, nil),
+			},
+			NewFunctionTestResult(castTarget, false, []types.Decimal256{
+				decimal256FromBigWideTest(big.NewInt(1)),
+				decimal256FromBigWideTest(big.NewInt(0)),
+				{},
+			}, []bool{false, false, true}),
+			NewCast)
+		succeed, info := casted.RunAndFree()
+		require.True(t, succeed, info)
+
+		// Consumer: the bound "/" overload executes TRUE/FALSE/NULL rows
+		// through the production executor with the one-digit derivation.
+		retType, exec := boundDecimal256SlashExecution(
+			t, "/", []types.Type{types.T_bool.ToType(), divisor})
+		require.Equal(t, types.New(types.T_decimal256, 35, 4), retType)
+		slashes := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(castTarget, []types.Decimal256{
+					decimal256FromBigWideTest(big.NewInt(1)),
+					decimal256FromBigWideTest(big.NewInt(0)),
+					{},
+					decimal256FromBigWideTest(big.NewInt(1)),
+				}, []bool{false, false, true, false}),
+				NewFunctionTestInput(divisor, []types.Decimal256{
+					decimal256AtScaleTestHelper(t, "2", 30),
+					decimal256AtScaleTestHelper(t, "1", 30),
+					decimal256AtScaleTestHelper(t, "2", 30),
+					{},
+				}, []bool{false, false, false, true}),
+			},
+			NewFunctionTestResult(retType, false, []types.Decimal256{
+				parseDecimal256LiteralTestHelper(t, "0.5000"),
+				parseDecimal256LiteralTestHelper(t, "0.0000"),
+				{},
+				{},
+			}, []bool{false, false, true, true}),
+			exec)
+		succeed, info = slashes.RunAndFree()
+		require.True(t, succeed, info)
+
+		// The same shared row also carries DIV: the int quotient derives
+		// from the one-digit dividend plus the divisor scale, clamped by
+		// the BIGINT display domain; NULL rows and the zero-divisor NULL
+		// policy keep their existing behavior.
+		divRetType, divExec := boundDecimal256SlashExecution(
+			t, "div", []types.Type{types.T_bool.ToType(), divisor})
+		require.Equal(t, types.New(types.T_int64, 20, 0), divRetType)
+		quotients := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(castTarget, []types.Decimal256{
+					decimal256FromBigWideTest(big.NewInt(1)),
+					decimal256FromBigWideTest(big.NewInt(0)),
+					decimal256FromBigWideTest(big.NewInt(1)),
+					{},
+					decimal256FromBigWideTest(big.NewInt(1)),
+				}, []bool{false, false, false, true, false}),
+				NewFunctionTestInput(divisor, []types.Decimal256{
+					decimal256AtScaleTestHelper(t, "2", 30),
+					decimal256AtScaleTestHelper(t, "2", 30),
+					decimal256AtScaleTestHelper(t, "1", 30),
+					decimal256AtScaleTestHelper(t, "2", 30),
+					{}, // zero divisor keeps the existing NULL policy
+				}, nil),
+			},
+			NewFunctionTestResult(divRetType, false,
+				[]int64{0, 0, 1, 0, 0},
+				[]bool{false, false, false, true, true}),
+			divExec)
+		succeed, info = quotients.RunAndFree()
 		require.True(t, succeed, info)
 	})
 

@@ -2329,6 +2329,7 @@ func initFixed2() {
 		// same contract instead of binding wider than an integer.
 		{types.T_bool, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_bool, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_bool, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_decimal64, types.T_bool, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_bool, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal256, types.T_bool, types.T_decimal256, types.T_decimal256},
