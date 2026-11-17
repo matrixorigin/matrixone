@@ -173,6 +173,42 @@ func TestRejectUnsafeEnumIdentityDowngrade(t *testing.T) {
 	generatedTarget := proto.Clone(generated).(*planpb.TableDef)
 	generatedTarget.Cols[1].Typ.EnumCollation = 0
 	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(generated, generatedTarget), "legacy ENUM")
+
+	primaryOnly := proto.Clone(oldTable).(*planpb.TableDef)
+	primaryOnly.Indexes = nil
+	primaryOnly.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "e", Names: []string{"e"}}
+	primaryTarget := proto.Clone(primaryOnly).(*planpb.TableDef)
+	primaryTarget.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(primaryOnly, primaryTarget), "legacy ENUM")
+}
+
+func TestRejectUnsafeEnumIdentityDowngradeAfterRename(t *testing.T) {
+	spec := enumIndexTestSpec()
+	oldTable := proto.Clone(spec.Source).(*planpb.TableDef)
+	oldTable.Cols[0].ColId = 1
+	oldTable.Cols[1].ColId = 2
+	oldTable.Cols[2].ColId = 3
+	oldIndex := proto.Clone(spec.Index).(*planpb.IndexDef)
+	oldIndex.IndexName = "e_idx"
+	oldTable.Indexes = []*planpb.IndexDef{oldIndex}
+
+	newTable := proto.Clone(oldTable).(*planpb.TableDef)
+	newTable.Cols[1].Name = "f"
+	newTable.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
+	newTable.Indexes[0].Parts = []string{"f"}
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+
+	// Mapping by the stable column ID handles multiple renames in one ALTER.
+	newTable.Cols[1].Name = "g"
+	newTable.Indexes[0].Parts = []string{"g"}
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+
+	// Dropping and re-adding the same name creates a new column identity. The
+	// replacement index is built for that new column, not the old ENUM value.
+	replacement := proto.Clone(oldTable).(*planpb.TableDef)
+	replacement.Cols[1].ColId = 99
+	replacement.Cols[1].Typ.EnumCollation = types.EnumCollationLegacy
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, replacement))
 }
 
 func TestDropAlterCopyUniqueDedupForAffectedIndexes(t *testing.T) {

@@ -967,13 +967,14 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
-		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, safeDisplay))
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, safeDisplay))
 		if err != nil {
 			return nil, err
 		}
 		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
 		numericExpr.Typ.Enumvalues = storageType.Enumvalues
 		numericExpr.Typ.EnumEncoding = storageType.EnumEncoding
+		numericExpr.Typ.EnumCollation = storageType.EnumCollation
 
 		numericZero := &plan.Expr{
 			Typ: *DeepCopyType(storageType),
@@ -990,6 +991,7 @@ func makeMySQLSpecialNumericValue(
 		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
 		recovered.Typ.Enumvalues = storageType.Enumvalues
 		recovered.Typ.EnumEncoding = storageType.EnumEncoding
+		recovered.Typ.EnumCollation = storageType.EnumCollation
 		return recovered, nil
 	}
 

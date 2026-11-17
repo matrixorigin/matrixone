@@ -9,6 +9,12 @@ select id,e,e+0 from target_enum order by id;
 ➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
 1  ¦  A  ¦  2  𝄀
 2  ¦  a  ¦  1
+create table grouped_numeric(id int primary key,e enum('A','a') collate utf8mb4_bin);
+insert into grouped_numeric values(1,'a');
+select e+0 from grouped_numeric group by e;
+➤ e + 0[-5,64,0]  𝄀
+2
+drop table grouped_numeric;
 create table inline_index(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int,key ix(e,n));
 create table added_index(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int);
 insert into inline_index values(1,'A',11),(2,'a',22),(3,'',33);
@@ -153,6 +159,21 @@ select row_count() as affected;
 ➤ affected[-5,64,0]  𝄀
 1
 select id,e,e+0,n from downgrade_alter order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+1  ¦  A  ¦  1  ¦  10
+create table rename_downgrade_alter(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,key ix(e,n));
+insert into rename_downgrade_alter values(1,'A',10),(2,'a',20);
+alter table rename_downgrade_alter change column e f enum('A','a');
+not supported: ALTER from ENUM collation identity to legacy ENUM with a dependent index
+select id,e,e+0,n from rename_downgrade_alter order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
+1  ¦  A  ¦  1  ¦  10  𝄀
+2  ¦  a  ¦  2  ¦  20
+delete from rename_downgrade_alter where id=2;
+select row_count() as affected;
+➤ affected[-5,64,0]  𝄀
+1
+select id,e,e+0,n from rename_downgrade_alter order by id;
 ➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  n[4,32,0]  𝄀
 1  ¦  A  ¦  1  ¦  10
 create table upsert_target(id int primary key,e enum('A','a') collate utf8mb4_bin,n int,key ix(e,n));

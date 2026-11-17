@@ -407,15 +407,43 @@ func rejectUnsafeEnumIdentityDowngrade(oldTable, newTable *planpb.TableDef) erro
 		if oldCol == nil || oldCol.Typ.Id != int32(types.T_enum) || oldCol.Typ.EnumCollation == 0 {
 			continue
 		}
+		// CHANGE COLUMN preserves ColId through renames, while DROP/ADD gets a
+		// new ID. Name-only matching misses renamed downgrades and can mistake a
+		// replacement column for the original physical ENUM values.
 		newCol := (*planpb.ColDef)(nil)
+		var sameID *planpb.ColDef
+		sameIDCount := 0
 		for _, candidate := range newTable.Cols {
-			if candidate != nil && strings.EqualFold(candidate.Name, oldCol.Name) {
-				newCol = candidate
-				break
+			if candidate == nil || candidate.ColId != oldCol.ColId {
+				continue
 			}
+			sameID = candidate
+			sameIDCount++
+			if strings.EqualFold(candidate.Name, oldCol.Name) {
+				newCol = candidate
+			}
+		}
+		if newCol == nil {
+			if sameIDCount > 1 {
+				return moerr.NewInvalidInputNoCtx("ambiguous ALTER ENUM column identity")
+			}
+			newCol = sameID
 		}
 		if newCol == nil || newCol.Typ.Id != int32(types.T_enum) || newCol.Typ.EnumCollation != 0 {
 			continue
+		}
+		oldPrimaryDepends, err := indexReferencesColumn(oldTable, &planpb.IndexDef{}, oldCol.Name)
+		if err != nil {
+			return err
+		}
+		if oldPrimaryDepends {
+			newPrimaryDepends, err := indexReferencesColumn(newTable, &planpb.IndexDef{}, newCol.Name)
+			if err != nil {
+				return err
+			}
+			if newPrimaryDepends {
+				return moerr.NewNotSupportedNoCtx("ALTER from ENUM collation identity to legacy ENUM with a dependent index")
+			}
 		}
 		for _, oldIndex := range oldTable.Indexes {
 			if oldIndex == nil {
@@ -435,7 +463,14 @@ func rejectUnsafeEnumIdentityDowngrade(oldTable, newTable *planpb.TableDef) erro
 			if err != nil {
 				return err
 			}
-			if depends {
+			if !depends {
+				continue
+			}
+			survives, err := indexReferencesColumn(newTable, newIndex, newCol.Name)
+			if err != nil {
+				return err
+			}
+			if survives {
 				return moerr.NewNotSupportedNoCtx("ALTER from ENUM collation identity to legacy ENUM with a dependent index")
 			}
 		}
