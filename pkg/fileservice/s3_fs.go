@@ -197,7 +197,6 @@ func NewS3FS(
 			}
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
-			fs.prefetcher.bound = fs.prefetchQueueBound()
 		}
 	}
 

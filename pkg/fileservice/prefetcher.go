@@ -20,11 +20,9 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,18 +118,6 @@ type ObjectPrefetcher interface {
 }
 
 var _ ObjectPrefetcher = new(S3FS)
-
-// prefetchHorizon is how far ahead of the reads prefetches are queued: no more bytes
-// than the file service reads from object storage in that time, besides those a read
-// reaches within it, which are dropped only past the queue's bound.
-const prefetchHorizon = 30 * time.Second
-
-// dueSoon reports whether a request due at due is reached within the prefetch horizon of
-// now, before or after; 0 is not known.
-func dueSoon(due int64) bool {
-	now := time.Now()
-	return due > 0 && due >= now.Add(-prefetchHorizon).UnixNano() && due <= now.Add(prefetchHorizon).UnixNano()
-}
 
 // prefetchEntry is an object queued, or being downloaded, by a prefetcher.
 type prefetchEntry struct {
@@ -237,8 +223,6 @@ type prefetcher struct {
 	cancel context.CancelFunc
 	have   func(ObjectPrefetch) bool // what the request downloads is cached or being downloaded
 	limit  func() int64              // the most bytes queued
-	bound  func() int64              // the most bytes queued with the requests due soon
-	soon   func(due int64) bool      // a read reaches the object within the prefetch horizon
 	queued atomic.Int64
 	known  atomic.Int64 // entries
 
@@ -254,7 +238,7 @@ type prefetcher struct {
 func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{
-		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, bound: limit, soon: dueSoon,
+		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
 		prefetch: fetchQueue{max: workers},
 		live:     fetchQueue{max: workers},
 		entries:  make(map[string]*prefetchEntry),
@@ -281,7 +265,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		metric.FSPrefetchMergedCounter.Inc()
 		if q := e.queue; q != nil {
 			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limitFor(merged.Due) {
+			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
 				// Past the queues' bytes, the queued download keeps what it downloads.
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
@@ -298,10 +282,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	}
 	p.seq++
 	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq, started: make(chan struct{})}
-	// A request a read reaches within the horizon is queued past the limit, up to the
-	// bound, and drops only requests reached later.
-	soon := p.soon(req.Due)
-	limit := p.limitFor(req.Due)
+	limit := p.limit()
 	if req.Size > limit {
 		metric.FSPrefetchDroppedCounter.Inc()
 		return
@@ -309,22 +290,18 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	// Room is made in the prefetch queue: a read waits for each download of the live queue.
 	for p.queuedBytesLocked()+req.Size > limit {
 		q := p.prefetch.queue
-		// An entry whose scans ended goes first, then the last in download order of those
-		// not reached within the horizon.
+		// An entry whose scans ended goes first, then the last in download order.
 		last := -1
 		for i := range q {
 			if !q[i].live() {
 				last = i
 				break
 			}
-			if p.soon(q[i].req.Due) {
-				continue
-			}
 			if last < 0 || q[last].before(q[i]) {
 				last = i
 			}
 		}
-		if last < 0 || q[last].live() && !soon && !e.before(q[last]) {
+		if last < 0 || q[last].live() && !e.before(q[last]) {
 			metric.FSPrefetchDroppedCounter.Inc()
 			return
 		}
@@ -336,15 +313,6 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.known.Add(1)
 	p.queued.Add(1)
 	p.startLocked()
-}
-
-// limitFor returns the most bytes queued with a request due at due: the limit, or the
-// bound for one a read reaches within the horizon.
-func (p *prefetcher) limitFor(due int64) int64 {
-	if p.soon(due) {
-		return max(p.limit(), p.bound())
-	}
-	return p.limit()
 }
 
 // queuedBytesLocked returns the bytes of the downloads both queues hold.
@@ -529,19 +497,8 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 	return nil
 }
 
-// prefetchQueueLimit is the most bytes queued for download: no more than the queue's
-// bound, nor than the file service reads from object storage within the prefetch horizon.
+// prefetchQueueLimit is the most bytes queued for download: half the disk cache keeps.
 func (s *S3FS) prefetchQueueLimit() func() int64 {
-	bound := s.prefetchQueueBound()
-	return func() int64 {
-		byRate := int64(min(float64(s.diskCache.networkRate)*prefetchHorizon.Seconds(), math.MaxInt64/2))
-		return min(bound(), byRate)
-	}
-}
-
-// prefetchQueueBound is the most bytes queued for download, with the requests due soon:
-// half the disk cache keeps.
-func (s *S3FS) prefetchQueueBound() func() int64 {
 	return func() int64 { return s.diskCache.capacityFunc() / 2 }
 }
 

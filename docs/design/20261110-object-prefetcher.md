@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v7, 2026-11-17 (v6, 2026-11-16; v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v8, 2026-11-17 (v7, 2026-11-17; v6, 2026-11-16; v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -152,22 +152,18 @@ loses little by reading its ranges.
 
 ### The queue is bounded (decision)
 
-The queued bytes stay below the smaller of:
-- half the disk cache's capacity;
-- what the file service reads from object storage within a 30-second horizon, at a
-  configured network rate, 110 MiB/s by default (decision 2026-11-17).
+The queued bytes stay below half the disk cache's capacity (decision 2026-11-17, v8).
+The disk cache is sized for the data the node serves, and the queued bytes are bytes it
+will hold. The scans' windows bound what is queued at once: on TPC-H SF100, two CNs at
+110 MiB/s each, the queue held at most 1.8 GiB per CN, with no request dropped. An
+earlier bound of 30 seconds at a configured network rate, with requests due soon exempt
+from it, was never reached there and is removed.
 
-The rate is configured, not measured: a rate measured per download falls as more
-downloads share the node's link, and shrank the bound when the link was busiest.
-
-A request due within 30 seconds of now, before or after, is queued past the network-rate
-bound, up to half the disk cache's capacity, and is not dropped to make room for a
-request due later (decision 2026-11-17). When a new request does not fit:
-- A request larger than its bound is dropped, and the queue is left unchanged.
+When a new request does not fit:
+- A request larger than the bound is dropped, and the queue is left unchanged.
 - Otherwise, entries whose scans have all ended are dropped first.
-- Then the last entry in download order of those not due within the horizon is dropped,
-  if the new request is due within it or orders before that entry. If not, the new
-  request is dropped.
+- Then the last entry in download order is dropped, if the new request orders before it.
+  If not, the new request is dropped.
 
 A dropped request is asked for again, due now, when the scan reaches its object (see
 below), so the scan's reads of the object still join one download.
