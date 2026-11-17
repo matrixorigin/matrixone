@@ -1,6 +1,6 @@
 # Index health measurements and suggestions
 
-Owner: #30346; implementation: #32698, following the read-only statistics work.
+Owner: #30346; follows the read-only statistics work in #32698.
 Decision date: 2026-11-17. The user authorized implementing the reviewer's follow-up
 and updating the design. This document fixes the previously open API and policy
 choices before implementation; recommendations are diagnostic heuristics.
@@ -22,12 +22,36 @@ The independent entry preserves the normal entry and makes full-source work
 explicit; an implicit full scan or fourth argument on the normal entry was
 rejected. Unsupported metrics return an explanatory analysis status.
 
+Summary fields added by this extension:
+
+| Field | Meaning |
+| --- | --- |
+| `growth_ratio` | Source non-null-vector growth since this generation's build. |
+| `training_sample_ratio` | Actual training samples / (30 × configured lists). |
+| `baseline_status` | Missing, invalid, unsupported-format or stale baseline; omitted when usable. |
+| `drift.sample_count`, `new_sample_count`, `old_sample_count` | Actual reservoir and historical membership counts. |
+| `drift.new_old_residual_ratio` | Sampled new-cohort MSE / old-cohort MSE. |
+| `drift.new_rows_in_largest_5pct_buckets_ratio` | Fraction of sampled new keys in the largest ceil(5% × K) buckets. |
+| `drift.approximate` | Present for reconstructed quantized entry vectors. |
+| `analysis.recall` | `kind:centroid_coverage`, actual query count, k=10, target, `(nprobe,recall)` curve, optional new/old curves and smallest evaluated `recommended_probe_limit` meeting target. |
+| `analysis.retrain` | Sample count, iteration limit, `approximate:true` and current/retrained `sse_ratio`; present only on request. |
+| `tail_chunk_count`, `tail_frame_count`, `tail_size_bytes` | Fulltext2 CDC-tail stored rows, distinct frame IDs and serialized payload bytes. |
+| `base_dead_ratio` | Fulltext2 max(0, 1 − source rows/base documents); absent without a base. |
+| `suggestions` | Summary-only array of `{action,reason,params?,variable?,value?}`; observing it never performs the action. |
+
+Unavailable component metrics are omitted and accompanied by `status` in that
+component. `analysis.cohort_status` explains unavailable build-snapshot controls;
+coverage without cohort comparisons may still be computed. A source-count or
+fulltext maintenance read failure preserves unrelated statistics and adds
+`health_status`.
+
 ## Build metadata and compatibility
 
 The existing IVF key/value metadata table gains one optional `diagnostic_build`
 record. Its JSON contains `format:1`, `index_version`, `build_ts` (full physical-
 logical snapshot timestamp), `nrow` (the build's source non-null-vector count),
-`train_nsample` (actual valid training vectors) and `source_table_id`.
+`train_nsample` (actual valid training vectors), `source_table_id` and
+`historical` (whether the build source had a committed historical view).
 The centroid builder writes it in the same transaction as that generation;
 CREATE, REINDEX and asynchronous force-builds share this writer. Empty/untrained
 builds do not claim a trained baseline. Sampling limits and transaction snapshot
@@ -68,7 +92,10 @@ A retained timestamp is not guaranteed merely because the baseline is retained.
 ## Deep analysis
 
 Read a bounded uniform sample of original source vectors; prioritize available
-new keys while retaining old-query controls. Stream the source once and maintain
+new keys found in that sample while retaining old-query controls. This bounded
+lookup does not enumerate all post-build keys: rare new data can be absent from
+the reservoir, and zero new-query count makes that comparison unavailable.
+Stream the source once and maintain
 exact top-10 neighbors per query, excluding the query key itself. Retrieve only
 the resulting neighbor keys' indexed centroid IDs. Rank each neighbor bucket
 among the query's centroids and report coverage for nprobe 1,2,4,...,K.
@@ -84,12 +111,17 @@ retrained SSE on that sample, actual sample count and approximation status.
 It neither writes centroids nor changes the index. The ratio estimates sampled
 geometric improvement, not latency or production recall improvement.
 
-Sampled vector payload and training workspace are admitted against a 64 MiB
-budget; sample keys and neighbor heaps are bounded too. Retraining requires at
+Source sampling reuses the bounded streaming reservoir; SQL does not retain a
+vector/key top-N before admission. Vector dimension limits the requested reservoir
+size, reserving half the 64 MiB ceiling for keys and training. Sampled retained
+state, neighbor heaps and training workspace each have a 64 MiB admission ceiling
+(excluding SQL executor batches and the existing centroid state). Retraining
+requires at
 least K sampled vectors and uses at most 4096; otherwise that component reports
 a resource/sample limit. Cancellation propagates through streaming and training;
 all batches, iterators and native allocations have lexical cleanup owners.
-Exact-neighbor CPU cost is O(S*N*d), centroid coverage O(S*K*d), and default drift
+Sampling and exact-neighbor streaming each scan the source. Exact-neighbor CPU
+cost is O(S*N*d), centroid coverage O(S*K*d), and default drift
 adds bounded O(S*d) retained state plus a historical PK read. No background task,
 cache, retry service or result-history table is introduced.
 

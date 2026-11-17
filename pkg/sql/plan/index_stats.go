@@ -28,12 +28,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr) (int32, error) {
-	if len(exprs) != 3 {
+func (builder *QueryBuilder) buildIndexStats(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr) (int32, error) {
+	return builder.buildIndexDiagnostic(tbl, ctx, exprs, false)
+}
+func (builder *QueryBuilder) buildIndexAnalyze(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr) (int32, error) {
+	return builder.buildIndexDiagnostic(tbl, ctx, exprs, true)
+}
+func (builder *QueryBuilder) buildIndexDiagnostic(_ *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, deep bool) (int32, error) {
+	if (!deep && len(exprs) != 3) || (deep && len(exprs) != 3 && len(exprs) != 4) {
+		if deep {
+			return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_analyze requires 3 or 4 arguments (database, table, index [, options])")
+		}
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats requires 3 arguments (database, table, index)")
 	}
 	var names [3]string
-	for i, expr := range exprs {
+	for i, expr := range exprs[:3] {
 		name, ok := stringLiteral(expr)
 		if !ok || strings.TrimSpace(name) == "" {
 			return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats requires non-empty string literals (database, table, index)")
@@ -52,6 +61,23 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_index_stats supports local, non-temporary, non-partitioned ordinary tables only")
 	}
 	cfg := indexstats.Config{Database: obj.SchemaName, Table: source.Name, Index: names[2], TableID: source.TblId}
+	functionName := indexstats.FunctionName
+	if deep {
+		raw := ""
+		if len(exprs) == 4 {
+			var ok bool
+			raw, ok = stringLiteral(exprs[3])
+			if !ok {
+				return 0, moerr.NewInvalidInput(builder.GetContext(), "index analysis options must be a JSON string literal")
+			}
+		}
+		cfg.Analyze, err = indexstats.ParseAnalyzeOptions(builder.GetContext(), raw)
+		if err != nil {
+			return 0, err
+		}
+		functionName = indexstats.AnalyzeFunctionName
+	}
+
 	if strings.EqualFold(names[2], "PRIMARY") {
 		if source.Pkey == nil || source.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index 'PRIMARY' does not exist on '%s.%s'", names[0], names[1])
@@ -88,6 +114,9 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 			}
 		}
 	}
+	if deep && !cfg.SupportsAnalysis {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "index type does not support deep analysis")
+	}
 	if source.Pkey != nil {
 		cfg.PrimaryKey = source.Pkey.PkeyColName
 	}
@@ -113,7 +142,7 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 	return builder.appendNode(&plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN, Stats: &plan.Stats{}, ObjRef: obj,
 		TableDef: &plan.TableDef{TableType: "func_table", Cols: defs,
-			TblFunc: &plan.TableFunction{Name: indexstats.FunctionName, Param: param, IsSingle: true}},
+			TblFunc: &plan.TableFunction{Name: functionName, Param: param, IsSingle: true}},
 		BindingTags: []int32{builder.genNewBindTag()}, TblFuncExprList: exprs,
 		ScanSnapshot: DeepCopySnapshot(ctx.snapshot),
 	}, ctx), nil

@@ -87,5 +87,5 @@ func (s *indexStatsState) fullTextMetrics() map[string]any {
 		metrics["maintenance_mode"] = "async"
 		metrics["async"] = s.maintenance
 	}
-	return metrics
+	return s.attachHealth(metrics)
 }

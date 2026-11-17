@@ -19,12 +19,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
 	"github.com/stretchr/testify/require"
 )
 
@@ -156,6 +158,7 @@ func TestMoIndexStatsSQL(t *testing.T) {
 				"select cast(json_extract(metrics,'$.index_version') as bigint) from mo_index_stats('index_stats_test','"+name+"','ivf') AS s where row_type='index'").Scan(&version))
 			require.Equal(t, int64(1), version)
 		}
+		testIndexHealthSQL(t, ctx, conn, exec)
 		exec("alter table plain_vectors alter reindex ivf ivfflat lists=2")
 		exec("delete from plain_vectors where id=1")
 		var count, empty, minBucket int64
@@ -201,6 +204,8 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(ordinaryJSON), &ordinary))
 		require.Equal(t, float64(1), ordinary["entry_count"])
 		require.Equal(t, float64(1), ordinary["cardinality"])
+		err = conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ordinary') as s").Scan(&ordinaryJSON)
+		require.ErrorContains(t, err, "does not support deep analysis")
 		rows, err = conn.QueryContext(ctx, "select * from mo_index_stats('index_stats_test','plain_vectors','missing') AS s")
 		if rows != nil {
 			defer rows.Close()
@@ -217,9 +222,13 @@ func TestMoIndexStatsSQL(t *testing.T) {
 			require.NoError(t, rows.Err())
 		}
 		require.Error(t, err, "diagnostics must require SELECT on the primary table")
+		var denied string
+		err = reader.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&denied)
+		require.Error(t, err, "deep analysis must require source SELECT too")
 		exec("grant select on table index_stats_test.plain_vectors to public")
 		var summary string
 		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') AS s where row_type='index'").Scan(&summary))
+		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&summary))
 		exec("create temporary table plain_vectors(id bigint primary key, embedding vecf64(1))")
 		var unavailable string
 		err = conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&unavailable)
@@ -297,6 +306,11 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "async", metrics["maintenance_mode"])
 		require.Equal(t, float64(2), metrics["vector_count"], "report consumed index vectors")
+		var deepJSON string
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_async','vectors','ivf') as s where row_type='index'").Scan(&deepJSON))
+		var deep map[string]any
+		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
+		require.Equal(t, "index_not_caught_up", deep["analysis"].(map[string]any)["status"])
 		maintenance := metrics["async"].(map[string]any)
 		require.Equal(t, false, maintenance["caught_up"])
 		require.GreaterOrEqual(t, maintenance["lag_seconds"].(float64), float64(0))
@@ -313,5 +327,104 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.NoError(t, executor.Resume())
 		paused = false
 		wait(3)
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_async','vectors','ivf') as s where row_type='index'").Scan(&deepJSON))
+		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
+		require.NotContains(t, deep["analysis"], "status", "same-view durable progress permits coverage analysis")
+		require.Contains(t, deep["analysis"], "recall")
 	})
+}
+
+// Reuses the existing one-CN fixture. Two old clusters are followed by a remote
+// third cluster straddling their old boundary: true neighbors cross old buckets.
+func testIndexHealthSQL(t *testing.T, ctx context.Context, conn *sql.Conn, exec func(string)) {
+	t.Helper()
+	exec("create table health_vectors(id bigint primary key,v vecf64(2))")
+	values := make([]string, 0, 32)
+	for i := 0; i < 32; i++ {
+		x := -10
+		if i%2 == 1 {
+			x = 10
+		}
+		values = append(values, fmt.Sprintf("(%d,'[%d,%g]')", i, x, float64((i/2)%2)*.02-.01))
+	}
+	exec("insert into health_vectors values" + strings.Join(values, ","))
+	exec("create index ivf using ivfflat on health_vectors(v) lists=2 op_type 'vector_l2_ops' kmeans_train_percent=100")
+	read := func(deep bool) map[string]any {
+		t.Helper()
+		name, args := "mo_index_stats", ""
+		if deep {
+			name, args = "mo_index_analyze", `, '{"sample_count":256,"retrain":true}'`
+		}
+		var raw string
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from "+name+"('index_stats_test','health_vectors','ivf'"+args+") as s where row_type='index'").Scan(&raw))
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &m))
+		return m
+	}
+	initial := read(true)
+	require.Equal(t, 0., initial["growth_ratio"])
+	require.NotContains(t, initial, "baseline_status")
+	recallAtOne := func(m map[string]any) float64 {
+		t.Helper()
+		a := m["analysis"].(map[string]any)
+		r := a["recall"].(map[string]any)
+		require.NotContains(t, r, "status")
+		curve := r["curve"].([]any)
+		return curve[0].(map[string]any)["recall"].(float64)
+	}
+	require.Equal(t, 1., recallAtOne(initial))
+	require.Equal(t, float64(32)/60, initial["training_sample_ratio"])
+	values = values[:0]
+	for i := 0; i < 96; i++ {
+		x := -.01
+		if i%2 == 1 {
+			x = .01
+		}
+		values = append(values, fmt.Sprintf("(%d,'[%g,%g]')", i+32, x, 1000+float64(i/2)/10))
+	}
+	exec("insert into health_vectors values" + strings.Join(values, ","))
+	normal := read(false)
+	require.NotContains(t, normal, "analysis")
+	require.Equal(t, 3., normal["growth_ratio"])
+	drift := normal["drift"].(map[string]any)
+	require.NotContains(t, drift, "status")
+	require.Greater(t, drift["new_old_residual_ratio"].(float64), 100.)
+	bad := read(true)
+	analysis := bad["analysis"].(map[string]any)
+	coverage := analysis["recall"].(map[string]any)
+	require.Contains(t, []any{"below_target_at_probe_budget", "new_data_recall_drop"}, coverage["status"])
+	require.Less(t, coverage["curve"].([]any)[0].(map[string]any)["recall"].(float64), .7)
+	require.Equal(t, float64(96), coverage["new_query_count"])
+	require.Equal(t, float64(32), coverage["old_query_count"])
+	require.Greater(t, analysis["retrain"].(map[string]any)["sse_ratio"].(float64), 1.2)
+	require.Len(t, bad["suggestions"], 2, "one REINDEX and one probe_limit suggestion")
+	exec("alter table health_vectors alter reindex ivf ivfflat")
+	healthy := read(true)
+	require.Equal(t, 0., healthy["growth_ratio"])
+	require.GreaterOrEqual(t, recallAtOne(healthy), .95)
+	var meta, raw string
+	require.NoError(t, conn.QueryRowContext(ctx, "select i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase='index_stats_test' and t.relname='health_vectors' and i.name='ivf' and i.algo_table_type='metadata'").Scan(&meta))
+	require.NoError(t, conn.QueryRowContext(ctx, "select __mo_index_val from "+sqlquote.Ident(meta)+" where __mo_index_key='diagnostic_build'").Scan(&raw))
+	base, status := diagnostic.DecodeBuild(raw, 1)
+	require.Empty(t, status)
+	require.Equal(t, int64(128), base.Rows)
+	require.Equal(t, int64(128), base.TrainingSamples)
+	require.True(t, base.Historical)
+	base.IndexVersion = 0
+	encoded, err := json.Marshal(base)
+	require.NoError(t, err)
+	exec("update " + sqlquote.Ident(meta) + " set __mo_index_val=" + sqlquote.String(string(encoded)) + " where __mo_index_key='diagnostic_build'")
+	require.Equal(t, "baseline_stale", read(false)["baseline_status"])
+	exec("delete from " + sqlquote.Ident(meta) + " where __mo_index_key='diagnostic_build'")
+	legacy := read(false)
+	require.Equal(t, "baseline_missing", legacy["baseline_status"])
+	require.NotContains(t, legacy, "growth_ratio")
+	require.NotContains(t, legacy, "drift")
+	var invalid string
+	for _, q := range []string{
+		"select metrics from mo_index_analyze('index_stats_test','health_vectors','ivf','{\"sample_count\":0}') as s",
+		"select metrics from mo_index_stats('index_stats_test','health_vectors','ivf','{}') as s",
+	} {
+		require.Error(t, conn.QueryRowContext(ctx, q).Scan(&invalid))
+	}
 }

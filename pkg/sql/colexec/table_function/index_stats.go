@@ -47,6 +47,10 @@ var (
 )
 
 type indexStatsState struct {
+	health      map[string]any
+	suggestions []indexstats.Suggestion
+	sample      *diagnostic.Reservoir
+	build       *diagnostic.BuildInfo
 	config      indexstats.Config
 	batch       *batch.Batch
 	version     int64
@@ -64,11 +68,14 @@ type indexStatsState struct {
 
 func indexStatsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
 	state := &indexStatsState{}
-	if len(tf.Args) != 3 {
+	if len(tf.Args) != 3 && len(tf.Args) != 4 {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats requires 3 arguments (database, table, index)")
 	}
 	if err := json.Unmarshal(tf.Params, &state.config); err != nil {
 		return nil, err
+	}
+	if state.config.Analyze == nil && len(tf.Args) != 3 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats requires 3 arguments")
 	}
 	return state, nil
 }
@@ -78,6 +85,10 @@ func (s *indexStatsState) reset(_ *TableFunction, _ *process.Process) {
 		s.batch.CleanOnlyData()
 	}
 	s.buckets = nil
+	s.health = nil
+	s.suggestions = nil
+	s.sample = nil
+	s.build = nil
 	s.storage = nil
 	s.maintenance = nil
 	s.fulltext = nil
@@ -91,6 +102,10 @@ func (s *indexStatsState) free(_ *TableFunction, proc *process.Process, _ bool, 
 		s.batch = nil
 	}
 	s.buckets = nil
+	s.health = nil
+	s.suggestions = nil
+	s.sample = nil
+	s.build = nil
 }
 
 func (s *indexStatsState) end(_ *TableFunction, _ *process.Process) error { return nil }
@@ -173,6 +188,9 @@ func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int,
 			}
 		}
 	}
+	if geometry && s.config.TableID > 0 {
+		s.sample = diagnostic.NewReservoir(diagnostic.SampleSize)
+	}
 	query := buildIndexStatsEntriesSQL(s.config, s.version, geometry)
 
 	var scratch []float64
@@ -200,6 +218,9 @@ func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int,
 			if !geometry {
 				bucket.Count += vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], row)
 				continue
+			}
+			if s.sample != nil {
+				s.sample.Observe(bat.Vecs[2].GetStringAt(row), id, values)
 			}
 			if addErr := bucket.Add(values); addErr != nil {
 				return addErr
@@ -233,7 +254,7 @@ func (s *indexStatsState) readMetadata(proc *process.Process, sqlproc *sqlexec.S
 			return err
 		}
 	}
-	return nil
+	return s.readHealth(proc, sqlproc)
 }
 
 func buildIndexStatsEntriesSQL(cfg indexstats.Config, version int64, geometry bool) string {
@@ -241,6 +262,9 @@ func buildIndexStatsEntriesSQL(cfg indexstats.Config, version int64, geometry bo
 	projection := ", COUNT(*)"
 	if geometry {
 		projection = ", " + sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+	}
+	if geometry && cfg.TableID > 0 {
+		projection += ", HEX(SERIAL(" + sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk) + "))"
 	}
 	query := "SELECT " + id + projection + " FROM " + sqlquote.QualifiedIdent(cfg.Database, cfg.Entries) + " AS e WHERE " +
 		sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_version) + " = " + strconv.FormatInt(version, 10)
@@ -557,6 +581,7 @@ func (s *indexStatsState) rowMetrics(bucket *diagnostic.Bucket) map[string]any {
 			metrics["maintenance_mode"] = "async"
 			metrics["async"] = s.maintenance
 		}
+		s.attachHealth(metrics)
 	} else {
 		count = bucket.Count
 		geometry, hasGeometry = bucket.Geometry()

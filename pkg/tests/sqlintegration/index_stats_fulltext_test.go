@@ -118,6 +118,16 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 				}
 				metrics := wait(3, 3, 5.0/3)
 				require.Equal(t, float64(tc.version), metrics["version"])
+				if tc.version == 2 {
+					require.NotContains(t, metrics, "health_status")
+					for _, key := range []string{"tail_chunk_count", "tail_frame_count", "tail_size_bytes"} {
+						require.Contains(t, metrics, key)
+					}
+					require.Empty(t, metrics["suggestions"])
+				} else {
+					require.NotContains(t, metrics, "tail_chunk_count")
+				}
+
 				require.Equal(t, []any{"body"}, metrics["columns"])
 				require.Equal(t, "ngram", metrics["parser"])
 				require.Equal(t, float64(1), metrics["min_document_frequency"])
@@ -153,6 +163,13 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 					paused = false
 				}
 				metrics = wait(2, 2, 1.5)
+				if tc.version == 2 {
+					require.NotContains(t, metrics, "health_status")
+					require.Greater(t, metrics["tail_chunk_count"].(float64), 0.)
+					require.Greater(t, metrics["tail_frame_count"].(float64), 0.)
+					require.Greater(t, metrics["tail_size_bytes"].(float64), 0.)
+					require.InDelta(t, 1.0/3, metrics["base_dead_ratio"], 1e-12)
+				}
 				require.Equal(t, float64(1), metrics["min_document_frequency"])
 				require.Equal(t, float64(2), metrics["max_document_frequency"])
 				reader, err := sql.Open("mysql", fmt.Sprintf("fulltext_stats_reader:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))

@@ -15298,6 +15298,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "mo_index_stats":
 			nodeId, err = builder.buildIndexStats(tbl, ctx, exprs)
+		case "mo_index_analyze":
+			nodeId, err = builder.buildIndexAnalyze(tbl, ctx, exprs)
 		case "load_file_chunks":
 			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
 		case indexFileChunksFuncName:

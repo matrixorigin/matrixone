@@ -1159,14 +1159,35 @@ func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg T
 	return ts, tail, nil
 }
 
-// CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron
-// tail-growth gate (fold once the delta is large enough).
+func cdcTailFilter() string {
+	return fmt.Sprintf("%s = %s AND %s = %d", catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId), catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+}
+
+// CountTailChunks is the scheduler's tag=1 CdcTail growth gate.
 func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %s AND %s = %d",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	return scanInt64(sqlproc, sql)
+	return scanInt64(sqlproc, "SELECT COUNT(*) FROM "+sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable)+" WHERE "+cdcTailFilter())
+}
+
+type TailUsage struct{ Chunks, Frames, Bytes int64 }
+
+// ReadTailUsage counts stored chunk rows, distinct frames and serialized payload
+// bytes. A frame's nrow is not a pending-document count.
+func ReadTailUsage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (TailUsage, error) {
+	var usage TailUsage
+	query := fmt.Sprintf("SELECT COUNT(*), COUNT(DISTINCT %s), CAST(COALESCE(SUM(LENGTH(%s)),0) AS SIGNED) FROM %s WHERE %s", catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter())
+	result, err := runSql(sqlproc, query)
+	if err != nil {
+		return usage, err
+	}
+	defer result.Close()
+	for _, bat := range result.Batches {
+		if bat.RowCount() > 0 {
+			usage.Chunks = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+			usage.Frames = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
+			usage.Bytes = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], 0)
+		}
+	}
+	return usage, nil
 }
 
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the

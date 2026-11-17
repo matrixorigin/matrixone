@@ -33,6 +33,7 @@ func (Hooks) ConfigureIndexStats(ctx context.Context, source *plan.TableDef, def
 		return moerr.NewInvalidInput(ctx, "mo_index_stats: incomplete fulltext index definition")
 	}
 	cfg.FullTextVersion, cfg.Async = 2, true
+	cfg.Algorithm = catalog.MoIndexFullText2Algo.ToString()
 	for _, idx := range defs {
 		if idx.IndexTableName != "" {
 			cfg.Tables = append(cfg.Tables, indexstats.IndexTable{Kind: idx.IndexAlgoTableType, Name: idx.IndexTableName})

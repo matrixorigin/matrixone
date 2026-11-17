@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package diagnostic computes current IVF statistics without retaining vectors
-// or writing a historical baseline.
+// Package diagnostic computes IVF statistics and bounded health measurements.
+// It never writes index state.
 package diagnostic
 
 import (
