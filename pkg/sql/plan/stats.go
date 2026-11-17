@@ -1576,7 +1576,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = selectivity_out
 			node.Stats.BlockNum = leftStats.BlockNum
 
-		case plan.Node_SEMI, plan.Node_INDEX:
+		case plan.Node_SEMI:
+			node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[0], node.Children[1], leftStats, rightStats)
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = leftSelectivity * safeSelectivityRatio(node.Stats.Outcnt, leftStats.Outcnt)
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1853,8 +1860,8 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 		node.Stats.Selectivity = preservedStats.Selectivity
 	case plan.Node_SEMI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
-		node.Stats.Outcnt = preservedStats.Outcnt * estimateJoinSelectivity(
-			clampSelectivity(preservedStats.Selectivity, 1), clampSelectivity(matchingStats.Selectivity, 1))
+		node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[1], node.Children[0], preservedStats, matchingStats)
+		node.Stats.Selectivity = clampSelectivity(preservedStats.Selectivity, 1) * safeSelectivityRatio(node.Stats.Outcnt, preservedStats.Outcnt)
 		node.Stats.BlockNum = preservedStats.BlockNum
 	case plan.Node_ANTI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
@@ -1878,6 +1885,29 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 // clamped inputs. After a physical swap, the preserved input still comes first.
 func estimateJoinSelectivity(preservedSelectivity, matchingSelectivity float64) float64 {
 	return clampSelectivity(math.Pow(matchingSelectivity, math.Pow(preservedSelectivity, 0.2)), 1)
+}
+
+// Filtering within the matching input is not the probability that a preserved
+// key has a match. Use the same overlap uncertainty as ANTI, rather than applying
+// the matching input's source-filter ratio a second time.
+func estimateSemiJoinOutcnt(node *plan.Node, builder *QueryBuilder, preservedID, matchingID int32, preserved, matching *Stats) float64 {
+	rows := math.Max(0, finiteOr(preserved.Outcnt, 0))
+	if rows == 0 || matching.Outcnt <= 0 {
+		return 0
+	}
+	if len(node.OnList) == 0 {
+		return rows
+	}
+	// A filtered unique-key dimension has no duplicate-key amplification.
+	// Retain the existing dimension-domain estimate for this proven case.
+	if antiJoinLeftKeysArePrimaryKey(node, builder, matchingID, preservedID) {
+		outcnt := rows * estimateJoinSelectivity(clampSelectivity(preserved.Selectivity, 1), clampSelectivity(matching.Selectivity, 1))
+		if antiJoinLeftKeysArePrimaryKey(node, builder, preservedID, matchingID) {
+			outcnt = math.Min(outcnt, math.Max(0, finiteOr(matching.Outcnt, 0)))
+		}
+		return outcnt
+	}
+	return rows - estimateAntiJoinOutcnt(node, builder, preservedID, matchingID, preserved, matching)
 }
 
 // estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
