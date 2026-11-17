@@ -49,7 +49,7 @@ func (s *Scope) handleUniqueIndexTable(
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
 	// it will be processed when inserting into the hidden table.
-	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, indexDef)
+	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, def, indexDef)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func (s *Scope) handleRegularSecondaryIndexTable(
 		return err
 	}
 
-	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, indexDef)
+	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, def, indexDef)
 	if err != nil {
 		return err
 	}

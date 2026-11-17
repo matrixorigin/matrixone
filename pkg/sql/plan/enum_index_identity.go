@@ -255,17 +255,225 @@ func EnumIndexUsesNewIdentity(table *planpb.TableDef, index *planpb.IndexDef) (b
 	return dependent, nil
 }
 
-// validateNewEnumIndexPrefixes prevents a new-identity index from inheriting
-// legacy ENUM prefix keys, whose ordinal-based encoding does not implement the
-// declared label prefix. Run this at index authoring or final ALTER schema
-// validation, not when reading or dropping an existing legacy-only index.
-func validateNewEnumIndexPrefixes(table *planpb.TableDef, indexes []*planpb.IndexDef) error {
+// indexReferencesColumn includes transitive generated-column sources, INCLUDE
+// payload, and the primary-key payload carried by every secondary index.
+func indexReferencesColumn(table *planpb.TableDef, index *planpb.IndexDef, column string) (bool, error) {
+	if table == nil || index == nil {
+		return false, moerr.NewInvalidInputNoCtx("cannot determine index column dependencies")
+	}
+	want := strings.ToLower(catalog.ResolveAlias(column))
+	positions := make(map[int]bool)
+	for i, col := range table.Cols {
+		if col != nil && strings.EqualFold(catalog.ResolveAlias(col.Name), want) {
+			positions[i] = true
+		}
+	}
+	if len(positions) == 0 {
+		// A newly added column cannot be referenced by an index on the old
+		// table, so it has no existing index dependency to rebuild.
+		return false, nil
+	}
+	names := append([]string(nil), index.Parts...)
+	if table.Pkey != nil {
+		names = append(names, table.Pkey.PkeyColName)
+		names = append(names, table.Pkey.Names...)
+	}
+	include := index.IncludedColumns
+	if len(index.IndexAlgoParams) > 0 {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(index.IndexAlgoParams), &params); err != nil {
+			return false, err
+		}
+		for _, key := range []string{catalog.IncludedColumns, "include_columns"} {
+			if value, ok := params[key]; ok {
+				var raw string
+				if err := json.Unmarshal(value, &raw); err != nil {
+					return false, err
+				}
+				parsed, err := catalog.ParseIncludeColumnsValue(raw)
+				if err != nil {
+					return false, err
+				}
+				include = append(append([]string(nil), include...), parsed...)
+			}
+		}
+	}
+	names = append(names, include...)
+	lookup := func(name string) (int, error) {
+		name = catalog.ResolveAlias(name)
+		found := -1
+		for i, col := range table.Cols {
+			if col != nil && strings.EqualFold(col.Name, name) {
+				if found >= 0 {
+					return -1, moerr.NewInvalidInputNoCtx("ambiguous ALTER index dependency")
+				}
+				found = i
+			}
+		}
+		if found < 0 {
+			return -1, moerr.NewInvalidInputNoCtx("missing ALTER index dependency")
+		}
+		return found, nil
+	}
+	state := make(map[int]uint8)
+	var visitCol func(int) (bool, error)
+	var visitExpr func(*planpb.Expr) (bool, error)
+	visitCol = func(pos int) (bool, error) {
+		if pos < 0 || pos >= len(table.Cols) || state[pos] == 1 {
+			return false, moerr.NewInvalidInputNoCtx("invalid generated index dependency")
+		}
+		if positions[pos] {
+			return true, nil
+		}
+		col := table.Cols[pos]
+		if col == nil {
+			return false, moerr.NewInvalidInputNoCtx("invalid index dependency column")
+		}
+		if state[pos] == 2 {
+			return false, nil
+		}
+		state[pos] = 1
+		if col.GeneratedCol != nil {
+			found, err := visitExpr(col.GeneratedCol.Expr)
+			if err != nil {
+				return false, err
+			}
+			state[pos] = 2
+			return found, nil
+		}
+		state[pos] = 2
+		return false, nil
+	}
+	visitExpr = func(expr *planpb.Expr) (bool, error) {
+		if expr == nil {
+			return false, moerr.NewInvalidInputNoCtx("missing generated index dependency expression")
+		}
+		switch e := expr.Expr.(type) {
+		case *planpb.Expr_Col:
+			if e.Col == nil || e.Col.RelPos != 0 {
+				return false, moerr.NewInvalidInputNoCtx("invalid generated index dependency reference")
+			}
+			return visitCol(int(e.Col.ColPos))
+		case *planpb.Expr_F:
+			if e.F == nil {
+				return false, moerr.NewInvalidInputNoCtx("invalid generated index dependency function")
+			}
+			for _, arg := range e.F.Args {
+				found, err := visitExpr(arg)
+				if err != nil || found {
+					return found, err
+				}
+			}
+		case *planpb.Expr_List:
+			if e.List == nil {
+				return false, moerr.NewInvalidInputNoCtx("invalid generated index dependency list")
+			}
+			for _, arg := range e.List.List {
+				found, err := visitExpr(arg)
+				if err != nil || found {
+					return found, err
+				}
+			}
+		case *planpb.Expr_Lit:
+			if e.Lit != nil && e.Lit.Src != nil {
+				return visitExpr(e.Lit.Src)
+			}
+		case *planpb.Expr_T:
+		default:
+			return false, moerr.NewInvalidInputNoCtx("unknown generated index dependency expression")
+		}
+		return false, nil
+	}
+	for _, name := range names {
+		pos, err := lookup(name)
+		if err != nil {
+			return false, err
+		}
+		found, err := visitCol(pos)
+		if err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
+// rejectUnsafeEnumIdentityDowngrade blocks ENUM identity changes whose target
+// still represents a previously physical ENUM domain as a legacy ENUM key.
+func rejectUnsafeEnumIdentityDowngrade(oldTable, newTable *planpb.TableDef) error {
+	if oldTable == nil || newTable == nil {
+		return moerr.NewInvalidInputNoCtx("cannot validate ALTER ENUM index transition")
+	}
+	for _, oldCol := range oldTable.Cols {
+		if oldCol == nil || oldCol.Typ.Id != int32(types.T_enum) || oldCol.Typ.EnumCollation == 0 {
+			continue
+		}
+		newCol := (*planpb.ColDef)(nil)
+		for _, candidate := range newTable.Cols {
+			if candidate != nil && strings.EqualFold(candidate.Name, oldCol.Name) {
+				newCol = candidate
+				break
+			}
+		}
+		if newCol == nil || newCol.Typ.Id != int32(types.T_enum) || newCol.Typ.EnumCollation != 0 {
+			continue
+		}
+		for _, oldIndex := range oldTable.Indexes {
+			if oldIndex == nil {
+				return moerr.NewInvalidInputNoCtx("invalid ALTER ENUM index definition")
+			}
+			newIndex := (*planpb.IndexDef)(nil)
+			for _, candidate := range newTable.Indexes {
+				if candidate != nil && strings.EqualFold(candidate.IndexName, oldIndex.IndexName) {
+					newIndex = candidate
+					break
+				}
+			}
+			if newIndex == nil {
+				continue
+			}
+			depends, err := indexReferencesColumn(oldTable, oldIndex, oldCol.Name)
+			if err != nil {
+				return err
+			}
+			if depends {
+				return moerr.NewNotSupportedNoCtx("ALTER from ENUM collation identity to legacy ENUM with a dependent index")
+			}
+		}
+	}
+	return nil
+}
+
+// validateNewEnumIndexSafety rejects index formats whose handling of a new
+// ENUM identity is not proven. Run this at index authoring or final ALTER
+// schema validation, not when reading or dropping an existing legacy index.
+func validateNewEnumIndexSafety(table *planpb.TableDef, indexes []*planpb.IndexDef) error {
 	if table == nil {
 		return moerr.NewInvalidInputNoCtx("missing ENUM index source table")
 	}
 	for _, index := range indexes {
 		if index == nil {
 			return moerr.NewInvalidInputNoCtx("missing ENUM index definition")
+		}
+		if !catalog.IsRegularIndexAlgo(index.IndexAlgo) || catalog.IsRTreeIndexAlgo(index.IndexAlgo) {
+			usesNew, err := EnumIndexUsesNewIdentity(table, index)
+			if err != nil {
+				return err
+			}
+			// Plugins have different authoritative INCLUDE representations.
+			// Until each one has a stable dependency hook, check both catalog
+			// forms and reject a new identity found in either.
+			if len(index.IncludedColumns) > 0 {
+				paramsOnly := *index
+				paramsOnly.IncludedColumns = nil
+				paramsUseNew, err := EnumIndexUsesNewIdentity(table, &paramsOnly)
+				if err != nil {
+					return err
+				}
+				usesNew = usesNew || paramsUseNew
+			}
+			if usesNew {
+				return moerr.NewNotSupportedNoCtx("index algorithm with a new ENUM collation identity")
+			}
 		}
 		// The prefix metadata keys are canonical catalog names. Avoid parsing
 		// unrelated algorithm parameters when there is no prefix metadata.

@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,6 +38,9 @@ func enumIndexTestSpec() *executor.EnumIndexBackfillSpec {
 			{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: 2}},
 			{Name: "other", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "x,y"}},
 		}},
+		Target: &planpb.TableDef{Name: "idx", Cols: []*planpb.ColDef{
+			{Name: "__mo_index_idx_col", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: 2}},
+		}, Pkey: &planpb.PrimaryKeyDef{PkeyColName: "__mo_index_idx_col", Names: []string{"__mo_index_idx_col"}}},
 		Index: &planpb.IndexDef{IndexTableName: "idx", Parts: []string{"e"}, Unique: true},
 	}
 }
@@ -92,10 +97,18 @@ func TestEnumIndexBackfillScopedReferences(t *testing.T) {
 	sourceObj.Obj = 11
 	require.Error(t, validateEnumIndexBackfillSource(marked, sourceNode, source, sourceObj))
 	require.NoError(t, validateEnumIndexBackfillSource(clean, sourceNode, source, sourceObj))
-	def := &planpb.TableDef{TblId: 20, Name: "idx"}
+	def := proto.Clone(spec.Target).(*planpb.TableDef)
+	def.Cols = append(def.Cols, &planpb.ColDef{Name: catalog.Row_ID, Hidden: true})
+	def.TblId = 20
 	obj := &planpb.ObjectRef{Obj: 20}
 	require.NoError(t, validateEnumIndexBackfillTarget(marked, stmt.(*tree.Insert), def, obj))
 	def.TblId = 21
+	require.Error(t, validateEnumIndexBackfillTarget(marked, stmt.(*tree.Insert), def, obj))
+	def.TblId = 20
+	def.Cols[0].Typ.EnumCollation = 0
+	require.Error(t, validateEnumIndexBackfillTarget(marked, stmt.(*tree.Insert), def, obj))
+	def.Cols[0].Typ.EnumCollation = 2
+	def.Cols[0].Typ.Enumvalues = "a,A"
 	require.Error(t, validateEnumIndexBackfillTarget(marked, stmt.(*tree.Insert), def, obj))
 	require.NoError(t, validateEnumIndexBackfillTarget(clean, stmt.(*tree.Insert), def, obj))
 }

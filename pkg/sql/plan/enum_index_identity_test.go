@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -92,20 +94,93 @@ func TestNewEnumIndexRejectsMixedLegacyPrefix(t *testing.T) {
 	table, index := spec.Source, spec.Index
 	index.Parts = []string{"other", "e"}
 	index.IndexAlgoParams = `{"prefix_lengths":"other:1"}`
-	require.ErrorContains(t, validateNewEnumIndexPrefixes(table, []*planpb.IndexDef{index}), "ENUM prefix index")
+	require.ErrorContains(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "ENUM prefix index")
 	index.Unique = false
-	require.Error(t, validateNewEnumIndexPrefixes(table, []*planpb.IndexDef{index}))
+	require.Error(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}))
 
 	// A legacy-only prefix index remains valid on a table that also has an
 	// unrelated new-identity ENUM column.
 	index.Parts = []string{"other"}
-	require.NoError(t, validateNewEnumIndexPrefixes(table, []*planpb.IndexDef{index}))
+	require.NoError(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}))
 	// A prefix of a regular text column with a new ENUM remains supported.
 	table.Cols = append(table.Cols, &planpb.ColDef{Name: "txt", Typ: planpb.Type{Id: int32(types.T_varchar)}})
 	index.Parts = []string{"txt", "e"}
 	index.IndexAlgoParams = `{"prefix_lengths":"txt:1"}`
-	require.NoError(t, validateNewEnumIndexPrefixes(table, []*planpb.IndexDef{index}))
+	require.NoError(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}))
 	// Malformed prefix metadata is not treated as absence of a prefix.
 	index.IndexAlgoParams = `{"prefix_lengths":"other:0"}`
-	require.Error(t, validateNewEnumIndexPrefixes(table, []*planpb.IndexDef{index}))
+	require.Error(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}))
+}
+
+func TestNewEnumIndexRejectsUnverifiedAlgorithms(t *testing.T) {
+	spec := enumIndexTestSpec()
+	table, index := spec.Source, spec.Index
+	index.IndexAlgo = "ivfflat"
+	index.Parts = []string{"other"}
+	index.IncludedColumns = []string{"other"}
+	index.IndexAlgoParams = `{"included_columns":"e"}`
+	require.ErrorContains(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "index algorithm")
+	index.IndexAlgoParams = ""
+	index.IncludedColumns = []string{"e"}
+	require.ErrorContains(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "index algorithm")
+	index.IncludedColumns = nil
+	require.NoError(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "an unrelated legacy plugin index is retained")
+	index.IndexAlgoParams = `{"async":"true","included_columns":"e"}`
+	require.ErrorContains(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "index algorithm", "async plugin indexes are rejected before background dispatch")
+	index.IndexAlgoParams = ""
+	index.Parts = []string{"e"}
+	require.Error(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}))
+	index.IndexAlgo = "btree"
+	require.NoError(t, validateNewEnumIndexSafety(table, []*planpb.IndexDef{index}), "ordinary proven indexes remain supported")
+}
+
+func TestRejectUnsafeEnumIdentityDowngrade(t *testing.T) {
+	spec := enumIndexTestSpec()
+	oldTable := proto.Clone(spec.Source).(*planpb.TableDef)
+	oldIndex := proto.Clone(spec.Index).(*planpb.IndexDef)
+	oldTable.Indexes = []*planpb.IndexDef{oldIndex}
+
+	newTable := proto.Clone(oldTable).(*planpb.TableDef)
+	newTable.Cols[1].Typ.EnumCollation = 0
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(oldTable, newTable), "legacy ENUM")
+
+	varcharTable := proto.Clone(newTable).(*planpb.TableDef)
+	varcharTable.Cols[1].Typ.Id = int32(types.T_varchar)
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, varcharTable), "ENUM to VARCHAR is a distinct conversion")
+
+	withoutIndex := proto.Clone(newTable).(*planpb.TableDef)
+	withoutIndex.Indexes = nil
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(oldTable, withoutIndex), "removing the affected index avoids a downgrade")
+
+	unrelatedIndex := proto.Clone(oldTable).(*planpb.TableDef)
+	unrelatedIndex.Indexes[0].Parts = []string{"other"}
+	unrelatedTarget := proto.Clone(unrelatedIndex).(*planpb.TableDef)
+	unrelatedTarget.Cols[1].Typ.EnumCollation = 0
+	require.NoError(t, rejectUnsafeEnumIdentityDowngrade(unrelatedIndex, unrelatedTarget), "an unrelated legacy-only index remains eligible")
+
+	depends, err := indexReferencesColumn(oldTable, oldIndex, "new_column")
+	require.NoError(t, err)
+	require.False(t, depends, "an added column has no old-index dependency")
+
+	generated := proto.Clone(oldTable).(*planpb.TableDef)
+	generated.Cols = append(generated.Cols, &planpb.ColDef{
+		Name: "generated", Typ: planpb.Type{Id: int32(types.T_int64)},
+		GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: 0, ColPos: 1},
+		}}},
+	})
+	generated.Indexes[0].Parts = []string{"generated"}
+	generatedTarget := proto.Clone(generated).(*planpb.TableDef)
+	generatedTarget.Cols[1].Typ.EnumCollation = 0
+	require.ErrorContains(t, rejectUnsafeEnumIdentityDowngrade(generated, generatedTarget), "legacy ENUM")
+}
+
+func TestDropAlterCopyUniqueDedupForAffectedIndexes(t *testing.T) {
+	opt := &planpb.AlterCopyOpt{
+		SkipUniqueIdxDedup: map[string]bool{"affected": true, "unaffected": true},
+		SkipIndexesCopy:    map[string]bool{"affected": false, "unaffected": true},
+	}
+	dropAlterCopyUniqueDedupForAffectedIndexes(opt)
+	require.NotContains(t, opt.SkipUniqueIdxDedup, "affected")
+	require.True(t, opt.SkipUniqueIdxDedup["unaffected"])
 }

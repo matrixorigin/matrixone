@@ -122,6 +122,7 @@ type EnumIndexBackfillSpec struct {
 	Database           string
 	SourceID, TargetID uint64
 	Source             *plan.TableDef
+	Target             *plan.TableDef
 	Index              *plan.IndexDef
 	SQL                string
 	DuplicateCheck     bool

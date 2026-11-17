@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
@@ -48,7 +49,7 @@ type enumIndexBackfillBinding struct {
 // including generated column expressions, cannot inherit these AST marks.
 func WithEnumIndexBackfill(ctx context.Context, stmt tree.Statement, spec *executor.EnumIndexBackfillSpec) (context.Context, error) {
 	invalid := func() error { return moerr.NewInvalidInputNoCtx("invalid internal ENUM index backfill") }
-	if spec == nil || spec.Source == nil || spec.Index == nil || spec.SourceID == 0 || spec.TargetID == 0 || spec.Database == "" || spec.Source.Name == "" || spec.Index.IndexTableName == "" {
+	if spec == nil || spec.Source == nil || spec.Target == nil || spec.Index == nil || spec.SourceID == 0 || spec.TargetID == 0 || spec.Database == "" || spec.Source.Name == "" || spec.Index.IndexTableName == "" || !strings.EqualFold(spec.Target.Name, spec.Index.IndexTableName) {
 		return nil, invalid()
 	}
 	account, err := defines.GetAccountId(ctx)
@@ -266,7 +267,48 @@ func validateEnumIndexBackfillTarget(ctx context.Context, stmt *tree.Insert, def
 	if def == nil || obj == nil || def.TblId != state.spec.TargetID || uint64(obj.Obj) != state.spec.TargetID || !strings.EqualFold(def.Name, state.spec.Index.IndexTableName) {
 		return moerr.NewInvalidInputNoCtx("ENUM index backfill target changed")
 	}
+	if !sameEnumIndexBackfillTargetLayout(state.spec.Target, def) {
+		return moerr.NewInvalidInputNoCtx("ENUM index backfill target schema changed")
+	}
 	return nil
+}
+
+func sameEnumIndexBackfillTargetLayout(expected, actual *planpb.TableDef) bool {
+	if expected == nil || actual == nil || !strings.EqualFold(expected.Name, actual.Name) {
+		return false
+	}
+	actualCols := make([]*planpb.ColDef, 0, len(actual.Cols))
+	for _, col := range actual.Cols {
+		// The catalog materializes a hidden row ID for every physical table;
+		// it is not part of the planned index key/payload layout.
+		if col != nil && col.Hidden && col.Name == catalog.Row_ID {
+			continue
+		}
+		actualCols = append(actualCols, col)
+	}
+	if len(expected.Cols) != len(actualCols) {
+		return false
+	}
+	for i, want := range expected.Cols {
+		got := actualCols[i]
+		if want == nil || got == nil || !strings.EqualFold(want.Name, got.Name) {
+			return false
+		}
+		left, right := want.Typ, got.Typ
+		left.Table, right.Table = "", ""
+		left.NotNullable, right.NotNullable = false, false
+		left.AutoIncr, right.AutoIncr = false, false
+		if !proto.Equal(&left, &right) {
+			return false
+		}
+	}
+	if (expected.Pkey == nil) != (actual.Pkey == nil) {
+		return false
+	}
+	if expected.Pkey != nil && (expected.Pkey.PkeyColName != actual.Pkey.PkeyColName || !slices.Equal(expected.Pkey.Names, actual.Pkey.Names)) {
+		return false
+	}
+	return true
 }
 
 func sameEnumIndexDomain(a, b *planpb.Type) bool {

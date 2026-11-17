@@ -2146,7 +2146,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	if err := validateNewEnumIndexPrefixes(createTable.TableDef, createTable.TableDef.Indexes); err != nil {
+	if err := validateNewEnumIndexSafety(createTable.TableDef, createTable.TableDef.Indexes); err != nil {
 		return err
 	}
 
@@ -3838,7 +3838,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 		createIndex.TableExist = true
 	}
-	if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+	if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
 		return nil, err
 	}
 
@@ -4376,7 +4376,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
-				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
 					return nil, err
 				}
 
@@ -4445,7 +4445,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
-				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
 					return nil, err
 				}
 
@@ -4508,7 +4508,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
-				if err := validateNewEnumIndexPrefixes(tableDef, indexInfo.TableDef.Indexes); err != nil {
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
 					return nil, err
 				}
 

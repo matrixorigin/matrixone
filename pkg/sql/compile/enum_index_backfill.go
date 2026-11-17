@@ -29,8 +29,8 @@ import (
 
 // The source is the relation whose DDL owns this build; resolve the just-created
 // hidden table in the same transaction and carry its physical identity too.
-func newEnumIndexBackfillSpec(c *Compile, sourceID uint64, db engine.Database, database string, source *plan.TableDef, index *plan.IndexDef) (*executor.EnumIndexBackfillSpec, error) {
-	if source == nil || index == nil {
+func newEnumIndexBackfillSpec(c *Compile, sourceID uint64, db engine.Database, database string, source, target *plan.TableDef, index *plan.IndexDef) (*executor.EnumIndexBackfillSpec, error) {
+	if source == nil || target == nil || index == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing index source")
 	}
 	usesNewIdentity, err := sqlplan.EnumIndexUsesNewIdentity(source, index)
@@ -73,7 +73,7 @@ func newEnumIndexBackfillSpec(c *Compile, sourceID uint64, db engine.Database, d
 	if sourceID == 0 || targetID == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid ENUM index relation identity")
 	}
-	return &executor.EnumIndexBackfillSpec{AccountID: account, Database: database, SourceID: sourceID, TargetID: targetID, Source: source, Index: index}, nil
+	return &executor.EnumIndexBackfillSpec{AccountID: account, Database: database, SourceID: sourceID, TargetID: targetID, Source: source, Target: target, Index: index}, nil
 }
 
 func enumIndexStatementOption(opt executor.StatementOption, spec *executor.EnumIndexBackfillSpec, sql string, duplicateCheck bool) executor.StatementOption {
