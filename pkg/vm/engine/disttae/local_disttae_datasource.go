@@ -545,6 +545,9 @@ func (ls *LocalDisttaeDataSource) Next(
 			}
 
 			info = ls.rangeSlice.Get(ls.rangesCursor)
+			if !ls.rc.prefetchDisabled && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+				ls.rc.prefetch.Reach(ctx, ls.fs, info, seqNums)
+			}
 			ls.rangesCursor++
 			state = engine.Persisted
 			return

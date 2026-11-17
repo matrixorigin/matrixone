@@ -47,6 +47,9 @@ type ScanPrefetch struct {
 	scan       *fileservice.PrefetchScan
 	paceStart  time.Time
 	paceCursor int
+	// reached is the object the scan reads, when entered.
+	reached objectio.ObjectId
+	entered bool
 }
 
 // Scan returns what the scan's prefetches are for.
@@ -77,6 +80,20 @@ func (p *ScanPrefetch) Pace(now time.Time, cursor int) float64 {
 	pace := float64(blocks) / elapsed.Seconds()
 	scanPaces.Store(math.Float64bits((1-scanPaceWeight)*average + scanPaceWeight*pace))
 	return pace
+}
+
+// Reach prefetches, due now, the columns seqNums of the object of blk when the scan enters
+// it: a queued prefetch of them moves up, a dropped one is queued again, and one cached or
+// under way is left, so the scan's reads of the object join one download.
+func (p *ScanPrefetch) Reach(
+	ctx context.Context, fs fileservice.FileService, blk *objectio.BlockInfo, seqNums []uint16,
+) {
+	obj := *blk.BlockID.Object()
+	if p.entered && p.reached == obj {
+		return
+	}
+	p.reached, p.entered = obj, true
+	p.PrefetchColumns(ctx, fs, blk, seqNums, time.Now().UnixNano())
 }
 
 // PrefetchColumns prefetches the ranges that hold the columns seqNums across all the

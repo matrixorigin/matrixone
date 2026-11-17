@@ -121,8 +121,15 @@ type ObjectPrefetcher interface {
 var _ ObjectPrefetcher = new(S3FS)
 
 // prefetchHorizon is how far ahead of the reads prefetches are queued: no more bytes
-// than the downloads write in that time.
+// than the node reads from object storage in that time, besides those a read reaches
+// within it, which are never dropped.
 const prefetchHorizon = 30 * time.Second
+
+// dueSoon reports whether a read reaches, within the prefetch horizon, the object a
+// request due at due is for; 0 is not known.
+func dueSoon(due int64) bool {
+	return due > 0 && due <= time.Now().Add(prefetchHorizon).UnixNano()
+}
 
 // prefetchEntry is an object queued, or being downloaded, by a prefetcher.
 type prefetchEntry struct {
@@ -228,6 +235,7 @@ type prefetcher struct {
 	cancel context.CancelFunc
 	have   func(ObjectPrefetch) bool // what the request downloads is cached or being downloaded
 	limit  func() int64              // the most bytes queued
+	soon   func(due int64) bool      // a read reaches the object within the prefetch horizon
 	queued atomic.Int64
 	known  atomic.Int64 // entries
 
@@ -243,7 +251,7 @@ type prefetcher struct {
 func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{
-		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
+		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, soon: dueSoon,
 		prefetch: fetchQueue{max: workers},
 		live:     fetchQueue{max: workers},
 		entries:  make(map[string]*prefetchEntry),
@@ -270,7 +278,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		metric.FSPrefetchMergedCounter.Inc()
 		if q := e.queue; q != nil {
 			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
+			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() && !p.soon(merged.Due) {
 				// Past the queues' bytes, the queued download keeps what it downloads.
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
@@ -288,7 +296,10 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.seq++
 	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq, started: make(chan struct{})}
 	limit := p.limit()
-	if req.Size > limit {
+	// A request a read reaches within the horizon is queued past the limit; it drops only
+	// requests reached later.
+	soon := p.soon(req.Due)
+	if req.Size > limit && !soon {
 		metric.FSPrefetchDroppedCounter.Inc()
 		return
 	}
@@ -304,7 +315,10 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 				last = i
 			}
 		}
-		if last < 0 || q[last].live() && !e.before(q[last]) {
+		if last < 0 || q[last].live() && (!e.before(q[last]) || p.soon(q[last].req.Due)) {
+			if soon {
+				break
+			}
 			metric.FSPrefetchDroppedCounter.Inc()
 			return
 		}
@@ -501,10 +515,10 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 }
 
 // prefetchQueueLimit is the most bytes queued for download: no more than half the disk
-// cache keeps, nor than the downloads write within the prefetch horizon.
-func (s *S3FS) prefetchQueueLimit(workers int) func() int64 {
+// cache keeps, nor than the node reads from object storage within the prefetch horizon.
+func (s *S3FS) prefetchQueueLimit() func() int64 {
 	return func() int64 {
-		byRate := int64(downloadRates.rate() * float64(workers) * prefetchHorizon.Seconds())
+		byRate := int64(float64(s.diskCache.networkRate) * prefetchHorizon.Seconds())
 		return min(s.diskCache.capacityFunc()/2, byRate)
 	}
 }

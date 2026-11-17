@@ -65,9 +65,12 @@ type CacheConfig struct {
 	// MemoryPrefetchObject; a larger one downloads to a file, as a FilePrefetchObject.
 	// Default DefaultDiskPrefetchMemoryMax, at least minDiskPrefetchMemoryMax.
 	DiskPrefetchMemoryMax *toml.ByteSize `toml:"disk-prefetch-memory-max"`
-	RemoteCacheEnabled    bool           `toml:"remote-cache-enabled"`
-	RPC                   morpc.Config   `toml:"rpc"`
-	CheckOverlaps         bool           `toml:"check-overlaps"`
+	// DiskPrefetchNetworkRate is the bytes a second the node reads object storage at, which
+	// sizes the prefetch queue. Default DefaultDiskPrefetchNetworkRate.
+	DiskPrefetchNetworkRate *toml.ByteSize `toml:"disk-prefetch-network-rate"`
+	RemoteCacheEnabled      bool           `toml:"remote-cache-enabled"`
+	RPC                     morpc.Config   `toml:"rpc"`
+	CheckOverlaps           bool           `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -198,6 +201,7 @@ func newFileServiceCaches(
 				prefetchRange:        prefetchRangeConfig{on: true},
 				objectSplit:          config.diskObjectSplit(),
 				memoryPrefetchMax:    config.diskPrefetchMemoryMax(),
+				networkRate:          config.diskPrefetchNetworkRate(),
 			},
 		)
 		if err != nil {
@@ -258,7 +262,16 @@ const (
 	DefaultDiskPrefetchMemoryMax = 32 << 20
 	// minDiskPrefetchMemoryMax is the least DiskPrefetchMemoryMax.
 	minDiskPrefetchMemoryMax = 8 << 20
+	// DefaultDiskPrefetchNetworkRate is the default DiskPrefetchNetworkRate, 110 MiB/s.
+	DefaultDiskPrefetchNetworkRate = 110 << 20
 )
+
+func (c *CacheConfig) diskPrefetchNetworkRate() int64 {
+	if c.DiskPrefetchNetworkRate != nil && *c.DiskPrefetchNetworkRate > 0 {
+		return int64(*c.DiskPrefetchNetworkRate)
+	}
+	return DefaultDiskPrefetchNetworkRate
+}
 
 func (c *CacheConfig) diskPrefetchMemoryMax() int64 {
 	if c.DiskPrefetchMemoryMax != nil && *c.DiskPrefetchMemoryMax > 0 {

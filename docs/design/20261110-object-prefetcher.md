@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v6, 2026-11-16 (v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v7, 2026-11-17 (v6, 2026-11-16; v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -36,8 +36,8 @@ Goals:
 - Each object is downloaded at most once at a time, whoever asks for it.
 - The scans set the priority of the downloads. The prefetcher owns scheduling,
   bounds and cancellation.
-- The queued bytes are bounded by what the disk cache can keep and what the
-  downloads can write in time.
+- The queued bytes are bounded by what the disk cache can keep and what the node
+  reads from object storage in time.
 - The object size comes from metadata MO already has.
 
 Non-goals:
@@ -154,16 +154,23 @@ loses little by reading its ranges.
 
 The queued bytes stay below the smaller of:
 - half the disk cache's capacity;
-- what the download workers can write within a 30-second horizon, at the measured
-  download rate.
+- what the node reads from object storage within a 30-second horizon, at a configured
+  network rate, 110 MiB/s by default (decision 2026-11-17).
 
-When a new request does not fit:
+The rate is configured, not measured: a rate measured per download falls as more
+downloads share the node's link, and shrank the bound when the link was busiest.
+
+A request that a read reaches within the horizon is never dropped: it is queued past the
+bound, and is not dropped to make room (decision 2026-11-17). Of the other requests, when
+a new one does not fit:
 - A request larger than the bound is dropped, and the queue is left unchanged.
 - Otherwise, entries whose scans have all ended are dropped first.
-- Then, if the new request orders before the last entry in download order, that
-  entry is dropped. If not, the new request is dropped.
+- Then, if the new request orders before the last entry in download order, and a read
+  reaches that entry after the horizon, that entry is dropped. If not, the new request
+  is dropped.
 
-A dropped request costs nothing: the scan's read falls back to the normal read path.
+A dropped request is asked for again, due now, when the scan reaches its object (see
+below), so the scan's reads of the object still join one download.
 
 ### Scans end; the file service closes (decision)
 
@@ -244,6 +251,13 @@ of each other CN the scan is distributed to (decision 2026-11-16). Without it a 
 scan reads each block's columns as separate range reads, one after another, with no
 whole-object download to amortize them; distributed SSB ran 8–11 times slower
 ([#32796](https://github.com/matrixorigin/matrixone/issues/32796)).
+
+When such a scan reaches an object, it asks again for the object's column ranges, due now
+(decision 2026-11-17). A queued request moves up, a dropped one is queued again, and one
+cached or downloading is left. Without it, a scan that reached an object whose request
+the full queue had dropped read that object's column block by block: in TPC-H SF100 Q19,
+at 110 MiB/s per CN, 41 objects took 72 reads each, one after another, about 3.3 s per
+object.
 
 ### Parallel range downloads of whole objects (decision)
 

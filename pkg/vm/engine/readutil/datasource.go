@@ -122,6 +122,9 @@ func (rs *RemoteDataSource) Next(
 	}
 	rs.batchPrefetch(ctx, seqNums)
 	cur := rs.blockAt(rs.cursor)
+	if fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+		rs.prefetch.Reach(ctx, rs.fs, &cur, seqNums)
+	}
 	rs.cursor++
 	return &cur, engine.Persisted, nil
 }

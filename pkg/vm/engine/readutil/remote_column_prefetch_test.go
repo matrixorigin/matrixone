@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -80,8 +81,9 @@ func writeColumnObjects(t *testing.T, fs fileservice.FileService, objects int) (
 	return data, stats
 }
 
-// A remote scan of some columns prefetches the ranges of those columns, once per object,
-// for the scan it closes; other scans do not.
+// A remote scan of some columns prefetches the ranges of those columns, once per object
+// ahead of the scan and once due now when the scan enters the object, for the scan it
+// closes; other scans do not.
 func TestRemoteDataSourcePrefetchesColumns(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -111,14 +113,21 @@ func TestRemoteDataSourcePrefetchesColumns(t *testing.T) {
 				ds.Close()
 				return
 			}
-			require.Len(t, fs.reqs, len(stats), "each object is asked for once")
-			for i, req := range fs.reqs {
-				require.Equal(t, stats[i].ObjectName().String(), req.FilePath)
+			byObject := make(map[string][]fileservice.ObjectPrefetch)
+			for _, req := range fs.reqs {
+				byObject[req.FilePath] = append(byObject[req.FilePath], req)
 				require.Len(t, req.Ranges, 1)
 				require.Equal(t, req.Ranges[0].Size, req.Size)
-				require.Less(t, req.Size, int64(stats[i].Size()), "the columns not read are not downloaded")
 				require.NotNil(t, req.Scan)
 				require.Same(t, fs.reqs[0].Scan, req.Scan)
+			}
+			require.Len(t, byObject, len(stats))
+			for _, st := range stats {
+				reqs := byObject[st.ObjectName().String()]
+				require.Len(t, reqs, 2, "ahead of the scan, and when the scan enters it")
+				require.Equal(t, reqs[0].Ranges, reqs[1].Ranges)
+				require.Less(t, reqs[0].Size, int64(st.Size()), "the columns not read are not downloaded")
+				require.LessOrEqual(t, reqs[1].Due, time.Now().UnixNano(), "due when the scan enters it")
 			}
 			ds.Close()
 			require.Nil(t, ds.prefetch.scan, "the scan's prefetches end with it")

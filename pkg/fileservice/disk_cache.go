@@ -70,7 +70,9 @@ type DiskCache struct {
 	objectSplit          objectSplitConfig
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
 	memoryPrefetchMax int64
-	prefetched        prefetchedObjects
+	// networkRate is the bytes a second the node reads object storage at.
+	networkRate int64
+	prefetched  prefetchedObjects
 	// downloadConns counts the object-storage connections whole-object downloads hold,
 	// at most maxDownloadConns.
 	downloadConns    atomic.Int64
@@ -187,6 +189,9 @@ type diskCacheOptions struct {
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject; 0 is
 	// DefaultDiskPrefetchMemoryMax.
 	memoryPrefetchMax int64
+	// networkRate is the bytes a second the node reads object storage at; 0 is
+	// DefaultDiskPrefetchNetworkRate.
+	networkRate int64
 }
 
 func newDiskCache(
@@ -234,6 +239,7 @@ func newDiskCache(
 		prefetchRange:        opts.prefetchRange,
 		objectSplit:          opts.objectSplit,
 		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
+		networkRate:          cmp.Or(opts.networkRate, DefaultDiskPrefetchNetworkRate),
 		preloads:             newPreloadUsage(),
 		maxDownloadConns:     int64(maxConnsPerHost / 2),
 	}
