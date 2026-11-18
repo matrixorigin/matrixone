@@ -129,13 +129,134 @@ func TestShuffleDictionaryPreservesShortCoalescing(t *testing.T) {
 }
 
 func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
-	for _, useViews := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ordinary", true: "views"}[useViews], func(t *testing.T) {
+	for _, shape := range []struct {
+		name     string
+		typ      types.Type
+		holders  int
+		capacity uint64
+		retain   bool
+		recycle  bool
+	}{
+		{name: "int64", typ: types.T_int64.ToType(), holders: 8, capacity: 128 << 10, retain: true},
+		{name: "narrow int32", typ: types.T_int32.ToType(), holders: 16, capacity: 68 << 10},
+		{name: "recycled int64", typ: types.T_int64.ToType(), holders: 8, capacity: 128 << 10, recycle: true},
+	} {
+		for _, useViews := range []bool{false, true} {
+			t.Run(shape.name+"/"+map[bool]string{false: "ordinary", true: "views"}[useViews], func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(proc.Free)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+				require.NoError(t, err)
+				account, err := registry.Open(shape.capacity)
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.Zero(t, account.Snapshot().Used)
+					_, _, err := registry.CompleteTerminal(account)
+					require.NoError(t, err)
+				})
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				require.NoError(t, err)
+				input := batch.NewWithSchema(true, nil, []types.Type{shape.typ})
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				require.NoError(t, input.SetAllocationAccount(allocation))
+				require.NoError(t, input.Vecs[0].PreExtend(objectio.BlockMaxRows, proc.Mp()))
+				for row := range objectio.BlockMaxRows {
+					if shape.typ.Oid == types.T_int32 {
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, proc.Mp()))
+					} else {
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
+					}
+				}
+				input.SetRowCount(objectio.BlockMaxRows)
+				fullRows := objectio.BlockMaxRows * shuffleProducerTailBlocksPerBucket / shape.holders
+				shortRows := fullRows / 2
+				buckets := 1 + (objectio.BlockMaxRows-fullRows)/shortRows
+				sp := NewShufflePool(int32(buckets), int32(shape.holders), true)
+				for range shape.holders {
+					require.True(t, sp.hold())
+					t.Cleanup(func() { sp.release(proc.Mp(), true) })
+				}
+				// Another producer generation selected the shared lane's provenance.
+				seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+				t.Cleanup(func() { seed.Clean(proc.Mp()) })
+				require.True(t, sp.matchesSharedLane(seed))
+				require.Equal(t, fullRows, sp.producerBatchMaxRows)
+				if shape.recycle {
+					reuse := batch.NewWithSchema(true, nil, []types.Type{shape.typ})
+					require.NoError(t, reuse.SetAllocationAccount(allocation))
+					require.NoError(t, reuse.Vecs[0].PreExtend(fullRows, proc.Mp()))
+					sp.putBatchToPool(reuse, proc.Mp())
+				}
+				sels := make([][]int32, buckets)
+				for row := range objectio.BlockMaxRows {
+					bucket := 0
+					if row >= fullRows {
+						bucket = 1 + (row-fullRows)/shortRows
+					}
+					sels[bucket] = append(sels[bucket], int32(row))
+				}
+				var views *shufflePartitionViews
+				t.Cleanup(func() {
+					if views != nil {
+						views.free(proc.Mp())
+					}
+				})
+				var workspace **shufflePartitionViews
+				if useViews {
+					workspace = &views
+				}
+				_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
+				require.NoError(t, err)
+				require.True(t, done)
+				if useViews && !shape.retain {
+					require.Nil(t, views)
+				}
+				require.EqualValues(t, 2*objectio.BlockMaxRows*shape.typ.TypeSize(), account.Snapshot().Used)
+				full := sp.getAnyFullBatch()
+				require.NotNil(t, full)
+				t.Cleanup(func() { sp.discardBatch(full, proc.Mp()) })
+				require.Equal(t, useViews && shape.retain, full.HasDictionary())
+				valueAt := func(v *vector.Vector, row int) int64 {
+					if shape.typ.Oid == types.T_int32 {
+						return int64(vector.GetFixedAtNoTypeCheck[int32](v, row))
+					}
+					return vector.GetFixedAtNoTypeCheck[int64](v, row)
+				}
+				got := make([]int64, 0, objectio.BlockMaxRows)
+				for row := range full.RowCount() {
+					got = append(got, valueAt(full.Vecs[0], row))
+				}
+				for range shape.holders {
+					sp.stopWriting()
+				}
+				for tail := sp.getAnyLastBatch(); tail != nil; tail = sp.getAnyLastBatch() {
+					for row := range tail.RowCount() {
+						got = append(got, valueAt(tail.Vecs[0], row))
+					}
+					sp.discardBatch(tail, proc.Mp())
+				}
+				require.Equal(t, objectio.BlockMaxRows, len(got))
+				for row, value := range got {
+					require.Equal(t, int64(row), value)
+				}
+			})
+		}
+	}
+}
+
+func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		dictionary, nullable bool
+	}{
+		{name: "wide flat"}, {name: "composed dictionary", dictionary: true}, {name: "nullable metadata", nullable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(proc.Free)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 			require.NoError(t, err)
-			account, err := registry.Open(128 << 10)
+			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				require.Zero(t, account.Snapshot().Used)
@@ -144,31 +265,26 @@ func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 			})
 			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
 			require.NoError(t, err)
-			input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+			typ := types.T_decimal128.ToType()
+			if tc.nullable {
+				typ = types.T_int64.ToType()
+			}
+			input := batch.NewWithSchema(true, nil, []types.Type{typ})
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			require.NoError(t, input.SetAllocationAccount(allocation))
-			require.NoError(t, input.Vecs[0].PreExtend(objectio.BlockMaxRows, proc.Mp()))
-			for row := range objectio.BlockMaxRows {
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
+			if tc.nullable {
+				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{1, 2, 3, 4}, []bool{true, false, false, false}, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []types.Decimal128{{B0_63: 1}, {B0_63: 2}, {B0_63: 3}, {B0_63: 4}}, nil, proc.Mp()))
 			}
-			input.SetRowCount(objectio.BlockMaxRows)
-			sp := NewShufflePool(3, 8, true)
-			for range 8 {
-				require.True(t, sp.hold())
-				t.Cleanup(func() { sp.release(proc.Mp(), true) })
-			}
-			// Another producer generation selected the shared lane's provenance.
-			seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
-			t.Cleanup(func() { seed.Clean(proc.Mp()) })
-			require.True(t, sp.matchesSharedLane(seed))
-			require.Equal(t, objectio.BlockMaxRows/2, sp.producerBatchMaxRows)
-			sels := make([][]int32, 3)
-			for row := range objectio.BlockMaxRows {
-				bucket := 0
-				if row >= objectio.BlockMaxRows/2 {
-					bucket = 1 + (row-objectio.BlockMaxRows/2)/(objectio.BlockMaxRows/4)
-				}
-				sels[bucket] = append(sels[bucket], int32(row))
+			input.SetRowCount(4)
+			if tc.dictionary {
+				selected := make([]*vector.Vector, 1)
+				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, []int64{3, 1, 2, 0}, 4, proc.Mp(), allocation)
+				require.NoError(t, err)
+				require.True(t, admitted)
+				input.Vecs[0].Free(proc.Mp())
+				input.Vecs = selected
 			}
 			var views *shufflePartitionViews
 			t.Cleanup(func() {
@@ -176,34 +292,26 @@ func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 					views.free(proc.Mp())
 				}
 			})
-			var workspace **shufflePartitionViews
-			if useViews {
-				workspace = &views
-			}
-			_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
+			before := account.Snapshot().Used
+			sp := NewShufflePool(1, 1, true)
+			output, err := sp.selectPartition(input, []int32{0, 2}, &views, proc)
 			require.NoError(t, err)
-			require.True(t, done)
-			full := sp.getAnyFullBatch()
-			require.NotNil(t, full)
-			t.Cleanup(func() { sp.discardBatch(full, proc.Mp()) })
-			require.Equal(t, useViews, full.HasDictionary())
-			got := make([]int64, 0, objectio.BlockMaxRows)
-			for row := range full.RowCount() {
-				got = append(got, vector.GetFixedAtNoTypeCheck[int64](full.Vecs[0], row))
+			if tc.nullable {
+				require.Nil(t, output)
+				require.Equal(t, before, account.Snapshot().Used, "rejected metadata must release all unpublished capacity")
+				return
 			}
-			for range 8 {
-				sp.stopWriting()
+			require.NotNil(t, output)
+			t.Cleanup(func() { output.Clean(proc.Mp()) })
+			require.True(t, output.HasDictionary())
+			views.free(proc.Mp())
+			views = nil
+			want := uint64(1)
+			if tc.dictionary {
+				want = 4
 			}
-			for tail := sp.getAnyLastBatch(); tail != nil; tail = sp.getAnyLastBatch() {
-				for row := range tail.RowCount() {
-					got = append(got, vector.GetFixedAtNoTypeCheck[int64](tail.Vecs[0], row))
-				}
-				sp.discardBatch(tail, proc.Mp())
-			}
-			require.Equal(t, objectio.BlockMaxRows, len(got))
-			for row, value := range got {
-				require.Equal(t, int64(row), value)
-			}
+			require.Equal(t, types.Decimal128{B0_63: want}, vector.GetFixedAtNoTypeCheck[types.Decimal128](output.Vecs[0], 0))
+			require.Equal(t, types.Decimal128{B0_63: 3}, vector.GetFixedAtNoTypeCheck[types.Decimal128](output.Vecs[0], 1))
 		})
 	}
 }
@@ -290,6 +398,7 @@ func testShuffleDictionaryConcurrentRelease(t *testing.T, mixed bool) {
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	outputs := 0
+	dictionaryOutputs := 0
 	for {
 		output := sp.getAnyFullBatch()
 		if output == nil && sp.allStop() {
@@ -314,7 +423,12 @@ func testShuffleDictionaryConcurrentRelease(t *testing.T, mixed bool) {
 				require.True(t, output.HasDictionary())
 				require.Equal(t, objectio.BlockMaxRows, output.RowCount())
 			} else {
-				require.Equal(t, objectio.BlockMaxRows/2, output.RowCount())
+				// Another producer may reuse an owned buffer returned by the
+				// consumer. Both the full and short owned sizes are valid.
+				require.Contains(t, []int{objectio.BlockMaxRows, objectio.BlockMaxRows / 2}, output.RowCount())
+			}
+			if output.HasDictionary() {
+				dictionaryOutputs++
 			}
 			first := vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], 0)
 			require.NotEqual(t, int64(-1), first)
@@ -324,6 +438,7 @@ func testShuffleDictionaryConcurrentRelease(t *testing.T, mixed bool) {
 	}
 	writers.Wait()
 	require.Equal(t, 2*buckets, outputs)
+	require.Positive(t, dictionaryOutputs)
 	for range inputs {
 		require.NoError(t, <-errors)
 	}

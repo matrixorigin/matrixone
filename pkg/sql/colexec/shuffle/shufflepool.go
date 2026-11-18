@@ -976,7 +976,7 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 				var consumed bool
 				var writeErr error
 				var selected *batch.Batch
-				if views != nil && !wholeBucket && end-offset == maxRows && oldLength == oldReady {
+				if views != nil && buf == nil && !wholeBucket && end-offset == maxRows && oldLength == oldReady {
 					selected, writeErr = sp.selectPartition(srcBatch, current[offset:end], views, proc)
 				}
 				if selected != nil {

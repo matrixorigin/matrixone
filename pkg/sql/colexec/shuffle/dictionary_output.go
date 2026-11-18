@@ -47,17 +47,49 @@ func (s *shufflePartitionViews) free(mp *mpool.MPool) {
 }
 
 func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspace **shufflePartitionViews, proc *process.Process) (_ *batch.Batch, retErr error) {
-	if *workspace == nil {
-		*workspace = &shufflePartitionViews{bases: make([]*vector.DictionaryBase, len(input.Vecs))}
-	}
-	s := *workspace
-	if s.disabled || len(input.ExtraBuf) != 0 || len(input.Vecs) == 0 {
+	if len(input.ExtraBuf) != 0 || len(input.Vecs) == 0 || (*workspace != nil && (*workspace).disabled) {
 		return nil, nil
 	}
 	allocation := sp.outputAllocation
 	if allocation == nil {
 		allocation = input.Vecs[0].AllocationAccountSelection()
 	}
+	copyAllocation := sp.outputAllocation
+	if copyAllocation == nil {
+		copyAllocation = input.AllocationAccountSelection()
+	}
+	if copyAllocation != nil && !vector.AllocationAccountSelectionsEqual(copyAllocation, allocation) {
+		return nil, nil
+	}
+	var copyBytes, selectors int64
+	// Ignore constant payload and out-of-line bytes in the owned-copy bound:
+	// both make this sufficient admission test conservative.
+	sharedSelection := false
+	for _, source := range input.Vecs {
+		// A single destination policy makes the cost comparison valid for
+		// each charged account, rather than trading one column's quota for another.
+		if !vector.AllocationAccountSelectionsEqual(source.AllocationAccountSelection(), allocation) {
+			return nil, nil
+		}
+		if !source.IsConst() {
+			copyBytes += int64(len(rows)) * int64(source.GetType().TypeSize())
+		}
+		if source.IsDictionary() {
+			selectors++
+		} else {
+			sharedSelection = true
+		}
+	}
+	if sharedSelection {
+		selectors++
+	}
+	if selectors*int64(len(rows))*8 > copyBytes {
+		return nil, nil
+	}
+	if *workspace == nil {
+		*workspace = &shufflePartitionViews{bases: make([]*vector.DictionaryBase, len(input.Vecs))}
+	}
+	s := *workspace
 	if s.rows == nil {
 		var err error
 		s.rows, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), allocation)
@@ -110,6 +142,10 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 	if err = output.SetAllocationAccount(batchAllocation); err != nil {
 		return nil, err
 	}
+	var retainedBytes int64
+	if sharedSelection {
+		retainedBytes = selection.RetainedBytes()
+	}
 	for i, source := range input.Vecs {
 		columnAllocation := source.AllocationAccountSelection()
 		if sp.outputAllocation != nil {
@@ -119,6 +155,8 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 			output.Vecs[i], err = source.SelectDictionary(selection, proc.Mp(), columnAllocation)
 		} else {
 			if s.bases[i] == nil {
+				borrowed := source.HasBorrowedBacking()
+				ownedPayload := int64(cap(source.GetData())) + int64(cap(source.GetArea()))
 				var admitted bool
 				s.bases[i], admitted, err = vector.TryFreezeVector(source, proc.Mp(), columnAllocation)
 				if err != nil {
@@ -128,12 +166,31 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 					s.disabled = true
 					return nil, nil
 				}
+				added := s.bases[i].RetainedBytes()
+				// Known source-owned allocations are already charged. Borrowed
+				// backing whose shared charge cannot be proved keeps its full bound.
+				if !borrowed {
+					added -= ownedPayload
+				}
+				retainedBytes += max(0, added)
 			}
 			output.Vecs[i], err = vector.NewDictionaryVector(s.bases[i], selection, proc.Mp(), columnAllocation)
 		}
 		if err != nil {
 			return nil, err
 		}
+		// Allocated includes referenced backing. Only the new selector and
+		// metadata are additional when that backing already belongs to input.
+		ownedMetadata := int64(output.Vecs[i].Allocated()) - output.Vecs[i].DictionaryRetainedBytes()
+		retainedBytes += ownedMetadata
+		if source.IsDictionary() {
+			oldSelection := int64(cap(vector.ResolveFixedBytesReadView(source).Selection)) * 8
+			baseBytes := source.DictionaryRetainedBytes() - oldSelection
+			retainedBytes += output.Vecs[i].DictionaryRetainedBytes() - baseBytes
+		}
+	}
+	if retainedBytes > copyBytes {
+		return nil, nil
 	}
 	output.Attrs = append(output.Attrs, input.Attrs...)
 	output.Recursive = input.Recursive

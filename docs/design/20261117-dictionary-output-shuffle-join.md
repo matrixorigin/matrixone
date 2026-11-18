@@ -146,3 +146,11 @@ A retained shuffle partition owns an independent RowSelection. Before an owned
 short-partition copy, release the producer's temporary conversion map while
 retaining the immutable source snapshots required by later partitions. Ordinary
 copy capacity must not depend on flushing the pending input first.
+
+Retained publication must not increase the destination charge over the owned
+copy alternative. Reject narrow selectors before allocating metadata; include
+composed maps, private metadata and new backing/pin bounds before publication.
+Use one proven charge policy for the comparison, and prefer an available owned
+recycle buffer. The copy estimate ignores constant and out-of-line bytes, so
+admission is conservative. Unpublished refusal releases its selection and
+workspace before ordinary copying; routing and queue-credit rules stay unchanged.
