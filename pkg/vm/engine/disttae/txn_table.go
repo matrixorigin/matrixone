@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -617,6 +618,19 @@ func (tbl *txnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
+	var snapshot timestamp.Timestamp
+	if policy&engine.Policy_CollectCommittedTombstones != 0 {
+		snapshot = tbl.db.op.SnapshotTS()
+	}
+	return tbl.collectTombstonesAt(ctx, txnOffset, policy, snapshot)
+}
+
+func (tbl *txnTable) collectTombstonesAt(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	snapshot timestamp.Timestamp,
+) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
 
 	//collect uncommitted tombstones
@@ -671,13 +685,13 @@ func (tbl *txnTable) CollectTombstones(
 	if policy&engine.Policy_CollectCommittedTombstones != 0 {
 
 		//collect committed in-memory tombstones from partition state.
-		state, err := tbl.getPartitionState(ctx)
+		state, err := tbl.getPartitionStateAt(ctx, snapshot)
 		if err != nil {
 			return nil, err
 		}
+		snapshotTS := types.TimestampToTS(snapshot)
 		{
-			ts := tbl.db.op.SnapshotTS()
-			iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
+			iter := state.NewRowsIter(snapshotTS, nil, true)
 			for iter.Next() {
 				entry := iter.Entry()
 				//bid, o := entry.RowID.Decode()
@@ -688,8 +702,7 @@ func (tbl *txnTable) CollectTombstones(
 
 		//tombstone.SortInMemory()
 		//collect committed persisted tombstones from partition state.
-		snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
-		err = state.CollectTombstoneObjects(snapshot,
+		err = state.CollectTombstoneObjects(snapshotTS,
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)
 			})
@@ -962,9 +975,10 @@ func (tbl *txnTable) EstimateCommittedTombstoneCount(ctx context.Context) (int, 
 
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
+	snapshot := tbl.db.op.SnapshotTS()
 
 	var part *logtailreplay.PartitionState
-	if part, err = tbl.getPartitionState(ctx); err != nil {
+	if part, err = tbl.getPartitionStateAt(ctx, snapshot); err != nil {
 		return
 	}
 
@@ -988,7 +1002,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 	}
 
 	if err = ForeachSnapshotObjects(
-		tbl.db.op.SnapshotTS(),
+		snapshot,
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
 			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
@@ -1009,6 +1023,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
+	snapshot := tbl.db.op.SnapshotTS()
 
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
@@ -1108,7 +1123,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 
 	// get the table's snapshot
 	if rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
+		if part, err = tbl.getPartitionStateAt(ctx, snapshot); err != nil {
 			return
 		}
 	}
@@ -1116,6 +1131,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
+		snapshot,
 		tbl.GetTableDef(ctx),
 		rangesParam,
 		&blocks,
@@ -1126,7 +1142,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}
 
 	if part == nil {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
+		if part, err = tbl.getPartitionStateAt(ctx, snapshot); err != nil {
 			return
 		}
 	}
@@ -1163,6 +1179,7 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	snapshot timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	rangesParam engine.RangesParam,
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
@@ -1173,8 +1190,8 @@ func (tbl *txnTable) rangesOnePart(
 
 	if done, err = readutil.TryFastFilterBlocksWithZone(
 		ctx,
-		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
+		snapshot,
+		tableDef,
 		rangesParam,
 		state,
 		nil,
@@ -1243,8 +1260,11 @@ func (tbl *txnTable) rangesOnePart(
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
 	if err = ForeachSnapshotObjects(
-		tbl.db.op.SnapshotTS(),
+		snapshot,
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
+			if err2 = context.Cause(ctx); err2 != nil {
+				return
+			}
 			// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
 			if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
@@ -1311,7 +1331,9 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-				outBlocks.AppendBlockInfo(&blk)
+				if err2 = rangesParam.AppendBlockInfo(outBlocks, &blk); err2 != nil {
+					return false
+				}
 
 				return true
 
@@ -2088,10 +2110,8 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-		if bat.RowCount() == 0 {
-			return nil
-		}
+		// writeTnPartition prepares an owned delete batch and resolves metadata
+		// before the transaction publishes all delete representations together.
 		return tbl.writeTnPartition(ctx, bat)
 
 	case catalog.ObjectMeta_ObjectStats:
@@ -2165,15 +2185,58 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	txn := tbl.getTxn()
+	e, err := txn.prepareWriteEntry(ctx, Entry{
+		typ: DELETE, accountId: tbl.accountId, databaseId: tbl.db.databaseId,
+		tableId: tbl.tableId, databaseName: tbl.db.databaseName, tableName: tbl.tableName,
+		bat: bat, tnStore: txn.tnStores[0], autoIncrEpoch: tbl.extraInfo.AutoIncrEpoch,
+		autoIncrEpochKnown: true,
+	})
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
-		ibat.Clean(tbl.getTxn().proc.Mp())
+	txn.Lock()
+	defer txn.Unlock()
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	partition := txn.partitionDeletesLocked(bat, tbl.db.databaseId, tbl.tableId)
+	defer vector.PutSels(partition.remaining)
+	if len(partition.remaining) != 0 {
+		// Pure bounded vector work under the same mutex: no metadata lookup,
+		// internal SQL or I/O. All-workspace deletes allocate no TN batch.
+		owned := batch.NewWithSize(len(bat.Vecs))
+		owned.Attrs = append(owned.Attrs, bat.Attrs...)
+		for i, src := range bat.Vecs {
+			owned.Vecs[i] = vector.NewVec(*src.GetType())
+		}
+		published := false
+		defer func() {
+			if !published {
+				owned.Clean(txn.proc.Mp())
+			}
+		}()
+		if err = owned.Union(bat, partition.remaining, txn.proc.Mp()); err != nil {
+			return err
+		}
+		e.bat = owned
+		if err = txn.sortDeleteBatch(e); err != nil {
+			return err
+		}
+		if err = context.Cause(ctx); err != nil {
+			return err
+		}
+		txn.publishDeletePartitionLocked(partition)
+		txn.publishWriteEntryLocked(e)
+		published = true
+		return nil
+	}
+	// One publication point for raw selections, CN-object offsets and the
+	// remaining TN entry. A captured statement view sees all or none of it.
+	if err = context.Cause(ctx); err != nil {
+		return err
+	}
+	txn.publishDeletePartitionLocked(partition)
 	return nil
 }
 
@@ -2202,11 +2265,12 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 func buildRemoteDS(
 	ctx context.Context,
 	tbl *txnTable,
+	snapshot timestamp.Timestamp,
 	txnOffset int,
 	relData engine.RelData,
 ) (source engine.DataSource, err error) {
 
-	tombstones, err := tbl.CollectTombstones(ctx, txnOffset, engine.Policy_CollectAllTombstones)
+	tombstones, err := tbl.collectTombstonesAt(ctx, txnOffset, engine.Policy_CollectAllTombstones, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -2228,7 +2292,7 @@ func buildRemoteDS(
 	source = readutil.NewRemoteDataSource(
 		ctx,
 		tbl.getTxn().engine.fs,
-		tbl.db.op.SnapshotTS(),
+		snapshot,
 		newRelData,
 	)
 	return
@@ -2263,6 +2327,7 @@ func extractPStateFromRelData(
 	ctx context.Context,
 	tbl *txnTable,
 	relData engine.RelData,
+	snapshot timestamp.Timestamp,
 ) (*logtailreplay.PartitionState, error) {
 
 	var part any
@@ -2289,7 +2354,7 @@ func extractPStateFromRelData(
 			zap.String("txn", tbl.db.op.Txn().DebugString()),
 		)
 
-		pState, err := tbl.getPartitionState(ctx)
+		pState, err := tbl.getPartitionStateAt(ctx, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -2306,13 +2371,24 @@ func (tbl *txnTable) buildLocalDataSource(
 	relData engine.RelData,
 	policy engine.TombstoneApplyPolicy,
 	category engine.DataSourceType,
+) (engine.DataSource, error) {
+	return tbl.buildLocalDataSourceAt(ctx, tbl.db.op.SnapshotTS(), txnOffset, relData, policy, category)
+}
+
+func (tbl *txnTable) buildLocalDataSourceAt(
+	ctx context.Context,
+	snapshot timestamp.Timestamp,
+	txnOffset int,
+	relData engine.RelData,
+	policy engine.TombstoneApplyPolicy,
+	category engine.DataSourceType,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
 	case engine.RelDataObjList, engine.RelDataBlockList:
 		var pState *logtailreplay.PartitionState
 
-		pState, err = extractPStateFromRelData(ctx, tbl, relData)
+		pState, err = extractPStateFromRelData(ctx, tbl, relData, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -2333,11 +2409,12 @@ func (tbl *txnTable) buildLocalDataSource(
 			}
 		}
 		if skipReadMem && forceBuildRemoteDS {
-			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
+			source, err = buildRemoteDS(ctx, tbl, snapshot, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
 				ctx,
 				tbl,
+				types.TimestampToTS(snapshot),
 				txnOffset,
 				pState,
 				ranges,
@@ -2383,8 +2460,16 @@ func (tbl *txnTable) BuildReaders(
 
 	// relData maybe is nil, indicate that only read data from memory.
 	// When relData is non-nil but DataCnt()==0, caller explicitly requests no blocks (e.g. StarCount optimization: only relation.StarCount() is used, no scan).
+	if relData != nil && relData.DataCnt() == 0 {
+		// No blocks to read — return only EmptyReaders so no data flows.
+		for i := 0; i < num; i++ {
+			rds = append(rds, new(readutil.EmptyReader))
+		}
+		return rds, nil
+	}
+	snapshot := tbl.db.op.SnapshotTS()
 	if relData == nil {
-		part, err := tbl.getPartitionState(ctx)
+		part, err := tbl.getPartitionStateAt(ctx, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -2392,12 +2477,6 @@ func (tbl *txnTable) BuildReaders(
 		relData = readutil.NewBlockListRelationData(
 			1,
 			readutil.WithPartitionState(part))
-	} else if relData.DataCnt() == 0 {
-		// No blocks to read — return only EmptyReaders so no data flows.
-		for i := 0; i < num; i++ {
-			rds = append(rds, new(readutil.EmptyReader))
-		}
-		return rds, nil
 	}
 
 	blkCnt := relData.DataCnt()
@@ -2429,8 +2508,9 @@ func (tbl *txnTable) BuildReaders(
 		preparedHint,
 		mainFilter,
 		func(i int) (engine.DataSource, error) {
-			return tbl.buildLocalDataSource(
+			return tbl.buildLocalDataSourceAt(
 				ctx,
+				snapshot,
 				txnOffset,
 				shards[i],
 				tombstonePolicy,
@@ -2444,7 +2524,7 @@ func (tbl *txnTable) BuildReaders(
 				tbl.getTxn().engine.packerPool,
 				tbl.getTxn().engine.fs,
 				def,
-				tbl.db.op.SnapshotTS(),
+				snapshot,
 				expr,
 				ds,
 				readutil.GetThresholdForReader(newNum),
@@ -2469,6 +2549,13 @@ func (tbl *txnTable) BuildShardingReaders(
 
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
+) (ps *logtailreplay.PartitionState, err error) {
+	return tbl.getPartitionStateAt(ctx, tbl.db.op.SnapshotTS())
+}
+
+func (tbl *txnTable) getPartitionStateAt(
+	ctx context.Context,
+	snapshot timestamp.Timestamp,
 ) (ps *logtailreplay.PartitionState, err error) {
 	// defer func() {
 	// 	if tbl.tableId == catalog.MO_COLUMNS_ID {
@@ -2537,7 +2624,7 @@ func (tbl *txnTable) getPartitionState(
 			tbl.tableId,
 			ps,
 			pending,
-			tbl.db.op.SnapshotTS(),
+			snapshot,
 		)
 		if err != nil {
 			return nil, err
@@ -2575,7 +2662,7 @@ func (tbl *txnTable) getPartitionState(
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
-		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+		types.TimestampToTS(snapshot))
 
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {

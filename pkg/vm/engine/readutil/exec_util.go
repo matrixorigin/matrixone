@@ -139,6 +139,9 @@ func FilterObjects(
 		}
 	}
 	onObject := func(objStats *objectio.ObjectStats, isCommitted bool) (err error) {
+		if err = context.Cause(ctx); err != nil {
+			return
+		}
 		// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
 		if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
 			return
@@ -228,7 +231,9 @@ func FilterObjects(
 			}
 			var blk objectio.BlockInfo
 			objStats.ConstructBlockInfoTo(uint16(pos), &blk)
-			outBlocks.AppendBlockInfo(&blk)
+			if err = rangesParam.AppendBlockInfo(outBlocks, &blk); err != nil {
+				return
+			}
 		}
 
 		return

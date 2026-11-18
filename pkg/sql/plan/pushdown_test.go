@@ -773,6 +773,36 @@ func TestFunctionScanDoesNotDropMixedTagFilter(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[1].FilterList)
 }
 
+func TestPushdownKeepsVolatileProjectBoundary(t *testing.T) {
+	for _, volatile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("volatile=%t", volatile), func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			scanTag, projectTag := builder.GenNewBindTag(), builder.GenNewBindTag()
+			expr := GetColExpr(Type{Id: int32(types.T_int64)}, scanTag, 0)
+			if volatile {
+				var err error
+				expr, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "uuid", nil)
+				require.NoError(t, err)
+			}
+			filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnotnull", []*plan.Expr{GetColExpr(expr.Typ, projectTag, 0)})
+			require.NoError(t, err)
+			builder.qry.Nodes = []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{scanTag}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, Children: []int32{0}, ProjectList: []*plan.Expr{expr}},
+			}
+			_, remaining := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+			if volatile {
+				require.Equal(t, []*plan.Expr{filter}, remaining)
+				require.Empty(t, builder.qry.Nodes[0].FilterList)
+			} else {
+				require.Empty(t, remaining)
+				require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+			}
+		})
+	}
+}
+
 func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	scanTag := builder.GenNewBindTag()

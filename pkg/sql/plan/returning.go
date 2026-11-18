@@ -207,9 +207,9 @@ func (builder *QueryBuilder) recordReturningIrregularMaintenance(
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = indexes
 	builder.irregularMaintSourceStep = builder.returningSourceStep
-	builder.irregularMaintDeleteStep = builder.returningSourceStep
-	builder.irregularMaintDeletePkPos = pkPos
-	builder.irregularMaintDeletePkTyp = tableDef.Cols[pkColIdx].Typ
+	if err := builder.recordIrregularDeleteKey(builder.returningSourceStep, pkPos); err != nil {
+		return err
+	}
 	builder.irregularMaintIndexes = indexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef

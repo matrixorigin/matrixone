@@ -117,6 +117,23 @@ func (s closeOnlyRPCServer) RegisterRequestHandler(
 ) {
 }
 
+type statementObjectCloseEngine struct {
+	engine.Engine
+	closeObjects func() error
+}
+
+func (e statementObjectCloseEngine) CloseStatementObjects() error { return e.closeObjects() }
+
+func TestCloseStatementObjectsForwardsFailureAndAllowsOtherEngines(t *testing.T) {
+	s := &service{}
+	require.NoError(t, s.closeStatementObjects())
+	s.storeEngine = &struct{ engine.Engine }{}
+	require.NoError(t, s.closeStatementObjects())
+	cleanupErr := errors.New("statement object shutdown failed")
+	s.storeEngine = statementObjectCloseEngine{closeObjects: func() error { return cleanupErr }}
+	require.ErrorIs(t, s.closeStatementObjects(), cleanupErr)
+}
+
 func TestCloseCNServiceStepsAttemptsAllAndAggregatesErrors(t *testing.T) {
 	bootstrapErr := errors.New("bootstrap close failed")
 	gossipErr := errors.New("gossip leave failed")
@@ -640,6 +657,7 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 
 			startFinalEvent := make(chan struct{})
 			finalEventSubmitted := make(chan struct{})
+			objectCloseCalls := 0
 			s := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
@@ -651,6 +669,20 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 					close(startFinalEvent)
 				}},
 				lockService: ls,
+				storeEngine: statementObjectCloseEngine{closeObjects: func() error {
+					select {
+					case <-finalEventSubmitted:
+					default:
+						t.Error("object cleanup ran before pipeline handlers joined")
+					}
+					select {
+					case <-recordingTrace.closed:
+						t.Error("object cleanup ran after dependent service teardown")
+					default:
+					}
+					objectCloseCalls++
+					return nil
+				}},
 			}
 
 			s.pipelines.wg.Add(1)
@@ -673,6 +705,8 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 			}()
 
 			require.NoError(t, s.Close())
+			require.NoError(t, s.Close())
+			require.Equal(t, 1, objectCloseCalls)
 			select {
 			case <-finalEventSubmitted:
 			default:

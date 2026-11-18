@@ -176,6 +176,16 @@ func (s *service) Read(
 		v2.ReplicaRemoteReadCounter.Add(float64(remote))
 
 		var buffer *morpc.Buffer
+		applyFailed := false
+		apply := func(data []byte) {
+			if applyFailed {
+				return
+			}
+			if applyErr := req.Apply(data); applyErr != nil {
+				err = errors.Join(err, applyErr)
+				applyFailed = true
+			}
+		}
 		for _, i := range selected.local {
 			if opts.adjust != nil {
 				opts.adjust(&selected.values[i])
@@ -195,7 +205,7 @@ func (s *service) Read(
 				buffer,
 			)
 			if e == nil {
-				req.Apply(v)
+				apply(v)
 				continue
 			}
 			s.maybeRemoveReadCache(req.TableID, e)
@@ -211,7 +221,7 @@ func (s *service) Read(
 				resp, e = s.unwrapError(resp, e)
 			}
 			if e == nil {
-				req.Apply(resp.ShardRead.Payload)
+				apply(resp.ShardRead.Payload)
 				s.remote.pool.ReleaseResponse(resp)
 			} else {
 				s.maybeRemoveReadCache(req.TableID, e)

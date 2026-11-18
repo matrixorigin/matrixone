@@ -17,6 +17,9 @@ package preinsertunique
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -45,12 +48,24 @@ func (preInsertUnique *PreInsertUnique) OpType() vm.OpType {
 }
 
 func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
+	if err := ValidateODKUContext(preInsertUnique.PreInsertCtx); err != nil {
+		return err
+	}
 	if preInsertUnique.OpAnalyzer == nil {
 		preInsertUnique.OpAnalyzer = process.NewAnalyzer(preInsertUnique.GetIdx(), preInsertUnique.IsFirst, preInsertUnique.IsLast, "pre_insert_unique")
 	} else {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
+	if c := preInsertUnique.PreInsertCtx; c != nil && c.OrderedOdku {
+		if preInsertUnique.allocationAccount == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		if len(preInsertUnique.ctr.acceptedKeys) != 0 {
+			return moerr.NewInternalError(proc.Ctx, "ODKU actions reused before Reset")
+		}
+		return preInsertUnique.prepareODKUActions(proc)
+	}
 	return nil
 }
 
@@ -83,6 +98,19 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 
 func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := preInsertUnique.OpAnalyzer
+	if preInsertUnique.PreInsertCtx.GetOrderedOdku() && preInsertUnique.ctr.failed {
+		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "ODKU actions require Reset after a failed attempt")
+	}
+	if preInsertUnique.PreInsertCtx.GetOdkuActions() != nil {
+		result, err := preInsertUnique.callODKUActions(proc)
+		if err != nil {
+			preInsertUnique.ctr.failed = true
+		}
+		if mpool.AllocationFailureReasonOf(err) == mpool.AllocationFailureCapacity && !mpool.IsMPoolCapacityFailure(err) {
+			err = moerr.NewResourceExhaustedf(proc.Ctx, "ODKU statement memory budget exceeded")
+		}
+		return result, err
+	}
 
 	result, err := vm.ChildrenCall(preInsertUnique.GetChildren(0), proc, analyzer)
 	if err != nil {

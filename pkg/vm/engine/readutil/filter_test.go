@@ -1379,6 +1379,82 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+// A valid stored float block can contain NaNs between finite values: the
+// storage comparator does not establish a total NaN order. Numeric binary
+// search is therefore unsafe even when the block carries the sorted flag.
+func TestFloatCandidateSearchKeepsFiniteRowsAcrossNaN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			input, probe := vector.NewVec(oid.ToType()), vector.NewVec(oid.ToType())
+			defer input.Free(mp)
+			defer probe.Free(mp)
+			var bound []byte
+			if oid == types.T_float32 {
+				require.NoError(t, vector.AppendFixedList(input, []float32{1, float32(math.NaN()), 2}, nil, mp))
+				require.NoError(t, vector.AppendFixed(probe, float32(1), false, mp))
+				value := float32(1)
+				bound = types.EncodeFloat32(&value)
+			} else {
+				require.NoError(t, vector.AppendFixedList(input, []float64{1, math.NaN(), 2}, nil, mp))
+				require.NoError(t, vector.AppendFixed(probe, float64(1), false, mp))
+				value := float64(1)
+				bound = types.EncodeFloat64(&value)
+			}
+			for _, op := range []int{function.IN, function.BETWEEN} {
+				filter, err := ConstructBlockPKFilter(false, BasePKFilter{Valid: true, Op: op, Oid: oid, Vec: probe, LB: bound, UB: bound}, nil)
+				require.NoError(t, err)
+				require.True(t, filter.Valid)
+				require.Equal(t, []int64{0}, filter.SortedSearchFunc(containers.Vectors{*input}))
+				require.Equal(t, []int64{0}, filter.UnSortedSearchFunc(containers.Vectors{*input}))
+			}
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestFloatCandidateRangesDoNotAssumeBlockOrder(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	table := &plan.TableDef{Name: "floats", Name2ColIndex: map[string]int32{"v": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "v"},
+		Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_float64)}, Seqnum: 0, ClusterBy: true}}}
+	col := func() *plan.Expr { return NewColumnExpr(0, table.Cols[0].Typ, "v") }
+	value := float64(1)
+	bound := func() *plan.Expr {
+		return &plan.Expr{Typ: table.Cols[0].Typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeFloat64(&value)}}}
+	}
+	probe := vector.NewVec(types.T_float64.ToType())
+	defer probe.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(probe, value, false, proc.Mp()))
+	encoded, err := probe.MarshalBinary()
+	require.NoError(t, err)
+	in := plan2.MakeInExpr(proc.Ctx, col(), 1, encoded, false)
+	for _, op := range []string{"in", ">=", "<="} {
+		expr := in
+		if op != "in" {
+			expr, err = plan2.BindFuncExprImplByPlanExpr(proc.Ctx, op, []*plan.Expr{col(), bound()})
+			require.NoError(t, err)
+		}
+		_, _, _, filter, seek, ok, _ := CompileFilterExpr(expr, table, nil)
+		require.True(t, ok)
+		require.NotNil(t, filter)
+		require.Nil(t, seek)
+		for _, v := range []float64{10, math.NaN(), 1} {
+			metadata := objectio.BuildMetaData(1, 1)
+			block := metadata.GetBlockMeta(0)
+			zm := index.NewZM(types.T_float64, 0)
+			index.UpdateZM(zm, types.EncodeFloat64(&v))
+			block.MustGetColumn(0).SetZoneMap(zm)
+			stop, hit, err := filter(0, block, nil)
+			require.NoError(t, err)
+			require.False(t, stop, "op=%s value=%v", op, v)
+			if v == 1 || math.IsNaN(v) {
+				require.True(t, hit, "op=%s value=%v", op, v)
+			}
+		}
+	}
+}
+
 func TestConstructBlockPKFilter(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB*2, mpool.NoFixed)
 	require.NoError(t, err)
