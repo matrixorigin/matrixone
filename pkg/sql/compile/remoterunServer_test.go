@@ -88,7 +88,7 @@ func TestActivateRemoteTenantCatalog(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.Ctx = tc.ctx
 			c := &Compile{e: e, proc: proc}
-			require.ErrorIs(t, c.activateRemoteTenantCatalog(), tc.wantErr)
+			require.ErrorIs(t, c.activateRemoteTenantCatalog(tc.ctx), tc.wantErr)
 			require.Equal(t, tc.calls, calls)
 		})
 	}
@@ -99,11 +99,11 @@ func TestActivateRemoteTenantCatalog(t *testing.T) {
 			t.Fatal("activation requires an account")
 			return nil
 		}}, proc: proc}
-		require.Error(t, c.activateRemoteTenantCatalog())
+		require.Error(t, c.activateRemoteTenantCatalog(proc.Ctx))
 	})
 	t.Run("engine without lazy catalog", func(t *testing.T) {
 		c := &Compile{e: mock_frontend.NewMockEngine(gomock.NewController(t))}
-		require.NoError(t, c.activateRemoteTenantCatalog())
+		require.NoError(t, c.activateRemoteTenantCatalog(t.Context()))
 	})
 }
 

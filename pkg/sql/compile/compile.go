@@ -11149,6 +11149,13 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
+	// A restore may write as a recreated tenant while reading the snapshot
+	// of its old account ID. The remote pipeline admitted only the writer.
+	if onRemoteCN && (node.ScanSnapshot.GetTenant() != nil || node.ObjRef.PubInfo != nil) {
+		if err := c.activateRemoteTenantCatalog(ctx); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, nil, nil, err

@@ -756,7 +756,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		defer registrations.cleanup()
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
-		if runErr = runCompile.activateRemoteTenantCatalog(); runErr != nil {
+		if runErr = runCompile.activateRemoteTenantCatalog(runCompile.proc.Ctx); runErr != nil {
 			return runErr
 		}
 
@@ -1176,12 +1176,12 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 	return message, nil
 }
 
-func (c *Compile) activateRemoteTenantCatalog() error {
+func (c *Compile) activateRemoteTenantCatalog(ctx context.Context) error {
 	activator, ok := c.e.(engine.TenantCatalogActivator)
 	if !ok {
 		return nil
 	}
-	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
@@ -1190,7 +1190,7 @@ func (c *Compile) activateRemoteTenantCatalog() error {
 		return nil
 	}
 	// Remote operators can resolve names without authenticating a local session.
-	return activator.ActivateTenantCatalog(c.proc.Ctx, accountID)
+	return activator.ActivateTenantCatalog(ctx, accountID)
 }
 
 // newCompile make and return a new compile to run a pipeline.
