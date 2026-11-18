@@ -56,6 +56,10 @@ select o.a, issue_32869_identity(
   (select (select i.d from secret_rows s where s.s > i.d limit 0)
    from inner_rows i limit 1)
 ) as nested_identity_zero from outer_rows o order by o.a;
+select o.a,
+  (select (select i.d from secret_rows s where s.s > i.d limit 0)
+   from inner_rows i limit 1) as nested_direct_zero
+from outer_rows o order by o.a;
 create role issue_32869_role;
 create user issue_32869_reader identified by '111' default role issue_32869_role;
 grant connect on account * to issue_32869_role;
@@ -69,6 +73,12 @@ select issue_32869_keep_second(
    from test_issue_32869.inner_rows o limit 1),
   a
 ) from test_issue_32869.outer_rows;
+select (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+        from test_issue_32869.inner_rows i limit 1)
+from test_issue_32869.outer_rows;
+select (select (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+        from test_issue_32869.restricted_wrapper i limit 1)
+from test_issue_32869.outer_rows;
 select issue_32869_keep_second(
   (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
    from test_issue_32869.inner_rows o

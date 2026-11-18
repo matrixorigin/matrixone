@@ -669,7 +669,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	subCtx.zeroScalarRootNodeID = nodeID
 
 	if b.builder != nil {
-		subCtx.zeroScalarRootNodeID = nodeID
 		subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
 			b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
 	}
@@ -2611,10 +2610,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	repeatedLeft, repeatedRight bool,
 ) (boundExpr *plan.Expr, bindErr error) {
 	zeroScalarRewriteGeneration := uint64(0)
-	var zeroScalarStart uint64
 	if b.builder != nil {
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
-		zeroScalarStart = b.builder.zeroScalarRewriteCount
 	}
 	var requiredZeroScalarRoots map[int32]struct{}
 	defer func() {
@@ -2624,8 +2621,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
 		}
 	}()
-	restoreZeroScalarCandidate := b.beginZeroScalarRewriteCandidate()
-	defer restoreZeroScalarCandidate()
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -2792,7 +2787,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			}
 		}
 	}
-	restoreZeroScalarCandidate()
 	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	var err error
 	args, err = b.useStoredNoFromSpecialScalarArgs(name, astArgs, args)
@@ -2814,7 +2808,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 		if len(astArgs) == 2 {
 			//interval expr like 'interval 5 day'
 			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
-				if b.builder != nil && b.builder.zeroScalarRewriteCount != zeroScalarStart {
+				if b.builder != nil && b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration {
 					return nil, moerr.NewNYI(b.GetContext(), "function with a nested correlated scalar LIMIT 0 argument may discard its table dependency")
 				}
 				// rewrite interval function to ListExpr, and return directly
@@ -2884,10 +2878,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	if err != nil {
 		return nil, err
 	}
-	if udf != nil && b.builder.zeroScalarRewriteCount != zeroScalarStart && !isIdentitySQLUDF(udf, len(args)) {
-		return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
-	}
-
 	if b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration && !isIdentitySQLUDF(udf, len(args)) {
 		// This branch cannot reliably prove which sources survive SQL UDF
 		// expansion across independent set-operation bind contexts, so keep
@@ -2924,20 +2914,6 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		args[i] = cast
 	}
 	return args, nil
-}
-
-func (b *baseBinder) beginZeroScalarRewriteCandidate() func() {
-	if b.builder == nil {
-		return func() {}
-	}
-	b.builder.zeroScalarRewriteCandidateDepth++
-	active := true
-	return func() {
-		if active {
-			b.builder.zeroScalarRewriteCandidateDepth--
-			active = false
-		}
-	}
 }
 
 func isIdentitySQLUDF(udf *function.Udf, argCount int) bool {

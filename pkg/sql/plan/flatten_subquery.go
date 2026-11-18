@@ -389,8 +389,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 	if rootLimitIsZero && subquery.Typ == plan.SubqueryRef_SCALAR {
 		if scan, ok := builder.emptyCorrelatedScalarScan(subID, subquery, subCtx); ok {
-			if builder.zeroScalarRootCtx == nil ||
-				(ctx != builder.zeroScalarRootCtx && builder.zeroScalarRewriteCandidateDepth == 0) {
+			if builder.zeroScalarRootCtx == nil {
 				return 0, nil, moerr.NewNYI(builder.GetContext(),
 					"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
 			}
