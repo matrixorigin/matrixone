@@ -820,7 +820,7 @@ func TestMergeRewriteRulesPreservesBinaryLiteralAcrossMerges(t *testing.T) {
 	merged, err = mergeRewriteRules(ctx, merged, base+"a = 3")
 	require.NoError(t, err)
 	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select X'5553275c' as tag from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", 1)
+		base+"((a = 1) or (a = 2)) or (a = 3)", 1)
 	require.NoError(t, err)
 	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
 	require.NoError(t, err)
@@ -835,7 +835,7 @@ func TestMergeRewriteRulesPreservesImplicitBinaryHeading(t *testing.T) {
 	merged, err = mergeRewriteRules(ctx, merged, base+"3")
 	require.NoError(t, err)
 	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select 0x6e5f6e616d65 as n_name from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", 1)
+		"select _binary 'n_name' from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", 1)
 	require.NoError(t, err)
 	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
 	require.NoError(t, err)
@@ -845,14 +845,13 @@ func TestMergeRewriteRulesPreservesImplicitBinaryHeading(t *testing.T) {
 func TestMergeRewriteRulesPreservesNestedBinaryHeadings(t *testing.T) {
 	ctx := context.Background()
 	const base = "select length(_binary '1') from db1.t1 where "
-	const predicate = "a = 1 and (select d.r_name from (select _binary 'r_name') d) = 'r_name'"
+	const predicate = "a = 1 and (select d.r_name from (select _binary 'r_name', r_regionkey from db1.region order by r_name limit 1) d) = 'r_name'"
 	merged, err := mergeRewriteRules(ctx, base+predicate, base+"a = 2")
 	require.NoError(t, err)
 	merged, err = mergeRewriteRules(ctx, merged, base+"a = 3")
 	require.NoError(t, err)
 	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select length(0x31) as `length(1)` from db1.t1 where "+
-			"((a = 1 and (select d.r_name from (select 0x725f6e616d65 as r_name) d) = 'r_name') or (a = 2)) or (a = 3)", 1)
+		base+"(("+predicate+") or (a = 2)) or (a = 3)", 1)
 	require.NoError(t, err)
 	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
 	require.NoError(t, err)
@@ -893,16 +892,8 @@ func TestMergedBinaryLiteralSurvivesRewriteHint(t *testing.T) {
 			require.IsType(t, &tree.OrExpr{}, clause.Where.Expr)
 			literal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
 			require.True(t, ok, "projection must still be a binary literal")
-			switch literal.ValType {
-			case tree.P_ScoreBinary:
-				require.Equal(t, value, literal.String())
-			case tree.P_hexnum:
-				decoded, err := hex.DecodeString(literal.String()[2:])
-				require.NoError(t, err)
-				require.Equal(t, value, string(decoded))
-			default:
-				t.Fatalf("unexpected literal type %v", literal.ValType)
-			}
+			require.Equal(t, tree.P_ScoreBinary, literal.ValType)
+			require.Equal(t, value, literal.String())
 		})
 	}
 }

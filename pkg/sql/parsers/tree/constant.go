@@ -188,18 +188,12 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
-	if ctx.singleQuoteString {
+	if ctx.rewriteRuleSQL {
 		if node.ValType == P_ScoreBinary {
-			if ctx.binaryHexCount != nil {
-				*ctx.binaryHexCount++
-			}
-			// Encode raw bytes before text escaping or UTF-8 transport can change them.
-			if node.origString == "" {
-				ctx.WriteString("X''")
-			} else {
-				ctx.WriteString("0x")
-				ctx.WriteString(hex.EncodeToString([]byte(node.origString)))
-			}
+			// Keep the original AST type and bytes on reparse, without raw bytes in JSON.
+			ctx.WriteString("_binary (X'")
+			ctx.WriteString(hex.EncodeToString([]byte(node.origString)))
+			ctx.WriteString("')")
 			return
 		}
 		if node.ValType == P_hexnum && node.origString == "0x" {

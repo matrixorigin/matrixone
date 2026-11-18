@@ -30,8 +30,7 @@ type FmtCtx struct {
 	singleQuoteString bool
 	quoteIdentifier   bool
 	literalPositions  *[]StringLiteralPosition
-	binaryHexCount    *int
-	binaryHeading     func(Expr) string
+	rewriteRuleSQL    bool
 }
 
 // StringLiteralPosition is the byte range of a single-quoted SQL literal.
@@ -73,12 +72,13 @@ func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption
 	return func(ctx *FmtCtx) { ctx.literalPositions = positions }
 }
 
-// WithBinaryProjectionHeadings supplies a heading for unaliased projections
-// whose binary literals are rendered as hex. An empty heading adds no alias.
-func WithBinaryProjectionHeadings(heading func(Expr) string) FmtCtxOption {
+// WithRewriteRuleSQL renders SQL for reparse by MatrixOne's rewrite-rule consumer.
+// It is not a generic quoting option or a cross-dialect formatter.
+func WithRewriteRuleSQL() FmtCtxOption {
 	return func(ctx *FmtCtx) {
-		ctx.binaryHeading = heading
-		ctx.binaryHexCount = new(int)
+		ctx.rewriteRuleSQL = true
+		ctx.singleQuoteString = true
+		ctx.quoteIdentifier = true
 	}
 }
 

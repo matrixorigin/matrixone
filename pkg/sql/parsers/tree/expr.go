@@ -986,7 +986,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	switch name := node.Func.FunctionReference.(*UnresolvedName).ColName(); {
 	case name == "trim":
 		trimExprsFormat(ctx, node.Exprs)
-	case ctx.singleQuoteString && strings.EqualFold(name, "group_concat") && len(node.Exprs) >= 2:
+	case ctx.rewriteRuleSQL && strings.EqualFold(name, "group_concat") && len(node.Exprs) >= 2:
 		// The parser stores SEPARATOR as the last expression for binding,
 		// but SQL must render it as a clause, not an aggregate input.
 		last := len(node.Exprs) - 1
@@ -1025,7 +1025,7 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	case "convert":
 		// CONVERT(expr, type) parses as a CastExpr. Here the second argument
 		// is a charset name, for which the grammar also accepts a string.
-		if len(node.Exprs) == 2 {
+		if ctx.rewriteRuleSQL && len(node.Exprs) == 2 {
 			node.Exprs[0].Format(ctx)
 			ctx.WriteString(" using ")
 			// A charset name is case-insensitive syntax even when spelled as a string.

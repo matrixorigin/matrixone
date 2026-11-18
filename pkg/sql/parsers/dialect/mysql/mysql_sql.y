@@ -16,6 +16,7 @@
 package mysql
 
 import (
+    "encoding/hex"
     "fmt"
     "strings"
 
@@ -12921,6 +12922,21 @@ literal:
 |   UNDERSCORE_BINARY HEXNUM
     {
         $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
+    }
+|   UNDERSCORE_BINARY '(' HEXNUM ')'
+    {
+        // Lossless spelling of a binary string in serialized rewrite rules.
+        digits := $3[2:]
+        if len(digits)%2 != 0 {
+            digits = "0" + digits
+        }
+        bytes, err := hex.DecodeString(digits)
+        if err != nil {
+            yylex.Error("invalid binary string hex literal")
+            return 1
+        }
+        value := string(bytes)
+        $$ = tree.NewNumVal(value, value, false, tree.P_ScoreBinary)
     }
 |   DECIMAL_VALUE
     {

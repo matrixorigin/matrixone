@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -511,19 +509,9 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 	}
 }
 
-func rewriteBinaryHeading(expr tree.Expr) string {
-	heading := plan.ImplicitExpressionHeading(expr)
-	// Not every byte string can be embedded as an identifier in the JSON hint comment.
-	if !utf8.ValidString(heading) || strings.Contains(heading, "*/") {
-		return ""
-	}
-	return heading
-}
-
 func formatRewriteRuleSQL(node tree.NodeFormatter, literals *[]tree.StringLiteralPosition) string {
 	return tree.StringWithOpts(node, dialect.MYSQL,
-		tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(literals),
-		tree.WithBinaryProjectionHeadings(rewriteBinaryHeading))
+		tree.WithRewriteRuleSQL(), tree.WithStringLiteralPositions(literals))
 }
 
 // Fold SQL syntax as before, but keep identifiers distinct from string literals
