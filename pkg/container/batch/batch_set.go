@@ -229,9 +229,10 @@ func (bs *BatchSet) Extend(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch) 
 		return false, nil
 	}
 
-	// fast path 2: inBatch is full
-	if inBatch.rowCount == bs.batchMaxRow {
-		if vectorAllocationSelectionsMatch(reuseBuf, inBatch) {
+	// Keep the full-input shortcut within its original provenance domain.
+	// Mixed-source copies must fill the earlier destination tail in order.
+	if inBatch.rowCount == bs.batchMaxRow && vectorAllocationSelectionsMatch(bs.batches[lastIdx], inBatch) {
+		if bs.matchesDestination(reuseBuf, inBatch) {
 			reuseBuf.CleanOnlyData()
 			reuseBuf, err = reuseBuf.AppendWithCopy(context.TODO(), mpool, inBatch)
 			if err != nil {

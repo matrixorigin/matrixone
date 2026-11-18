@@ -275,6 +275,61 @@ func BenchmarkBatchSetMixedInputDestination(b *testing.B) {
 	}
 }
 
+func TestBatchSetFullMixedInputTailOrderAndReuse(t *testing.T) {
+	for _, method := range []string{"extend", "union all"} {
+		for _, reuseKind := range []string{"none", "destination", "source columns"} {
+			t.Run(method+"/"+reuseKind, func(t *testing.T) {
+				mp, input, destination, foreign := batchSetCopyInput(t, 4, true)
+				queue := NewBatchSet(4)
+				var reuse *Batch
+				consumed := false
+				t.Cleanup(func() {
+					queue.Clean(mp)
+					if reuse != nil && !consumed {
+						reuse.Clean(mp)
+					}
+				})
+				_, err := queue.Union(mp, input, []int32{2, 3}, nil)
+				require.NoError(t, err)
+				if reuseKind != "none" {
+					reuse = NewWithSchema(true, nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+					require.NoError(t, reuse.SetAllocationAccount(destination))
+					if reuseKind == "source columns" {
+						require.NoError(t, reuse.Vecs[0].SetAllocationAccount(foreign))
+					}
+					for _, v := range reuse.Vecs {
+						require.NoError(t, vector.AppendFixedList(v, []int64{-1, -2}, nil, mp))
+					}
+					reuse.SetRowCount(2)
+				}
+				ready := queue.ReadyCount()
+				expectedDelta := queue.ReadyDeltaFor(input, input.RowCount())
+				if method == "extend" {
+					consumed, err = queue.Extend(mp, input, reuse)
+				} else {
+					consumed, err = queue.Union(mp, input, []int32{0, 1, 2, 3}, reuse)
+				}
+				require.NoError(t, err)
+				require.Equal(t, expectedDelta, queue.ReadyCount()-ready)
+				require.Equal(t, reuseKind == "destination", consumed)
+				if consumed {
+					require.Same(t, reuse, queue.Get(1))
+				}
+				rows := make([]int64, 0, 6)
+				for i := 0; i < queue.Length(); i++ {
+					bat := queue.Get(i)
+					rows = append(rows, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
+					for _, v := range bat.Vecs {
+						require.Same(t, destination, v.AllocationAccountSelection())
+					}
+				}
+				require.Equal(t, []int64{2, 3, 0, 1, 2, 3}, rows)
+				require.Same(t, foreign, input.Vecs[0].AllocationAccountSelection())
+			})
+		}
+	}
+}
+
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 	for _, tc := range []struct {
 		name string
