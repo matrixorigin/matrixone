@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -645,9 +646,10 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 // Catalog text is immutable after publication. Each request keeps the captured
 // generation, but each statement interprets it under its own parser mode.
 type roleRuleCache struct {
-	first map[string]string
-	later map[string][]string // competing rules only, in active-role priority order
-	last  atomic.Pointer[mergedRoleRules]
+	first      map[string]string
+	later      map[string][]string // competing rules only, in active-role priority order
+	hasNonUTF8 bool
+	last       atomic.Pointer[mergedRoleRules]
 }
 
 type mergedRoleRules struct {
@@ -659,7 +661,7 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 	if c == nil {
 		return nil, nil
 	}
-	if len(c.later) == 0 {
+	if len(c.later) == 0 && !c.hasNonUTF8 {
 		return c.first, nil
 	}
 	mode := mysql.ParseSQLModeFlags(sqlMode)
@@ -676,8 +678,52 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 			rules[name] = merged
 		}
 	}
+	for name, rule := range rules {
+		hintSQL, err := roleRuleHintSQL(ctx, rule, mode)
+		if err != nil {
+			return nil, err
+		}
+		rules[name] = hintSQL
+	}
 	c.last.Store(&mergedRoleRules{mode: mode, rules: rules})
 	return rules, nil
+}
+
+// roleRuleHintSQL encodes binary tokens only after rule selection and merging.
+// JSON replaces invalid UTF-8, so any remaining invalid byte must fail closed.
+func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) (string, error) {
+	if utf8.ValidString(rule) {
+		return rule, nil
+	}
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, rule, mode)
+	defer mysql.PutScanner(scanner)
+	var out strings.Builder
+	var binary bool
+	copied := 0
+	for {
+		token, value := scanner.ScanWithComments()
+		if token == 0 || token == mysql.EofChar() || token == mysql.LEX_ERROR {
+			break
+		}
+		if token == mysql.COMMENT {
+			continue
+		}
+		if binary && token == mysql.STRING && !utf8.ValidString(value) {
+			out.WriteString(rule[copied:scanner.PrePos])
+			// Separate both sides because quotes can delimit SQL tokens
+			// without whitespace, but a hexadecimal number cannot.
+			fmt.Fprintf(&out, " 0x%x ", value)
+			copied = scanner.Pos
+		}
+		binary = token == mysql.UNDERSCORE_BINARY
+	}
+	if copied != 0 {
+		out.WriteString(rule[copied:])
+		if sql := out.String(); utf8.ValidString(sql) {
+			return sql, nil
+		}
+	}
+	return "", moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals")
 }
 
 func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
@@ -734,6 +780,7 @@ func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
 		if err != nil {
 			return nil, err
 		}
+		rules.hasNonUTF8 = rules.hasNonUTF8 || !utf8.ValidString(rule)
 		ruleRows = append(ruleRows, rewriteRuleRow{
 			roleID:   roleID,
 			ruleName: ruleName,
@@ -935,7 +982,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 }
 
 func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {
-	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(), tree.WithByteExactBinaryLiterals()}
 	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
 		opts = append(opts, tree.WithNoBackslashEscape())
 	}

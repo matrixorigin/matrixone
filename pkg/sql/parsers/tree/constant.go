@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -188,6 +189,18 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if ctx.byteExactBinaryLiterals {
+		switch node.ValType {
+		case P_ScoreBinary:
+			ctx.writeSQLStringLiteral("_binary " + sqlquote.StringWithMode(node.origString, ctx.NoBackslashEscape()))
+			return
+		case P_ScoreBinaryHexnum:
+			if strings.EqualFold(node.origString, "0x") {
+				ctx.WriteString("_binary X''")
+				return
+			}
+		}
+	}
 	if ctx.ModeIndependentStringLiterals() {
 		switch node.ValType {
 		case P_char:
@@ -255,7 +268,10 @@ func (s *StrVal) String() string {
 
 func FormatString(str string) string {
 	var buffer strings.Builder
-	for i, ch := range str {
+	// SQL escapes are ASCII. Preserve bytes for callers that must reject
+	// strings which cannot be represented in their transport encoding.
+	for i := range len(str) {
+		ch := str[i]
 		if ch == '\n' {
 			buffer.WriteString("\\n")
 		} else if ch == '\x00' {
@@ -277,10 +293,8 @@ func FormatString(str string) string {
 		} else if ch == '\t' {
 			buffer.WriteString("\\t")
 		} else {
-			// buffer.WriteByte(byte(ch))
-			buffer.WriteRune(ch)
+			buffer.WriteByte(ch)
 		}
 	}
-	res := buffer.String()
-	return res
+	return buffer.String()
 }

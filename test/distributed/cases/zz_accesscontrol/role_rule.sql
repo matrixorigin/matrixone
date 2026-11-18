@@ -363,14 +363,50 @@ set sql_mode = '';
 select count(*) from db1.t_dup;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 select count(*) from db1.t_dup;
-commit;
-rollback;
 set secondary role none;
 select count(*) from db1.t_dup;
 set sql_mode = '';
 set secondary role all;
 select count(*) from db1.t_dup;
 -- @session
+
+-- Refresh the cached rules after writes are pending in two open transactions.
+create table db1.t_rule_txn(id int primary key);
+create table db1.t_rule_commit_refresh(id int);
+create table db1.t_rule_rollback_refresh(id int);
+grant insert, select on table db1.t_rule_txn to test_rule_role_dup_projection_a;
+grant drop table on database db1 to test_rule_role_dup_projection_a;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (1);
+-- @session
+-- @session:id=25&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (2);
+-- @session
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+-- DROP TABLE clears each session's rule cache while leaving its transaction open.
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+drop table db1.t_rule_commit_refresh;
+select count(*) from db1.t_dup;
+-- @session
+select count(*) as visible_before_commit from db1.t_rule_txn;
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+commit;
+-- @session
+-- @session:id=25&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+drop table db1.t_rule_rollback_refresh;
+select count(*) from db1.t_dup;
+rollback;
+-- @session
+select id from db1.t_rule_txn order by id;
 
 -- Quoted identifiers and binary literals survive merging under ANSI_QUOTES.
 alter table db1.t_dup rename column code to `part-code`;

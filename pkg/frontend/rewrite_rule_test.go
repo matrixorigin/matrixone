@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/hex"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1401,6 +1403,7 @@ func TestRoleRuleCachePreservesPredicateInStatementMode(t *testing.T) {
 		`trim(trailing 'x' from c) = 'x'`,
 		`timestampadd(day, 1, d) > d`,
 		`get_format(date, c) = 'USA'`,
+		`convert(c using utf8mb4) = 'x'`,
 	} {
 		t.Run(left, func(t *testing.T) {
 			cache := &roleRuleCache{first: map[string]string{"db.t": prefix + left}, later: map[string][]string{"db.t": {prefix + right}}}
@@ -1444,6 +1447,93 @@ func TestMergeRewriteRulesPreservesIdentifiersAndBinaryLiterals(t *testing.T) {
 			require.Equal(t, subtraction, merged)
 		})
 	}
+}
+
+func TestRoleRuleBinaryLiteralHintRoundTrip(t *testing.T) {
+	// Preserve invalid UTF-8 through both SQL escaping and JSON serialization.
+	binary := string([]byte{0, 0xff, 92, 39, 0x80})
+	hexLiteral := "_binary 0x" + hex.EncodeToString([]byte(binary))
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			ctx := t.Context()
+			literal := "_binary " + sqlquote.StringWithMode(binary, mode == "NO_BACKSLASH_ESCAPES")
+			const key = "db.t"
+			base := "select " + literal + " as payload from " + key + " where "
+			left := base + "id = 1"
+			for _, tc := range []struct {
+				name, first               string
+				later                     []string
+				wantProjection, wantWhere string
+			}{
+				{"single", left, nil, hexLiteral + " as payload", "id = 1"},
+				{"adjacent token", "select " + literal + "AS payload from db.t where id = 1",
+					nil, hexLiteral + " as payload", "id = 1"},
+				{"identical", left, []string{left}, hexLiteral + " as payload", "id = 1"},
+				{"fallback", "select id from db.t where id = 0", []string{left}, hexLiteral + " as payload", "id = 1"},
+				{"three roles", left, []string{base + "id = 2", base + "id = 3"}, hexLiteral + " as payload", "((id = 1) or (id = 2)) or (id = 3)"},
+				{"predicate", "select payload from db.t where id = 1",
+					[]string{"select payload from db.t where convert(payload using binary) = " + literal},
+					"payload", "(id = 1) or (convert(payload using binary) = " + hexLiteral + ")"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					cache := &roleRuleCache{first: map[string]string{key: tc.first}, hasNonUTF8: true}
+					if len(tc.later) != 0 {
+						cache.later = map[string][]string{key: tc.later}
+					}
+					policy := &rewritePolicySnapshot{enabled: true, roleRules: cache}
+					sql, err := policy.rewrite(ctx, "select payload from db.t", mode)
+					require.NoError(t, err)
+					stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, mode)
+					require.NoError(t, err)
+					defer stmt.Free()
+					require.NoError(t, parsers.AddRewriteHintsWithSQLMode(ctx, []tree.Statement{stmt}, sql, mode))
+					rules := stmt.(*tree.Select).RewriteOption.Rewrites[key]
+					require.Len(t, rules, 1)
+					got := rules[0].Stmt
+					defer got.Free()
+					want, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL,
+						"select "+tc.wantProjection+" from db.t where "+tc.wantWhere, 1, mode)
+					require.NoError(t, err)
+					defer want.Free()
+					require.Equal(t, want, got)
+				})
+			}
+		})
+	}
+}
+
+func TestRoleRuleHintSQLPreservesValidSQLAndRejectsNonBinaryBytes(t *testing.T) {
+	ctx := t.Context()
+	for _, sql := range []string{
+		"select _binary '' from db.t",
+		"select _binary 'printable' from db.t",
+		"select _binary 0x00 from db.t",
+	} {
+		got, err := roleRuleHintSQL(ctx, sql, 0)
+		require.NoError(t, err)
+		require.Equal(t, sql, got)
+	}
+	_, err := roleRuleHintSQL(ctx, "select '"+string([]byte{0xff})+"' from db.t", 0)
+	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
+
+	// Escaping a merged text predicate must preserve invalid bytes until
+	// the JSON boundary can reject them.
+	textLiteral := sqlquote.StringWithMode(string([]byte{0xff, 92}), false)
+	cache := &roleRuleCache{
+		first:      map[string]string{"db.t": "select id from db.t where id = 1"},
+		later:      map[string][]string{"db.t": {"select id from db.t where code = " + textLiteral}},
+		hasNonUTF8: true,
+	}
+	policy := &rewritePolicySnapshot{enabled: true, roleRules: cache}
+	_, err = policy.rewrite(ctx, "select id from db.t", "")
+	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
+
+	merged, err := mergeRewriteRules(ctx, "select id from db.t where a = _binary X''",
+		"select id from db.t where b is null", "")
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
 }
 
 func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {

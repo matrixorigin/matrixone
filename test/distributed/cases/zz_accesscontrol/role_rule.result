@@ -402,8 +402,6 @@ select count(*) from db1.t_dup;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 select count(*) from db1.t_dup;
 internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
-commit;
-rollback;
 set secondary role none;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
@@ -413,6 +411,37 @@ set secondary role all;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 2
+create table db1.t_rule_txn(id int primary key);
+create table db1.t_rule_commit_refresh(id int);
+create table db1.t_rule_rollback_refresh(id int);
+grant insert, select on table db1.t_rule_txn to test_rule_role_dup_projection_a;
+grant drop table on database db1 to test_rule_role_dup_projection_a;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (1);
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (2);
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+drop table db1.t_rule_commit_refresh;
+select count(*) from db1.t_dup;
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+select count(*) as visible_before_commit from db1.t_rule_txn;
+➤ visible_before_commit[-5,64,0]  𝄀
+0
+commit;
+drop table db1.t_rule_rollback_refresh;
+select count(*) from db1.t_dup;
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+rollback;
+select id from db1.t_rule_txn order by id;
+➤ id[4,32,0]  𝄀
+1
 alter table db1.t_dup rename column code to `part-code`;
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where `part-code` = _binary '0001'" on table db1.t_dup;
 alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where `part-code` = _binary 0x4f27427269656e" on table db1.t_dup;

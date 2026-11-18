@@ -39,6 +39,7 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
+	byteExactBinaryLiterals       bool
 	paramExprOffset               bool
 	stringLiteralPositions        *[]StringLiteralPosition
 }
@@ -101,6 +102,11 @@ func WithNoBackslashEscape() FmtCtxOption {
 // NoBackslashEscape reports whether string literals should be formatted for the
 // NO_BACKSLASH_ESCAPES sql_mode.
 func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+// WithByteExactBinaryLiterals keeps quoted binary bytes intact while deparsing.
+func WithByteExactBinaryLiterals() FmtCtxOption {
+	return func(ctx *FmtCtx) { ctx.byteExactBinaryLiterals = true }
+}
 
 func WithModeIndependentStringLiterals() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
