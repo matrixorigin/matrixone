@@ -77,7 +77,7 @@ func WithSingleQuoteString() FmtCtxOption {
 	})
 }
 
-// WithStringLiteralPositions records the ranges emitted by WithSingleQuoteString.
+// WithStringLiteralPositions records string literal ranges when formatting SQL with WithSingleQuoteString.
 func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
 	return func(ctx *FmtCtx) { ctx.stringLiteralPositions = positions }
 }
@@ -213,14 +213,19 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		default:
 			return ctx.WriteString(v)
 		}
-		start := ctx.Len()
-		n, err := ctx.WriteString(literal)
-		if ctx.stringLiteralPositions != nil {
-			*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{start, ctx.Len()})
-		}
-		return n, err
+		return ctx.writeSQLStringLiteral(literal)
 	}
 	return ctx.WriteString(v)
+}
+
+// writeSQLStringLiteral writes a complete, already quoted literal.
+func (ctx *FmtCtx) writeSQLStringLiteral(literal string) (int, error) {
+	start := ctx.Len()
+	n, err := ctx.WriteString(literal)
+	if ctx.stringLiteralPositions != nil {
+		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{start, ctx.Len()})
+	}
+	return n, err
 }
 
 func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {

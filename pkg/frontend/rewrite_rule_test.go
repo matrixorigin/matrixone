@@ -1454,6 +1454,7 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 		{"concat(label, 'East')", "concat(label, 'east')", "NO_BACKSLASH_ESCAPES"},
 		{"_binary 'East'", "_binary 'east'", ""},
 		{"_binary 'East'", "'East'", ""},
+		{"cast(1 as enum('East'))", "cast(1 as enum('east'))", ""},
 	} {
 		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
 			left := "select " + tc.left + " as x from db.t where id = 1"
@@ -1467,6 +1468,18 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 		"select concat(label, 'East') as x from db.t where id = 2", "")
 	require.NoError(t, err)
 	require.Contains(t, got, "where (`id` = 1) or (`id` = 2)")
+}
+
+func TestMergeRewriteRulesMergesIdenticalEnumProjections(t *testing.T) {
+	ctx := context.Background()
+	const prefix = "select cast(1 as enum('East')) as x from db.t where "
+	got, err := mergeRewriteRules(ctx, prefix+"id = 1", prefix+"id = 2", "")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL, prefix+"(id = 1) or (id = 2)", 1)
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, got, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, stmt)
 }
 
 func TestRewritePolicyAllowsStandaloneSQLModeRecovery(t *testing.T) {

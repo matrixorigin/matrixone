@@ -186,7 +186,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
 				if ctx.singleQuoteString {
-					ctx.WriteString(sqlquote.StringWithMode(enum, ctx.NoBackslashEscape()))
+					ctx.writeSQLStringLiteral(sqlquote.StringWithMode(enum, ctx.NoBackslashEscape()))
 				} else {
 					ctx.WriteByte('"')
 					ctx.WriteString(enum)

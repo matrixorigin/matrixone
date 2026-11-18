@@ -422,6 +422,13 @@ set secondary role all;
 select x from db1.t_dup order by x;
 ➤ x[4,32,0]  𝄀
 2
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum('East')) as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum('east')) as x from db1.t_dup where marker = 2" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
