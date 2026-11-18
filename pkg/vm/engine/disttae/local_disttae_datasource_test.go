@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -138,6 +137,74 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	calls int
+}
+
+func (it *countedReplayRows) Next() bool {
+	it.calls++
+	return it.RowsIter.Next()
+}
+
+func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: stamp, id: 42},
+		{rowID: types.NewRowid(&block, 1), ts: stamp, id: 43},
+		{rowID: types.NewRowid(&block, 2), ts: stamp.Next(), id: 44},
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		calls  int
+	}{
+		{"first-row-denied", 7, 1},
+		{"growth-denied", 23, 2},
+		{"fits", 24, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			if tc.name == "fits" {
+				require.NoError(t, err)
+				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			}
+			require.Equal(t, tc.calls, it.calls)
+		})
+	}
+}
+
 func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -167,462 +234,6 @@ func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	require.Equal(t, 1, out.RowCount())
 	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[0], 0))
 	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[1], 0))
-}
-
-type replayReadBudget struct {
-	reserves, releases int
-}
-
-func (b *replayReadBudget) AcquireAllocationCapacity(uint64) error { b.reserves++; return nil }
-func (b *replayReadBudget) ReleaseAllocationCapacity(uint64)       { b.releases++ }
-
-func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	block := testBlockID(7)
-	stamp := types.BuildTS(4, 0)
-	rows := make([]testMaterializedSnapshotRow, 100, 101)
-	for i := range rows {
-		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(i)), ts: stamp, id: int64(i)}
-	}
-	// A NULL outside the read snapshot must not allocate a validity bitmap
-	// just because it shares its backing vector with the selected rows.
-	pState := newTestMaterializedSnapshotPartitionState(t, mp, append(rows, testMaterializedSnapshotRow{
-		rowID: types.NewRowid(&block, 100), ts: stamp.Next(), id: 100, payloadNull: true,
-	}))
-	txnOp, closeTxn := client.NewTestTxnOperator(t.Context())
-	defer closeTxn()
-	txnOp.AddWorkspace(&Transaction{cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)})
-	table := &txnTable{db: &txnDatabase{op: txnOp}}
-	for _, tc := range []struct {
-		name       string
-		seq        uint16
-		limit      uint64
-		checkFiles bool
-	}{{"id", 0, 1 << 20, false}, {"id-no-flushed-files", 0, 1 << 20, true}, {"payload", 1, 1 << 20, false}, {"budget-denied", 0, 1, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			ls := &LocalDisttaeDataSource{ctx: context.Background(), pState: pState, snapshotTS: stamp,
-				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
-			if tc.checkFiles {
-				ls.table = table
-				ls.tombstonePolicy &^= engine.Policy_SkipUncommitedS3
-			}
-			defer ls.Close()
-			budget := new(replayReadBudget)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
-			require.NoError(t, err)
-			acct, err := registry.OpenWithController(tc.limit, budget)
-			require.NoError(t, err)
-			defer func() {
-				require.Zero(t, acct.Snapshot().Used)
-				require.Equal(t, budget.reserves, budget.releases)
-				_, _, err := registry.CompleteTerminal(acct)
-				require.NoError(t, err)
-			}()
-			selection, err := vector.NewAllocationAccountSelection(acct, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-			require.NoError(t, err)
-			out := batch.NewOffHeapWithSize(1)
-			out.Attrs = []string{tc.name}
-			typ := types.T_int64.ToType()
-			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			defer out.Clean(mp)
-			require.NoError(t, out.SetAllocationAccount(selection))
-			err = ls.filterInMemCommittedInserts(ls.ctx, []types.Type{typ}, []uint16{tc.seq}, mp, out)
-			if tc.limit == 1 {
-				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity, "grouped output must not bypass the statement limit")
-				return
-			}
-			require.NoError(t, err)
-			require.Len(t, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]), len(rows))
-			require.Positive(t, acct.Snapshot().Used)
-			require.Zero(t, out.Vecs[0].GetNulls().GetBitmap().ExternalStorageCapacity())
-			if tc.seq == 0 {
-				require.LessOrEqual(t, budget.reserves, 2, "reserve for accepted row groups, not each doubling from a single row")
-			}
-		})
-	}
-}
-
-type replayAdmissionTombstoner struct {
-	recordingTombstoner
-	err     error
-	offsets []int64
-}
-
-type countedReplayRows struct {
-	logtailreplay.RowsIter
-	visited int
-}
-
-func (it *countedReplayRows) Next() bool {
-	if !it.RowsIter.Next() {
-		return false
-	}
-	it.visited++
-	return true
-}
-
-func TestCommittedReplayBoundsReadAheadAcrossWorkspaceDeletes(t *testing.T) {
-	ctx := t.Context()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	block, stamp := testBlockID(7), types.BuildTS(4, 0)
-	rows := make([]testMaterializedSnapshotRow, 129)
-	deleted := make([]int64, 0, len(rows)-1)
-	for i := range rows {
-		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(i)), ts: stamp, id: int64(i + 42)}
-		if i != 0 {
-			deleted = append(deleted, int64(i))
-		}
-	}
-	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
-	txnOp, closeTxn := client.NewTestTxnOperator(ctx)
-	defer closeTxn()
-	txnOp.AddWorkspace(&Transaction{deletedBlocks: &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{
-		42: {block: deleted},
-	}}})
-	table := &txnTable{tableId: 42, db: &txnDatabase{op: txnOp}}
-	typ := types.T_int64.ToType()
-	for _, tc := range []struct {
-		name   string
-		budget uint64
-	}{{"denied", 7}, {"fits", 8}} {
-		t.Run(tc.name, func(t *testing.T) {
-			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
-			ls := &LocalDisttaeDataSource{ctx: ctx, table: table, pState: state, snapshotTS: stamp,
-				tombstonePolicy: engine.Policy_SkipAll &^ engine.Policy_SkipUncommitedInMemory,
-				memPKFilter:     &readutil.MemPKFilter{}}
-			ls.pStateRows.insIter = it
-			defer ls.Close()
-
-			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
-			require.NoError(t, err)
-			account, err := registry.OpenWithController(tc.budget, new(replayReadBudget))
-			require.NoError(t, err)
-			defer func() {
-				require.Zero(t, account.Snapshot().Used)
-				_, _, err := registry.CompleteTerminal(account)
-				require.NoError(t, err)
-			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-			require.NoError(t, err)
-			out := batch.NewOffHeapWithSize(1)
-			defer out.Clean(mp)
-			out.Attrs = []string{"id"}
-			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			require.NoError(t, out.SetAllocationAccount(selection))
-
-			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
-			if tc.budget == 7 {
-				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-				require.LessOrEqual(t, it.visited, 64)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
-		})
-	}
-}
-
-type replayCountingFileService struct {
-	fileservice.FileService
-	reads int
-}
-
-func (f *replayCountingFileService) Read(ctx context.Context, v *fileservice.IOVector) error {
-	f.reads++
-	return f.FileService.Read(ctx, v)
-}
-
-func TestCommittedReplayAdmissionBeforeFlushedTombstoneReads(t *testing.T) {
-	ctx := t.Context()
-	proc := testutil.NewProc(t)
-	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	require.NoError(t, err)
-	txnOp, closeTxn := client.NewTestTxnOperator(ctx)
-	defer closeTxn()
-	txn := &Transaction{cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
-	txnOp.AddWorkspace(txn)
-	table := &txnTable{db: &txnDatabase{op: txnOp}}
-	block := testBlockID(7)
-	stamp := types.BuildTS(4, 0)
-	rows := make([]testMaterializedSnapshotRow, 129)
-	typ := types.T_int32.ToType()
-	deletes := readutil.NewCNTombstoneBatch(&typ, objectio.HiddenColumnSelection_None)
-	defer deletes.Clean(proc.Mp())
-	for i := range rows {
-		rowID := types.NewRowid(&block, uint32(i))
-		rows[i] = testMaterializedSnapshotRow{rowID: rowID, ts: stamp, id: int64(i)}
-		if i != 0 {
-			require.NoError(t, vector.AppendFixed(deletes.Vecs[0], rowID, false, proc.Mp()))
-			require.NoError(t, vector.AppendFixed(deletes.Vecs[1], int32(i), false, proc.Mp()))
-		}
-	}
-	deletes.SetRowCount(128)
-	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, typ, -1)
-	defer func() { require.NoError(t, writer.Close()) }()
-	require.NoError(t, writer.Write(ctx, deletes))
-	stats, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, stats, 1)
-	txn.StashFlushedTombstones(stats[0])
-
-	type replayResult struct {
-		reads, reserves, rows int
-		err                   error
-	}
-	run := func(t *testing.T, input []testMaterializedSnapshotRow, limit uint64) replayResult {
-		t.Helper()
-		srcMP := mpool.MustNewZero()
-		defer mpool.DeleteMPool(srcMP)
-		state := newTestMaterializedSnapshotPartitionState(t, srcMP, input)
-		counting := &replayCountingFileService{FileService: fs}
-		ls := &LocalDisttaeDataSource{ctx: ctx, fs: counting, table: table, pState: state,
-			snapshotTS: stamp, tombstonePolicy: engine.Policy_SkipAll &^ engine.Policy_SkipUncommitedS3,
-			memPKFilter: &readutil.MemPKFilter{}}
-		defer ls.Close()
-		dstMP := mpool.MustNewZero()
-		defer mpool.DeleteMPool(dstMP)
-		registry, err := mpool.NewAllocationAccountRegistry(1, 32)
-		require.NoError(t, err)
-		budget := new(replayReadBudget)
-		account, err := registry.OpenWithController(limit, budget)
-		require.NoError(t, err)
-		defer func() {
-			require.Zero(t, dstMP.CurrNB())
-			require.Zero(t, account.Snapshot().Used)
-			_, _, err := registry.CompleteTerminal(account)
-			require.NoError(t, err)
-		}()
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-		require.NoError(t, err)
-		out := batch.NewOffHeapWithSize(1)
-		defer out.Clean(dstMP)
-		out.Attrs = []string{"id"}
-		out.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-		require.NoError(t, out.SetAllocationAccount(selection))
-		err = ls.filterInMemCommittedInserts(ctx, []types.Type{types.T_int64.ToType()}, []uint16{0}, dstMP, out)
-		return replayResult{counting.reads, budget.reserves, out.RowCount(), err}
-	}
-	t.Run("deleted-suffix", func(t *testing.T) {
-		control := run(t, rows[:1], 1)
-		got := run(t, rows, 1)
-		require.ErrorIs(t, control.err, mpool.ErrAllocationAccountCapacity)
-		require.ErrorIs(t, got.err, mpool.ErrAllocationAccountCapacity)
-		require.Positive(t, control.reads)
-		require.LessOrEqual(t, got.reads, control.reads, "deleted suffix must not cause further reads before admission")
-	})
-	t.Run("unrelated-file", func(t *testing.T) {
-		input := slices.Clone(rows[:100])
-		otherBlock := testBlockID(8)
-		for i := range input {
-			input[i].rowID = types.NewRowid(&otherBlock, uint32(i))
-		}
-		got := run(t, input, 1<<20)
-		require.NoError(t, got.err)
-		require.Equal(t, len(input), got.rows)
-		require.Zero(t, got.reads)
-		require.LessOrEqual(t, got.reserves, 2)
-	})
-	t.Run("pending-prefix", func(t *testing.T) {
-		input := slices.Clone(rows[:2])
-		otherBlock := testBlockID(6)
-		input[0].rowID = types.NewRowid(&otherBlock, 0)
-		got := run(t, input, 1)
-		require.ErrorIs(t, got.err, mpool.ErrAllocationAccountCapacity)
-		require.Zero(t, got.reads, "admit the preceding row before reading the matching file")
-	})
-}
-
-func (t *replayAdmissionTombstoner) ApplyPersistedTombstones(
-	_ context.Context, _ fileservice.FileService, _ *types.TS, _ *types.Blockid, offsets []int64, _ *objectio.Bitmap,
-) ([]int64, error) {
-	t.offsets = append(t.offsets, offsets...)
-	if offsets[0] == 1 {
-		return nil, t.err
-	}
-	return offsets, nil
-}
-
-func TestCommittedReplayAdmissionBeforeLaterTombstoneError(t *testing.T) {
-	srcMP := mpool.MustNewZero()
-	defer mpool.DeleteMPool(srcMP)
-	ts := types.BuildTS(4, 0)
-	block := testBlockID(7)
-	state := newTestMaterializedSnapshotPartitionState(t, srcMP, []testMaterializedSnapshotRow{
-		{rowID: types.NewRowid(&block, 0), ts: ts, id: 0, payload: 42},
-		{rowID: types.NewRowid(&block, 1), ts: ts, id: 1, payloadNull: true},
-	})
-	tombstoneErr := errors.New("second row tombstone read failed")
-	for _, tc := range []struct {
-		name    string
-		seq     uint16
-		limit   uint64
-		wantErr error
-		offsets []int64
-	}{
-		{"ineligible source", 1, 1, mpool.ErrAllocationAccountCapacity, []int64{0}},
-		{"eligible pending prefix", 0, 1, mpool.ErrAllocationAccountCapacity, []int64{0}},
-		{"eligible prefix fits", 0, 1024, tombstoneErr, []int64{0, 1}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dstMP := mpool.MustNewZero()
-			defer mpool.DeleteMPool(dstMP)
-			tombstones := &replayAdmissionTombstoner{err: tombstoneErr}
-			ctx := t.Context()
-			ls := &LocalDisttaeDataSource{
-				ctx: ctx, pState: state, snapshotTS: ts, category: engine.ShardingRemoteDataSource,
-				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}, extraTombstones: tombstones,
-			}
-			defer ls.Close()
-			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
-			require.NoError(t, err)
-			account, err := registry.OpenWithController(tc.limit, new(replayReadBudget))
-			require.NoError(t, err)
-			defer func() {
-				require.Zero(t, dstMP.CurrNB())
-				require.Zero(t, account.Snapshot().Used)
-				_, _, err := registry.CompleteTerminal(account)
-				require.NoError(t, err)
-			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-			require.NoError(t, err)
-			typ := types.T_int64.ToType()
-			out := batch.NewOffHeapWithSize(1)
-			defer out.Clean(dstMP)
-			col := []string{"id", "payload"}[tc.seq]
-			out.Attrs = []string{col}
-			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			require.NoError(t, out.SetAllocationAccount(selection))
-			err = ls.iterateInMemData(ctx, out.Attrs, []types.Type{typ}, []uint16{tc.seq}, 0, out, dstMP)
-			require.ErrorIs(t, err, tc.wantErr)
-			require.Equal(t, tc.offsets, tombstones.offsets)
-		})
-	}
-}
-
-func TestCommittedReplaySplitAdmission(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		split   int
-		limit   uint64
-		columns int
-	}{
-		{"split-at-scalar-peak", 60, 768, 1},
-		{"tiny-first-batch", 1, 768, 1},
-		{"below-output-size", 60, 511, 1},
-		{"two-batches-constrained", 60, 1152, 1},
-		{"one-batch-constrained", 64, 1152, 1},
-		{"wide-two-batches", 60, 128*512 + 256, 128},
-		{"wide-one-batch", 64, 128*512 + 256, 128},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srcMP := mpool.MustNewZero()
-			defer mpool.DeleteMPool(srcMP)
-			dstMP := mpool.MustNewZero()
-			defer mpool.DeleteMPool(dstMP)
-			ctx := context.Background()
-			block := testBlockID(4)
-			ts := types.BuildTS(4, 0)
-			rows := make([]testMaterializedSnapshotRow, 64)
-			for i := range rows {
-				rows[i] = testMaterializedSnapshotRow{
-					rowID: types.NewRowid(&block, uint32(i)), ts: ts, id: int64(i),
-				}
-			}
-			state := newTestMaterializedSnapshotPartitionState(t, srcMP, rows[:tc.split])
-			if tc.split < len(rows) {
-				appendTestSnapshotRows(t, srcMP, state, rows[tc.split:])
-			}
-			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: ts,
-				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
-			defer ls.Close()
-			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
-			require.NoError(t, err)
-			account, err := registry.OpenWithController(tc.limit, new(replayReadBudget))
-			require.NoError(t, err)
-			defer func() {
-				require.Zero(t, dstMP.CurrNB(), "destination allocation cleanup")
-				require.Zero(t, account.Snapshot().Used, "account cleanup")
-				_, _, e := registry.CompleteTerminal(account)
-				require.NoError(t, e)
-			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-			require.NoError(t, err)
-			out := batch.NewOffHeapWithSize(tc.columns)
-			defer out.Clean(dstMP)
-			typ := types.T_int64.ToType()
-			colTypes := make([]types.Type, tc.columns)
-			seqs := make([]uint16, tc.columns)
-			out.Attrs = make([]string, tc.columns)
-			for i := range tc.columns {
-				out.Attrs[i] = "id"
-				out.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-				colTypes[i] = typ
-			}
-			require.NoError(t, out.SetAllocationAccount(allocation))
-			err = ls.filterInMemCommittedInserts(ctx, colTypes, seqs, dstMP, out)
-			snap := account.Snapshot()
-			t.Logf("split=%d limit=%d peak=%d live=%d rows=%d vec_len=%d error=%v",
-				tc.split, tc.limit, snap.Peak, snap.Used, out.RowCount(), out.Vecs[0].Length(), err)
-			if tc.limit < 512 {
-				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-				return
-			}
-			require.LessOrEqual(t, snap.Peak, uint64(512*tc.columns+256), "one old backing during row-wise growth")
-			require.NoError(t, err, "same 64-row projection should fit regardless of replay batch boundaries")
-			require.Equal(t, 64, out.RowCount())
-			for _, v := range out.Vecs {
-				col := vector.MustFixedColWithTypeCheck[int64](v)
-				require.Len(t, col, len(rows))
-				for i, got := range col {
-					require.Equal(t, int64(i), got)
-				}
-			}
-		})
-	}
-}
-
-func TestCommittedReplayProjectionAcrossBatchesAndReadBoundary(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	block := testBlockID(9)
-	// The scalar projection visits rows in RowID order across both input
-	// batches and the output block boundary, keeping all columns aligned.
-	const size = objectio.BlockMaxRows + 3
-	rows := make([]testMaterializedSnapshotRow, size)
-	for i := range rows {
-		id := size - i - 1
-		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(id)), ts: types.BuildTS(int64(id+1), 0), id: int64(id)}
-	}
-	pState := newTestMaterializedSnapshotPartitionState(t, mp, rows[:size-71])
-	appendTestSnapshotRows(t, mp, pState, rows[size-71:])
-	ls := &LocalDisttaeDataSource{ctx: context.Background(), pState: pState, snapshotTS: types.MaxTs(),
-		tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
-	defer ls.Close()
-	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType(), types.T_int64.ToType()}
-	seqs := []uint16{objectio.SEQNUM_ROWID, 0, objectio.SEQNUM_COMMITTS, 5}
-	out := batch.NewWithSize(len(colTypes))
-	out.SetAttributes([]string{objectio.PhysicalAddr_Attr, "id", objectio.DefaultCommitTS_Attr, "added"})
-	for i, typ := range colTypes {
-		out.Vecs[i] = vector.NewVec(typ)
-	}
-	defer out.Clean(mp)
-	seen := make(map[int64]bool, size)
-	for _, want := range []int{objectio.BlockMaxRows, 3, 0} {
-		out.CleanOnlyData()
-		require.NoError(t, ls.filterInMemCommittedInserts(ls.ctx, colTypes, seqs, mp, out))
-		require.Equal(t, want, out.RowCount())
-		for i, id := range vector.MustFixedColWithTypeCheck[int64](out.Vecs[1]) {
-			require.False(t, seen[id])
-			seen[id] = true
-			require.Equal(t, types.NewRowid(&block, uint32(id)), vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], i))
-			require.Equal(t, types.BuildTS(id+1, 0), vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[2], i))
-			require.True(t, out.Vecs[3].IsNull(uint64(i)))
-		}
-	}
-	require.Len(t, seen, size)
 }
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -734,7 +345,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask, nil)
+		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
 		require.NoError(t, err)
 		require.Zero(t, len(left))
 

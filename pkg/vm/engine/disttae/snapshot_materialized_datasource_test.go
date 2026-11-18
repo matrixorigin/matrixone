@@ -133,11 +133,10 @@ func TestMaterializedSnapshotDataSourceUsesSnapshotTSForPersistedTombstones(t *t
 }
 
 type testMaterializedSnapshotRow struct {
-	rowID       types.Rowid
-	ts          types.TS
-	id          int64
-	payload     int64
-	payloadNull bool
+	rowID   types.Rowid
+	ts      types.TS
+	id      int64
+	payload int64
 }
 
 func newTestMaterializedSnapshotPartitionState(
@@ -148,12 +147,6 @@ func newTestMaterializedSnapshotPartitionState(
 	t.Helper()
 
 	pState := logtailreplay.NewPartitionState("", false, 42, false)
-	appendTestSnapshotRows(t, mp, pState, rows)
-	return pState
-}
-
-func appendTestSnapshotRows(t *testing.T, mp *mpool.MPool, pState *logtailreplay.PartitionState, rows []testMaterializedSnapshotRow) {
-	t.Helper()
 	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 	tsVec := vector.NewVec(types.T_TS.ToType())
 	idVec := vector.NewVec(types.T_int64.ToType())
@@ -167,7 +160,7 @@ func appendTestSnapshotRows(t *testing.T, mp *mpool.MPool, pState *logtailreplay
 		require.NoError(t, vector.AppendFixed(rowIDVec, row.rowID, false, mp))
 		require.NoError(t, vector.AppendFixed(tsVec, row.ts, false, mp))
 		require.NoError(t, vector.AppendFixed(idVec, row.id, false, mp))
-		require.NoError(t, vector.AppendFixed(payloadVec, row.payload, row.payloadNull, mp))
+		require.NoError(t, vector.AppendFixed(payloadVec, row.payload, false, mp))
 	}
 
 	packer := types.NewPacker()
@@ -181,6 +174,8 @@ func appendTestSnapshotRows(t *testing.T, mp *mpool.MPool, pState *logtailreplay
 			mustVectorToProtoForMaterializedSnapshotTest(t, payloadVec),
 		},
 	}, 0, packer, mp)
+
+	return pState
 }
 
 func collectMaterializedSnapshotInt64Column(

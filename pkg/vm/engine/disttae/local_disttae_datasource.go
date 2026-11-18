@@ -895,35 +895,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	return nil
 }
 
-// appendInitialReplayRows may skip intermediate data reservations, but must
-// leave the same capacity as row-wise append: the next grow charges both the
-// new and the old buffer. The replay source has no SQL expression sidecars.
-func appendInitialReplayRows(dst, src *vector.Vector, rows []int64, width int64, mp *mpool.MPool) error {
-	if len(rows) > 1 {
-		want := int64(len(rows)) * width
-		bulk, ok := mpool.GrowCapacity(0, want)
-		var scalar int64
-		for ok && scalar < want {
-			// At most 64 fixed-size descriptors; use the allocator's own
-			// growth policy at each single-row overflow.
-			scalar, ok = mpool.GrowCapacity(scalar, (scalar/width+1)*width)
-		}
-		if ok && scalar == bulk {
-			return dst.Union(src, rows, mp)
-		}
-	}
-	return appendReplayRowsScalar(dst, src, rows, mp)
-}
-
-func appendReplayRowsScalar(dst, src *vector.Vector, rows []int64, mp *mpool.MPool) error {
-	for _, offset := range rows {
-		if err := dst.UnionOne(src, offset, mp); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	ctx context.Context,
 	colTypes []types.Type,
@@ -1003,52 +974,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		delInFile int
 	)
 
-	// Only coalesce the first backing allocation for a single ordinary column.
-	// With multiple charged columns even changing row-major append order can
-	// raise their combined peak during replacement.
-	var offsets [64]int64
-	n, firstCol := 0, -1
-	var flushAtScan int
-	var firstSrc *vector.Vector
-	var firstWidth int64
-	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS &&
-		!(ls.category == engine.ShardingRemoteDataSource && ls.extraTombstones != nil) {
-		dst := outBatch.Vecs[0]
-		if width := dst.GetType().TypeSize(); width > 0 &&
-			dst.AllocationAccountSelection() != nil && !dst.IsConst() && !dst.IsDictionary() &&
-			dst.Length() == 0 && dst.Allocated() == 0 && !dst.HasBorrowedBacking() {
-			firstCol = 2 + int(seqNums[0])
-			firstWidth = int64(width)
-		}
-	}
-	var beforeStorage func() error
-	flushFirst := func(scalar bool) error {
-		firstCol = -1
-		beforeStorage = nil
-		if n == 0 {
-			return nil
-		}
-		rows := offsets[:n]
-		n = 0
-		if scalar {
-			return appendReplayRowsScalar(outBatch.Vecs[0], firstSrc, rows, mp)
-		}
-		return appendInitialReplayRows(outBatch.Vecs[0], firstSrc, rows, firstWidth, mp)
-	}
-	if firstCol >= 0 {
-		// File-backed tombstone checks must not run ahead of output
-		// admission. Disable grouping once such a check is necessary.
-		beforeStorage = func() error { return flushFirst(true) }
-	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
-		for outBatch.Vecs[0].Length()+n < int(objectio.BlockMaxRows) {
-			// Bound read-ahead from the first pending row, including candidates
-			// rejected by tombstones or filters.
-			if n > 0 && scan == flushAtScan {
-				if err := flushFirst(false); err != nil {
-					return err
-				}
-			}
+		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
 				break
 			}
@@ -1057,8 +984,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			b, o := entry.RowID.Decode()
 			scan++
 
-			if sels, err = ls.applyTombstones(
-				ls.ctx, b, []int64{int64(o)}, applyPolicy, beforeStorage,
+			if sels, err = ls.ApplyTombstones(
+				ls.ctx, b, []int64{int64(o)}, applyPolicy,
 			); err != nil {
 				return err
 			}
@@ -1090,31 +1017,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				false,
 				mp,
 			); err != nil {
-				if flushErr := flushFirst(true); flushErr != nil {
-					return flushErr
-				}
 				return err
-			}
-			if firstCol >= 0 {
-				if firstCol < len(entry.Batch.Vecs) && entry.Batch.Attrs[firstCol] != "" {
-					src := entry.Batch.Vecs[firstCol]
-					// Check the first source before reading ahead. Sources
-					// that can only append one row at a time must retain
-					// their admission order relative to tombstone reads.
-					if n == 0 && !src.IsConst() && !src.IsDictionary() &&
-						src.GetNulls().EmptyByFlag() && src.GetGrouping().EmptyByFlag() && len(src.GetArea()) == 0 {
-						firstSrc = src
-						flushAtScan = scan + len(offsets) - 1
-					}
-					if src == firstSrc {
-						offsets[n] = entry.Offset
-						n++
-						continue
-					}
-				}
-				if err := flushFirst(false); err != nil {
-					return err
-				}
 			}
 			for i := range outBatch.Attrs {
 				if i == physicalColumnPos {
@@ -1148,11 +1051,6 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if err != nil {
 					return err
 				}
-			}
-		}
-		if n > 0 {
-			if err := flushFirst(false); err != nil {
-				return err
 			}
 		}
 
@@ -1230,17 +1128,7 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 	rowsOffset []int64,
 	dynamicPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
-	return ls.applyTombstones(ctx, bid, rowsOffset, dynamicPolicy, nil)
-}
 
-// beforeStorage lets replay finish pending output before a file-backed check.
-func (ls *LocalDisttaeDataSource) applyTombstones(
-	ctx context.Context,
-	bid *objectio.Blockid,
-	rowsOffset []int64,
-	dynamicPolicy engine.TombstoneApplyPolicy,
-	beforeStorage func() error,
-) ([]int64, error) {
 	if len(rowsOffset) == 0 {
 		return nil, nil
 	}
@@ -1273,7 +1161,7 @@ func (ls *LocalDisttaeDataSource) applyTombstones(
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedS3 == 0 {
-		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil, beforeStorage)
+		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1330,7 +1218,7 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		if _, err = ls.applyWorkspaceFlushedS3Deletes(
-			bid, nil, &deletedRows, nil,
+			bid, nil, &deletedRows,
 		); err != nil {
 			deletedRows.Release()
 			return
@@ -1555,7 +1443,6 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
-	beforeStorage func() error,
 ) (leftRows []int64, err error) {
 
 	leftRows = offsets
@@ -1571,6 +1458,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	if len(tombstones) == 0 {
 		return
 	}
+
 	release := func() {}
 	if deletedRows == nil {
 		bm := objectio.GetReusableBitmap()
@@ -1587,13 +1475,6 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 		i := curr
 		curr++
-		// The object-level zone map can reject unrelated flushed files
-		// without I/O, so keep grouping until a file may actually be read.
-		if beforeStorage != nil && tombstones[i].SortKeyZoneMap().RowidPrefixEq(bid[:]) {
-			if err := beforeStorage(); err != nil {
-				return nil, err
-			}
-		}
 		return &tombstones[i], nil
 	}
 
