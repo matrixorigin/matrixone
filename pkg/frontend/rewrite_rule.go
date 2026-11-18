@@ -856,7 +856,8 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	mergedClause.Where = mergeRewriteRuleWhere(leftShape.clause.Where, rightShape.clause.Where)
 	merged.Select = &mergedClause
 
-	return tree.String(&merged, dialect.MYSQL), true, nil
+	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
+	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithSingleQuoteString()), true, nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
