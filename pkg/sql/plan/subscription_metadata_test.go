@@ -603,37 +603,77 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 
 	for _, mode := range []int64{1, 2} {
 		t.Run(fmt.Sprintf("case-insensitive mode %d deduplicates", mode), func(t *testing.T) {
-			optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
+			_, ctx := newSubscriptionMetadataTestOptimizer(t)
 			ctx.lowerCaseTableNames = mode
 			ctx.metadata = metadata
-
-			queryPlan, err := runOneStmt(optimizer, t,
-				"select count(*) from information_schema.statistics")
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			visible, err := builder.visibleSubscriptionMetadata(nil)
 			require.NoError(t, err)
-			require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()),
-				maxSubscriptionStatisticsPublisherBranches)
-			require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount)
+			require.Len(t, visible, maxSubscriptionStatisticsPublisherBranches)
+			var matching []string
+			for _, subscription := range visible {
+				if strings.EqualFold(subscription.Meta.SubName, "SubCase") {
+					matching = append(matching, subscription.Meta.SubName)
+				}
+			}
+			require.Equal(t, []string{"SubCase"}, matching)
+			require.Equal(t, []int{maxSubscriptionStatisticsPublisherBranches}, ctx.metadataLimits)
+			require.Zero(t, ctx.publisherBindCount)
 			require.Nil(t, ctx.GetQueryingSubscription())
+			_, err = builder.visibleSubscriptionMetadata(nil)
+			require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+			if mode == 1 {
+				// Retain one complete boundary-sized plan without an outer filter.
+				optimizer, full := newSubscriptionMetadataTestOptimizer(t)
+				full.lowerCaseTableNames = mode
+				full.metadata = metadata
+				queryPlan, err := runOneStmt(optimizer, t, "select count(*) from information_schema.statistics")
+				require.NoError(t, err)
+				require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), maxSubscriptionStatisticsPublisherBranches)
+				require.Equal(t, maxSubscriptionStatisticsPublisherBranches, full.publisherBindCount)
+				require.Nil(t, full.GetQueryingSubscription())
+			}
 		})
 	}
 }
 
 func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
+	t.Run("admission is per builder", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
+		ctx.metadata = subscriptionMetadataTestSet(129)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		visible, err := builder.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		require.Len(t, visible, 129)
+		_, err = builder.visibleSubscriptionMetadata(nil)
+		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+		fresh := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		visible, err = fresh.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		require.Len(t, visible, 129)
+		require.Equal(t, []int{256, 256}, ctx.metadataLimits)
+	})
+
 	_, ctx := newSubscriptionMetadataTestOptimizer(t)
-	ctx.metadata = subscriptionMetadataTestSet(129)
 	statements, err := mysql.Parse(context.Background(),
 		"select count(*) from information_schema.statistics", 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
 
-	for build := 0; build < 2; build++ {
+	wantScans := []map[string]int{
+		{"sub_00": 1, "sub_01": 1},
+		{"sub_00": 1, "sub_01": 1, "sub_02": 1},
+	}
+	for build := range wantScans {
+		ctx.metadata = subscriptionMetadataTestSet(build + 2)
 		queryPlan, buildErr := BuildPlan(ctx, statements[0], false, nil)
 		require.NoError(t, buildErr)
-		require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), 129)
+		require.Equal(t, wantScans[build], statisticsPublisherScanCounts(queryPlan.GetQuery()))
 		require.Nil(t, ctx.GetQueryingSubscription())
 	}
-	require.Equal(t, 258, ctx.publisherBindCount,
+	require.Equal(t, []int{256, 256}, ctx.metadataLimits)
+	require.Equal(t, 5, ctx.publisherBindCount,
 		"the statement-wide budget must be fresh for each independent build")
 }
 

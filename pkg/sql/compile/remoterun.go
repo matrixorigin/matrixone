@@ -1237,6 +1237,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
 			DedupKeyExprs:             t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:      t.AuxiliaryRowIdColIdx,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1272,6 +1273,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
 			DedupKeyExprs:                   t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:            t.AuxiliaryRowIdColIdx,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1943,6 +1945,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1968,6 +1971,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
