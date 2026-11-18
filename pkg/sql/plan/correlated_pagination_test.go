@@ -456,6 +456,12 @@ func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
 		sql  string
 	}{
 		{"filtered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"arithmetic in comparison", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey + 1 limit 0) as v from tpch.nation n`},
+		{"boolean IS TRUE projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is true from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"boolean IS FALSE projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is false from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"negated truth projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is not true from tpch.region r where (r.r_regionkey > n.n_nationkey + 1) is not false limit 0) as v from tpch.nation n`},
+		{"unknown projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is unknown from tpch.region r where (r.r_regionkey > n.n_nationkey + 1) is not unknown limit 0) as v from tpch.nation n`},
+		{"compound arithmetic projection", `select n.n_nationkey, (select (n.n_nationkey * 2 - 1) > 4 and n.n_regionkey is not null from tpch.region r where r.r_regionkey > n.n_nationkey + 1 limit 0) as v from tpch.nation n`},
 		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
 		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
 		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
@@ -526,6 +532,8 @@ func TestZeroLimitScalarSourceSafety(t *testing.T) {
 		{name: "multiple projections", sql: "select a, d from t2 limit 0"},
 		{name: "grouping", sql: "select a from t2 group by a limit 0"},
 		{name: "unsafe nested function argument", sql: "select coalesce(random_bytes(4), a) from t2 limit 0"},
+		{name: "arithmetic order key remains unsupported", sql: "select a from t2 order by (d + 1 > 2) is true limit 0"},
+		{name: "untrusted function inside arithmetic predicate", sql: "select a from t2 where d > 1 + custom_fn(a) limit 0"},
 		{name: "unsafe order key", sql: "select a from t2 order by random_bytes(4) limit 0"},
 		{name: "aggregate projection", sql: "select sum(a) from t2 limit 0"},
 		{name: "predicate parameter retained", sql: "select a from t2 where d > ? limit 0", safe: true},

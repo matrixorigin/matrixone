@@ -17,6 +17,10 @@ insert into restricted_wrapper values (4);
 -- @label:bvt
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0) as filtered_zero
 from outer_rows o order by o.a;
+select o.a, (select o.a from inner_rows i where i.d > o.a + 1 limit 0) as arithmetic_zero
+from outer_rows o order by o.a;
+select o.a, (select (o.a > 1) is true from inner_rows i where i.d > o.a limit 0) as truth_zero
+from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
 from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
