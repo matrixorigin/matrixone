@@ -916,6 +916,15 @@ SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) WHERE k IS
 SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation_check;
 ➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct k)[-5,64,0]  𝄀
 2  ¦  2
+UPDATE IGNORE multi_update_ignore_reservation_check x
+JOIN multi_update_ignore_reservation_check y ON x.id=y.id AND x.id=1
+SET x.u=1,y.k=40,y.v=100;
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  40  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  1  ¦  1
 DROP TABLE multi_update_ignore_reservation_check;
 CREATE TABLE multi_update_generated_pk_guard(
 a INT,n INT,m INT GENERATED ALWAYS AS(a*2) STORED,

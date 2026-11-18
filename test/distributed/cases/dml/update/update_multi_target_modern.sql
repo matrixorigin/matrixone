@@ -742,6 +742,12 @@ SHOW WARNINGS;
 SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
 SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) WHERE k IS NOT NULL ORDER BY id;
 SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation_check;
+-- The second alias sees u=1 from the first accepted write.
+UPDATE IGNORE multi_update_ignore_reservation_check x
+JOIN multi_update_ignore_reservation_check y ON x.id=y.id AND x.id=1
+SET x.u=1,y.k=40,y.v=100;
+SHOW WARNINGS;
+SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
 DROP TABLE multi_update_ignore_reservation_check;
 
 -- Indirect generated primary-key changes obey the repeated-target key guard.

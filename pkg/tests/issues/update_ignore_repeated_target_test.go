@@ -260,6 +260,71 @@ func TestUpdateIgnoreRepeatedPhysicalTargetUniqueArbitration(t *testing.T) {
 			}
 		}
 
+		t.Run("CHECK uses the last accepted image without a false warning", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("check_image", "(id int primary key,k int unique,u int,v int,check(u+v<150))", "(1,10,100,1)")
+			result := c.exec("update ignore check_image a join check_image b on a.id=b.id set a.k=30,a.u=1,b.k=40,b.v=100 where a.id=1")
+			require.Equal(t, int64(2), c.affected(result))
+			require.Empty(t, c.warnings())
+			require.Equal(t, [][]int64{{1, 40, 1, 100}}, c.intRows("select id,k,u,v from check_image", 4))
+			query := "select id,k from check_image force index(k) where k is not null order by id"
+			plan := strings.Join(c.stringRows("explain "+query), "\n")
+			require.Contains(t, plan, "Index Table Scan on check_image.k")
+			require.NotContains(t, plan, "Join")
+			require.Equal(t, [][]int64{{1, 40}}, c.intRows(query, 2))
+		})
+
+		t.Run("CHECK observes a prior unique rejection", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("check_conflict", "(id int primary key,k int unique,u int,v int,check(u+v<150))", "(1,10,100,1),(2,30,1,1)")
+			result := c.exec("update ignore check_conflict a join check_conflict b on a.id=b.id set a.k=30,a.u=1,b.k=40,b.v=100 where a.id=1")
+			require.Equal(t, int64(0), c.affected(result))
+			require.ElementsMatch(t, []string{"1062 Duplicate entry '30' for key 'k'", "3819 Check constraint 'check_conflict_chk_1' is violated"}, c.warnings())
+			require.Equal(t, [][]int64{{1, 10, 100, 1}, {2, 30, 1, 1}}, c.intRows("select id,k,u,v from check_conflict order by id", 4))
+		})
+
+		t.Run("CHECK rejection precedes foreign key failure", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("check_fk_parent", "(id int primary key)", "(1)")
+			c.resetTable("check_fk_child", "(id int primary key,k int unique,u int,v int,pid int,check(u>0),foreign key(pid) references check_fk_parent(id))", "(1,10,1,1,1)")
+			result := c.exec("update ignore check_fk_child a join check_fk_child b on a.id=b.id set a.u=-1,a.pid=99,b.v=b.v+1 where a.id=1")
+			require.Equal(t, int64(1), c.affected(result))
+			require.Equal(t, []string{"3819 Check constraint 'check_fk_child_chk_1' is violated"}, c.warnings())
+			want := [][]int64{{1, 10, 1, 2, 1}}
+			require.Equal(t, want, c.intRows("select id,k,u,v,pid from check_fk_child", 5))
+
+			// Once CHECK passes, the missing parent still aborts both writes.
+			_, err := c.cn.ExecContext(c.ctx, "update ignore check_fk_child a join check_fk_child b on a.id=b.id set a.u=2,a.pid=99,b.v=b.v+1 where a.id=1")
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.Equal(t, uint16(1452), mysqlErr.Number)
+			require.Equal(t, want, c.intRows("select id,k,u,v,pid from check_fk_child", 5))
+		})
+
+		t.Run("CHECK keeps alias-local and composed foreign keys distinct", func(t *testing.T) {
+			c := newConn(t)
+			c.resetTable("check_composite_parent", "(x int,y int,primary key(x,y))", "(1,1),(2,1),(2,2)")
+			c.resetTable("check_composite_child", "(id int primary key,x int,y int,check(x+y<10),foreign key(x,y) references check_composite_parent(x,y))", "(1,1,1)")
+			const update = "update ignore check_composite_child a join check_composite_child b on a.id=b.id set a.x=2,b.y=2"
+			const selectChild = "select id,x,y from check_composite_child"
+
+			// The composed key (2,2) exists, but the alias-local key (1,2)
+			// does not. The original 1452 contract applies.
+			_, err := c.cn.ExecContext(c.ctx, update)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.Equal(t, uint16(1452), mysqlErr.Number)
+			require.Equal(t, [][]int64{{1, 1, 1}}, c.intRows(selectChild, 3))
+
+			// The alias-local key exists now. Only the composed candidate
+			// fails, so the first alias's update remains accepted.
+			c.exec("delete from check_composite_parent where x=2 and y=2")
+			c.exec("insert into check_composite_parent values (1,2)")
+			require.Equal(t, int64(1), c.affected(c.exec(update)))
+			require.Empty(t, c.warnings())
+			require.Equal(t, [][]int64{{1, 2, 1}}, c.intRows(selectChild, 3))
+		})
+
 		t.Run("CHECK rejection retains accepted reservation", func(t *testing.T) {
 			c := newConn(t)
 			c.resetTable("t", "(id int primary key,k int unique,u int,v int,check(u+v<150))", "(1,10,1,1),(2,20,1,1)")

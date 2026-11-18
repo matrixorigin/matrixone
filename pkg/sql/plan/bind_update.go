@@ -1267,8 +1267,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
+		// The repeated-table candidate owns CHECK and the admission checks
+		// that follow it.
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || greedyUniqueTables[tableDef.TblId] > 1 && len(tableDef.Checks) != 0 {
+			continue
+		}
 		asyncColumns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
-		if len(dmlCtx.updateCol2Expr[i]) == 0 || (len(tableDef.Checks) == 0 && len(asyncColumns) == 0) {
+		if len(tableDef.Checks) == 0 && len(asyncColumns) == 0 {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
@@ -3615,6 +3620,43 @@ func (builder *QueryBuilder) mergeRepeatedPhysicalTargetAssignmentsWithUniqueFal
 	}
 	currentID := builder.appendNode(currentNode, bindCtx)
 
+	// Reconstruct each alias's local image from the snapshot and its own
+	// normalized contributions. The composed image is a separate FK domain.
+	var localOld, localNew map[string]int32
+	var checkForeignKeys bool
+	if len(tableDef.Checks) != 0 && len(tableDef.Fkeys) != 0 {
+		checkForeignKeys, err = IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+	needsLocalImage := checkForeignKeys
+	if len(tableDef.Checks) != 0 && !needsLocalImage {
+		for _, targetIdx := range targets {
+			if len(dmlCtx.asyncDatalinkColumns[targetIdx]) != 0 {
+				needsLocalImage = true
+				break
+			}
+		}
+	}
+	if needsLocalImage {
+		localOld = make(map[string]int32)
+		localNew = make(map[string]int32)
+		for _, targetIdx := range targets {
+			for _, col := range tableDef.Cols {
+				key := dmlCtx.aliases[targetIdx] + "." + col.Name
+				pos := candidateSource.oldValuePosByCol[col.Name]
+				localOld[key] = pos
+				if _, ok := newColName2Idx[key]; ok {
+					localNew[key] = pos
+				}
+			}
+		}
+		for _, contribution := range candidateSource.contributions {
+			key := dmlCtx.aliases[contribution.targetIdx] + "." + contribution.colName
+			localNew[key] = contribution.outputValuePos
+		}
+	}
 	rowIDPos := candidateSource.oldValuePosByCol[catalog.Row_ID]
 	// Reserve step slots up front. Compile walks query steps backwards, so assign
 	// the first table target the highest slot and descend from there. The logical
@@ -3711,6 +3753,14 @@ func (builder *QueryBuilder) mergeRepeatedPhysicalTargetAssignmentsWithUniqueFal
 			return 0, nil, err
 		}
 		if len(tableDef.Checks) > 0 {
+			candidateID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_FILTER, Children: []int32{candidateID},
+				FilterList: []*plan.Expr{{Typ: activeExpr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: candidateTag, ColPos: targetBranchActivePos[targetIdx],
+				}}}},
+				ProjectList:     getProjectionByLastNodeIfAvailable(builder, candidateID),
+				FilterIsBarrier: true,
+			}, bindCtx)
 			candidateID, err = appendCheckConstraintPlanWithColLookupAndEligibility(
 				builder,
 				bindCtx,
@@ -3730,6 +3780,29 @@ func (builder *QueryBuilder) mergeRepeatedPhysicalTargetAssignmentsWithUniqueFal
 			)
 			if err != nil {
 				return 0, nil, err
+			}
+			alias := dmlCtx.aliases[targetIdx]
+			candidateID, err = appendAsyncDatalinkAdmission(
+				builder, bindCtx, tableDef, asyncDatalinkUpdateColumns(dmlCtx, targetIdx, localNew), candidateID, candidateTag,
+				func(name string) (int32, bool) {
+					key := alias + "." + name
+					if pos, ok := localNew[key]; ok {
+						return pos, true
+					}
+					pos, ok := localOld[key]
+					return pos, ok
+				}, nil,
+			)
+			if err != nil {
+				return 0, nil, err
+			}
+			if checkForeignKeys {
+				candidateID, candidateTag, candidateNode, err = builder.appendUpdateChildForeignKeyAssertions(
+					bindCtx, tableDef, alias, candidateID, candidateTag, candidateNode, localOld, localNew, nil,
+				)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 		}
 		candidateID, candidateTag, candidateNode, err = builder.appendMergedPhysicalTargetChildForeignKeyChecks(
@@ -4583,11 +4656,11 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 					return 0, nil, err
 				}
 				contributionMarker := makePlan2BoolConstExprWithType(true)
-				// The greedy candidate source must retain every syntactic assignment;
-				// its separate accepted-target marker decides whether to apply it later.
-				// A final merge has no later eligibility stage, so an inactive tuple
-				// must expose NULL presence instead of reviving the assignment.
-				if candidateSource == nil {
+				// A CHECK candidate starts from the chosen active tuple. Copies
+				// carried by a sibling can supply OLD values for the fallback,
+				// but cannot originate an assignment or a constraint diagnostic.
+				// The final merge also needs to ignore inactive assignments.
+				if candidateSource == nil || len(tableDef.Checks) != 0 {
 					contributionMarker, err = BindFuncExprImplByPlanExpr(
 						builder.GetContext(),
 						"if",
