@@ -30,6 +30,31 @@ x-mo-common: &mo-common
 
 
 services:
+  cn-catalog:
+    <<: *mo-common
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-catalog.toml > >(tee -a /log/cn-catalog.log) 2>&1"]
+    profiles: [launch, launch-multi-cn]
+    depends_on: [tn]
+    ports:
+      - "127.0.0.1::6001"
+      - "127.0.0.1::12345"
+    environment:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      GOCOVERDIR: /coverage
+    networks: [monet]
+
+  catalog-placement:
+    image: mysql:8.4
+    profiles: [launch, launch-multi-cn]
+    depends_on: [cn-catalog]
+    environment:
+      MYSQL_PWD: "111"
+    volumes:
+      - ./config:/config:ro
+    entrypoint: ["/bin/bash", "/config/catalog-placement.sh", "cn-catalog", "6001", "dd1dccb5-4d3c-41f9-b482-5251dc7a41bf"]
+    networks: [monet]
+
   cn-0:
     container_name: cn-0
     <<: *mo-common
@@ -40,7 +65,8 @@ services:
       - launch
       - launch-multi-cn
     depends_on:
-      - tn
+      catalog-placement:
+        condition: service_completed_successfully
     ports:
       - "6002"
       - "12345:12345"
@@ -59,7 +85,8 @@ services:
     <<: *mo-common
     entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-1.toml > >(tee -a /log/cn-1.log) 2>&1"]
     depends_on:
-      - tn
+      catalog-placement:
+        condition: service_completed_successfully
     ports:
       - "6002"
       - "22345:12345"

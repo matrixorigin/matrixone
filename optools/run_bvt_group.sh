@@ -68,5 +68,23 @@ if [[ -n "${resource_dir}" ]]; then
 fi
 printf '%s\n' "${included_scripts[@]}"
 
+# The two multi-CN CI jobs launch this repository's Compose topology.
+# Local runs opt in using the full CN's published address.
+full_addr=${BVT_FULL_CATALOG_ADDR:-}
+full_debug=${BVT_FULL_CATALOG_DEBUG_PORT:-12345}
+case "${GITHUB_JOB:-}" in
+    multi-CN-bvt-docker-compose-proxy|pessimistic-bvt-linux-x86)
+        compose_file="$(dirname "$0")/../etc/launch-tae-compose/compose.yaml"
+        full_addr=$(docker compose -f "$compose_file" --profile launch-multi-cn port cn-catalog 6001)
+        debug_addr=$(docker compose -f "$compose_file" --profile launch-multi-cn port cn-catalog 12345)
+        full_debug=${debug_addr##*:}
+        [[ -n "$full_addr" && -n "$full_debug" ]]
+        ;;
+esac
+if [[ -n "$full_addr" ]]; then
+    printf '%s\n' "${included_scripts[@]}" | python3 "$(dirname "$0")/run_catalog_bvt.py" \
+        "$tester_dir" "$case_root" "$resource_dir" "$full_addr" "$full_debug"
+    exit
+fi
 cd "${tester_dir}"
 ./run.sh -n -g -o -p "${case_root}" -i "${include_list}" "${resource_args[@]+"${resource_args[@]}"}"
