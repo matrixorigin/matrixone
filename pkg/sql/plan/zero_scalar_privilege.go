@@ -15,12 +15,21 @@
 package plan
 
 import (
+	"slices"
+
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 // These nodes carry authorization metadata only; they are never query steps.
 const zeroScalarPrivilegeCarrier = "mo:zero-scalar-privilege-carrier"
+
+// IsZeroScalarPrivilegeCarrier identifies non-executable authorization metadata.
+func IsZeroScalarPrivilegeCarrier(node *plan.Node) bool {
+	return node != nil && node.ExtraOptions == zeroScalarPrivilegeCarrier &&
+		(node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_VALUE_SCAN)
+}
 
 func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) error {
 	pending := []int32{root}
@@ -43,8 +52,24 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) er
 			}
 			pending = append(pending, builder.qry.Steps[step])
 		}
+		if node.NodeType == plan.Node_PROJECT {
+			for _, expr := range node.ProjectList {
+				if expr != nil && HasMoCtrl(expr) {
+					return moerr.NewNYI(builder.GetContext(), "control function in correlated scalar LIMIT 0 wrapper")
+				}
+			}
+		}
+		if node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
+			// These scans may need separate frontend authorization; the original
+			// node must remain reachable for that consumer to validate it.
+			if builder.zeroScalarRequiredLiveSources == nil {
+				builder.zeroScalarRequiredLiveSources = make(map[int32]struct{})
+			}
+			builder.zeroScalarRequiredLiveSources[id] = struct{}{}
+			continue
+		}
 		isScan := node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil
-		if !isScan && len(node.OriginViews) == 0 && node.DirectView == "" {
+		if !isScan && len(node.OriginViews) == 0 && node.DirectView == "" && !node.NotCacheable {
 			continue
 		}
 		if _, ok := builder.zeroScalarPrivilegeSources[id]; ok {
@@ -55,9 +80,11 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) er
 		}
 		builder.zeroScalarPrivilegeSources[id] = struct{}{}
 		carrier := &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN, ExtraOptions: zeroScalarPrivilegeCarrier,
+			// Until publication NodeId identifies the source occurrence. The
+			// final append assigns the carrier's own plan node ID.
+			NodeId: id, NodeType: plan.Node_VALUE_SCAN, ExtraOptions: zeroScalarPrivilegeCarrier,
 			OriginViews: append([]string(nil), node.OriginViews...), DirectView: node.DirectView,
-			ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
+			ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot), NotCacheable: node.NotCacheable,
 		}
 		if isScan {
 			carrier.NodeType = plan.Node_TABLE_SCAN
@@ -72,4 +99,26 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) er
 		builder.zeroScalarPrivilegeScans = append(builder.zeroScalarPrivilegeScans, carrier)
 	}
 	return nil
+}
+
+// A reachable original can replace its carrier only while it still supplies
+// the same authorization, snapshot and cache metadata.
+func zeroScalarSourceCoversCarrier(source, carrier *plan.Node) bool {
+	if source == nil || carrier == nil ||
+		!proto.Equal(source.ObjRef, carrier.ObjRef) ||
+		!proto.Equal(source.ParentObjRef, carrier.ParentObjRef) ||
+		!proto.Equal(source.ScanSnapshot, carrier.ScanSnapshot) ||
+		!slices.Equal(source.OriginViews, carrier.OriginViews) || source.DirectView != carrier.DirectView ||
+		(carrier.NotCacheable && !source.NotCacheable) {
+		return false
+	}
+	if carrier.NodeType != plan.Node_TABLE_SCAN {
+		return true
+	}
+	if source.NodeType != plan.Node_TABLE_SCAN || source.TableDef == nil || carrier.TableDef == nil {
+		return false
+	}
+	a, b := source.TableDef, carrier.TableDef
+	return a.TableType == b.TableType && a.Name == b.Name && a.TblId == b.TblId &&
+		a.Version == b.Version && a.DbName == b.DbName && a.DbId == b.DbId
 }

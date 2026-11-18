@@ -98,7 +98,7 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
 	}
 	for _, node := range oldNodes {
-		if node == nil || node.ExtraOptions != zeroScalarPrivilegeCarrier {
+		if !IsZeroScalarPrivilegeCarrier(node) {
 			continue
 		}
 		if id := node.NodeId; id >= 0 && int(id) < len(newNodes) && newNodes[id] == node {

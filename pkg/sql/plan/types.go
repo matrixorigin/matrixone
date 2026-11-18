@@ -303,10 +303,14 @@ type QueryBuilder struct {
 	udfResolutionCount          uint64
 	udfExpansionDepth           uint32
 	zeroScalarRewriteGeneration uint64
-	zeroScalarPrivilegeScans    []*plan.Node
-	zeroScalarPrivilegeSources  map[int32]struct{}
-	zeroScalarRootCtx           *BindContext
-	zeroScalarScanIDs           []int32
+	// Tracks source retention even when the carrier is already present.
+	zeroScalarRetentionGeneration uint64
+	hasZeroScalarSourceCandidate  bool
+	zeroScalarPrivilegeScans      []*plan.Node
+	zeroScalarPrivilegeSources    map[int32]struct{}
+	zeroScalarRequiredLiveSources map[int32]struct{}
+	zeroScalarRootCtx             *BindContext
+	zeroScalarScanIDs             []int32
 
 	// SQL_CALC_FOUND_ROWS 不允许新增会提前截断原关系的候选改写。
 	sqlCalcFoundRows      bool
