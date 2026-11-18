@@ -373,6 +373,24 @@ set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
 ➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
 1  ¦  2
+set @rule_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from concat(' ',code)) = '0001' and 'A\B' = concat('A',char(92),'B')" on table db1.t_dup;
+set sql_mode = @rule_saved_mode;
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+2
+set sql_mode = '';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;

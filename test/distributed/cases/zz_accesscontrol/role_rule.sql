@@ -337,6 +337,22 @@ set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
 -- @session
 
+-- The same cached roles must follow the current statement's string escape mode.
+set @rule_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from concat(' ',code)) = '0001' and 'A\B' = concat('A',char(92),'B')" on table db1.t_dup;
+set sql_mode = @rule_saved_mode;
+-- @session:id=19&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

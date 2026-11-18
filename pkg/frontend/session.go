@@ -173,8 +173,8 @@ type Session struct {
 	errInfo *errInfo
 
 	cache       *privilegeCache
-	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	ruleCache   *roleRuleCache // nil means not loaded
+	ruleCacheMu sync.RWMutex   // protects ruleCache
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and

@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -58,7 +60,7 @@ type rewriteHintPayload struct {
 // that is current when that statement is parsed.
 type rewritePolicySnapshot struct {
 	enabled        bool
-	roleRules      map[string]string
+	roleRules      *roleRuleCache
 	sessionRules   map[string]string
 	sessionRemapDb map[string]string
 }
@@ -81,13 +83,10 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	}
 
 	ses.ruleCacheMu.RLock()
-	cacheLoaded := ses.ruleCache != nil
-	if cacheLoaded {
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
-	}
+	policy.roleRules = ses.ruleCache
 	ses.ruleCacheMu.RUnlock()
 
-	if !cacheLoaded {
+	if policy.roleRules == nil {
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
@@ -98,7 +97,7 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		if ses.ruleCache == nil {
 			ses.ruleCache = rules
 		}
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		policy.roleRules = ses.ruleCache
 		ses.ruleCacheMu.Unlock()
 	}
 
@@ -244,18 +243,22 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		}
 		return sql, err
 	}
+	roleRules, err := policy.roleRules.forSQLMode(ctx, sqlMode)
+	if err != nil {
+		return sql, err
+	}
 	if len(fragments) == 1 {
 		if !parsers.FragmentHasStatement(sql) {
 			return sql, nil
 		}
-		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
+		return rewriteSingleSQL(ctx, sql, roleRules, policy.sessionRules, policy.sessionRemapDb)
 	}
 
 	for i, fragment := range fragments {
 		if !parsers.FragmentHasStatement(fragment) {
 			continue
 		}
-		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
+		rewritten, err := rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
 		if err != nil {
 			return sql, err
 		}
@@ -603,12 +606,49 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 	return out, nil
 }
 
-// loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
-// associated with the current user's active roles and returns them as a map.
-func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error) {
+// Catalog text is immutable after publication. Each request keeps the captured
+// generation, but each statement interprets it under its own parser mode.
+type roleRuleCache struct {
+	first map[string]string
+	later map[string][]string // competing rules only, in active-role priority order
+	last  atomic.Pointer[mergedRoleRules]
+}
+
+type mergedRoleRules struct {
+	mode  mysql.SQLModeFlags
+	rules map[string]string
+}
+
+func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[string]string, error) {
+	if c == nil {
+		return nil, nil
+	}
+	if len(c.later) == 0 {
+		return c.first, nil
+	}
+	mode := mysql.ParseSQLModeFlags(sqlMode)
+	if last := c.last.Load(); last != nil && last.mode == mode {
+		return last.rules, nil
+	}
+	rules := cloneRewriteMap(c.first)
+	for name, later := range c.later {
+		for _, rule := range later {
+			merged, err := mergeRewriteRules(ctx, rules[name], rule, sqlMode)
+			if err != nil {
+				return nil, err
+			}
+			rules[name] = merged
+		}
+	}
+	c.last.Store(&mergedRoleRules{mode: mode, rules: rules})
+	return rules, nil
+}
+
+func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+	rules := &roleRuleCache{first: make(map[string]string)}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		return map[string]string{}, nil
+		return rules, nil
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -619,7 +659,7 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 		return nil, err
 	}
 	if len(roleIDs) == 0 {
-		return map[string]string{}, nil
+		return rules, nil
 	}
 
 	sql := getSqlForRoleRulesOfRoleIDs(roleIDs)
@@ -634,7 +674,6 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 		return nil, err
 	}
 
-	rules := make(map[string]string)
 	if !execResultArrayHasData(erArray) {
 		return rules, nil
 	}
@@ -686,15 +725,14 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	})
 
 	for _, row := range ruleRows {
-		if existingRule, ok := rules[row.ruleName]; ok {
-			mergedRule, err := mergeRewriteRules(ctx, existingRule, row.rule)
-			if err != nil {
-				return nil, err
-			}
-			rules[row.ruleName] = mergedRule
-		} else {
-			rules[row.ruleName] = row.rule
+		if _, ok := rules.first[row.ruleName]; !ok {
+			rules.first[row.ruleName] = row.rule
+			continue
 		}
+		if rules.later == nil {
+			rules.later = make(map[string][]string)
+		}
+		rules.later[row.ruleName] = append(rules.later[row.ruleName], row.rule)
 	}
 
 	return rules, nil
@@ -791,7 +829,7 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
-func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string, error) {
+func mergeRewriteRules(ctx context.Context, leftRule, rightRule, sqlMode string) (string, error) {
 	leftRule = trimRewriteRuleForMerge(leftRule)
 	rightRule = trimRewriteRuleForMerge(rightRule)
 
@@ -799,7 +837,7 @@ func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string,
 		return leftRule, nil
 	}
 
-	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, sqlMode)
 	if err != nil {
 		return "", err
 	}
@@ -830,8 +868,8 @@ type rewriteRuleMergeShape struct {
 // filters expresses that row union directly. This is intentionally not a
 // UNION DISTINCT equivalent for partial projections; two visible base rows that
 // project to the same values should both remain visible.
-func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
-	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule)
+func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
+	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -839,7 +877,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 		return "", false, nil
 	}
 
-	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule)
+	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -857,11 +895,15 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	merged.Select = &mergedClause
 
 	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
-	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithSingleQuoteString()), true, nil
+	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString()}
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		opts = append(opts, tree.WithNoBackslashEscape())
+	}
+	return tree.StringWithOpts(&merged, dialect.MYSQL, opts...), true, nil
 }
 
-func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
