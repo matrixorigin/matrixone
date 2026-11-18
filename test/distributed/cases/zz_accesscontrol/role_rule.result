@@ -391,18 +391,25 @@ set sql_mode = '';
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 1
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
 set enable_remap_hint = 1;
 set secondary role all;
 set sql_mode = '';
+begin;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 2
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 select count(*) from db1.t_dup;
 internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+rollback;
+set secondary role none;
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
 set sql_mode = '';
+set secondary role all;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 2

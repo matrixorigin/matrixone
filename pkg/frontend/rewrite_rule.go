@@ -245,7 +245,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 	}
 	roleRules, ruleErr := policy.roleRules.forSQLMode(ctx, sqlMode)
 	rewrite := func(fragment string) (string, error) {
-		if ruleErr != nil && !isStandaloneSQLModeAssignment(ctx, fragment, sqlMode) {
+		if ruleErr != nil && !isRoleRuleRecoveryStatement(ctx, fragment, sqlMode) {
 			return fragment, ruleErr
 		}
 		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
@@ -274,27 +274,36 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 	return rewritten, nil
 }
 
-// A broken rule in the current mode must not prevent restoring a usable mode.
-// Only a standalone session assignment without an evaluable expression is safe
-// here: a general SET can contain a subquery or additional assignments.
-func isStandaloneSQLModeAssignment(ctx context.Context, sql, sqlMode string) bool {
+// A broken rule must not prevent rolling back, dropping secondary roles, or
+// restoring a usable mode. None of these control statements reads protected rows.
+func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
 		return false
 	}
 	defer stmt.Free()
-	set, ok := stmt.(*tree.SetVar)
-	if !ok || len(set.Assignments) != 1 {
-		return false
+	switch s := stmt.(type) {
+	case *tree.RollbackTransaction:
+		return true
+	case *tree.SetRole:
+		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone
+	case *tree.SetVar:
+		// General SET can contain a subquery or additional assignments.
+		if len(s.Assignments) == 1 {
+			return isStandaloneSQLModeAssignment(s.Assignments[0])
+		}
 	}
-	a := set.Assignments[0]
+	return false
+}
+
+func isStandaloneSQLModeAssignment(a *tree.VarAssignmentExpr) bool {
 	if !a.System || a.Global || !strings.EqualFold(a.Name, "sql_mode") || a.Reserved != nil {
 		return false
 	}
 	if value, ok := a.Value.(*tree.NumVal); ok {
 		return value.ValType == tree.P_char
 	}
-	_, ok = a.Value.(*tree.DefaultVal)
+	_, ok := a.Value.(*tree.DefaultVal)
 	return ok
 }
 

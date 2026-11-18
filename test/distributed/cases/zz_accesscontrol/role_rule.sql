@@ -354,16 +354,21 @@ select count(*) from db1.t_dup;
 -- @session
 
 -- A mode that rejects a stored rule must reject reads but allow recovery on the same connection.
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
 -- @session:id=20&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set enable_remap_hint = 1;
 set secondary role all;
 set sql_mode = '';
+begin;
 select count(*) from db1.t_dup;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 select count(*) from db1.t_dup;
+rollback;
+set secondary role none;
+select count(*) from db1.t_dup;
 set sql_mode = '';
+set secondary role all;
 select count(*) from db1.t_dup;
 -- @session
 
