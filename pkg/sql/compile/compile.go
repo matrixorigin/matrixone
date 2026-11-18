@@ -507,14 +507,19 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err      error
-	ctx      context.Context
-	queryCtx context.Context
+	err        error
+	ctx        context.Context
+	queryCtx   context.Context
+	classified bool // The execution owner classified the error before cleanup.
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
 		return scopeRunResult{err: err}
+	}
+	switch scope.Magic {
+	case Normal, Merge, MergeInsert, MergeDelete, Remote:
+		return scopeRunResult{err: err, classified: true}
 	}
 	return newScopeRunResultForProcess(err, scope.Proc)
 }
@@ -530,6 +535,9 @@ func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResul
 }
 
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
+	if r.classified {
+		return r, r.err != nil
+	}
 	var normalized bool
 	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
 	return r, normalized

@@ -572,9 +572,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
-				if terminal, _ := normalizeScopeRunError(err, scope.Proc.Ctx, scopeRunQueryContext(scope.Proc)); terminal != nil {
-					s.cancelMergeSiblingsOnError(terminal)
-				}
+				s.cancelMergeSiblingsOnError(err)
 				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
 			})
 
@@ -600,7 +598,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			scopeRunResult{err: err, classified: true},
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -665,7 +663,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, classified: true})
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
@@ -674,13 +672,11 @@ func collectMergeRunResults(
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
 // pipeline, its sibling goroutines, and remote receiver registration. It must
-// run before MergeRun waits for those siblings to exit.
+// run before MergeRun waits for those siblings to exit. The execution owner
+// classifies the error before cleanup, so a benign local stop arrives as nil.
 func (s *Scope) cancelMergeSiblingsOnError(err error) error {
 	if err != nil && s != nil && s.Proc != nil {
-		terminal, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
-		if terminal != nil {
-			table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx)
-		}
+		table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx, err)
 		if s.Proc.Cancel != nil {
 			s.Proc.Cancel(err)
 		}

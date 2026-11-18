@@ -76,9 +76,10 @@ func TestCurrentRolesCacheRetirementWakesWaitingConsumer(t *testing.T) {
 		waiterDone <- err
 	}()
 	<-waiterCtx.waiting
-	cache.Close()
+	failure := errors.New("merge failed")
+	CloseCurrentRolesExecutionCache(WithCurrentRolesExecutionCache(context.Background(), cache), failure)
 	<-canceled
-	require.ErrorIs(t, <-waiterDone, context.Canceled)
+	require.ErrorIs(t, <-waiterDone, failure)
 	// Retiring a cache does not wait for an uncooperative old loader, and its
 	// late result cannot publish into either the retired or the next generation.
 	next := NewCurrentRolesExecutionCache(context.Background())
@@ -87,7 +88,7 @@ func TestCurrentRolesCacheRetirementWakesWaitingConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{7}, roles)
 	unblock()
-	require.ErrorIs(t, <-loaderDone, context.Canceled)
+	require.ErrorIs(t, <-loaderDone, failure)
 	roles, err = next.get(context.Background(), currentRolesCacheKey{}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int64{7}, roles)

@@ -65,30 +65,37 @@ func WithCurrentRolesExecutionCache(ctx context.Context, cache *CurrentRolesExec
 
 // CloseCurrentRolesExecutionCache retires the cache associated with this execution.
 // Pipeline cancellation alone must not call this: another consumer may still run.
-func CloseCurrentRolesExecutionCache(ctx context.Context) {
+func CloseCurrentRolesExecutionCache(ctx context.Context, cause error) {
 	if ctx == nil {
 		return
 	}
 	cache, _ := ctx.Value(currentRolesCacheContextKey{}).(*CurrentRolesExecutionCache)
-	cache.Close()
+	cache.close(cause)
 }
 
 func (c *CurrentRolesExecutionCache) Close() {
+	c.close(nil)
+}
+
+func (c *CurrentRolesExecutionCache) close(cause error) {
 	if c == nil {
 		return
 	}
-	c.cancel()
+	defer c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.state == 3 {
 		return
+	}
+	if cause == nil {
+		cause = context.Canceled
 	}
 	if c.state != 2 {
 		close(c.done)
 	}
 	c.state = 3
 	c.roles = nil
-	c.err = nil
+	c.err = cause
 	c.key = currentRolesCacheKey{}
 }
 
@@ -125,8 +132,9 @@ func (c *CurrentRolesExecutionCache) get(ctx context.Context, key currentRolesCa
 	}
 	c.mu.Lock()
 	if c.state == 3 {
+		err := c.err
 		c.mu.Unlock()
-		return nil, context.Canceled
+		return nil, err
 	}
 	if c.state != 0 && c.key != key {
 		c.mu.Unlock()
@@ -163,13 +171,12 @@ func (c *CurrentRolesExecutionCache) get(ctx context.Context, key currentRolesCa
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.ctx.Done():
-		return nil, c.ctx.Err()
 	case <-c.done:
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.state == 3 {
-		return nil, context.Canceled
+		return nil, c.err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

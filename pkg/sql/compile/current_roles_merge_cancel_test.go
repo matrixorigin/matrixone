@@ -53,6 +53,7 @@ type reviewErrorAfterRoleLoad struct {
 	*colexec.MockOperator
 	started <-chan struct{}
 	failed  chan struct{}
+	err     error
 }
 
 func (op *reviewErrorAfterRoleLoad) Call(proc *process.Process) (vm.CallResult, error) {
@@ -62,9 +63,20 @@ func (op *reviewErrorAfterRoleLoad) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, proc.Ctx.Err()
 	}
 	close(op.failed)
-	return vm.CancelResult, errors.New("review sibling failure")
+	return vm.CancelResult, op.err
 }
+
 func TestReviewLocalMergeFailureCancelsRoleLoader(t *testing.T) {
+	t.Run("merge failure", func(t *testing.T) {
+		testMergeFailureCancelsRoleLoader(t, errors.New("merge failure"), false)
+	})
+	t.Run("independent child cancellation", func(t *testing.T) {
+		testMergeFailureCancelsRoleLoader(t, context.Canceled, true)
+	})
+}
+
+func testMergeFailureCancelsRoleLoader(t *testing.T, failure error, childFails bool) {
+	t.Helper()
 	proc := newIssue27261Process(t)
 	ctrl := gomock.NewController(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -90,23 +102,18 @@ func TestReviewLocalMergeFailureCancelsRoleLoader(t *testing.T) {
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), 7))
 	tf := &table_function.TableFunction{FuncName: "mo_current_roles", Attrs: []string{"role_id"}, Rets: []*plan.ColDef{{Name: "role_id", Typ: plan.Type{Id: int32(types.T_int64)}}}}
 	failed := make(chan struct{})
-	sink := &reviewErrorAfterRoleLoad{MockOperator: colexec.NewMockOperator(), started: started, failed: failed}
+	sink := &reviewErrorAfterRoleLoad{MockOperator: colexec.NewMockOperator(), started: started, failed: failed, err: failure}
 	child := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: tf}
 	parent := &Scope{Magic: Merge, Proc: proc.NewNoContextChildProc(0), RootOp: sink, PreScopes: []*Scope{child}}
+	if childFails {
+		// The dependency returns context.Canceled while both scopes are live.
+		// The parent is blocked inside the query-owned loader.
+		parent.RootOp, child.RootOp = child.RootOp, parent.RootOp
+	}
 	c := &Compile{proc: proc, hasMergeOp: true, scopes: []*Scope{parent}, counterSet: &perfcounter.CounterSet{}}
 	c.InitPipelineContextToExecuteQuery()
-	done := make(chan error, 1)
-	go func() { done <- parent.MergeRun(c) }()
-	defer func() {
-		c.closeCurrentRolesExecutionCache()
-		proc.Cancel(nil)
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Error("cleanup did not join")
-		}
-		tf.Free(child.Proc, false, nil)
-	}()
+	done := runIssue27261Scope(t, proc, func() error { return parent.MergeRun(c) })
+	t.Cleanup(c.closeCurrentRolesExecutionCache)
 	select {
 	case <-failed:
 	case <-time.After(10 * time.Second):
@@ -114,18 +121,18 @@ func TestReviewLocalMergeFailureCancelsRoleLoader(t *testing.T) {
 	}
 	select {
 	case <-parent.Proc.Ctx.Done():
-	case <-time.After(10 * time.Second):
+		require.ErrorIs(t, context.Cause(parent.Proc.Ctx), failure)
+	case <-time.After(2 * time.Second):
 		t.Fatal("merge did not cancel pipeline")
 	}
 	select {
 	case <-canceled:
 	case <-time.After(2 * time.Second):
-		t.Error("local merge failure did not cancel active role loader")
+		t.Fatal("terminal failure did not cancel active role loader")
 	}
 	select {
 	case err := <-done:
-		done <- err
-		require.ErrorContains(t, err, "review sibling failure")
+		require.ErrorIs(t, err, failure)
 	case <-time.After(2 * time.Second):
 		t.Error("MergeRun still waits for role loader after sibling failure")
 	}
@@ -160,8 +167,11 @@ func TestCurrentRolesCacheSurvivesInternalPipelineStop(t *testing.T) {
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), 7))
 	tf := &table_function.TableFunction{FuncName: "mo_current_roles", Attrs: []string{"role_id"}, Rets: []*plan.ColDef{{Name: "role_id", Typ: plan.Type{Id: int32(types.T_int64)}}}}
 	consumer := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: tf}
-	stopped := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0)}
-	c := &Compile{proc: proc, scopes: []*Scope{consumer, stopped}, counterSet: &perfcounter.CounterSet{}}
+	stopped := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: &scopeRunCancelErrorOperator{
+		MockOperator: colexec.NewMockOperator(), runErr: context.Canceled,
+	}}
+	merge := &Scope{Magic: Merge, Proc: proc.NewNoContextChildProc(0), PreScopes: []*Scope{stopped}}
+	c := &Compile{proc: proc, hasMergeOp: true, scopes: []*Scope{consumer, merge}, counterSet: &perfcounter.CounterSet{}}
 	c.InitPipelineContextToExecuteQuery()
 	require.NoError(t, tf.Prepare(consumer.Proc))
 	done := make(chan error, 1)
@@ -177,8 +187,8 @@ func TestCurrentRolesCacheSurvivesInternalPipelineStop(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("loader did not start")
 	}
-	stopped.Proc.Cancel(context.Canceled)
-	stopped.cancelMergeSiblingsOnError(context.Canceled)
+	require.NoError(t, merge.MergeRun(c))
+	require.NoError(t, merge.Proc.Ctx.Err())
 	close(release)
 	select {
 	case err := <-done:
@@ -225,7 +235,9 @@ func TestCurrentRolesMultiRootFailureAndRetry(t *testing.T) {
 	failed := make(chan struct{})
 	waiting := make(chan struct{})
 	loader := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: tf}
-	failure := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: &reviewErrorAfterRoleLoad{MockOperator: colexec.NewMockOperator(), started: waiting, failed: failed}}
+	failure := &Scope{Magic: Normal, Proc: proc.NewNoContextChildProc(0), RootOp: &reviewErrorAfterRoleLoad{
+		MockOperator: colexec.NewMockOperator(), started: waiting, failed: failed, err: errors.New("review sibling failure"),
+	}}
 	c := &Compile{proc: proc, scopes: []*Scope{loader, failure}, counterSet: &perfcounter.CounterSet{}}
 	c.InitPipelineContextToExecuteQuery()
 	done := make(chan error, 1)
