@@ -20,11 +20,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -101,11 +101,8 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	if !ok {
 		return Result{}, moerr.NewNotSupported(ctx, "changed-table logtail read barrier is unavailable")
 	}
-	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
-	if err != nil {
-		return Result{}, err
-	}
-	target, err := changedTableTN(ctx, cluster)
+	keeper := proc.GetHaKeeper()
+	target, err := changedTableTN(ctx, keeper)
 	if err != nil {
 		return Result{}, err
 	}
@@ -206,7 +203,7 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 		!maps.Equal(registry.sourceNames, current.sourceNames) {
 		return Result{}, moerr.NewInvalidInput(ctx, "changed-table authorization or catalog identity changed during query")
 	}
-	recheckTN, err := changedTableTN(ctx, cluster)
+	recheckTN, err := changedTableTN(ctx, keeper)
 	if err != nil {
 		return Result{}, err
 	}
@@ -233,28 +230,55 @@ func loadCallerIdentity(ctx, top context.Context) (callerIdentity, error) {
 	return callerIdentity{accountID: account, userID: user, roleID: role}, nil
 }
 
-func changedTableTN(ctx context.Context, cluster clusterservice.MOCluster) (metadata.TNShard, error) {
-	var target metadata.TNShard
-	var count int
-	cluster.GetTNService(clusterservice.NewSelector(), func(store metadata.TNService) bool {
-		for _, shard := range store.Shards {
-			count++
-			if count > 1 {
-				return false
-			}
-			target = metadata.TNShard{
-				TNShardRecord: metadata.TNShardRecord{ShardID: shard.ShardID, LogShardID: shard.LogShardID},
-				ReplicaID:     shard.ReplicaID,
-				Address:       store.TxnServiceAddress,
-			}
-		}
-		return true
-	})
+type changeWatchTopologyReader interface {
+	GetClusterState(context.Context) (logpb.CheckerState, error)
+}
+
+func changedTableTN(ctx context.Context, keeper changeWatchTopologyReader) (metadata.TNShard, error) {
+	if keeper == nil {
+		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table HAKeeper client is unavailable")
+	}
+	state, err := keeper.GetClusterState(ctx)
+	if err != nil {
+		return metadata.TNShard{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return metadata.TNShard{}, err
 	}
-	if count != 1 || target.ShardID == 0 || target.Address == "" {
-		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table query requires one available TN shard")
+
+	shards := state.ClusterInfo.TNShards
+	if len(shards) != 1 || shards[0].ShardID == 0 || shards[0].LogShardID == 0 {
+		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table query requires one configured TN shard")
+	}
+	configured := shards[0]
+	var target metadata.TNShard
+	var latestTick uint64
+	var contenders int
+	for _, store := range state.TNState.Stores {
+		if len(store.Shards) == 0 {
+			continue
+		}
+		if len(store.Shards) != 1 || store.Shards[0].ShardID != configured.ShardID {
+			return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table TN advertisement does not match the configured shard")
+		}
+
+		// Use MatrixOne's latest-heartbeat routing rule after checking the
+		// authoritative shard inventory. HAKeeper can retain an older store's
+		// advertisement after a replica of the same shard is replaced.
+		if contenders == 0 || store.Tick > latestTick {
+			latestTick = store.Tick
+			contenders = 1
+			target = metadata.TNShard{
+				TNShardRecord: configured,
+				ReplicaID:     store.Shards[0].ReplicaID,
+				Address:       store.ServiceAddress,
+			}
+		} else if store.Tick == latestTick {
+			contenders++
+		}
+	}
+	if contenders != 1 || target.ReplicaID == 0 || target.Address == "" {
+		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table query requires one unambiguous TN route")
 	}
 	return target, nil
 }
