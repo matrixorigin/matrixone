@@ -88,3 +88,40 @@ func TestScopedDirtyReaderCompactionDoesNotLoseCandidates(t *testing.T) {
 	require.NoError(t, reader.ForEachDirtyTable(charge, visit))
 	require.Contains(t, ids, uint64(2), "compacted history must retain the inclusive upper endpoint")
 }
+
+func TestScopedDirtyReaderSkipsDisjointCompactedBlocks(t *testing.T) {
+	table := NewTxnTable(2, func() types.TS { return types.BuildTS(5, 0) })
+	first := scopedDirtyTxn(10, txnif.TxnStateCommitted, 1)
+	// Insertion can precede prepare timestamp assignment. The resulting
+	// block birth time is then earlier than the actual first row.
+	first.PrepareTS = txnif.UncommitTS
+	require.NoError(t, table.AddTxn(first))
+	first.PrepareTS = types.BuildTS(10, 0)
+	require.NoError(t, table.AddTxn(scopedDirtyTxn(20, txnif.TxnStateCommitted, 2)))
+	require.NoError(t, table.AddTxn(scopedDirtyTxn(30, txnif.TxnStateCommitted, 3)))
+	require.NoError(t, table.AddTxn(scopedDirtyTxn(40, txnif.TxnStateCommitted, 4)))
+	blocks := 0
+	table.Scan(func(block *txnBlock) bool {
+		all, changed := block.TryCompact()
+		require.True(t, all && changed)
+		blocks++
+		return true
+	})
+	require.Equal(t, 2, blocks)
+
+	read := func(from, to int64) []uint64 {
+		t.Helper()
+		reader := Reader{table: table, from: types.BuildTS(from, 0), to: types.BuildTS(to, 0)}
+		var ids []uint64
+		require.NoError(t, reader.ForEachDirtyTable(func() error { return nil }, func(record model.TableRecord) error {
+			ids = append(ids, record.ID)
+			return nil
+		}))
+		return ids
+	}
+	require.Empty(t, read(8, 9), "the birth timestamp is not the first actual prepare timestamp")
+	require.Empty(t, read(21, 29), "the preceding block is selected by the pivot but ends before the window")
+	require.Contains(t, read(8, 10), uint64(1), "the upper endpoint is inclusive")
+	require.Contains(t, read(20, 29), uint64(2), "the lower endpoint is inclusive")
+	require.ElementsMatch(t, []uint64{3, 4}, read(21, 40), "skipping the predecessor still visits the next block")
+}

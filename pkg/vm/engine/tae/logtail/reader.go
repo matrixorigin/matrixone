@@ -149,15 +149,29 @@ func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRe
 				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an empty compacted block")
 				return false
 			}
+			if !consume() {
+				return false
+			}
+			first := rows[0].GetPrepareTS()
+			if !consume() {
+				return false
+			}
+			last := rows[len(rows)-1].GetPrepareTS()
+			if first.IsEmpty() || last.LT(&first) {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an invalid compacted block range")
+				return false
+			}
+			if first.GT(&r.to) {
+				return false
+			}
+			if last.LT(&r.from) {
+				return true
+			}
 			for record := range summary.tids {
 				if !visitRecord(record) {
 					return false
 				}
 			}
-			if !consume() {
-				return false
-			}
-			last := rows[len(rows)-1].GetPrepareTS()
 			return last.LE(&r.to)
 		}
 		for _, row := range rows {
