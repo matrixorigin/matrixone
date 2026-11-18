@@ -3153,6 +3153,9 @@ func TestCorrelatedScalarRootZeroKeepsInnerScan(t *testing.T) {
 		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
 		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
 		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
+		{"alias", `select n.n_nationkey, (select n.n_nationkey as x from tpch.region r limit 0) as v from tpch.nation n`},
+		{"hidden sort", `select n.n_nationkey, (select n.n_nationkey from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"cast and sort", `select n.n_nationkey, (select cast(n.n_nationkey as signed) from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)

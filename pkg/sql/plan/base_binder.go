@@ -1266,6 +1266,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			return nil, err
 		}
 	}
+	subCtx.zeroScalarRootNodeID = nodeID
 
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
 		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
@@ -3853,6 +3854,8 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
 	}
 	args := make([]*Expr, len(astArgs))
+	restoreZeroScalarCandidate := b.beginZeroScalarRewriteCandidate()
+	defer restoreZeroScalarCandidate()
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
@@ -3860,6 +3863,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 		}
 		args[i] = expr
 	}
+	restoreZeroScalarCandidate()
 
 	if b.builder == nil {
 		return nil, moerr.NewInvalidInputf(
@@ -3872,7 +3876,12 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
+	requiredRoots := zeroScalarSubqueryRoots(b.builder, args)
+	bound, err := bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
+	if err == nil && len(requiredRoots) > 0 && !exprRetainsZeroScalarRoots(bound, requiredRoots) {
+		return nil, moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+	}
+	return bound, err
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4622,11 +4631,19 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return expr, err
 }
 
-func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
 	zeroScalarRewriteGeneration := uint64(0)
 	if b.builder != nil {
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
 	}
+	var requiredZeroScalarRoots map[int32]struct{}
+	defer func() {
+		if bindErr == nil && len(requiredZeroScalarRoots) > 0 &&
+			!exprRetainsZeroScalarRoots(boundExpr, requiredZeroScalarRoots) {
+			boundExpr = nil
+			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+		}
+	}()
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4704,6 +4721,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	}
 
 	// bind ast function's args
+	restoreZeroScalarCandidate := b.beginZeroScalarRewriteCandidate()
+	defer restoreZeroScalarCandidate()
 	var args []*Expr
 	if name == "bit_cast" {
 		bitCastExpr := astArgs[0].(*tree.BitCastExpr)
@@ -4876,6 +4895,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			args[idx] = expr
 		}
 	}
+	restoreZeroScalarCandidate()
+	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
 		var err error
@@ -5322,7 +5343,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	if err != nil {
 		return nil, err
 	}
-
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
@@ -5338,6 +5358,118 @@ func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.U
 		}
 	}
 	return compiler.ResolveUdf(name, args)
+}
+
+func (b *baseBinder) beginZeroScalarRewriteCandidate() func() {
+	if b.builder == nil {
+		return func() {}
+	}
+	b.builder.zeroScalarRewriteCandidateDepth++
+	active := true
+	return func() {
+		if active {
+			b.builder.zeroScalarRewriteCandidateDepth--
+			active = false
+		}
+	}
+}
+
+func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
+	if builder == nil || len(args) == 0 {
+		return nil
+	}
+	var roots map[int32]struct{}
+	for _, arg := range args {
+		_ = visitExecutablePlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+				sub.NodeId < 0 || int(sub.NodeId) >= len(builder.ctxByNode) {
+				return nil
+			}
+			ctx := builder.ctxByNode[sub.NodeId]
+			if ctx != nil && ctx.zeroScalarRootSourceSafe && builder.scalarRootZeroNeedsDependent(sub) {
+				if roots == nil {
+					roots = make(map[int32]struct{})
+				}
+				roots[sub.NodeId] = struct{}{}
+			}
+			return nil
+		})
+	}
+	return roots
+}
+
+func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bool {
+	if len(required) == 0 {
+		return true
+	}
+	retained := make(map[int32]struct{}, len(required))
+	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
+		if sub := candidate.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			if _, ok := required[sub.NodeId]; ok {
+				retained[sub.NodeId] = struct{}{}
+			}
+		}
+		return nil
+	})
+	return len(retained) == len(required)
+}
+
+func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if dependent := expr.GetDependent(); dependent != nil {
+			pending = append(pending, dependent.Comparison)
+			for i := len(dependent.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Lhs[i])
+			}
+			for i := len(dependent.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Inputs[i])
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+	}
+	return nil
+}
+
+func isIdentitySQLUDF(udf *function.Udf, argCount int) bool {
+	if udf == nil || udf.Language != string(tree.SQL) || argCount != 1 {
+		return false
+	}
+	body := strings.ToLower(strings.Join(strings.Fields(udf.Body), " "))
+	return body == "$1"
 }
 
 func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
@@ -5823,10 +5955,33 @@ func validateUDFArgumentAuthorizationSources(
 	}
 	for source := range missing {
 		if _, inPlan := retainedSources[source]; !inPlan {
+			if udfAuthorizationSourceHasRetainedCarrier(builder, source) {
+				continue
+			}
 			return moerr.NewNYI(builder.GetContext(), "SQL UDF with an unretained correlated scalar LIMIT 0 source")
 		}
 	}
 	return nil
+}
+
+func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int32) bool {
+	if builder == nil || builder.qry == nil || source < 0 || int(source) >= len(builder.qry.Nodes) {
+		return false
+	}
+	expected := windowValidationPrivilegeCarrier(builder.qry.Nodes[source])
+	if expected == nil {
+		return false
+	}
+	key := windowValidationPrivilegeCarrierKey(expected)
+	if _, ok := builder.windowValidationSeen[key]; ok {
+		return true
+	}
+	for _, carrier := range builder.windowValidationScans {
+		if carrier != nil && windowValidationPrivilegeCarrierKey(carrier) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func bindFuncExprImplUdf(

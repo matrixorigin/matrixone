@@ -276,7 +276,7 @@ func (builder *QueryBuilder) zeroScalarDirectTablePlan(root int32, ctx *BindCont
 }
 
 func (builder *QueryBuilder) scalarRootZeroNeedsDependent(sub *plan.SubqueryRef) bool {
-	if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+	if builder == nil || builder.qry == nil || sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
 		sub.NodeId < 0 || int(sub.NodeId) >= len(builder.qry.Nodes) ||
 		int(sub.NodeId) >= len(builder.ctxByNode) {
 		return false
