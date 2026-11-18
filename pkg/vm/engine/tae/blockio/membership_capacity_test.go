@@ -58,9 +58,9 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	info := stats.ConstructBlockInfo(0)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
-	// Two eight-row maps consume the available capacity; nullable view
+	// The selected two-row map consumes the available capacity; nullable view
 	// metadata is optional, while a temporary wide-value copy cannot fit.
-	account, err := registry.Open(128)
+	account, err := registry.Open(16)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.Zero(t, account.Snapshot().Used)
@@ -94,7 +94,7 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	request.Membership.Select = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 		memberCalls++
 		require.Equal(t, 8, bat.RowCount())
-		require.EqualValues(t, 128, account.Snapshot().Used)
+		require.Zero(t, account.Snapshot().Used, "identity inputs need no row map")
 		return engine.ReaderFilterResult{Sels: []int64{0, 6}}, nil
 	}
 	request.Select = func(bat *batch.Batch, columns []int) (engine.ReaderFilterResult, error) {
@@ -118,4 +118,121 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 		require.False(t, v.HasBorrowedBacking())
 	}
 	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, request.ColumnUses)
+}
+
+func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}
+	input := batch.NewWithSchema(false, nil, typs)
+	t.Cleanup(func() { input.Clean(mp) })
+	for row := range 8 {
+		for col, v := range input.Vecs {
+			require.NoError(t, vector.AppendFixed(v, int32(row+100*col), false, mp))
+		}
+	}
+	input.SetRowCount(8)
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	for _, tc := range []struct {
+		name           string
+		limit          uint64
+		selective      bool
+		bypass         bool
+		predicateError bool
+	}{
+		{name: "identity", limit: 128},
+		{name: "selective output fits", limit: 128, selective: true},
+		{name: "early output pressure", limit: 64, selective: true, bypass: true},
+		{name: "late output pressure", limit: 96, selective: true, bypass: true},
+		{name: "callback capacity error", limit: 128, predicateError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, enabled := range []bool{false, true} {
+				registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+				require.NoError(t, err)
+				account, err := registry.Open(tc.limit)
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.Zero(t, account.Snapshot().Used)
+					_, _, err := registry.CompleteTerminal(account)
+					require.NoError(t, err)
+				})
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				require.NoError(t, err)
+				output := batch.NewWithSchema(true, nil, typs)
+				t.Cleanup(func() { output.Clean(mp) })
+				require.NoError(t, output.SetAllocationAccount(allocation))
+				original := append([]*vector.Vector(nil), output.Vecs...)
+				request := &engine.ReaderFilterRequest{
+					OutputAllocation: allocation,
+					ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned},
+				}
+				request.Apply = func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("scoped reads must use the borrowed Select route")
+					return engine.ReaderFilterResult{}, nil
+				}
+				cache := containers.NewVectors(4)
+				t.Cleanup(func() { request.FreeMembership(mp); cache.Free(mp) })
+				memberCalls, predicateCalls := 0, 0
+				var memberUsed uint64
+				request.Select = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+					predicateCalls++
+					if tc.predicateError && enabled {
+						return engine.ReaderFilterResult{}, mpool.ErrAllocationAccountCapacity
+					}
+					return engine.ReaderFilterResult{All: true}, nil
+				}
+				if enabled {
+					request.Membership = &engine.ReaderMembershipFilter{
+						Columns: []int{0}, PredicateColumns: []int{0}, PredicatesTotal: true,
+						Select: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+							memberCalls++
+							memberUsed = account.Snapshot().Used
+							if tc.selective {
+								return engine.ReaderFilterResult{Sels: []int64{0, 1, 2, 3, 4, 5, 6}}, nil
+							}
+							return engine.ReaderFilterResult{All: true}, nil
+						},
+					}
+				}
+				_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, typs, -1,
+					timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "membership-output-capacity", output, cache, mp, fs, []int{0}, request)
+				if enabled && tc.predicateError {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					require.Equal(t, 1, predicateCalls)
+					require.False(t, request.Membership.Bypass)
+					continue
+				}
+				require.NoError(t, err, "membership=%v", enabled)
+				wantRows, wantCalls := 8, 1
+				if enabled {
+					require.Equal(t, 1, memberCalls)
+					require.Zero(t, memberUsed, "identity inputs must not reserve optional row maps")
+					require.Equal(t, tc.bypass, request.Membership.Bypass)
+					if tc.bypass {
+						wantCalls++
+					} else if tc.selective {
+						wantRows--
+					}
+				}
+				require.Equal(t, wantCalls, predicateCalls)
+				require.Equal(t, wantRows, output.RowCount())
+				for col, v := range output.Vecs {
+					require.Same(t, original[col], v)
+					require.False(t, v.HasBorrowedBacking())
+					for row := range wantRows {
+						require.Equal(t, int32(row+100*col), vector.GetFixedAtNoTypeCheck[int32](v, row))
+					}
+				}
+			}
+		})
+	}
 }

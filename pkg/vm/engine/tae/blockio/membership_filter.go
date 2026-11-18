@@ -52,6 +52,44 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	if err != nil {
 		return false, err
 	}
+	identity := false
+	var deleted objectio.Bitmap
+	if storageRows == nil {
+		if ds == nil {
+			return false, nil
+		}
+		deleted, err = ds.GetTombstones(ctx, &info.BlockID)
+		defer deleted.Release()
+		if err != nil {
+			return true, err
+		}
+		identity = deleted.IsEmpty()
+	}
+	// Only an admitted reader changes private-input publication. Restore the
+	// conservative outer policy before any ordinary read fallback can run.
+	if len(request.Membership.ColumnUses) == len(columns) {
+		original := request.ColumnUses
+		request.ColumnUses = request.Membership.ColumnUses
+		defer func() { request.ColumnUses = original }()
+	}
+	if identity && request.Exact == nil && request.Membership.PredicatesTotal && scopedOwnedColumns(request, len(columns)) {
+		predicates := request.Membership.PredicateColumns
+		if predicates == nil {
+			predicates = early
+		}
+		rows := int(info.MetaLocation().Rows())
+		if rows > 0 && len(predicates) > 0 {
+			if preFilterRows != nil {
+				*preFilterRows = rows
+			}
+			// The identity domain needs neither map. A selective membership
+			// result admits only its physical map inside the pinned scope.
+			handled, err := withScopedTotalMembership(ctx, info, columns, typs, early, predicates, rows, policy, output, mp, fs, request, s)
+			if handled || err != nil {
+				return handled, err
+			}
+		}
+	}
 	for _, v := range []*vector.Vector{s.Physical, s.Logical} {
 		if err = v.PreExtend(int(info.MetaLocation().Rows()), mp); err != nil {
 			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
@@ -65,19 +103,9 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	physical := vector.MustFixedColNoTypeCheck[int64](s.Physical)
 	logical := vector.MustFixedColNoTypeCheck[int64](s.Logical)
 	live := 0
-	identity := storageRows == nil
 	if storageRows != nil {
 		live = copy(physical, storageRows)
 	} else {
-		if ds == nil {
-			return false, nil
-		}
-		deleted, err := ds.GetTombstones(ctx, &info.BlockID)
-		if err != nil {
-			deleted.Release()
-			return true, err
-		}
-		identity = deleted.IsEmpty()
 		if identity {
 			// Identity coordinates are derived at the first real selection.
 			// Do not fill a map that the membership-first path overwrites.
@@ -90,7 +118,6 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 				}
 			}
 		}
-		deleted.Release()
 	}
 	if preFilterRows != nil {
 		*preFilterRows = live
@@ -98,13 +125,6 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	if live == 0 {
 		output.SetRowCount(0)
 		return true, nil
-	}
-	// Only an admitted reader changes private-input publication. Restore the
-	// conservative outer policy before any ordinary read fallback can run.
-	if len(request.Membership.ColumnUses) == len(columns) {
-		original := request.ColumnUses
-		request.ColumnUses = request.Membership.ColumnUses
-		defer func() { request.ColumnUses = original }()
 	}
 	if request.Exact == nil {
 		return true, blockDataReadPredicateMembership(ctx, info, columns, typs, early, physical[:live], logical[:live], identity, policy, output, mp, fs, request, s)
@@ -182,12 +202,6 @@ func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockI
 		s.Keys = s.Keys[:0]
 		s.Overlap = s.Overlap[:0]
 	}()
-	if identity && request.Membership.PredicatesTotal && len(predicates) > 0 && scopedOwnedColumns(request, len(columns)) {
-		handled, err := withScopedTotalMembership(ctx, info, columns, typs, early, predicates, physical, policy, output, mp, fs, request, s)
-		if handled || err != nil {
-			return err
-		}
-	}
 	var readRows []int64
 	if !identity {
 		readRows = physical
