@@ -303,18 +303,22 @@ func TestBindStoredValueEqualityUsesStoredBytes(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		textType   types.T
+		oldWidth   int32
+		newWidth   int32
 		binaryType types.T
 	}{
-		{name: "varchar", textType: types.T_varchar, binaryType: types.T_varbinary},
-		{name: "text", textType: types.T_text, binaryType: types.T_blob},
+		{name: "varchar", textType: types.T_varchar, oldWidth: 32, newWidth: 32, binaryType: types.T_varbinary},
+		{name: "wide varchar with short replacement", textType: types.T_varchar,
+			oldWidth: int32(types.MaxVarBinaryLen + 19), newWidth: 9, binaryType: types.T_blob},
+		{name: "text", textType: types.T_text, oldWidth: 32, newWidth: 32, binaryType: types.T_blob},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			oldCol := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(tc.textType), Width: 32, Charset: uint32(types.CharsetUTF8)},
+				Typ:  planpb.Type{Id: int32(tc.textType), Width: tc.oldWidth, Charset: uint32(types.CharsetUTF8)},
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 2, Name: "old.body"}},
 			}
 			newCol := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(tc.textType), Width: 32, Charset: uint32(types.CharsetUTF8)},
+				Typ:  planpb.Type{Id: int32(tc.textType), Width: tc.newWidth, Charset: uint32(types.CharsetUTF8)},
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 3, Name: "new.body"}},
 			}
 			got, err := bindStoredValueEquality(context.Background(), oldCol, newCol)
@@ -455,6 +459,14 @@ func TestBindStoredValueEqualityEvaluatesStoredIdentity(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+
+	t.Run("wide VARCHAR old value accepts a short final value", func(t *testing.T) {
+		oldValue := makeStoredTextLiteral("wideoldtoken "+strings.Repeat(" ", 65541), false, types.T_varchar)
+		oldValue.Typ.Width = types.MaxVarBinaryLen + 19
+		newValue := makeStoredTextLiteral("afterword", false, types.T_varchar)
+		newValue.Typ.Width = int32(len("afterword"))
+		require.False(t, evalStoredValueEquality(t, oldValue, newValue))
+	})
 
 	t.Run("different expressions with the same final value", func(t *testing.T) {
 		ctx := context.Background()

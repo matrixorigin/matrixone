@@ -335,12 +335,13 @@ func bindStoredValueEqualityWithCaster(
 	newType := types.T(newCol.Typ.Id)
 	if oldType == types.T_varchar || oldType == types.T_text ||
 		newType == types.T_varchar || newType == types.T_text {
-		// VARCHAR values are bounded by the string byte limit, while TEXT may
-		// be unbounded in the plan. Use the corresponding binary family with
-		// its native maximum width so the comparison cast does not truncate or
-		// trim the stored payload (in particular, trailing spaces).
+		// Use VARBINARY for values within its declared width. CTAS can infer a
+		// VARCHAR wider than VARBINARY's limit, so compare those values in the
+		// larger BLOB family instead of rejecting a valid stored payload.
 		binaryType := types.T_varbinary.ToType()
-		if oldType == types.T_text || newType == types.T_text {
+		if oldType == types.T_text || newType == types.T_text ||
+			(oldType == types.T_varchar && oldCol.Typ.Width > types.MaxVarBinaryLen) ||
+			(newType == types.T_varchar && newCol.Typ.Width > types.MaxVarBinaryLen) {
 			binaryType = types.T_blob.ToType()
 		}
 		var err error
