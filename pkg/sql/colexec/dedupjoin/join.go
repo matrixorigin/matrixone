@@ -469,7 +469,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				SpillThreshold:            ctr.spillThreshold,
 				AdaptiveMemory:            ctr.autoSpill,
 				NeedsBuildForEmptyProbe:   true,
-				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
+				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE || dedupJoin.OnDuplicateAction == plan.Node_IGNORE,
 				NeedBatches:               true,
 				IsDedup:                   true,
 				OnDuplicateAction:         dedupJoin.OnDuplicateAction,
@@ -477,6 +477,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupColName:              dedupJoin.DedupColName,
 				DedupColTypes:             dedupJoin.DedupColTypes,
 				DedupKeyExprs:             dedupJoin.DedupKeyExprs,
+				AuxiliaryRowIdColIdx:      dedupJoin.AuxiliaryRowIdColIdx,
 				DelColIdx:                 dedupJoin.DelColIdx,
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
@@ -2136,6 +2137,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		if !warningsEnabled {
 			return
 		}
+		suppressed, err := ctr.duplicateWarningSuppressed(ap, proc, group)
+		if err != nil {
+			// Diagnostics are optional; never turn IGNORE into a statement error.
+			duplicateWarnings.AddCount()
+			return
+		}
+		if suppressed {
+			return
+		}
 		if !duplicateWarnings.NeedsDiagnostic() {
 			duplicateWarnings.AddCount()
 			return
@@ -2361,6 +2371,44 @@ func (dedupJoin *DedupJoin) resetRBat() error {
 	return nil
 }
 
+func (ctr *container) duplicateWarningSuppressed(ap *DedupJoin, proc *process.Process, group uint64) (bool, error) {
+	if ap.AuxiliaryRowIdColIdx == 0 {
+		return false, nil
+	}
+	colIdx := ap.AuxiliaryRowIdColIdx - 1
+	checkBatchRow := func(bat *batch.Batch, row int) (bool, error) {
+		if row < 0 {
+			return false, moerr.NewInternalError(proc.Ctx, "negative duplicate diagnostic row")
+		}
+		if bat == nil || row >= bat.RowCount() {
+			return false, moerr.NewInternalError(proc.Ctx, "invalid duplicate warning suppression row")
+		}
+		if colIdx < 0 || int(colIdx) >= len(bat.Vecs) {
+			return false, moerr.NewInternalError(proc.Ctx, "invalid duplicate warning suppression column")
+		}
+		return bat.Vecs[colIdx].IsNull(uint64(row)), nil
+	}
+	checkRow := func(row int) (bool, error) {
+		if row < 0 {
+			return false, moerr.NewInternalError(proc.Ctx, "negative duplicate diagnostic row")
+		}
+		batIdx := row / colexec.DefaultBatchSize
+		if batIdx >= len(ctr.batches) {
+			return false, moerr.NewInternalError(proc.Ctx, "invalid duplicate warning suppression row")
+		}
+		return checkBatchRow(ctr.batches[batIdx], row%colexec.DefaultBatchSize)
+	}
+	if sels := ctr.mp.GetSels(group); len(sels) > 0 {
+		return checkRow(int(sels[0]))
+	}
+	if group == 0 {
+		return false, moerr.NewInternalError(proc.Ctx, "invalid duplicate warning suppression group")
+	}
+	// Marked HashBuilds always collect selections. With no explicit selections,
+	// GroupSels.Finalize proved this identity even if trailing keys are NULL.
+	return checkRow(int(group - 1))
+}
+
 func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process, probeRow int, group uint64) (string, error) {
 	if len(ap.DedupKeyExprs) == 0 {
 		return colexec.FormatDedupEntry(ctr.vecs[0], probeRow, ap.DedupColName, ap.DedupColTypes)
@@ -2372,7 +2420,7 @@ func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process,
 	if sels := ctr.mp.GetSels(group); len(sels) > 0 {
 		return render(int(sels[0]))
 	}
-	if ctr.mp.GetGroupCount() == uint64(ctr.batchRowCount) {
+	if ap.AuxiliaryRowIdColIdx > 0 || ctr.mp.GetGroupCount() == uint64(ctr.batchRowCount) {
 		return render(int(group - 1))
 	}
 	// Compact maps omit row selections. NULL keys do not get a bucket, so a
