@@ -128,6 +128,15 @@ null  ¦  null  𝄀
 1  ¦  null  𝄀
 1  ¦  null  𝄀
 11  ¦  null
+select o.a,
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1) as nested_direct_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  nested_direct_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
 create role issue_32869_role;
 create user issue_32869_reader identified by '111' default role issue_32869_role;
 grant connect on account * to issue_32869_role;
@@ -149,6 +158,14 @@ select issue_32869_keep_second(
 from test_issue_32869.inner_rows o limit 1),
 a
 ) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+from test_issue_32869.inner_rows i limit 1)
+from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select (select (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+from test_issue_32869.restricted_wrapper i limit 1)
+from test_issue_32869.outer_rows;
 internal error: do not have privilege to execute the statement
 select issue_32869_keep_second(
 (select (select o.d from test_issue_32869.inner_rows s where s.d > o.d limit 0)

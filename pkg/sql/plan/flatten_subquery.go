@@ -477,8 +477,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	}
 	rootZeroDependent := builder.scalarRootZeroNeedsDependent(subquery)
 	if rootZeroDependent {
-		if builder.zeroScalarRootCtx == nil ||
-			(ctx != builder.zeroScalarRootCtx && builder.zeroScalarRewriteCandidateDepth == 0) {
+		if builder.zeroScalarRootCtx == nil {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
 		}
@@ -506,7 +505,6 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				builder.zeroScalarPrograms = make(map[uint32]struct{})
 			}
 			builder.zeroScalarPrograms[bound.GetDependent().ProgramId] = struct{}{}
-			builder.zeroScalarRewriteCount++
 		}
 		return nodeID, bound, err
 	}
