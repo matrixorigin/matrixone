@@ -142,3 +142,13 @@ The reader already records an identity boolean when there are no storage selecti
 Extend existing NULL/short-constant/multiple-domain controls and original-row mapping fixtures. Prefill reusable map storage with invalid indexes to prove identity cases do not consume stale contents; cover empty/all/partial stages and tombstones/storage rows. Require a component instruction/cycle win and unchanged allocations using the actual existing Bloom API. Reuse unchanged stream/cache lifetime evidence; run the changed owning packages and static closure.
 
 Then screen Q7 and Q10 at both SF10 and SF100 against current main, not only the small scale. No full reader campaign until those foreground instruction/resource signals improve. Finish all22 qualification with the approved one-process six-suite protocol, preserve exclusions and keep draft if any introduced regression remains. The independent join PR continues separately.
+
+## Review closure: projection policy, retirement and optional capacity
+
+Handled membership reads use the original projection ColumnUses carried by the optional request; the outer request retains its aligned policy for unsupported/ordinary readers. Required domain-source keys remain owned. Policy caching is invalidated when membership enters or retires.
+
+After a read returns, account its current late columns and retire completed membership before EOF/empty-result shortcuts. Low-rejection bypass restores ordinary scheduling immediately, including an empty residual result.
+
+If optional dictionary metadata is refused, leave the pinned scope, release all membership maps/bitmaps, and reuse the ordinary scoped-owned predicate route. No selected wide-payload temporary is allocated before predicate evaluation. The optional stage passes and retires for that scan; the join still owns correctness. Preserve raw input/callback order and conservative fallback column policy.
+
+Focused projection-policy, empty-result retirement and constrained-account nullable/wide predicate regressions pass; owning table_scan/blockio, focused race checks and incremental static checks pass. Existing performance measurements remain pinned to source59acc92f6a; these functional/resource review fixes are not represented as newly timed benchmark results.

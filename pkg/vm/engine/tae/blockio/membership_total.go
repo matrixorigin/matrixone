@@ -17,7 +17,6 @@ package blockio
 import (
 	"context"
 	"errors"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +45,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		read.Types = append(read.Types, typs[column])
 		read.Sources = append(read.Sources, output.Vecs[column])
 	}
+	fallback := false
 	_, err := ioutil.WithColumnsDataIntoBorrowedFixed(ctx, read.Seqnums, read.Types, fs, info.MetaLocation(), read.Sources, request.ColumnScope(), mp, policy, func(inputs []*vector.Vector, marked []bool) error {
 		for _, cached := range marked {
 			if !cached {
@@ -89,7 +89,6 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			copy(physical, member.Sels)
 		}
 		physical = physical[:count]
-		copiedPredicates := false
 		if !member.All {
 			admitted, err := s.Scope.Bind(s.Sources, s.Views, predicates, physical, inputs[0].Length(), mp, request.OutputAllocation)
 			if err != nil && !errors.Is(err, mpool.ErrAllocationAccountCapacity) {
@@ -100,21 +99,12 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 					output.Vecs[column] = s.Views[column]
 				}
 			} else {
-				s.Scope.Free(mp)
-				copiedPredicates = true
-				// Reuse the ordinary owned gather when optional view metadata
-				// is refused. Original cached inputs remain live for publication.
-				for i, column := range early {
-					if !slices.Contains(predicates, column) {
-						continue
-					}
-					destination := read.Sources[i]
-					if err := destination.Union(inputs[i], physical, mp); err != nil {
-						return err
-					}
-					inputs[i].CopyExpressionMetadataTo(destination)
-					output.Vecs[column] = destination
-				}
+				// Optional view metadata must not force a temporary payload
+				// allocation ahead of the ordinary predicate evaluation.
+				fallback = true
+				request.Membership.Bypass = true
+				request.Membership.OutputRows += int64(inputs[0].Length() - count)
+				return nil
 			}
 		}
 		output.SetRowCount(count)
@@ -143,9 +133,6 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		}
 		physical = physical[:selected]
 		for i, column := range early {
-			if copiedPredicates && slices.Contains(predicates, column) {
-				read.Sources[i].CleanOnlyData()
-			}
 			output.Vecs[column] = inputs[i]
 		}
 		if selected == 0 {
@@ -153,6 +140,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			output.CleanOnlyData()
 			return nil
 		}
+		output.SetRowCount(selected)
 		if err := borrowed.gather(output, physical, member.All && residual.All, request, mp); err != nil {
 			return err
 		}
@@ -167,5 +155,11 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		output.SetRowCount(selected)
 		return nil
 	})
+	if err == nil && fallback {
+		// The pinned scope has returned and restored all original headers. Retire
+		// every optional row-map/bitmap allocation before baseline Select runs.
+		request.FreeMembership(mp)
+		return true, blockDataReadScopedOwned(ctx, info, columns, typs, predicates, policy, output, mp, fs, request, nil)
+	}
 	return handled, err
 }

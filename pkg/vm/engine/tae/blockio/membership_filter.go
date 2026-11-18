@@ -37,7 +37,7 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	columns []uint16, typs []types.Type, storageRows []int64, early []int,
 	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
 	request *engine.ReaderFilterRequest, preFilterRows *int) (handled bool, retErr error) {
-	if request == nil || request.Membership == nil || request.Membership.Select == nil || request.Select == nil ||
+	if request == nil || request.Membership == nil || request.Membership.Bypass || request.Membership.Select == nil || request.Select == nil ||
 		request.OutputAllocation == nil || len(request.Membership.Columns) == 0 || len(output.ExtraBuf) != 0 ||
 		info.IsAppendable() || info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
 		return false, nil
@@ -98,6 +98,13 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	if live == 0 {
 		output.SetRowCount(0)
 		return true, nil
+	}
+	// Only an admitted reader changes private-input publication. Restore the
+	// conservative outer policy before any ordinary read fallback can run.
+	if len(request.Membership.ColumnUses) == len(columns) {
+		original := request.ColumnUses
+		request.ColumnUses = request.Membership.ColumnUses
+		defer func() { request.ColumnUses = original }()
 	}
 	if request.Exact == nil {
 		return true, blockDataReadPredicateMembership(ctx, info, columns, typs, early, physical[:live], logical[:live], identity, policy, output, mp, fs, request, s)
@@ -310,6 +317,7 @@ func finishPredicateMembership(ctx context.Context, info *objectio.BlockInfo,
 		logical, physical = logical[:selected], physical[:selected]
 	}
 	if scoped != nil {
+		output.SetRowCount(selected)
 		if err := scoped.gather(output, logical, residual.All && member.All, request, mp); err != nil {
 			return err
 		}
@@ -396,7 +404,7 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		if p.marked[i] {
 			var err error
 			if all {
-				err = destination.UnionBatch(source, 0, len(rows), nil, mp)
+				err = destination.UnionBatch(source, 0, output.RowCount(), nil, mp)
 			} else {
 				err = destination.Union(source, rows, mp)
 			}
@@ -412,7 +420,7 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		output.Vecs[column] = destination
 	}
 	if request.ObserveSelection != nil {
-		request.ObserveSelection(len(rows), 0, 0)
+		request.ObserveSelection(output.RowCount(), 0, 0)
 	}
 	return nil
 }

@@ -840,8 +840,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			if tc.refusal || tc.scoped {
 				request.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
 			}
-			if tc.unusedPredicate {
-				request.ColumnUses[1] = engine.ReaderColumnUnused
+			if tc.unusedPredicate || tc.refusal {
+				request.Membership.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}
 			}
 			if tc.exact {
 				request.Exact = objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: colTypes[0], Op: objectio.ExactScanGE, Value: 4}}))
@@ -1001,6 +1001,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			if tc.unusedPredicate || tc.refusal {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, request.ColumnUses, "outer fallback policy must be restored")
+			}
 			if tc.scoped {
 				require.Same(t, originalHeaders[1], output.Vecs[1])
 				require.False(t, output.Vecs[1].HasBorrowedBacking())

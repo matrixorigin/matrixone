@@ -1371,6 +1371,12 @@ type ReaderFilterRequest struct {
 // domain. Ordinary reader requests carry only a nil optional pointer.
 type ReaderMembershipFilter struct {
 	Columns []int
+	// ColumnUses is the original projection policy, used only once a reader
+	// admits the membership path. The outer request keeps aligned fallback data.
+	ColumnUses []ReaderColumnUse
+	// Bypass retires the optional stage after a resource refusal. The current
+	// read completes through the ordinary borrowed-predicate route instead.
+	Bypass bool
 	// PredicateColumns is the original ordered chain's required input set.
 	// Nil retains early-column behavior for callers without staged metadata.
 	PredicateColumns []int

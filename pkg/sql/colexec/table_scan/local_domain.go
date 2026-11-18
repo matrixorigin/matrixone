@@ -152,26 +152,10 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		s.rows += int64(bat.RowCount())
 	}
 	if tableScan.ctr.membershipApplied {
-		active := false
-		for _, probe := range tableScan.ctr.domainProbes {
-			active = active || !probe.pass
-		}
-		if !active {
-			// Reuse the existing low-rejection bypass. Once it fires, future
-			// blocks return to the original eager/late column schedule.
-			tableScan.recordReaderMembershipStats()
-			tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
-			tableScan.ctr.readerFilter.Membership = nil
-			tableScan.configureLateMaterialization()
-			if len(tableScan.ctr.earlyColumns) == 0 {
-				for column := range tableScan.Types {
-					tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, column)
-				}
-			}
-		}
 		return nil
 	}
 	rows, all, err := tableScan.selectLocalDomains(proc, bat)
+	tableScan.retireReaderMembership(proc)
 	if err != nil || all {
 		return err
 	}
@@ -329,6 +313,8 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 			tableScan.ctr.lateColumns = append(tableScan.ctr.lateColumns, column)
 		}
 	}
+	// Membership changes publication policy; refresh the cached projection proof.
+	tableScan.ctr.columnUsesReady = false
 	request.Membership.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 		started := time.Now()
 		defer func() { tableScan.ctr.filterActiveDuration += time.Since(started) }()
@@ -349,6 +335,39 @@ func (tableScan *TableScan) prepareReaderMembership(proc *process.Process) {
 			request.Membership.OutputRows += int64(len(rows))
 		}
 		return engine.ReaderFilterResult{Sels: rows, All: all}, nil
+	}
+}
+
+// retireReaderMembership runs after ReadWithFilter, including empty results.
+// No reader callback or borrowed map is live at this boundary.
+func (tableScan *TableScan) retireReaderMembership(proc *process.Process) {
+	request := tableScan.ctr.readerFilter
+	if request == nil || request.Membership == nil {
+		return
+	}
+	bypass := request.Membership.Bypass
+	active := false
+	for i := range tableScan.ctr.domainProbes {
+		if bypass {
+			tableScan.ctr.domainProbes[i].pass = true
+		}
+		active = active || !tableScan.ctr.domainProbes[i].pass
+	}
+	if active {
+		return
+	}
+	tableScan.recordReaderMembershipStats()
+	if bypass && tableScan.OpAnalyzer != nil {
+		tableScan.OpAnalyzer.GetOpStats().AddExtraStat("RuntimeDomainReaderCapacityFallback", 1)
+	}
+	request.FreeMembership(proc.Mp())
+	request.Membership = nil
+	tableScan.ctr.columnUsesReady = false
+	tableScan.configureLateMaterialization()
+	if len(tableScan.ctr.earlyColumns) == 0 {
+		for column := range tableScan.Types {
+			tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, column)
+		}
 	}
 }
 
