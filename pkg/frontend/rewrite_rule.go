@@ -616,13 +616,13 @@ func rewriteSingleSQL(
 	if err != nil {
 		return sql, err
 	}
-	if err = validateDiscardedRewriteRules(ctx, cache, roleSelected, lowerCaseTableNames, sqlMode); err != nil {
+	if err = validateRewriteRules(ctx, cache, roleSelected, lowerCaseTableNames, sqlMode); err != nil {
 		return sql, err
 	}
-	if err = validateDiscardedRewriteRules(ctx, sessionRules, sessionSelected, lowerCaseTableNames, sqlMode); err != nil {
+	if err = validateRewriteRules(ctx, sessionRules, sessionSelected, lowerCaseTableNames, sqlMode); err != nil {
 		return sql, err
 	}
-	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
+	if err = validateRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
 		return sql, err
 	}
 	chains := make(map[string][]string,
@@ -717,7 +717,7 @@ func rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
 		if err != nil {
 			return innerSQL, err
 		}
-		if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
+		if err = validateRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
 			return innerSQL, err
 		}
 		for key, rule := range normalizedInlineRules {
@@ -745,7 +745,7 @@ func rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
 	return hint + " " + innerSQL, nil
 }
 
-func validateDiscardedRewriteRules(ctx context.Context, rules, selected map[string]string, lowerCaseTableNames int64, sqlMode string) error {
+func validateRewriteRules(ctx context.Context, rules, selected map[string]string, lowerCaseTableNames int64, sqlMode string) error {
 	keys := make([]string, 0, len(rules))
 	for key := range rules {
 		keys = append(keys, key)
@@ -1009,22 +1009,21 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 	return out, nil
 }
 
-// Validate before publishing SET sql_mode. Otherwise the next policy refresh
-// could fail before the user can execute a SET to restore the previous mode.
-func validateRoleRulesForSQLMode(ctx context.Context, ses *Session, mode string) error {
-	// SQL SET has already admitted the mandatory policy for this request.
+// Check a proposed mode against the active role rules before publishing it.
+func validateRoleRulesForSQLMode(ctx context.Context, ses *Session, mode string, recoverMode bool) error {
 	ses.ruleCacheMu.RLock()
 	active := len(ses.ruleCache) != 0
 	ses.ruleCacheMu.RUnlock()
-	if !active {
+	if !active && !recoverMode {
 		return nil
 	}
-	rules, err := loadRuleCache(ctx, ses, mode)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Include unmerged rules and fallback winners in the validation.
-	return validateDiscardedRewriteRules(ctx, rules, nil, parserLowerCaseTableNames(ses), mode)
+	if _, err := loadRuleCache(ctx, ses, mode); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
@@ -1096,6 +1095,9 @@ func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[str
 		if err != nil {
 			return nil, err
 		}
+		if !utf8.ValidString(rule) {
+			return nil, moerr.NewInvalidInput(ctx, "rewrite rule cannot be represented as UTF-8")
+		}
 		ruleRows = append(ruleRows, rewriteRuleRow{
 			roleID:   roleID,
 			ruleName: ruleName,
@@ -1134,6 +1136,11 @@ func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[str
 		}
 	}
 
+	// Validate effective rules before publishing, including rules that never
+	// went through merging. Hint parsing uses the same session parser settings.
+	if err := validateRewriteRules(ctx, rules, nil, parserLowerCaseTableNames(ses), sqlMode); err != nil {
+		return nil, err
+	}
 	return rules, nil
 }
 

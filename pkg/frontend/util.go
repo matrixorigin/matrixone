@@ -2606,6 +2606,8 @@ type UserInput struct {
 	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
 	// without injecting the same rules a second time.
 	rewritePolicyMaterialized bool
+	// Recovery carries an already checked control AST and cannot reuse a plan.
+	rewritePolicyRecovery bool
 	// Trusted derived SQL is part of its parent statement authorization.
 	sameStatementAuthorization bool
 	preparePlan                *plan.Plan // binary protocol execute
@@ -2698,7 +2700,7 @@ func (ui *UserInput) isPreparedExpr() bool {
 }
 
 func (ui *UserInput) canUsePlanCache() bool {
-	return ui != nil && !ui.isSetExpression
+	return ui != nil && !ui.isSetExpression && !ui.rewritePolicyRecovery
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {

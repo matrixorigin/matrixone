@@ -1501,6 +1501,7 @@ func doSetVar(
 			captureSystemReplayability(assign.Name)
 		}
 	}
+	recoverMode := execCtx.input != nil && execCtx.input.rewritePolicyRecovery
 	var preparedItems []*plan.SetVariablesItem
 	if preparedExpression {
 		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.plan != nil {
@@ -1516,7 +1517,13 @@ func doSetVar(
 		var valueType plan.Type
 		var runtimeDomain types.RuntimeStringDomain
 		var evalErr error
-		if index < len(preparedItems) && preparedItems[index].Value != nil {
+		if recoverMode {
+			// Admission permits only a string literal or DEFAULT. Neither
+			// needs the synthetic SELECT used by the general SET evaluator.
+			if literal, ok := assign.Value.(*tree.NumVal); ok {
+				value = literal.String()
+			}
+		} else if index < len(preparedItems) && preparedItems[index].Value != nil {
 			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
 				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
 					assign.Value, preparedItems[index].Value, ses, execCtx,
@@ -1637,7 +1644,7 @@ func doSetVar(
 						return err
 					}
 				}
-				if err = ses.SetSessionSysVar(execCtx.reqCtx, name, value); err != nil {
+				if err = ses.setSessionSysVar(execCtx.reqCtx, name, value, false, recoverMode); err != nil {
 					return err
 				}
 				if strings.ToLower(name) == "autocommit" {
@@ -7440,6 +7447,40 @@ func newBinaryExecuteUserInput(sql string, prepareStmt *PrepareStmt, cursorReque
 	}
 }
 
+// rewritePolicyRecoveryStatement admits only standalone controls that can
+// execute without reading protected data. The returned AST is dispatched as-is.
+func rewritePolicyRecoveryStatement(ctx context.Context, ses *Session, sql string) tree.Statement {
+	if ctx.Err() != nil || strings.Contains(sql, "/*!") || strings.Contains(sql, "/*+") {
+		return nil
+	}
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql,
+		parserLowerCaseTableNames(ses), sessionSQLModeForParser(ses))
+	if err != nil {
+		return nil
+	}
+	switch node := stmt.(type) {
+	case *tree.RollbackTransaction:
+		if node.Type == tree.COMPLETION_TYPE_NO_CHAIN {
+			return stmt
+		}
+	case *tree.SetVar:
+		if len(node.Assignments) == 1 && isSessionSQLModeSet(node) {
+			switch value := node.Assignments[0].Value.(type) {
+			case *tree.NumVal:
+				if value.ValType == tree.P_char {
+					return stmt
+				}
+			case *tree.DefaultVal:
+				if value.Expr == nil {
+					return stmt
+				}
+			}
+		}
+	}
+	stmt.Free()
+	return nil
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -7503,14 +7544,18 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
+		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		if rewriteErr != nil {
-			ses.beginWarningDiagnostics()
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-			return resp, nil
+			input.stmt = rewritePolicyRecoveryStatement(execCtx.reqCtx, ses, query)
+			if input.stmt == nil {
+				ses.beginWarningDiagnostics()
+				markRowCountFailed(ses, ses.GetProc())
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
+			input.rewritePolicyRecovery = true
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
-		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
 			markRowCountFailed(ses, ses.GetProc())

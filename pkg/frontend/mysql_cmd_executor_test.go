@@ -11248,6 +11248,94 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	}
 }
 
+func TestExecRequestRewritePolicyRecovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	ses.rewriteEnabled.Store(false)
+	handler := ses.GetTxnHandler()
+	handler.optionBits = OPTION_AUTOCOMMIT | OPTION_BEGIN
+	handler.SetServerStatus(SERVER_STATUS_IN_TRANS)
+	txnOperator := handler.GetTxn().(*mock_frontend.MockTxnOperator)
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+
+	catalogRead := getSqlForRoleRulesOfRoleIDs([]int64{10})
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bh.sql2result[catalogRead] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select from"}})
+	t.Cleanup(gostub.StubFunc(&NewBackgroundExec, bh).Reset)
+	ses.ruleCache = nil // An absent cache cannot validate the recovery target.
+	require.NoError(t, ses.SetSessionSysVar(t.Context(), "sql_mode", "NO_BACKSLASH_ESCAPES"))
+	initialMode := sessionSQLMode(ses)
+	exec := func(ctx context.Context, cmd CommandType, sql string) *Response {
+		execCtx.reqCtx = ctx
+		resp, err := ExecRequest(ses, execCtx, &Request{cmd: cmd, data: []byte(sql)})
+		require.NoError(t, err)
+		return resp
+	}
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	// Malformed unmerged rules fail admission, including when optional
+	// remapping is off. Only the two standalone controls can reach dispatch.
+	for _, sql := range []string{
+		"select * from db.t",
+		"set global sql_mode = ''",
+		"set sql_mode = concat('')",
+		"set sql_mode = '', @other = 1",
+		"set sql_mode = ''; select * from db.t",
+		"rollback to savepoint s",
+		"rollback and chain",
+		"commit",
+		"/*! rollback */",
+	} {
+		resp := exec(ctx, COM_QUERY, sql)
+		require.NotNil(t, resp, sql)
+		require.Equal(t, ErrorResponse, resp.category, sql)
+		require.ErrorContains(t, resp.GetData().(error), "SQL parser error", sql)
+	}
+	resp := exec(ctx, COM_STMT_PREPARE, "select * from db.t")
+	require.Equal(t, ErrorResponse, resp.category)
+	require.ErrorContains(t, resp.GetData().(error), "SQL parser error")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	resp = exec(cancelled, COM_QUERY, "rollback")
+	require.Equal(t, ErrorResponse, resp.category)
+	require.ErrorIs(t, resp.GetData().(error), context.Canceled)
+
+	resp = exec(ctx, COM_QUERY, "set session sql_mode = ''")
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.ErrorContains(t, resp.GetData().(error), "SQL parser error")
+	require.Equal(t, initialMode, sessionSQLMode(ses))
+	txnBeforeRecovery := ses.GetTxnHandler().GetTxn()
+	require.NotNil(t, txnBeforeRecovery)
+
+	// The same catalog rule must be rejected in the old mode and accepted in
+	// the target mode. The latter is checked without publishing a policy.
+	bh.sql2result[catalogRead] = newMrsForRewriteRules([][]interface{}{
+		{10, "db.t", `select * from db.t where code = 'docs\'notes'`},
+	})
+	resp = exec(ctx, COM_QUERY, "set session sql_mode = ''")
+	if resp != nil {
+		t.Fatalf("unexpected mode recovery response: %v", resp.GetData())
+	}
+	require.Empty(t, sessionSQLMode(ses))
+	require.Same(t, txnBeforeRecovery, ses.GetTxnHandler().GetTxn())
+	require.Nil(t, ses.ruleCache)
+
+	bh.sql2result[catalogRead] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select from"}})
+	resp = exec(ctx, COM_QUERY, "rollback")
+	if resp != nil {
+		t.Fatalf("unexpected rollback response: %v", resp.GetData())
+	}
+	require.False(t, handler.InActiveTxn())
+	require.Zero(t, handler.GetServerStatus()&SERVER_STATUS_IN_TRANS)
+	require.Nil(t, ses.ruleCache)
+}
+
 func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ctrl := gomock.NewController(t)

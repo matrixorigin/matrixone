@@ -1929,17 +1929,17 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) error {
-	return ses.setSessionSysVar(ctx, name, val, false)
+	return ses.setSessionSysVar(ctx, name, val, false, false)
 }
 
 // restoreSessionSysVar preserves an already-decoded historical session snapshot.
 // A stored charset spelling is not a new charset request or permission to enable
 // a native collation. All normal variable validation and runtime hooks still run.
 func (ses *Session) restoreSessionSysVar(ctx context.Context, name string, val interface{}) error {
-	return ses.setSessionSysVar(ctx, name, val, true)
+	return ses.setSessionSysVar(ctx, name, val, true, false)
 }
 
-func (ses *Session) setSessionSysVar(ctx context.Context, name string, val interface{}, restoring bool) (err error) {
+func (ses *Session) setSessionSysVar(ctx context.Context, name string, val interface{}, restoring, recoverMode bool) (err error) {
 	name = strings.ToLower(name)
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
@@ -2005,8 +2005,8 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 		if name == "sql_mode" {
 			oldMode, _ := oldValue.(string)
 			newMode, _ := val.(string)
-			if mysql.ParseSQLModeFlags(oldMode) != mysql.ParseSQLModeFlags(newMode) {
-				if err = validateRoleRulesForSQLMode(ctx, ses, newMode); err != nil {
+			if recoverMode || mysql.ParseSQLModeFlags(oldMode) != mysql.ParseSQLModeFlags(newMode) {
+				if err = validateRoleRulesForSQLMode(ctx, ses, newMode, recoverMode); err != nil {
 					return err
 				}
 			}
@@ -2063,6 +2063,8 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	canonicalName := canonicalSystemVariableName(name)
 	if def.UpdateSessVar != nil {
 		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, canonicalName, val)
+	} else if recoverMode {
+		err = ses.sesSysVars.setIfActive(ctx, canonicalName, val)
 	} else {
 		ses.sesSysVars.Set(canonicalName, val)
 	}

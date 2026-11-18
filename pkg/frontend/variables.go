@@ -1274,6 +1274,20 @@ func (sv *SystemVariables) Get(name string) interface{} {
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
+	sv.setLocked(name, value)
+}
+
+func (sv *SystemVariables) setIfActive(ctx context.Context, name string, value interface{}) error {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sv.setLocked(name, value)
+	return nil
+}
+
+func (sv *SystemVariables) setLocked(name string, value interface{}) {
 	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
 	if alias := transactionSystemVariableAlias(name); alias != "" {
