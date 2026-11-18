@@ -69,7 +69,7 @@ func TestMoChangedTablesPublicPlan(t *testing.T) {
 
 func TestMoChangedTablesAliasScope(t *testing.T) {
 	for _, tc := range []struct{ sql, wantErr string }{
-		{"select mo_changed_tables.kind from mo_changed_tables(NULL) w", "not found"},
+		{"select mo_changed_tables.kind from mo_changed_tables(NULL) w", "missing FROM-clause entry"},
 		{"select * from (select 1) s cross join generate_series(1, 2)", "Every table function must have an alias"},
 		{"select * from (select 1) s cross apply mo_changed_tables(NULL) w", "must run as an independent table function"},
 	} {
