@@ -130,6 +130,14 @@ select hex(cast(label as char)) from enum_original_v;
 select hex(cast(label as char)) from enum_replay_v;
 ➤ hex(cast(label as varchar))[-1,16383,0]  𝄀
 615C62
+drop view enum_replay_v;
+set sql_mode = '';
+prepare enum_replay_stmt from @enum_replay;
+execute enum_replay_stmt;
+deallocate prepare enum_replay_stmt;
+select hex(cast(label as char)) from enum_replay_v;
+➤ hex(cast(label as varchar))[-1,16383,0]  𝄀
+615C62
 set sql_mode = @saved_view_sql_mode;
 drop database information_schema_views_metadata;
 drop database if exists information_schema_views_clone;

@@ -389,6 +389,13 @@ set sql_mode = '';
 select a from db1.t_dup order by a;
 -- @session
 
+-- Multiple valid changes in one SET keep the same authorization principal.
+-- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'NO_BACKSLASH_ESCAPES', sql_mode = 'ANSI_QUOTES';
+select @@sql_mode = 'ANSI_QUOTES' as final_mode;
+select a from db1.t_dup order by a;
+-- @session
+
 -- A mode that cannot parse an active rule is rejected before the session changes.
 insert into db1.t_dup values (5,6,'docs''notes');
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;

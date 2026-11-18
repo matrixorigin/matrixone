@@ -390,6 +390,13 @@ set sql_mode = '';
 select a from db1.t_dup order by a;
 ➤ a[4,32,0]  𝄀
 3
+set sql_mode = 'NO_BACKSLASH_ESCAPES', sql_mode = 'ANSI_QUOTES';
+select @@sql_mode = 'ANSI_QUOTES' as final_mode;
+➤ final_mode[-6,8,0]  𝄀
+1
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+3
 insert into db1.t_dup values (5,6,'docs''notes');
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
 set sql_mode = '';

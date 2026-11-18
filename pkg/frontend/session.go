@@ -264,7 +264,7 @@ type Session struct {
 	// A loaded cache is reused only while a fresh proof still matches it, so a
 	// rule change committed through another CN is observed here (issue #29133).
 	// The zero version never authorizes reuse.
-	ruleCacheIdentity        rewriteRuleIdentity
+	ruleCacheKey             rewriteRuleCacheKey
 	ruleCacheVersion         any
 	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
 	ruleCacheRevision        uint64 // changes on every publication, including equal policy

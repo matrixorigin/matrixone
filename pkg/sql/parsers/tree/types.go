@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -190,8 +191,11 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		if len(node.EnumValues) > 0 {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
-				if ctx.preserveTextLiteralWidth {
-					// ENUM/SET require STRING tokens, not hex-introduced expressions.
+				if ctx.viewDefinition && strings.Contains(enum, "\\") {
+					// The MySQL scanner decodes this spelling to a STRING token,
+					// regardless of NO_BACKSLASH_ESCAPES.
+					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", enum)
+				} else if ctx.preserveTextLiteralWidth {
 					if !ctx.NoBackslashEscape() {
 						enum = FormatString(enum)
 					}

@@ -151,27 +151,39 @@ func roleRuleCacheVersion(ctx context.Context, ses *Session) (disttae.PrivilegeC
 type rewriteRuleIdentity struct {
 	account, user, role uint32
 	secondary           bool
-	sqlMode             string
+}
+
+// The parser mode determines cached SQL, not the authorization principal.
+type rewriteRuleCacheKey struct {
+	rewriteRuleIdentity
+	sqlMode string
 }
 
 func rewriteRuleSessionIdentity(ses *Session) rewriteRuleIdentity {
-	return rewriteRuleIdentityForTenant(ses, ses.GetTenantInfo())
+	return rewriteRuleIdentityForTenant(ses.GetTenantInfo())
 }
 
-func rewriteRuleIdentityForTenant(ses *Session, tenant *TenantInfo) rewriteRuleIdentity {
+func rewriteRuleIdentityForTenant(tenant *TenantInfo) rewriteRuleIdentity {
 	if tenant == nil {
 		return rewriteRuleIdentity{}
 	}
-	sqlMode := sessionSQLModeForParser(ses)
 	tenant.mu.Lock()
 	defer tenant.mu.Unlock()
-	return rewriteRuleIdentity{account: tenant.TenantID, user: tenant.UserID, role: tenant.DefaultRoleID, secondary: tenant.useAllSecondaryRole, sqlMode: sqlMode}
+	return rewriteRuleIdentity{account: tenant.TenantID, user: tenant.UserID, role: tenant.DefaultRoleID, secondary: tenant.useAllSecondaryRole}
+}
+
+func rewriteRuleKeyForTenant(ses *Session, tenant *TenantInfo) rewriteRuleCacheKey {
+	key := rewriteRuleCacheKey{rewriteRuleIdentity: rewriteRuleIdentityForTenant(tenant)}
+	if tenant != nil {
+		key.sqlMode = sessionSQLModeForParser(ses)
+	}
+	return key
 }
 
 type rewritePolicyRequestKey struct{}
 
 type rewritePolicyRefreshStamp struct {
-	identity             rewriteRuleIdentity
+	key                  rewriteRuleCacheKey
 	generation, revision uint64
 }
 
@@ -206,12 +218,12 @@ func preparedPolicyAlreadyRefreshedLocked(ctx context.Context, ses *Session) boo
 	if r == nil {
 		return false
 	}
-	identity := rewriteRuleIdentityForTenant(ses, ses.tenant)
+	key := rewriteRuleKeyForTenant(ses, ses.tenant)
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.valid = r.valid && !r.ended && ctx.Err() == nil && r.stamp.identity == identity &&
+	r.valid = r.valid && !r.ended && ctx.Err() == nil && r.stamp.key == key &&
 		r.stamp.generation == ses.rewritePolicyGeneration && r.stamp.revision == ses.ruleCacheRevision
 	return r.valid
 }
@@ -281,17 +293,17 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		if attempt == 3 {
 			return fail(moerr.NewInternalError(ctx, "rewrite rule cache changed during reload"))
 		}
-		identity := rewriteRuleSessionIdentity(ses)
+		key := rewriteRuleKeyForTenant(ses, ses.GetTenantInfo())
 		ses.ruleCacheMu.RLock()
 		generation := ses.rewritePolicyGeneration
 		loaded := ses.ruleCache != nil
 		cachedVersion := ses.ruleCacheVersion
 		revision := ses.ruleCacheRevision
-		cachedIdentity := ses.ruleCacheIdentity
+		cachedKey := ses.ruleCacheKey
 		// An empty catalog result is independent of parser mode and remains
 		// reusable while the same catalog proof is current.
 		if len(ses.ruleCache) == 0 {
-			cachedIdentity.sqlMode = identity.sqlMode
+			cachedKey.sqlMode = key.sqlMode
 		}
 		ses.ruleCacheMu.RUnlock()
 
@@ -322,14 +334,14 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 			cached, ok := cachedVersion.(disttae.PrivilegeCacheVersion)
 			versionMatches = ok && typedVersion != (disttae.PrivilegeCacheVersion{}) && typedVersion == cached
 		}
-		if loaded && identity == cachedIdentity && (ses.GetTenantInfo() == nil || versionMatches) {
-			if identity != rewriteRuleSessionIdentity(ses) {
+		if loaded && key == cachedKey && (ses.GetTenantInfo() == nil || versionMatches) {
+			if key != rewriteRuleKeyForTenant(ses, ses.GetTenantInfo()) {
 				continue
 			}
 			ses.ruleCacheMu.RLock()
 			unchanged := generation == ses.rewritePolicyGeneration && ses.ruleCache != nil && ses.ruleCacheRevision == revision
 			if unchanged {
-				stamp = rewritePolicyRefreshStamp{identity, generation, revision}
+				stamp = rewritePolicyRefreshStamp{key, generation, revision}
 				roleRulesActive = len(ses.ruleCache) > 0
 				if materialize {
 					policy.roleRules = maps.Clone(ses.ruleCache)
@@ -345,11 +357,11 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 
 		// The proof precedes this independent snapshot read. A later commit can
 		// only make this stamp conservative; it cannot bless older rules as new.
-		rules, err := loadRuleCache(ctx, ses, identity.sqlMode)
+		rules, err := loadRuleCache(ctx, ses, key.sqlMode)
 		if err != nil {
 			return fail(err)
 		}
-		if identity != rewriteRuleSessionIdentity(ses) {
+		if key != rewriteRuleKeyForTenant(ses, ses.GetTenantInfo()) {
 			continue
 		}
 		ses.mu.Lock()
@@ -367,14 +379,14 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 			version = typedVersion
 		}
 		ses.ruleCache, ses.ruleCacheVersion = rules, version
-		ses.ruleCacheIdentity = identity
+		ses.ruleCacheKey = key
 		ses.ruleCacheRevision++
 		policy.generation = ses.rewritePolicyGeneration
 		roleRulesActive = len(rules) > 0
 		if materialize {
 			policy.roleRules = maps.Clone(rules)
 		}
-		stamp = rewritePolicyRefreshStamp{identity, ses.rewritePolicyGeneration, ses.ruleCacheRevision}
+		stamp = rewritePolicyRefreshStamp{key, ses.rewritePolicyGeneration, ses.ruleCacheRevision}
 		ses.ruleCacheMu.Unlock()
 		ses.mu.Unlock()
 		cacheReloaded = true
