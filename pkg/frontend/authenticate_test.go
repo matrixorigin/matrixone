@@ -19705,3 +19705,38 @@ func TestExtensionPrivilegeClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestUnusedTableChangesWindowDiagnosticsAndCatalogValidation(t *testing.T) {
+	ctx := t.Context()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	for _, prepare := range []bool{false, true} {
+		compiler := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
+		query, err := plan2.NewBaseOptimizer(compiler).Optimize(stmt, prepare, nil)
+		require.NoError(t, err)
+		handler := &marshalPlanHandler{query: query}
+		_, stats := handler.Stats(ctx, nil)
+		require.Zero(t, stats.RowsRead)
+		require.Zero(t, stats.BytesScan)
+
+		built := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+		for _, bump := range []uint32{0, 1} {
+			validatedSource := false
+			changed, err := checkModify(built, func(db, name string, snapshot *plan.Snapshot, _ *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+				require.NotEmpty(t, name)
+				ref, def, err := compiler.Resolve(db, name, snapshot, nil)
+				if name == "region" {
+					validatedSource = true
+					def.Version += bump
+				}
+				return ref, def, err
+			})
+			require.NoError(t, err)
+			require.True(t, validatedSource)
+			require.Equal(t, bump != 0, changed)
+		}
+	}
+}

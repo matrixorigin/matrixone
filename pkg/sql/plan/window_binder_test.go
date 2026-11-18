@@ -1121,8 +1121,8 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	require.Equal(t, planpb.Node_TABLE_SCAN, carriers["region"].GetNodeType())
 	require.Equal(t, uint32(7), carriers["region"].GetTableDef().GetVersion())
 	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers["events"].GetExternScan().GetType())
-	require.Equal(t, planpb.Node_TABLE_SCAN, carriers["nation"].GetNodeType())
-	require.Nil(t, carriers["nation"].GetTableDef())
+	require.Equal(t, planpb.Node_FUNCTION_SCAN, carriers["nation"].GetNodeType())
+	require.Equal(t, "table_changes", carriers["nation"].GetTableDef().GetTblFunc().GetName())
 
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.

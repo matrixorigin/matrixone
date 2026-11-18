@@ -20,6 +20,8 @@ create function issue_32869_add_twice(x int) returns int language sql as '$1 + $
 -- @label:bvt
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0) as filtered_zero
 from outer_rows o order by o.a;
+select o.a, (select o.a from inner_rows i where i.d > o.a + 1 limit 0) as arithmetic_zero
+from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
 from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero

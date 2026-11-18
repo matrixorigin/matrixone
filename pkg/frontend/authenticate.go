@@ -7902,7 +7902,11 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return node.NodeType == plan.Node_FUNCTION_SCAN &&
+	return isTableChangesScan(node)
+}
+
+func isTableChangesScan(node *plan.Node) bool {
+	return node.GetNodeType() == plan.Node_FUNCTION_SCAN &&
 		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
 }
 

@@ -3149,6 +3149,7 @@ func TestCorrelatedScalarRootZeroKeepsInnerScan(t *testing.T) {
 		sql  string
 	}{
 		{"filtered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"arithmetic in comparison", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey + 1 limit 0) as v from tpch.nation n`},
 		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
 		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
 		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
@@ -3273,7 +3274,7 @@ func TestValidationCarrierPreservesCatalogIdentity(t *testing.T) {
 	node.TableDef = &plan.TableDef{TblFunc: &plan.TableFunction{Name: "table_changes"}}
 	carrier = windowValidationPrivilegeCarrier(node)
 	require.NotNil(t, carrier)
-	require.Equal(t, plan.Node_TABLE_SCAN, carrier.NodeType)
-	require.Nil(t, carrier.TableDef, "synthetic function schemas are not catalog objects")
+	require.Equal(t, plan.Node_FUNCTION_SCAN, carrier.NodeType)
+	require.Equal(t, "table_changes", carrier.GetTableDef().GetTblFunc().GetName())
 	require.Equal(t, node.ObjRef, carrier.ObjRef)
 }

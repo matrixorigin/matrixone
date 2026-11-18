@@ -67,7 +67,7 @@ func zeroLimitScalarSourceSafe(statement tree.SelectStatement, parent *BindConte
 	if !zeroLimitSourceExprSafe(clause.Exprs[0].Expr, true, 0) {
 		return false
 	}
-	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, false, 0) {
+	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, true, 0) {
 		return false
 	}
 	// Bound-expression validation below still rejects unsafe sort keys.
@@ -147,21 +147,33 @@ func zeroLimitSourceExprSafe(expr tree.Expr, allowValueOps bool, depth int) bool
 	case *tree.ParenExpr:
 		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.AndExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
 	case *tree.OrExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
 	case *tree.NotExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.IsNullExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.IsNotNullExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.ComparisonExpr:
 		return node != nil && node.SubOp == 0 && node.Escape == nil &&
-			zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+			zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.IsTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.BinaryExpr:
 		return allowValueOps && node != nil &&
 			(node.Op == tree.PLUS || node.Op == tree.MINUS || node.Op == tree.MULTI ||

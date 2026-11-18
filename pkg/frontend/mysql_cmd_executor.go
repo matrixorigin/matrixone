@@ -4531,8 +4531,11 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 			return true, nil
 		}
 		for i := range p.Query.Nodes {
-			if def := p.Query.Nodes[i].TableDef; def != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def, p.Query.Nodes[i].ScanSnapshot)
+			node := p.Query.Nodes[i]
+			// table_changes has a synthetic output schema. Its source is
+			// validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
 				}
