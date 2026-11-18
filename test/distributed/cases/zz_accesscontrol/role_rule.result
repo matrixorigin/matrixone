@@ -419,11 +419,12 @@ select * from db1.t1 order by a;
 100  ¦  30
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001' and (select group_concat('x' separator '|') from db1.t1 where a = 1) = 'x'" on table db1.t_dup;
 alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
+grant select on table db1.t1 to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_b;
 grant test_rule_role_dup_projection_b to test_rule_user_dup_projection;
 set enable_remap_hint = 1;
@@ -437,7 +438,7 @@ select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 2
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001' and (select group_concat('x' separator '|') from db1.t1 where a = 1) = 'x'" on table db1.t_dup;
 set enable_remap_hint = 1;
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;

@@ -380,11 +380,12 @@ select * from db1.t1 order by a;
 -- 18. Partial projections keep duplicate projected values from distinct visible rows
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001' and (select group_concat('x' separator '|') from db1.t1 where a = 1) = 'x'" on table db1.t_dup;
 alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
+grant select on table db1.t1 to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_b;
 grant test_rule_role_dup_projection_b to test_rule_user_dup_projection;
 -- @session:id=8&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
@@ -396,7 +397,7 @@ select count(*) from db1.t_dup;
 -- @session
 
 -- Re-saving a rule and rebuilding the merged rule in a new session keeps the same visible rows.
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from code) = '0001' and (select group_concat('x' separator '|') from db1.t1 where a = 1) = 'x'" on table db1.t_dup;
 -- @session:id=18&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set enable_remap_hint = 1;
 set secondary role all;

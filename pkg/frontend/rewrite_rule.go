@@ -508,10 +508,11 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 	}
 }
 
-// Fold SQL syntax as before, but retain the type boundary and case of string literals.
+// Fold SQL syntax as before, but keep identifiers distinct from string literals
+// and retain the case of literal values.
 func rewriteRuleProjectionKey(exprs *tree.SelectExprs) string {
 	var literals []tree.StringLiteralPosition
-	sql := tree.StringWithOpts(exprs, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(&literals))
+	sql := tree.StringWithOpts(exprs, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(&literals))
 	if len(literals) == 0 {
 		return normalizeRewriteSQL(sql)
 	}

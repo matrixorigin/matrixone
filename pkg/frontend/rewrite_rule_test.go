@@ -812,6 +812,26 @@ func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestMergeRewriteRulesPreservesSubqueryGroupConcat(t *testing.T) {
+	ctx := context.Background()
+	const base = "select a from db1.t1 where "
+	for _, predicate := range []string{
+		"code = (select group_concat(x separator '|') from db1.codes)",
+		"code = (select group_concat(distinct x, y order by x desc separator '') from db1.codes)",
+		"code = (select group_concat(x) from db1.codes)",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			merged, err := mergeRewriteRules(ctx, base+predicate, base+"a = 2")
+			require.NoError(t, err)
+			want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"("+predicate+") or (a = 2)", 1)
+			require.NoError(t, err)
+			got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
 func TestMergeRewriteRulesPreservesKeywordArguments(t *testing.T) {
 	ctx := context.Background()
 	const base = "select a from db1.t1 where "
@@ -844,6 +864,7 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 
 	for _, tc := range []struct{ left, right string }{
 		{"'1'", "1"},
+		{"'1'", "`'1'`"},
 		{"'UP'", "'up'"},
 	} {
 		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
@@ -918,7 +939,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "simple select",
 			rule:       "select A, Age from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a, age",
+			selectList: "`a`, `age`",
 			table:      "db1.t1",
 		},
 		{
@@ -932,35 +953,35 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "qualified star with alias",
 			rule:       "select t.* from db1.t1 as t where age > 28",
 			ok:         true,
-			selectList: "t.*",
+			selectList: "`t`.*",
 			table:      "db1.t1 as t",
 		},
 		{
 			name:       "aliased column",
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a as x",
+			selectList: "`a` as `x`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "where subquery with order by and limit",
 			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "parenthesized single table",
 			rule:       "select a from (db1.t1) where age > 28",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "scalar expression",
 			rule:       "select a + 1 from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a + 1",
+			selectList: "`a` + 1",
 			table:      "db1.t1",
 		},
 		{

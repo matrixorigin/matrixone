@@ -982,14 +982,29 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	var separator Expr
+	switch name := node.Func.FunctionReference.(*UnresolvedName).ColName(); {
+	case name == "trim":
 		trimExprsFormat(ctx, node.Exprs)
-	} else {
+	case ctx.singleQuoteString && strings.EqualFold(name, "group_concat") && len(node.Exprs) >= 2:
+		// The parser stores SEPARATOR as the last expression for binding,
+		// but SQL must render it as a clause, not an aggregate input.
+		last := len(node.Exprs) - 1
+		node.Exprs[:last].Format(ctx)
+		separator = node.Exprs[last]
+	default:
 		formatFuncExprs(ctx, node)
 	}
 
-	if node.OrderBy != nil {
+	if len(node.OrderBy) != 0 {
+		if separator != nil {
+			ctx.WriteByte(' ')
+		}
 		node.OrderBy.Format(ctx)
+	}
+	if separator != nil {
+		ctx.WriteString(" separator ")
+		separator.Format(ctx)
 	}
 
 	ctx.WriteByte(')')
