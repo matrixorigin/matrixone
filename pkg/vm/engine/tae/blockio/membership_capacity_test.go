@@ -33,6 +33,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type membershipVisibilityTestSource struct {
+	blockReadTestDataSource
+	lookups int
+}
+
+func (s *membershipVisibilityTestSource) GetTombstones(ctx context.Context, id *objectio.Blockid) (objectio.Bitmap, error) {
+	s.lookups++
+	return s.blockReadTestDataSource.GetTombstones(ctx, id)
+}
+
 func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
@@ -160,6 +170,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		{name: "callback capacity error", limit: 128, predicateError: true},
 		{name: "generic ordinary fallback", limit: 128, ordinary: true},
 		{name: "tombstoned ordinary fallback", limit: 128, ordinary: true, tombstone: true},
+		{name: "total tombstoned visibility once", limit: 128, tombstone: true},
 		{name: "native exact ordinary fallback", limit: 128, ordinary: true, exact: true},
 		{name: "ordinary releases retained scratch", limit: 128, ordinary: true, retained: true},
 		{name: "ordinary callback capacity error", limit: 128, ordinary: true, predicateError: true},
@@ -223,7 +234,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 						require.NoError(t, scratch.Physical.PreExtend(16, mp))
 					}
 				}
-				ds := &blockReadTestDataSource{}
+				ds := &membershipVisibilityTestSource{}
 				if tc.sourceError {
 					ds.err = context.Canceled
 				}
@@ -232,6 +243,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				}
 				_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, typs, -1,
 					timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "membership-output-capacity", output, cache, mp, fs, []int{0}, request)
+				require.Equal(t, 1, ds.lookups, "ordinary visibility must be reused by membership admission")
 				if tc.sourceError {
 					require.ErrorIs(t, err, context.Canceled)
 					require.Zero(t, memberCalls)
@@ -254,7 +266,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				}
 				if enabled {
 					wantMember := 1
-					if tc.ordinary {
+					if tc.ordinary || tc.tombstone || tc.exact {
 						wantMember = 0
 					}
 					require.Equal(t, wantMember, memberCalls)

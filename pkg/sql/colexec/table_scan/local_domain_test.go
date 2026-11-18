@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -90,6 +92,11 @@ func (*localDomainTestReader) Close() error { return nil }
 type membershipDecliningTestReader struct{ *localDomainTestReader }
 
 func (r *membershipDecliningTestReader) ReadWithFilter(ctx context.Context, cols []string, early []int, request *engine.ReaderFilterRequest, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	if r.reads == 0 {
+		if err := out.Vecs[0].PreExtend(len(r.values), mp); err != nil {
+			return false, err
+		}
+	}
 	end, err := r.Read(ctx, cols, nil, mp, out)
 	if err == nil && !end {
 		_, err = request.Select(out, early)
@@ -104,9 +111,14 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 		ndv     float64
 		pass    bool
 		decline bool
+		tight   bool
+		limit   uint64
 	}{
 		{name: "complete domain filters before output", ndv: 10000},
 		{name: "ordinary reader keeps post-read membership", ndv: 10000, decline: true},
+		{name: "tight ordinary control", ndv: 20, pass: true, decline: true, tight: true},
+		{name: "tight optional publication", ndv: 10000, decline: true, tight: true},
+		{name: "affordable optional publication", ndv: 10000, decline: true, tight: true, limit: 128},
 		{name: "empty domain avoids probe read", empty: true, ndv: 10000},
 		{name: "unprofitable probe keeps all rows", ndv: 20, pass: true},
 		{name: "unknown probe NDV keeps all rows", pass: true},
@@ -123,6 +135,22 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
 			t.Cleanup(domain.Close)
 			typ := plan.Type{Id: int32(types.T_int64)}
+			var account *mpool.AllocationAccount
+			if tc.tight {
+				registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+				require.NoError(t, err)
+				limit := tc.limit
+				if limit == 0 {
+					limit = 64
+				}
+				account, err = registry.Open(limit)
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.Zero(t, account.Snapshot().Used)
+					_, _, err := registry.CompleteTerminal(account)
+					require.NoError(t, err)
+				})
+			}
 			makeScan := func(id int) *TableScan {
 				s := NewArgument().WithTypes([]plan.Type{typ})
 				s.Attrs = []string{"id"}
@@ -143,7 +171,21 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			source.Reader = sourceReader
 			source.LocalDomainBuilds = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id"}}
 			probe := makeScan(1)
+			if tc.tight {
+				probe.ProjectList = []*plan.Expr{lateTestCol(0, types.T_int64.ToType())}
+				fn, err := function.GetFunctionByName(proc.Ctx, "isnotnull", []types.Type{types.T_int64.ToType()})
+				require.NoError(t, err)
+				probe.FilterExprs = []*plan.Expr{{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "isnotnull", Obj: fn.GetEncodedOverloadID()}, Args: []*plan.Expr{lateTestCol(0, types.T_int64.ToType())},
+				}}}}
+			}
 			probeReader := &localDomainTestReader{values: []int64{1, 2, 99, 0}, nullAt: 3}
+			if tc.tight {
+				probeReader.values, probeReader.nullAt = []int64{1, 99, 99, 99, 99, 99, 99, 99}, -1
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				require.NoError(t, err)
+				probe.OutputAllocation = allocation
+			}
 			probe.Reader = probeReader
 			if tc.decline {
 				probe.Reader = &membershipDecliningTestReader{probeReader}
@@ -151,11 +193,26 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			probe.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id", ProbeNDV: tc.ndv}}
 			require.NoError(t, source.Prepare(proc))
 			require.NoError(t, probe.Prepare(proc))
+			if tc.tight {
+				consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator()}
+				consumer.AppendChild(probe)
+				vm.ConfigureDictionaryBoundaries(consumer)
+				require.True(t, probe.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+			}
 			predicateCalls := 0
+			var predicateInput *batch.Batch
 			if tc.decline {
+				if old := probe.ctr.readerFilter; old != nil {
+					if old.Exact != nil {
+						old.Exact.Close()
+					}
+					old.FreeMembership(proc.Mp())
+				}
 				probe.ctr.readerFilter = &engine.ReaderFilterRequest{
-					Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					Select: func(input *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 						predicateCalls++
+						predicateInput = input
+						probe.ctr.filterReadMetrics = true
 						return engine.ReaderFilterResult{All: true}, nil
 					},
 					Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
@@ -175,13 +232,26 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			require.NoError(t, err)
 			if tc.decline {
 				require.Equal(t, 1, predicateCalls)
-				require.False(t, probe.ctr.readerFilter.Membership.Bypass)
+				if !tc.pass {
+					require.False(t, probe.ctr.readerFilter.Membership.Bypass)
+				}
 			}
 			if tc.empty {
 				require.Nil(t, result.Batch)
 				require.Zero(t, probeReader.reads)
+			} else if tc.tight && tc.limit > 64 {
+				require.True(t, result.Batch.HasDictionary())
+				require.Equal(t, 1, result.Batch.RowCount())
+				require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+			} else if tc.tight {
+				require.Same(t, predicateInput, result.Batch)
+				require.Equal(t, probeReader.values, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+				require.EqualValues(t, 64, account.Snapshot().Used)
+				if !tc.pass {
+					require.EqualValues(t, 8, probe.OpAnalyzer.GetOpStats().ExtraStats["RuntimeDomainPublicationCapacityFallbackRows"])
+				}
 			} else if tc.pass {
-				require.Equal(t, 4, result.Batch.RowCount())
+				require.Equal(t, len(probeReader.values), result.Batch.RowCount())
 				require.True(t, result.Batch.Vecs[0].IsNull(3), "PASS must not perform even NULL rejection")
 			} else {
 				require.NotNil(t, result.Batch)

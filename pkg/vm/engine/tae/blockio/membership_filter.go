@@ -29,58 +29,66 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// blockDataReadMembership admits only the pinned, identity-visible total path.
-// Other routes keep the ordinary reader and TableScan's post-read membership.
-func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds engine.DataSource,
+// canReadMembership checks representation and callback contracts without I/O.
+// The ordinary reader owns visibility and invokes the stage only for an empty mask.
+func canReadMembership(ctx context.Context, info *objectio.BlockInfo,
 	columns []uint16, typs []types.Type, storageRows []int64, early []int,
-	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
-	request *engine.ReaderFilterRequest, preFilterRows *int) (handled bool, retErr error) {
+	request *engine.ReaderFilterRequest) bool {
 	if request == nil || request.Membership == nil {
-		return false, nil
+		return false
 	}
-	defer func() {
-		if !handled {
-			// A previous admitted block may have retained optional capacity.
-			// Restore that headroom before the ordinary reader allocates.
-			request.FreeMembership(mp)
-		}
-	}()
 	member := request.Membership
 	if member.Bypass || !member.PredicatesTotal || request.Exact != nil || storageRows != nil ||
-		member.Select == nil || request.Select == nil || ds == nil || request.OutputAllocation == nil ||
-		len(member.Columns) == 0 || len(output.ExtraBuf) != 0 || info.IsAppendable() ||
+		member.Select == nil || request.Select == nil || request.OutputAllocation == nil ||
+		len(member.Columns) == 0 || info.IsAppendable() ||
 		info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
-		return false, nil
+		return false
 	}
 	for i, column := range member.Columns {
 		if column < 0 || column >= len(columns) || !slices.Contains(early, column) ||
 			(i > 0 && member.Columns[i-1] >= column) {
-			return false, nil
+			return false
 		}
 	}
+	uses := request.ColumnUses
 	if len(member.ColumnUses) == len(columns) {
-		original := request.ColumnUses
-		request.ColumnUses = member.ColumnUses
-		defer func() { request.ColumnUses = original }()
+		uses = member.ColumnUses
 	}
-	if !scopedOwnedColumns(request, len(columns)) {
-		return false, nil
+	if len(uses) != len(columns) {
+		return false
+	}
+	for _, use := range uses {
+		if use != engine.ReaderColumnOwned && use != engine.ReaderColumnUnused {
+			return false
+		}
 	}
 	predicates := member.PredicateColumns
 	if predicates == nil {
 		predicates = early
 	}
-	if len(predicates) == 0 {
-		return false, nil
+	return len(predicates) > 0
+}
+
+// blockDataReadMembership runs after the ordinary reader established identity
+// visibility. It never repeats or releases the caller's tombstone lookup.
+func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo,
+	columns []uint16, typs []types.Type, early []int,
+	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
+	request *engine.ReaderFilterRequest, preFilterRows *int) (handled bool, retErr error) {
+	defer func() {
+		if !handled {
+			request.FreeMembership(mp)
+		}
+	}()
+	member := request.Membership
+	if len(member.ColumnUses) == len(columns) {
+		original := request.ColumnUses
+		request.ColumnUses = member.ColumnUses
+		defer func() { request.ColumnUses = original }()
 	}
-	deleted, err := ds.GetTombstones(ctx, &info.BlockID)
-	identity := deleted.IsEmpty()
-	deleted.Release()
-	if err != nil {
-		return true, err
-	}
-	if !identity {
-		return false, nil
+	predicates := member.PredicateColumns
+	if predicates == nil {
+		predicates = early
 	}
 	rows := int(info.MetaLocation().Rows())
 	if preFilterRows != nil {
@@ -96,7 +104,6 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds e
 	}
 	return withScopedTotalMembership(ctx, info, columns, typs, early, predicates, rows, policy, output, mp, fs, request, s)
 }
-
 func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, columns []uint16, typs []types.Type,
 	positions []int, rows []int64, policy fileservice.Policy, output *batch.Batch,
 	mp *mpool.MPool, fs fileservice.FileService, request *engine.ReaderFilterRequest) error {

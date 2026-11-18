@@ -173,3 +173,14 @@ Q19 path stays staged; older measurements are not retimed or relabeled. Verify
 ordinary and optional generic/tombstoned/native-exact reads under identical small
 accounts, one callback execution, genuine callback/source errors, stale-scratch
 release, and the TableScan post-read domain application.
+
+The ordinary reader owns visibility. Admission checks are free of I/O; staged
+execution runs only after the existing tombstone lookup proves identity, while
+nonempty masks continue through that same ordinary read. Unsupported/native
+routes release prior scratch before required materialization. No second lookup
+or visibility cache is added.
+
+If post-read dictionary publication exhausts optional capacity, preserve the
+already read batch for the exact join and record the publication fallback.
+Successful publication still prunes; callback and I/O errors retain their usual
+propagation. A failed publication never destroys or repeats the required read.

@@ -15,12 +15,14 @@
 package table_scan
 
 import (
+	"errors"
 	"math"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -165,6 +167,14 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
 		next, _, err := colexec.SelectBatchColumns(bat, nil, rows, proc.Mp(), tableScan.OutputAllocation, true)
 		if err != nil {
+			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+				// The join remains the correctness owner. Optional publication
+				// must not invalidate an already completed ordinary read.
+				if tableScan.OpAnalyzer != nil {
+					tableScan.OpAnalyzer.GetOpStats().AddExtraStat("RuntimeDomainPublicationCapacityFallbackRows", int64(bat.RowCount()))
+				}
+				return nil
+			}
 			return err
 		}
 		bat.Clean(proc.Mp())
