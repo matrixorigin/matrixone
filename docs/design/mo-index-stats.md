@@ -2,8 +2,9 @@
 
 Chinese design and metric reference: [索引统计设计](../cn/mo_index_stats.md).
 
-`mo_index_stats(database, table, index)` is a built-in table function. Its three
-arguments are non-empty string literals. Currently it supports local, non-temporary, non-partitioned ordinary
+`mo_index_stats(database, table, index [, options])` is a built-in table function. Its first three
+arguments are non-empty string literals; the optional JSON string requests the
+IVF deep check described in [index health](mo-index-health.md). Currently it supports local, non-temporary, non-partitioned ordinary
 tables with declared primary keys, unique indexes, regular BTREE secondary
 indexes, IVF_FLAT, classic fulltext, or fulltext2 indexes. Other index types
 return a not-supported error;
