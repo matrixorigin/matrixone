@@ -36,6 +36,9 @@ type objectDeletes struct {
 	last map[string]uint64
 	// floor is the count when last was cleared: earlier deletes are forgotten.
 	floor uint64
+	// loading keeps every delete while the cache loads its files: a file found by the load
+	// is indexed only when its object was not deleted since the cache was created.
+	loading bool
 	// stripes are held shared by the publications of entries and exclusively by the
 	// counting of deletes, by object disk path.
 	stripes [objectDeletesStripes]sync.RWMutex
@@ -59,7 +62,7 @@ func (o *objectDeletes) deleted(diskPath string) {
 	defer stripe.Unlock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if len(o.last) >= objectDeletesMax {
+	if len(o.last) >= objectDeletesMax && !o.loading {
 		clear(o.last)
 		o.floor = o.count.Load()
 	}
@@ -67,6 +70,13 @@ func (o *objectDeletes) deleted(diskPath string) {
 		o.last = make(map[string]uint64)
 	}
 	o.last[diskPath] = o.count.Add(1)
+}
+
+// setLoading sets whether the cache loads its files.
+func (o *objectDeletes) setLoading(loading bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.loading = loading
 }
 
 // since reports whether the object at diskPath may have been deleted after the count
@@ -81,6 +91,18 @@ func (o *objectDeletes) since(diskPath string, start uint64) bool {
 		return true
 	}
 	return o.last[diskPath] > start
+}
+
+// storePrefetchedSize stores the size of the object at objectPath, told by a prefetch made
+// when the delete count was mark, unless the object was deleted since. The delete of the
+// object forgets a size stored before it.
+func (d *DiskCache) storePrefetchedSize(objectPath string, size int64, mark uint64) {
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if !d.deletes.since(objectPath, mark) {
+		d.prefetched.store(objectPath, size)
+	}
 }
 
 // readDeletes returns the mark of an entry read now: 1 plus the delete count.

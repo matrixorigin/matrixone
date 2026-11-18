@@ -24,7 +24,8 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
   the objects of its blocks the cache already has until the scan ends. A distributed search
   assigns whole objects to CNs by object id, so each CN loads its share.
 - **Reading.** Reads of an entries table carry `IndexFileObject`: its table scans,
-  identified by the table type, and the search's own scan. A read with it of an object the
+  identified by the table type, which read whole objects rather than column ranges, and
+  the search's own scan. A read with it of an object the
   index-file cache holds is served from there, and the decoded data still enters the
   memory cache; concurrent reads of an entry share its decode as reads of an object the
   disk cache holds do. A prefetch with it, through the prefetcher or the IO pipeline, of an

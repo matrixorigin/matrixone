@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -30,27 +29,13 @@ const prefetchedObjectsMax = 1 << 16
 type prefetchedObjects struct {
 	mu sync.Mutex
 	m  map[string]int64
-	// deletes counts the objects deleted; a prefetch queued before a delete does not
-	// store its size.
-	deletes atomic.Uint64
 }
 
 // forget drops the size of the object at diskPath, which is deleted.
 func (o *prefetchedObjects) forget(diskPath string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.deletes.Add(1)
 	delete(o.m, diskPath)
-}
-
-// storeCurrent stores the size of the object at diskPath unless an object was deleted
-// since the delete count was deletes.
-func (o *prefetchedObjects) storeCurrent(diskPath string, size int64, deletes uint64) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.deletes.Load() == deletes {
-		o.storeLocked(diskPath, size)
-	}
 }
 
 func (o *prefetchedObjects) store(diskPath string, size int64) {

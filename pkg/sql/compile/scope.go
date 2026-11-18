@@ -432,10 +432,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 }
 
 // scanReadPolicy returns the fileservice policy bits a table scan adds to its reads: the
-// planner's read policy, and an index-file object read for an IVF-Flat entries table.
+// planner's read policy, or for an IVF-Flat entries table an index-file object read, which
+// reads whole objects into the index-file cache instead of column ranges.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
 	policy := fileservice.Policy(node.GetReadPolicy())
 	if node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		policy &^= fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads
 		policy |= fileservice.IndexFileObject
 	}
 	return policy

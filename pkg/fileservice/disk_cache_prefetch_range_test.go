@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -766,5 +767,54 @@ func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
 		require.ErrorIs(t, err, errSourceIdle)
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("the stalled open was not stopped")
+	}
+}
+
+// A prefetch of ranges past the in-memory bound downloads at most prefetchFilesAtOnce of
+// them at once, and downloads them all.
+func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	var mu sync.Mutex
+	var cur, most int
+	gate := make(chan struct{})
+	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		mu.Lock()
+		cur++
+		most = max(most, cur)
+		mu.Unlock()
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		mu.Lock()
+		cur--
+		mu.Unlock()
+		return io.NopCloser(bytes.NewReader(data[start:end])), nil
+	}
+	var ranges []PrefetchRange
+	for i := range 10 {
+		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
+	}
+	done := make(chan error, 1)
+	go func() { done <- fs.prefetchFiles(context.Background(), "object", ranges, open) }()
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	inFlight := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return cur
+	}
+	require.Eventually(t, func() bool { return inFlight() == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return inFlight() > prefetchFilesAtOnce }, 100*time.Millisecond, time.Millisecond)
+	release()
+	require.NoError(t, <-done)
+	mu.Lock()
+	require.Equal(t, prefetchFilesAtOnce, most)
+	mu.Unlock()
+	key := fs.diskCache.rangeObjectKey("object")
+	for _, r := range ranges {
+		_, ok := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
+		require.True(t, ok, "range %d cached", r.Offset)
 	}
 }

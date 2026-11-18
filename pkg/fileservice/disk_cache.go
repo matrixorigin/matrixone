@@ -299,8 +299,10 @@ func newDiskCache(
 	loadCtx, loadCancel := context.WithCancel(ctx)
 	ret.load.cancel = loadCancel
 	ret.load.done = make(chan struct{})
+	ret.deletes.setLoading(true)
 	runLoad := func() {
 		defer func() {
+			ret.deletes.setLoading(false)
 			loadCancel()
 			close(ret.load.done)
 		}()

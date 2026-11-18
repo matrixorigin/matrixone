@@ -494,3 +494,48 @@ func (p *prefetcher) isQueued(filePath string) bool {
 	e, ok := p.entries[filePath]
 	return ok && e.queue != nil
 }
+
+// A request for ranges the running download of its object does not download is queued
+// once that download ends; one it downloads only joins it.
+func TestPrefetcherQueuesUncoveredRangesAfterRunningDownload(t *testing.T) {
+	var mu sync.Mutex
+	var ran []ObjectPrefetch
+	started := make(chan struct{}, 8)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		mu.Lock()
+		ran = append(ran, req)
+		mu.Unlock()
+		started <- struct{}{}
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll()
+	first := PrefetchRange{Offset: 0, Size: 10}
+	other := PrefetchRange{Offset: 100, Size: 10}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{first}})
+	<-started
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{first}})
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{other}})
+	release <- struct{}{}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the uncovered range is not downloaded after the running download")
+	}
+	releaseAll()
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, ran, 2)
+	require.Equal(t, []PrefetchRange{other}, ran[1].Ranges, "the uncovered range is downloaded after")
+}
+
+func TestObjectPrefetchCovers(t *testing.T) {
+	r := ObjectPrefetch{Ranges: []PrefetchRange{{Offset: 0, Size: 100}}}
+	require.True(t, r.covers(ObjectPrefetch{Ranges: []PrefetchRange{{Offset: 10, Size: 20}}}))
+	require.False(t, r.covers(ObjectPrefetch{Ranges: []PrefetchRange{{Offset: 90, Size: 20}}}))
+	require.False(t, r.covers(ObjectPrefetch{}), "ranges do not cover the whole object")
+	require.True(t, ObjectPrefetch{}.covers(r), "the whole object covers any range")
+}

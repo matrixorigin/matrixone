@@ -41,7 +41,7 @@ type ObjectPrefetch struct {
 	Blocks   int
 	Ranges   []PrefetchRange
 	Scan     *PrefetchScan
-	// deletes is the file service's count of deleted objects when the request was made.
+	// deletes is the disk cache's count of deleted objects when the request was made.
 	deletes uint64
 	// indexObject publishes the download of the whole object into the index-file cache.
 	indexObject bool
@@ -90,6 +90,24 @@ func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	return r
 }
 
+// covers reports whether the download of r downloads every byte o asks for.
+func (r ObjectPrefetch) covers(o ObjectPrefetch) bool {
+	if len(r.Ranges) == 0 {
+		return true
+	}
+	if len(o.Ranges) == 0 {
+		return false
+	}
+	for _, x := range o.Ranges {
+		if !slices.ContainsFunc(r.Ranges, func(y PrefetchRange) bool {
+			return y.Offset <= x.Offset && x.Offset+x.Size <= y.Offset+y.Size
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
 // unionRanges returns a copy of a with the ranges of b not in it, and size plus their bytes.
 func unionRanges(a, b []PrefetchRange, size int64) ([]PrefetchRange, int64) {
 	a = slices.Clone(a)
@@ -131,6 +149,10 @@ type prefetchEntry struct {
 	once    sync.Once
 	// joiners counts the reads that wait for the download to start.
 	joiners int
+	// next is what requests for the object asked for that its running download does not
+	// download, with their scans: it is queued once the download ends.
+	next      *ObjectPrefetch
+	nextScans []*PrefetchScan
 }
 
 // start marks the download joinable.
@@ -261,8 +283,22 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			metric.FSPrefetchCachedCounter.Inc()
 			return
 		}
-		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
+		if e.queue == nil && !e.req.covers(req) {
+			// The running download does not download what req asks for: it is queued once
+			// the download ends.
+			if e.next == nil {
+				e.next = &req
+			} else {
+				merged := e.next.merge(req)
+				e.next = &merged
+			}
+			if !slices.Contains(e.nextScans, req.Scan) {
+				e.nextScans = append(e.nextScans, req.Scan)
+			}
+			return
+		}
+		e.addScan(req.Scan)
 		if q := e.queue; q != nil {
 			merged := e.req.merge(req)
 			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
@@ -372,8 +408,16 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 				p.forgetLocked(e)
 				q.running--
 				e.start()
+				next, scans := e.next, e.nextScans
 				p.startLocked()
 				p.mu.Unlock()
+				if next != nil {
+					for _, s := range scans {
+						req := *next
+						req.Scan = s
+						p.add(req)
+					}
+				}
 				p.wg.Done()
 			}()
 			p.run(withDownloadStarted(p.ctx, e.start), e.req)
@@ -491,7 +535,7 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 		req.indexObject = len(req.Ranges) == 0
 	}
 	if s.prefetcher != nil && req.Size > 0 {
-		req.deletes = s.diskCache.prefetched.deletes.Load()
+		req.deletes = s.diskCache.deletes.now()
 		s.prefetcher.add(req)
 	}
 	return nil
@@ -553,7 +597,7 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	}
 	// A size told before an object was deleted may be another object's at that path.
 	objectPath := s.diskCache.pathForFile(path.File)
-	s.diskCache.prefetched.storeCurrent(objectPath, req.Size, req.deletes)
+	s.diskCache.storePrefetchedSize(objectPath, req.Size, req.deletes)
 	ctx, done := s.diskCache.startFilePrefetch(ctx, objectPath, 0, req.Size)
 	if req.indexObject {
 		ctx = WithFileServicePolicy(ctx, GetFileServicePolicy(ctx)|IndexFileObject)
@@ -619,22 +663,36 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 	metric.FSPrefetchDownloadedCounter.Inc()
 }
 
+// prefetchFilesAtOnce is the most ranges of one prefetch that download at once, each
+// holding an object-storage connection.
+const prefetchFilesAtOnce = 4
+
 // prefetchFiles downloads each of ranges of the object at filePath as a FilePrefetchObject,
-// all at once. Reads can join them once every one is under way.
+// prefetchFilesAtOnce at a time. The prefetch counts as started once the first ranges are
+// under way; a read of a range not yet under way reads its own bytes.
 func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, ranges []PrefetchRange, open rangeOpener) error {
-	var running, registered sync.WaitGroup
+	var running, started sync.WaitGroup
 	errs := make([]error, len(ranges))
-	registered.Add(len(ranges))
+	slots := make(chan struct{}, prefetchFilesAtOnce)
+	first := min(len(ranges), prefetchFilesAtOnce)
+	started.Add(first)
+	var under atomic.Int32
 	for i, r := range ranges {
-		mark := sync.OnceFunc(registered.Done)
 		running.Add(1)
 		go func() {
 			defer running.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			mark := sync.OnceFunc(func() {
+				if under.Add(1) <= int32(first) {
+					started.Done()
+				}
+			})
 			defer mark()
 			_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, mark), filePath, r.Offset, r.Offset+r.Size, open)
 		}()
 	}
-	registered.Wait()
+	started.Wait()
 	downloadStarted(ctx)
 	running.Wait()
 	return errors.Join(errs...)

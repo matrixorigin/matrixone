@@ -25,43 +25,56 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/require"
 )
 
-// A size told before a delete is never stored after it, however the store and the
-// delete interleave.
+// A size told before a delete of its object is never stored after it, however the store
+// and the delete interleave; a delete of another object does not drop it.
 func TestPrefetchedSizeStoredOnlyWithoutDelete(t *testing.T) {
-	var o prefetchedObjects
-	told := o.deletes.Load()
-	o.forget("object")
-	o.storeCurrent("object", 10, told)
-	_, known := o.size("object")
+	ctx := context.Background()
+	d, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer d.Close(ctx)
+	path := d.pathForFile("object")
+	deleteObject := func(p string) {
+		d.deletes.deleted(p)
+		d.prefetched.forget(p)
+	}
+
+	told := d.deletes.now()
+	deleteObject(path)
+	d.storePrefetchedSize(path, 10, told)
+	_, known := d.prefetched.size(path)
 	require.False(t, known)
-	o.storeCurrent("object", 20, o.deletes.Load())
-	size, known := o.size("object")
-	require.True(t, known)
+
+	told = d.deletes.now()
+	deleteObject(d.pathForFile("unrelated"))
+	d.storePrefetchedSize(path, 20, told)
+	size, known := d.prefetched.size(path)
+	require.True(t, known, "a delete of another object keeps the size")
 	require.Equal(t, int64(20), size)
 
+	other := d.pathForFile("other")
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			for range 200 {
-				o.forget("other")
+				deleteObject(other)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for range 200 {
-				told := o.deletes.Load()
-				o.storeCurrent("other", 1, told)
+				d.storePrefetchedSize(other, 1, d.deletes.now())
 			}
 		}()
 	}
 	wg.Wait()
-	o.forget("other")
-	_, known = o.size("other")
+	deleteObject(other)
+	_, known = d.prefetched.size(other)
 	require.False(t, known)
 }
 
@@ -83,6 +96,23 @@ func TestObjectDeletesSince(t *testing.T) {
 	o.deleted("c")
 	require.True(t, o.since("b", before), "the deletes since are forgotten")
 	require.False(t, o.since("b", o.now()))
+}
+
+// While the cache loads its files no delete is forgotten, so a file of an object not
+// deleted is still found not deleted since the cache was created; once loaded, deletes
+// past the bound are forgotten again.
+func TestObjectDeletesKeptWhileLoading(t *testing.T) {
+	var o objectDeletes
+	o.setLoading(true)
+	for i := range objectDeletesMax + 1 {
+		o.deleted(strconv.Itoa(i))
+	}
+	require.False(t, o.since("kept", 0))
+	require.True(t, o.since("0", 0))
+
+	o.setLoading(false)
+	o.deleted("next")
+	require.True(t, o.since("kept", 0), "past the bound once loaded, deletes are forgotten")
 }
 
 // heldStorage reads the first read's bytes at once and returns them when released.

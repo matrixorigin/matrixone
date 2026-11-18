@@ -658,7 +658,8 @@ func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 					want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
 				}
 				if entries {
-					want |= fileservice.IndexFileObject
+					// An entries table reads whole objects into the index-file cache.
+					want = fileservice.IndexFileObject
 				}
 				require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
 				wantGroup := uint64(0)

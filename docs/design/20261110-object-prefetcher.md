@@ -137,7 +137,10 @@ not known, the object counts as read whole.
 
 When a second scan asks for an object that is already queued, the two requests merge.
 The merged entry keeps the sooner due time and the larger share, and serves both
-scans. It is dropped only when both scans have ended.
+scans. It is dropped only when both scans have ended. A request for bytes the running
+download of its object does not download is queued once that download ends (decision
+2026-11-18, v9): before, it was counted as merged and lost, and its scan read those
+columns block by block.
 
 Share comes before due time because a download of an object read only in part
 displaces more useful bytes from the cache. A read that reaches such an object first
@@ -257,7 +260,8 @@ whole-object download to amortize them; distributed SSB ran 8–11 times slower
 ([#32796](https://github.com/matrixorigin/matrixone/issues/32796)).
 
 When such a scan reaches an object, it asks again for the object's column ranges, due now
-(decision 2026-11-17); an ordered scan, which may read one block of an object, does not. A queued request moves up, a dropped one is queued again, and one
+(decision 2026-11-17); an ordered scan, which may read one block of an object, asks for
+no object's columns, ahead of it or when it reaches the object (v9). A queued request moves up, a dropped one is queued again, and one
 cached or downloading is left. Without it, a scan that reached an object whose request
 the full queue had dropped read that object's column block by block: in TPC-H SF100 Q19,
 at 110 MiB/s per CN, 41 objects took 72 reads each, one after another, about 3.3 s per
@@ -311,7 +315,7 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
 | Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
-| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; the object-storage connections they hold count with whole-object downloads |
+| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; one prefetch downloads at most 4 ranges at once, and counts as started once its first ranges are under way; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
 | Cache files kept open for reads, and paths found without a file | the disk cache, and apart the index-file cache | `disk-open-files-max` files each, default 128, 0 keeping none and noting no path missing; past it the least recently read file no read holds is closed; a change or eviction of a path closes its file once no read holds it; a path found without a file is not opened again until it changes, with a fixed number of such paths, forgotten when full; the bound counts against the process's open-file limit, shared by every service of a process, which it must stay well below; warm TPC-H SF10 read as fast at 128 as at 512 or 1024 (decision 2026-11-18, v9: column ranges are cached as separate files, and warm reads opened each again) |

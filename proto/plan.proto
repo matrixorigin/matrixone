@@ -1396,8 +1396,8 @@ message Node {
   // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
   bool mark_existence_only = 96;
 
-  // TABLE_SCAN only: the scan reads a small share of each object it touches.
-  bool narrow_scan = 97;
+  // Unused: kept so its number is not reused.
+  bool unused1 = 97;
 
   // TABLE_SCAN only: the fileservice.Policy bits the scan adds to its reads.
   uint64 read_policy = 98;

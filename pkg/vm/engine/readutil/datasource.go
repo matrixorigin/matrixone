@@ -140,7 +140,7 @@ func (rs *RemoteDataSource) Next(
 	rs.batchPrefetch(ctx, seqNums)
 	cur := rs.blockAt(rs.cursor)
 	// An ordered scan reads blocks of objects in zone-map order and may read one block of
-	// an object; it does not ask for the object's columns.
+	// an object; it asks for no object's columns, ahead of it or when it enters the object.
 	if rs.orderedBlocks == nil && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
 		rs.prefetch.Reach(ctx, rs.fs, &cur, seqNums)
 	}
@@ -157,7 +157,7 @@ func (rs *RemoteDataSource) blockAt(i int) objectio.BlockInfo {
 
 func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	policy := fileservice.GetFileServicePolicy(ctx)
-	if policy.Any(fileservice.ColumnPrefetch) {
+	if policy.Any(fileservice.ColumnPrefetch) && rs.orderedBlocks == nil {
 		rs.prefetchColumns(ctx, seqNums)
 	}
 	// TODO: remove proc and don't GetService
