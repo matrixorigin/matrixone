@@ -2889,7 +2889,7 @@ func formatDedupColumnName(parts []string) string {
 }
 
 // collectGeneratedColumnDependents returns the set of columns that may change
-// when any column in seed is assigned during ODKU. Generated columns are
+// when any column in seed is assigned during DML. Generated columns are
 // expanded to a fixed point so a generated column can depend on another
 // generated column. The returned names are canonical table column names.
 func collectGeneratedColumnDependents(ctx context.Context, tableDef *plan.TableDef, seed map[string]struct{}) (map[string]struct{}, error) {

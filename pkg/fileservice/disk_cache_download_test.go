@@ -38,9 +38,14 @@ func downloading(t *testing.T) (*DiskCache, *io.PipeWriter, chan error) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
 	filled := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = pw.CloseWithError(io.ErrClosedPipe)
+		<-done
+	})
 	go func() {
+		defer close(done)
 		filled <- cache.SetFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil })
 	}()
 	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
@@ -140,6 +145,23 @@ func TestDiskCacheReadOfDownloadStopsOnCancel(t *testing.T) {
 	pending := readRange(ctx, cache, 6, 5)
 	cancel()
 	require.False(t, waitVector(t, pending).Entries[0].done)
+}
+
+func TestDiskCacheDownloadCleanupJoinsAbandonedFill(t *testing.T) {
+	var filled chan error
+	// Establish TempDir's cleanup before registering the witness. downloading
+	// creates another directory under the same test-owned parent.
+	t.TempDir()
+	// The witness runs after downloading's cleanups and before TempDir removal.
+	t.Cleanup(func() {
+		select {
+		case err := <-filled:
+			require.ErrorIs(t, err, io.ErrClosedPipe)
+		default:
+			t.Error("abandoned cache fill outlived its cleanup")
+		}
+	})
+	_, _, filled = downloading(t)
 }
 
 // A download that ends with the object shorter than a read leaves the read unserved.
