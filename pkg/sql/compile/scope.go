@@ -368,6 +368,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 				readers, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
+					// Classify a local stop before deferred cleanup signals the receiver.
+					err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 					return err
 				}
 
