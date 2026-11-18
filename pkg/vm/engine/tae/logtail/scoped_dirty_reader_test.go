@@ -154,7 +154,7 @@ func TestScopedDirtyReaderFiltersMaintenanceAndRollback(t *testing.T) {
 			ids[record.ID] = struct{}{}
 			return nil
 		}))
-		var result []uint64
+		result := make([]uint64, 0, len(ids))
 		for id := range ids {
 			result = append(result, id)
 		}

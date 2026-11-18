@@ -15,16 +15,20 @@
 package changedtables
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"hash/crc32"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 func TestMarkerRoundTripAndScopeBinding(t *testing.T) {
@@ -33,12 +37,12 @@ func TestMarkerRoundTripAndScopeBinding(t *testing.T) {
 		To:      timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 11},
 		Sources: map[uint32][16]byte{29: {0x55}, 2: {0xaa}},
 	}
-	encoded, err := EncodeMarker(binding, marker)
+	encoded, err := EncodeMarker(t.Context(), binding, marker)
 	require.NoError(t, err)
-	again, err := EncodeMarker(binding, marker)
+	again, err := EncodeMarker(t.Context(), binding, marker)
 	require.NoError(t, err)
 	require.Equal(t, encoded, again)
-	decoded, err := DecodeMarker(encoded, binding, marker.To)
+	decoded, err := DecodeMarker(t.Context(), encoded, binding, marker.To)
 	require.NoError(t, err)
 	require.Equal(t, marker, decoded)
 
@@ -48,12 +52,13 @@ func TestMarkerRoundTripAndScopeBinding(t *testing.T) {
 		"incarnation": {Epoch: binding.Epoch, Observer: Observer{AccountID: 23, Incarnation: 43}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := DecodeMarker(encoded, wrongBinding, marker.To)
-			require.Error(t, err)
+			_, err := DecodeMarker(t.Context(), encoded, wrongBinding, marker.To)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 		})
 	}
-	_, err = DecodeMarker(encoded, binding, marker.To.Prev())
-	require.ErrorContains(t, err, "watermark")
+	_, err = DecodeMarker(t.Context(), encoded, binding, marker.To.Prev())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.EqualError(t, err, "invalid input: invalid marker watermark")
 }
 
 func TestMarkerRejectsInvalidWireData(t *testing.T) {
@@ -62,7 +67,7 @@ func TestMarkerRejectsInvalidWireData(t *testing.T) {
 		To:      timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 9},
 		Sources: map[uint32][16]byte{3: {1}, 5: {2}},
 	}
-	encoded, err := EncodeMarker(binding, marker)
+	encoded, err := EncodeMarker(t.Context(), binding, marker)
 	require.NoError(t, err)
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	require.NoError(t, err)
@@ -91,8 +96,8 @@ func TestMarkerRejectsInvalidWireData(t *testing.T) {
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			decoded, err := DecodeMarker(candidate, binding, marker.To)
-			require.Error(t, err)
+			decoded, err := DecodeMarker(t.Context(), candidate, binding, marker.To)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 			require.Empty(t, decoded.Sources)
 		})
 	}
@@ -107,26 +112,27 @@ func TestMarkerLargeSourceBounds(t *testing.T) {
 	for i := uint32(1); i <= 5_000; i++ {
 		marker.Sources[i] = [16]byte{byte(i)}
 	}
-	encoded, err := EncodeMarker(binding, marker)
+	encoded, err := EncodeMarker(t.Context(), binding, marker)
 	require.NoError(t, err)
 	require.Greater(t, len(encoded), 65535)
-	decoded, err := DecodeMarker(encoded, binding, marker.To)
+	decoded, err := DecodeMarker(t.Context(), encoded, binding, marker.To)
 	require.NoError(t, err)
 	require.Equal(t, marker, decoded)
 
 	for i := uint32(5_001); i <= MaxSources; i++ {
 		marker.Sources[i] = [16]byte{byte(i)}
 	}
-	encoded, err = EncodeMarker(binding, marker)
+	encoded, err = EncodeMarker(t.Context(), binding, marker)
 	require.NoError(t, err)
 	require.Len(t, encoded, MaxMarkerBytes)
-	decoded, err = DecodeMarker(encoded, binding, marker.To)
+	decoded, err = DecodeMarker(t.Context(), encoded, binding, marker.To)
 	require.NoError(t, err)
 	require.Len(t, decoded.Sources, MaxSources)
 	require.Equal(t, marker.Sources[MaxSources], decoded.Sources[MaxSources])
 	marker.Sources[MaxSources+1] = [16]byte{}
-	_, err = EncodeMarker(binding, marker)
-	require.Error(t, err)
+	_, err = EncodeMarker(t.Context(), binding, marker)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+	require.EqualError(t, err, "internal error: marker exceeds source limit")
 }
 
 func TestProjectGrantsTracksPerSourceAndPhysicalIdentity(t *testing.T) {
@@ -134,12 +140,12 @@ func TestProjectGrantsTracksPerSourceAndPhysicalIdentity(t *testing.T) {
 	missing := Grant{AccountID: 2, DatabaseName: "db", TableName: "missing", GrantID: [16]byte{2}, DatabaseID: 11}
 	retired := Grant{AccountID: 4, DatabaseName: "db", TableName: "retired", GrantID: [16]byte{3}, DatabaseID: 12, TableID: 34}
 
-	prior, baseline, incremental, err := ProjectGrants([]Grant{missing, retired, a}, nil)
+	prior, baseline, incremental, err := ProjectGrants(t.Context(), []Grant{missing, retired, a}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []Grant{a, missing, retired}, baseline)
 	require.Empty(t, incremental)
 
-	next, baseline, incremental, err := ProjectGrants([]Grant{missing, a}, prior)
+	next, baseline, incremental, err := ProjectGrants(t.Context(), []Grant{missing, a}, prior)
 	require.NoError(t, err)
 	require.Empty(t, baseline)
 	require.Equal(t, []Grant{a}, incremental)
@@ -156,7 +162,7 @@ func TestProjectGrantsTracksPerSourceAndPhysicalIdentity(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			replacement := a
 			change(&replacement)
-			digests, baseline, incremental, err := ProjectGrants([]Grant{retired, replacement, missing}, prior)
+			digests, baseline, incremental, err := ProjectGrants(t.Context(), []Grant{retired, replacement, missing}, prior)
 			require.NoError(t, err)
 			require.NotEqual(t, prior[2], digests[2])
 			require.Equal(t, prior[4], digests[4])
@@ -164,8 +170,34 @@ func TestProjectGrantsTracksPerSourceAndPhysicalIdentity(t *testing.T) {
 			require.Equal(t, []Grant{retired}, incremental)
 		})
 	}
-	_, _, _, err = ProjectGrants([]Grant{a, a}, prior)
-	require.ErrorContains(t, err, "duplicate")
-	_, _, _, err = ProjectGrants(make([]Grant, MaxTables+1), prior)
-	require.ErrorContains(t, err, "limit")
+	_, _, _, err = ProjectGrants(t.Context(), []Grant{a, a}, prior)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.EqualError(t, err, "invalid input: duplicate granted table name")
+	_, _, _, err = ProjectGrants(t.Context(), make([]Grant, MaxTables+1), prior)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.EqualError(t, err, "invalid input: grant scope exceeds table limit")
+}
+
+func TestMarkerErrorRespectsReportingContext(t *testing.T) {
+	type reportContextKey struct{}
+	ctx := context.WithValue(t.Context(), reportContextKey{}, true)
+
+	previous := errutil.GetReportErrorFunc()
+	t.Cleanup(func() { errutil.SetErrorReporter(previous) })
+	var reports atomic.Int32
+	errutil.SetErrorReporter(func(ctx context.Context, err error, depth int) {
+		if ctx.Value(reportContextKey{}) == true {
+			reports.Add(1)
+			return
+		}
+		previous(ctx, err, depth)
+	})
+
+	_, err := DecodeMarker(errutil.ContextWithNoReport(ctx, false), "", Binding{}, timestamp.Timestamp{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.Equal(t, int32(1), reports.Load())
+
+	_, err = DecodeMarker(errutil.ContextWithNoReport(ctx, true), "", Binding{}, timestamp.Timestamp{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.Equal(t, int32(1), reports.Load())
 }

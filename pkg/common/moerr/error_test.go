@@ -705,3 +705,30 @@ func TestConvertGoErrorKeepsContextIdentity(t *testing.T) {
 	require.True(t, IsMoErrCode(ConvertGoError(ctx, io.EOF), ErrUnexpectedEOF))
 	require.Nil(t, ConvertGoError(ctx, nil))
 }
+
+func TestChangeWatchErrorIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		err       *Error
+		code      uint16
+		mysqlCode uint16
+		sqlState  string
+	}{
+		{"stale snapshot", NewSnapshotNotAfter(t.Context()), ErrSnapshotNotAfter, ErrSnapshotNotAfter, "40001"},
+		{"history unavailable", NewChangeWatchHistoryUnavailable(t.Context(), "retention gap"), ErrChangeWatchHistoryUnavailable, ER_UNKNOWN_ERROR, MySQLDefaultSqlState},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.code, tt.err.ErrorCode())
+			require.Equal(t, tt.mysqlCode, tt.err.MySQLCode())
+			require.Equal(t, tt.sqlState, tt.err.SqlState())
+
+			encoded, err := tt.err.MarshalBinary()
+			require.NoError(t, err)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(encoded))
+			require.Equal(t, tt.code, decoded.ErrorCode())
+			require.Equal(t, tt.mysqlCode, decoded.MySQLCode())
+			require.Equal(t, tt.sqlState, decoded.SqlState())
+		})
+	}
+}

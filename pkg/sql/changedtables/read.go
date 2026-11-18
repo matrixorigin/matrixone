@@ -123,15 +123,15 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	var prior Marker
 	var from *timestamp.Timestamp
 	if marker != nil {
-		prior, err = DecodeMarker(*marker, registry.binding, to)
+		prior, err = DecodeMarker(ctx, *marker, registry.binding, to)
 		if err != nil {
-			return Result{}, moerr.NewInvalidInput(ctx, err.Error())
+			return Result{}, err
 		}
 		from = &prior.To
 	}
-	digests, baseline, incremental, err := ProjectGrants(registry.grants, prior.Sources)
+	digests, baseline, incremental, err := ProjectGrants(ctx, registry.grants, prior.Sources)
 	if err != nil {
-		return Result{}, moerr.NewInvalidInput(ctx, err.Error())
+		return Result{}, err
 	}
 	req := cmd_util.GetScopedChangedTablesReq{From: to, To: to}
 	if from != nil && from.Less(to) && len(incremental) != 0 {
@@ -168,9 +168,9 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	next, err := EncodeMarker(registry.binding, Marker{To: to, Sources: digests})
+	next, err := EncodeMarker(ctx, registry.binding, Marker{To: to, Sources: digests})
 	if err != nil {
-		return Result{}, moerr.NewInternalError(ctx, err.Error())
+		return Result{}, err
 	}
 
 	// Read the current authority again so a revoked grant cannot release an
@@ -195,9 +195,9 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	currentDigests, _, _, err := ProjectGrants(current.grants, digests)
+	currentDigests, _, _, err := ProjectGrants(ctx, current.grants, digests)
 	if err != nil {
-		return Result{}, moerr.NewInvalidInput(ctx, err.Error())
+		return Result{}, err
 	}
 	if current.binding != registry.binding || !maps.Equal(digests, currentDigests) ||
 		!maps.Equal(registry.sourceNames, current.sourceNames) {

@@ -16,15 +16,16 @@ package changedtables
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"maps"
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -62,12 +63,12 @@ type Marker struct {
 
 // EncodeMarker encodes a canonical, unpadded-in-the-payload binary record with
 // a CRC32C for accidental corruption. The outer base64 uses standard padding.
-func EncodeMarker(binding Binding, current Marker) (string, error) {
+func EncodeMarker(ctx context.Context, binding Binding, current Marker) (string, error) {
 	if binding.Epoch == ([16]byte{}) || current.To.PhysicalTime <= 0 {
-		return "", errors.New("invalid marker binding or watermark")
+		return "", moerr.NewInternalError(ctx, "invalid marker binding or watermark")
 	}
 	if len(current.Sources) > MaxSources {
-		return "", errors.New("marker exceeds source limit")
+		return "", moerr.NewInternalError(ctx, "marker exceeds source limit")
 	}
 
 	data := make([]byte, 0, markerHeaderSize+len(current.Sources)*markerSourceSize+markerCRCSize)
@@ -89,38 +90,38 @@ func EncodeMarker(binding Binding, current Marker) (string, error) {
 
 // DecodeMarker validates the marker before using its source authorization digests.
 // Callers distinguish SQL NULL (bootstrap) from a present marker before decoding.
-func DecodeMarker(encoded string, binding Binding, to timestamp.Timestamp) (Marker, error) {
+func DecodeMarker(ctx context.Context, encoded string, binding Binding, to timestamp.Timestamp) (Marker, error) {
 	if binding.Epoch == ([16]byte{}) || len(encoded) > MaxMarkerBytes || strings.ContainsAny(encoded, "\r\n") {
-		return Marker{}, errors.New("invalid marker binding or encoded length")
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker binding or encoded length")
 	}
 	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || len(data) < markerHeaderSize+markerCRCSize || len(data) > maxMarkerPayload {
-		return Marker{}, errors.New("invalid marker encoding")
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker encoding")
 	}
 	if string(data[:len(markerVersion)]) != markerVersion {
-		return Marker{}, errors.New("unsupported marker version")
+		return Marker{}, moerr.NewInvalidInput(ctx, "unsupported marker version")
 	}
 	data, checksum := data[:len(data)-markerCRCSize], data[len(data)-markerCRCSize:]
 	if crc32.Checksum(data, markerCRC) != binary.BigEndian.Uint32(checksum) {
-		return Marker{}, errors.New("invalid marker checksum")
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker checksum")
 	}
 	data = data[len(markerVersion):]
 	if !bytes.Equal(data[:16], binding.Epoch[:]) ||
 		binary.BigEndian.Uint32(data[16:20]) != binding.Observer.AccountID ||
 		binary.BigEndian.Uint64(data[20:28]) != binding.Observer.Incarnation {
-		return Marker{}, errors.New("marker belongs to a different recovery epoch or observer")
+		return Marker{}, moerr.NewInvalidInput(ctx, "marker belongs to a different recovery epoch or observer")
 	}
 	cut := timestamp.Timestamp{
 		PhysicalTime: int64(binary.BigEndian.Uint64(data[28:36])),
 		LogicalTime:  binary.BigEndian.Uint32(data[36:40]),
 	}
 	if cut.PhysicalTime <= 0 || cut.Greater(to) {
-		return Marker{}, errors.New("invalid marker watermark")
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker watermark")
 	}
 	count := binary.BigEndian.Uint32(data[40:44])
 	data = data[44:]
 	if count > MaxSources || len(data) != int(count)*markerSourceSize {
-		return Marker{}, errors.New("invalid marker source count")
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker source count")
 	}
 
 	scopes := make(map[uint32][16]byte, count)
@@ -128,7 +129,7 @@ func DecodeMarker(encoded string, binding Binding, to timestamp.Timestamp) (Mark
 	for i := uint32(0); i < count; i++ {
 		account := binary.BigEndian.Uint32(data[:4])
 		if i > 0 && account <= previous {
-			return Marker{}, errors.New("marker sources are not sorted and unique")
+			return Marker{}, moerr.NewInvalidInput(ctx, "marker sources are not sorted and unique")
 		}
 		scopes[account] = [16]byte(data[4:markerSourceSize])
 		data = data[markerSourceSize:]
@@ -151,11 +152,11 @@ type Grant struct {
 // ProjectGrants compares each current source scope with its previously covered
 // digest. It sorts grants in place. Missing relations remain in baseline rows
 // and in the digest, while only extant incremental relations can reach the TN.
-func ProjectGrants(grants []Grant, prior map[uint32][16]byte) (
+func ProjectGrants(ctx context.Context, grants []Grant, prior map[uint32][16]byte) (
 	digests map[uint32][16]byte, baseline, incremental []Grant, err error,
 ) {
 	if len(grants) > MaxTables {
-		return nil, nil, nil, errors.New("grant scope exceeds table limit")
+		return nil, nil, nil, moerr.NewInvalidInput(ctx, "grant scope exceeds table limit")
 	}
 	slices.SortFunc(grants, func(a, b Grant) int {
 		if a.AccountID != b.AccountID {
@@ -181,12 +182,12 @@ func ProjectGrants(grants []Grant, prior map[uint32][16]byte) (
 		for ; groupEnd < len(grants) && grants[groupEnd].AccountID == account; groupEnd++ {
 			grant := grants[groupEnd]
 			if grant.DatabaseName == "" || grant.TableName == "" || (grant.TableID != 0 && grant.DatabaseID == 0) {
-				return nil, nil, nil, errors.New("invalid granted table identity")
+				return nil, nil, nil, moerr.NewInvalidInput(ctx, "invalid granted table identity")
 			}
 			if groupEnd != 0 {
 				last := grants[groupEnd-1]
 				if grant.DatabaseName == last.DatabaseName && grant.TableName == last.TableName {
-					return nil, nil, nil, errors.New("duplicate granted table name")
+					return nil, nil, nil, moerr.NewInvalidInput(ctx, "duplicate granted table name")
 				}
 			}
 			binary.BigEndian.PutUint32(ordinal[:], uint32(len(grant.DatabaseName)))

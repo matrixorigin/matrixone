@@ -853,7 +853,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// pass the two conflicting sides and the pk as a single pre-formatted
 	// detail; the leading "conflict: " comes from this catalog template.
 	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
-	ErrSnapshotNotAfter:   {ER_UNKNOWN_ERROR, []string{"40001"}, "transaction snapshot must be after the requested watermark (retry with a new transaction)"},
+	// Keep the vendor-specific ERR packet number paired with SQLSTATE 40001.
+	ErrSnapshotNotAfter: {ErrSnapshotNotAfter, []string{"40001"}, "transaction snapshot must be after the requested watermark (retry with a new transaction)"},
 
 	ErrChangeWatchHistoryUnavailable: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "changed-table history unavailable: %s. Restart with a NULL marker"},
 
