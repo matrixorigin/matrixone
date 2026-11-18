@@ -266,7 +266,7 @@ const (
 )
 
 // DefaultDiskOpenFilesMax is the default DiskOpenFilesMax.
-const DefaultDiskOpenFilesMax = 512
+const DefaultDiskOpenFilesMax = 128
 
 // diskOpenFilesMax returns the openFilesMax option of DiskOpenFilesMax: -1 keeps none.
 func (c *CacheConfig) diskOpenFilesMax() int {
