@@ -105,3 +105,11 @@ func (t diskFillTarget) publish(ctx context.Context, tempPath string, size int64
 	}
 	return nil
 }
+
+// entryFillTarget publishes the file of an entry into the disk cache, at diskPath, unless
+// the entry's object was deleted after the entry was read.
+type entryFillTarget struct {
+	diskFillTarget
+	filePath    string
+	readDeletes uint64
+}
