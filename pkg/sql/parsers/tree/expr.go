@@ -966,15 +966,18 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
-		ctx.WriteString("INTERVAL ")
-		node.Exprs[0].Format(ctx)
-		ctx.WriteByte(' ')
-		if nv, ok := node.Exprs[1].(*NumVal); ok {
-			ctx.WriteString(nv.String())
-		} else {
-			node.Exprs[1].Format(ctx)
+		_, timeUnit := node.Exprs[1].(*TimeUnitExpr)
+		if !ctx.rewriteRuleSQL || timeUnit {
+			ctx.WriteString("INTERVAL ")
+			node.Exprs[0].Format(ctx)
+			ctx.WriteByte(' ')
+			if nv, ok := node.Exprs[1].(*NumVal); ok {
+				ctx.WriteString(nv.String())
+			} else {
+				node.Exprs[1].Format(ctx)
+			}
+			return
 		}
-		return
 	}
 
 	if funcName != "" {
@@ -1065,6 +1068,11 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 			node.Exprs[1:].Format(ctx)
 		}
 	case "interval":
+		if ctx.rewriteRuleSQL {
+			// The time-unit syntax was handled above. These are value arguments.
+			node.Exprs.Format(ctx)
+			return
+		}
 		node.Exprs[0].Format(ctx)
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
@@ -1998,7 +2006,11 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	if ctx.rewriteRuleSQL {
+		ctx.WriteValue(P_char, FormatString(node.Pattern))
+	} else {
+		ctx.WriteString(node.Pattern)
+	}
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

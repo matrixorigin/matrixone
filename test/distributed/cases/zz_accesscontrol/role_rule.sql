@@ -436,7 +436,7 @@ select `2024` from db1.t_dup order by `2024`;
 -- The derived heading r_name must not shadow the source column used for sorting.
 alter table db1.t1 add column r_name varchar(8);
 update db1.t1 set r_name = case a when 100 then 'AAA' else 'ZZZ' end;
-alter role test_rule_role_dup_projection_a add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where marker = 1 and (select d.r_name from (select a, _binary 'r_name' from db1.t1 order by r_name limit 1) d where d.a = 100) = 'r_name'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where interval(marker, 2) = 0 and length(B'') = 0 and (select d.r_name from (select a, _binary 'r_name' from db1.t1 order by r_name limit 1) d where d.a = 100) = 'r_name'" on table db1.t_dup;
 alter role test_rule_role_dup_projection_b add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
 alter role test_rule_role_expr_projection_a add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where marker = 3" on table db1.t_dup;
 -- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456

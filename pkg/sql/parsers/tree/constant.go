@@ -200,6 +200,10 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 			ctx.WriteString("X''")
 			return
 		}
+		if node.ValType == P_bit && node.origString == "0b" {
+			ctx.WriteString("B''")
+			return
+		}
 	}
 	if strings.Contains(node.origString, "\\") {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
