@@ -30,6 +30,8 @@ type ShowCreateTable struct {
 	showImpl
 	Name     *UnresolvedObjectName
 	AtTsExpr *AtTimeStamp
+	// ObjectAdmitted requires resolution in the statement authorization view.
+	ObjectAdmitted bool
 }
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
@@ -107,6 +109,8 @@ type ShowColumns struct {
 	DBName  string
 	Like    *ComparisonExpr
 	Where   *Where
+	// ObjectAdmitted requires resolution in the statement authorization view.
+	ObjectAdmitted bool
 }
 
 // TargetDatabase implements the precedence of the trailing FROM or IN clause.

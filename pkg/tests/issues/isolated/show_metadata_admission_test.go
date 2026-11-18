@@ -141,4 +141,68 @@ func testShowMetadataAdmissionIsolation(t *testing.T, isolation txn.TxnIsolation
 		require.Equal(t, 1, rows)
 	}
 	exec(reader, "rollback")
+
+	if isolation == txn.TxnIsolation_SI {
+		exec(admin, "create table d.versioned (old_column int)",
+			"create table d.replacement (current_column int)")
+		exec(reader, "begin", "use d")
+		require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from d.allowed").Scan(&rows))
+		require.Equal(t, 1, rows)
+		exec(admin, "rename table d.versioned to d.retired, d.replacement to d.versioned",
+			"grant select on table d.versioned to r",
+			"insert into d.allowed values (2)")
+
+		checkColumns := func(t *testing.T, query string) {
+			t.Helper()
+			result, err := reader.QueryContext(ctx, query)
+			require.NoError(t, err)
+			defer result.Close()
+			columns, err := result.Columns()
+			require.NoError(t, err)
+			require.NotEmpty(t, columns)
+			require.Equal(t, "Field", columns[0])
+			var field string
+			var ignored sql.RawBytes
+			destinations := make([]any, len(columns))
+			destinations[0] = &field
+			for i := 1; i < len(destinations); i++ {
+				destinations[i] = &ignored
+			}
+			var fields []string
+			for result.Next() {
+				require.NoError(t, result.Scan(destinations...))
+				fields = append(fields, field)
+			}
+			require.NoError(t, result.Err())
+			require.Equal(t, []string{"current_column"}, fields)
+		}
+		checkDefinition := func(t *testing.T, row *sql.Row) {
+			t.Helper()
+			var table, definition string
+			require.NoError(t, row.Scan(&table, &definition))
+			require.Equal(t, "versioned", table)
+			require.Contains(t, definition, "current_column")
+			require.NotContains(t, definition, "old_column")
+		}
+		t.Run("columns", func(t *testing.T) {
+			checkColumns(t, "show columns from d.versioned")
+		})
+		t.Run("definition", func(t *testing.T) {
+			checkDefinition(t, reader.QueryRowContext(ctx, "show create table d.versioned"))
+		})
+		t.Run("prepared", func(t *testing.T) {
+			_, err := reader.ExecContext(ctx, "prepare snapshot_columns from 'show columns from versioned'")
+			require.NoError(t, err)
+			stmt, err := reader.PrepareContext(ctx, "show create table versioned")
+			require.NoError(t, err)
+			defer stmt.Close()
+			_, err = reader.ExecContext(ctx, "use other")
+			require.NoError(t, err)
+			checkColumns(t, "execute snapshot_columns")
+			checkDefinition(t, stmt.QueryRowContext(ctx))
+		})
+		require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from d.allowed").Scan(&rows))
+		require.Equal(t, 1, rows, "metadata reads must preserve the existing SI data snapshot")
+		exec(reader, "rollback")
+	}
 }

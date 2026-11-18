@@ -2012,9 +2012,8 @@ func createPrepareStmtInSession(
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
-	_, showTables := authorizationStatement(saveStmt).(*tree.ShowTables)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan && !showTables &&
+		isQueryPlan && canCachePreparedMetadataCompile(saveStmt) &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2990,27 +2989,38 @@ func buildPlanWithPrepareMode(
 	// Prepared SHOW rebuilding refreshes admission. Admit that exact statement
 	// before planning, so neither a stale decision nor a legacy plan is reused.
 	target := authorizationStatement(stmt)
-	if prepared, ok := target.(*tree.PrepareStmt); ok {
+	prepared, isPrepare := target.(*tree.PrepareStmt)
+	if isPrepare {
 		target = authorizationStatement(prepared.Stmt)
 	}
 	bindShowMetadataDatabase(target, ctx.DefaultDatabase)
-	if show, ok := target.(*tree.ShowTables); ok && show.Admission == tree.ShowTablesUnadmitted && ses != nil && !ses.IsBackgroundSession() {
+	show, showTables := target.(*tree.ShowTables)
+	objectAdmission := showMetadataObjectAdmission(target)
+	needsAdmission := showTables && show.Admission == tree.ShowTablesUnadmitted
+	if isPrepare && objectAdmission != nil {
+		// Rebuild may borrow the stored AST. Discard the preceding admission
+		// even when the new privilege check takes a trusted-session bypass.
+		*objectAdmission = false
+		_, _, _, needsAdmission = showMetadataTarget(target)
+	}
+	if needsAdmission && ses != nil && !ses.IsBackgroundSession() {
 		owner, err := preparedStatementOwner(reqCtx, ses)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := authenticateUserCanExecuteStatement(reqCtx, owner, show); err != nil {
+		if _, err := authenticateUserCanExecuteStatement(reqCtx, owner, target); err != nil {
 			return nil, err
 		}
 		// Trusted/bypass sessions return before ordinary privilege evaluation.
-		if show.Admission == tree.ShowTablesUnadmitted {
+		if showTables && show.Admission == tree.ShowTablesUnadmitted {
 			show.Admission = tree.ShowTablesDatabaseAdmitted
 		}
 	}
-	if show, ok := target.(*tree.ShowTables); ok && show.Admission == tree.ShowTablesObjectAdmitted {
+	namedObject := objectAdmission != nil && *objectAdmission
+	if namedObject || showTables && show.Admission == tree.ShowTablesObjectAdmitted {
 		if owner, ok := ses.(*Session); ok {
 			compiler := owner.GetTxnCompileCtx()
-			if err := compiler.execCtx.useShowTablesAuthorizationView(reqCtx, owner); err != nil {
+			if err := compiler.execCtx.useShowMetadataAuthorizationView(reqCtx, owner, namedObject); err != nil {
 				return nil, err
 			}
 		}
@@ -4448,7 +4458,7 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
-	defer execCtx.closeShowTablesAuthorizationView(ses)
+	defer execCtx.closeShowMetadataAuthorizationView(ses)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	var cmpBegin time.Time

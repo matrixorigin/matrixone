@@ -47,6 +47,27 @@ func showMetadataTarget(stmt tree.Statement) (database, table string, baseTableO
 	return "", "", false, false
 }
 
+func showMetadataObjectAdmission(stmt tree.Statement) *bool {
+	switch st := stmt.(type) {
+	case *tree.ShowColumns:
+		return &st.ObjectAdmitted
+	case *tree.ShowCreateTable:
+		return &st.ObjectAdmitted
+	}
+	return nil
+}
+
+// A prepared compile can outlive the snapshot used to build it. SHOW TABLES
+// also rebuilds its admission route on execution.
+func canCachePreparedMetadataCompile(stmt tree.Statement) bool {
+	stmt = authorizationStatement(stmt)
+	if _, ok := stmt.(*tree.ShowTables); ok {
+		return false
+	}
+	admission := showMetadataObjectAdmission(stmt)
+	return admission == nil || !*admission
+}
+
 // Bind the default on the AST so planning and both privilege checks use the
 // same target, even when a prepared statement outlives a subsequent USE.
 func bindShowMetadataDatabase(stmt tree.Statement, defaultDatabase func() string) {
@@ -164,11 +185,11 @@ func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.State
 	return allowed, stats, err
 }
 
-// Use the statement's authorization view for object-filtered listings. A
+// Use the statement's authorization view for object-admitted metadata. A
 // snapshot transaction owns these catalog reads and never advances the user's
 // transaction snapshot. The caller's execution scope releases it after the
 // compiled query finishes or on any planning/execution error.
-func (execCtx *ExecCtx) useShowTablesAuthorizationView(ctx context.Context, ses *Session) error {
+func (execCtx *ExecCtx) useShowMetadataAuthorizationView(ctx context.Context, ses *Session, namedObject bool) error {
 	if execCtx.showMetadataRead != nil {
 		return nil
 	}
@@ -177,13 +198,15 @@ func (execCtx *ExecCtx) useShowTablesAuthorizationView(ctx context.Context, ses 
 		return err
 	}
 	if snapshot.IsEmpty() {
-		return moerr.NewInternalError(ctx, "authorization snapshot unavailable for SHOW TABLES")
+		return moerr.NewInternalError(ctx, "authorization snapshot unavailable for SHOW metadata")
 	}
 	proc := execCtx.proc
 	if proc == nil || proc.GetTxnOperator() == nil {
-		return moerr.NewInternalError(ctx, "transaction unavailable for SHOW TABLES")
+		return moerr.NewInternalError(ctx, "transaction unavailable for SHOW metadata")
 	}
-	if proc.GetTxnOperator().SnapshotTS().Equal(snapshot) {
+	// A named object must resolve outside the user's workspace, which can
+	// contain catalog changes even when its committed timestamp matches.
+	if !namedObject && proc.GetTxnOperator().SnapshotTS().Equal(snapshot) {
 		return nil
 	}
 
@@ -206,7 +229,7 @@ func (execCtx *ExecCtx) useShowTablesAuthorizationView(ctx context.Context, ses 
 	return nil
 }
 
-func (execCtx *ExecCtx) closeShowTablesAuthorizationView(ses *Session) {
+func (execCtx *ExecCtx) closeShowMetadataAuthorizationView(ses *Session) {
 	if bh := execCtx.showMetadataRead; bh != nil {
 		execCtx.showMetadataRead = nil
 		execCtx.proc.Base.TxnOperator = ses.GetTxnHandler().GetTxn()

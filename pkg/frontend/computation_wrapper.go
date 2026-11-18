@@ -857,8 +857,7 @@ func initExecuteStmtParamWithResolverInSession(
 
 		executionIntent := querySchedulingIntentForStatementWithSQLMode(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
-		_, showTables := authorizationStatement(prepareStmt.PrepareStmt).(*tree.ShowTables)
-		if !executionSes.IsBackgroundSession() && !showTables {
+		if !executionSes.IsBackgroundSession() && canCachePreparedMetadataCompile(prepareStmt.PrepareStmt) {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.

@@ -8673,6 +8673,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		return false, stats, err
 	}
 	stats.Add(&delta)
+	objectAdmission := showMetadataObjectAdmission(stmt)
+	if objectAdmission != nil {
+		*objectAdmission = false
+	}
 	if st, yes := stmt.(*tree.ShowTables); yes {
 		st.Admission = tree.ShowTablesUnadmitted
 		if ok {
@@ -8693,8 +8697,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
 		if _, _, _, supported := showMetadataTarget(stmt); supported {
 			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
-			if st, yes := stmt.(*tree.ShowTables); yes && allowed && err == nil {
-				st.Admission = tree.ShowTablesObjectAdmitted
+			if allowed && err == nil {
+				if st, yes := stmt.(*tree.ShowTables); yes {
+					st.Admission = tree.ShowTablesObjectAdmitted
+				} else if objectAdmission != nil {
+					*objectAdmission = true
+				}
 			}
 			stats.Add(&delta)
 			return allowed, stats, err
