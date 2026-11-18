@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,11 +28,32 @@ import (
 func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	rows := ctr.leftBat.RowCount()
 	outputRows := 0
+	repeatedProbeRows := 0
+	repeatPayload := false
+	for _, position := range join.ResultCols {
+		if position.Rel == 0 && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
+			repeatPayload = true
+			break
+		}
+	}
 	for outputRows < colexec.DefaultBatchSize {
 		count := 0
 		limit := min(hashmap.UnitLimit, colexec.DefaultBatchSize-outputRows)
 		for count < limit {
 			if len(ctr.sels) > 0 {
+				if repeatPayload && repeatedProbeRows == outputRows+count {
+					// Copy each long probe value once for its complete duplicate
+					// group in this output, even when build gathering spans chunks.
+					repeats := min(len(ctr.sels), colexec.DefaultBatchSize-outputRows-count)
+					for column, position := range join.ResultCols {
+						if position.Rel == 0 && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
+							if err := ctr.resBat.Vecs[column].UnionMulti(ctr.leftBat.Vecs[position.Pos], int64(ctr.lastIdx-1), repeats, proc.Mp()); err != nil {
+								return err
+							}
+						}
+					}
+					repeatedProbeRows += repeats
+				}
 				n := min(len(ctr.sels), limit-count)
 				for i, buildRow := range ctr.sels[:n] {
 					join.uniqueLeftRows[count+i] = int64(ctr.lastIdx - 1)
@@ -72,13 +94,16 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 		}
 		if count > 0 {
 			left, right := join.uniqueLeftRows[:count], join.uniqueRightRows[:count]
-			if count == 1 {
+			if count == 1 && !repeatPayload {
 				if err := ctr.appendOneMatch(join, proc, left[0], right[0]/colexec.DefaultBatchSize, right[0]%colexec.DefaultBatchSize); err != nil {
 					return err
 				}
 			} else {
 				for column, position := range join.ResultCols {
 					if position.Rel == 0 {
+						if repeatPayload && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
+							continue
+						}
 						if err := ctr.resBat.Vecs[column].Union(ctr.leftBat.Vecs[position.Pos], left, proc.Mp()); err != nil {
 							return err
 						}
@@ -102,4 +127,10 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 	ctr.resBat.AddRowCount(outputRows)
 	result.Batch = ctr.resBat
 	return nil
+}
+
+func repeatProbeArea(source *vector.Vector) bool {
+	// Dictionary UnionMulti uses its existing selected scalar copier, so keep
+	// those sources on the selected bulk path rather than adding row calls.
+	return !source.IsDictionary() && source.GetType().IsVarlen() && len(source.GetArea()) != 0
 }

@@ -128,17 +128,113 @@ func TestShuffleDictionaryPreservesShortCoalescing(t *testing.T) {
 	require.Nil(t, sp.getAnyStoppedBatch())
 }
 
+func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
+	for _, useViews := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "views"}[useViews], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(128 << 10)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			require.NoError(t, input.SetAllocationAccount(allocation))
+			require.NoError(t, input.Vecs[0].PreExtend(objectio.BlockMaxRows, proc.Mp()))
+			for row := range objectio.BlockMaxRows {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
+			}
+			input.SetRowCount(objectio.BlockMaxRows)
+			sp := NewShufflePool(3, 8, true)
+			for range 8 {
+				require.True(t, sp.hold())
+				t.Cleanup(func() { sp.release(proc.Mp(), true) })
+			}
+			// Another producer generation selected the shared lane's provenance.
+			seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+			t.Cleanup(func() { seed.Clean(proc.Mp()) })
+			require.True(t, sp.matchesSharedLane(seed))
+			require.Equal(t, objectio.BlockMaxRows/2, sp.producerBatchMaxRows)
+			sels := make([][]int32, 3)
+			for row := range objectio.BlockMaxRows {
+				bucket := 0
+				if row >= objectio.BlockMaxRows/2 {
+					bucket = 1 + (row-objectio.BlockMaxRows/2)/(objectio.BlockMaxRows/4)
+				}
+				sels[bucket] = append(sels[bucket], int32(row))
+			}
+			var views *shufflePartitionViews
+			t.Cleanup(func() {
+				if views != nil {
+					views.free(proc.Mp())
+				}
+			})
+			var workspace **shufflePartitionViews
+			if useViews {
+				workspace = &views
+			}
+			_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
+			require.NoError(t, err)
+			require.True(t, done)
+			full := sp.getAnyFullBatch()
+			require.NotNil(t, full)
+			t.Cleanup(func() { sp.discardBatch(full, proc.Mp()) })
+			require.Equal(t, useViews, full.HasDictionary())
+			got := make([]int64, 0, objectio.BlockMaxRows)
+			for row := range full.RowCount() {
+				got = append(got, vector.GetFixedAtNoTypeCheck[int64](full.Vecs[0], row))
+			}
+			for range 8 {
+				sp.stopWriting()
+			}
+			for tail := sp.getAnyLastBatch(); tail != nil; tail = sp.getAnyLastBatch() {
+				for row := range tail.RowCount() {
+					got = append(got, vector.GetFixedAtNoTypeCheck[int64](tail.Vecs[0], row))
+				}
+				sp.discardBatch(tail, proc.Mp())
+			}
+			require.Equal(t, objectio.BlockMaxRows, len(got))
+			for row, value := range got {
+				require.Equal(t, int64(row), value)
+			}
+		})
+	}
+}
+
 func TestShuffleDictionaryConcurrentRelease(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "full partitions", true: "full and short partitions"}[mixed], func(t *testing.T) {
+			testShuffleDictionaryConcurrentRelease(t, mixed)
+		})
+	}
+}
+
+func testShuffleDictionaryConcurrentRelease(t *testing.T, mixed bool) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(proc.Free)
-	sp := NewShufflePool(2, 2, true)
+	buckets := 2
+	if mixed {
+		buckets = 3
+	}
+	sp := NewShufflePool(int32(buckets), 2, true)
 	require.True(t, sp.hold())
 	require.True(t, sp.hold())
 	t.Cleanup(func() { sp.release(proc.Mp(), true); sp.release(proc.Mp(), true) })
 	inputs := make([]*batch.Batch, 2)
-	selections := make([][]int32, 2)
+	selections := make([][]int32, buckets)
 	for row := range 2 * objectio.BlockMaxRows {
-		selections[row%2] = append(selections[row%2], int32(row))
+		bucket := row % 2
+		if mixed && bucket == 1 && row >= objectio.BlockMaxRows {
+			bucket = 2
+		}
+		selections[bucket] = append(selections[bucket], int32(row))
 	}
 	for producer := range inputs {
 		input := batch.NewWithSize(1)
@@ -214,16 +310,20 @@ func TestShuffleDictionaryConcurrentRelease(t *testing.T) {
 		// Own cleanup before checking a consumed output.
 		func() {
 			defer sp.discardBatch(output, proc.Mp())
-			require.True(t, output.HasDictionary())
-			require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+			if !mixed || output.HasDictionary() {
+				require.True(t, output.HasDictionary())
+				require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+			} else {
+				require.Equal(t, objectio.BlockMaxRows/2, output.RowCount())
+			}
 			first := vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], 0)
 			require.NotEqual(t, int64(-1), first)
-			require.Equal(t, first+2*(objectio.BlockMaxRows-1), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], output.RowCount()-1))
+			require.Equal(t, first+2*int64(output.RowCount()-1), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], output.RowCount()-1))
 		}()
 		outputs++
 	}
 	writers.Wait()
-	require.Equal(t, 4, outputs)
+	require.Equal(t, 2*buckets, outputs)
 	for range inputs {
 		require.NoError(t, <-errors)
 	}

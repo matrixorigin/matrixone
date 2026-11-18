@@ -985,6 +985,12 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 						selected.Clean(proc.Mp())
 					}
 				} else if writeErr == nil {
+					// Retained selections own their indices. Release only the
+					// producer's temporary map before allocating an owned tail.
+					if views != nil && *views != nil && (*views).rows != nil {
+						(*views).rows.Free(proc.Mp())
+						(*views).rows = nil
+					}
 					if wholeBucket {
 						consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
 					} else {

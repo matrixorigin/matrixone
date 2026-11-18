@@ -134,3 +134,15 @@ Extend the existing accounted BatchSet fixture with mixed borrowed source-vector
 
 Use a deterministic mixed-provenance component counter for allocations and batches, plus ordinary flat controls, before another full comparison. Require the repeated tail/header cost to disappear without changing copy or resource admission semantics. Reuse unchanged join continuation, shuffle ownership/race evidence; rerun the affected owning packages. Keep all recorded scores. Then qualify against fresh main with the agreed one-process six-suite all22 local protocol. No push/readiness while an introduced resource regression remains.
 
+## Repeat payload and temporary selector ownership
+
+For flat/constant out-of-line probe payloads, retain UnionMulti's one-value
+copy per probe row and output batch. A duplicate group may span several bounded
+build-gather chunks; fill its repeated descriptors once and keep the build
+projection batched. Dictionary inputs retain their existing selected bulk
+copy route. No copy kernel, SQL metadata or output continuation contract changes.
+
+A retained shuffle partition owns an independent RowSelection. Before an owned
+short-partition copy, release the producer's temporary conversion map while
+retaining the immutable source snapshots required by later partitions. Ordinary
+copy capacity must not depend on flushing the pending input first.

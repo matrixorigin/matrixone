@@ -16,8 +16,11 @@ package hashjoin
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +29,98 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		matches    int
+		probeRows  int
+		dictionary bool
+	}{
+		{name: "duplicate group", matches: 128, probeRows: 1},
+		{name: "across gather chunks", matches: 2*hashmap.UnitLimit + 1, probeRows: 1},
+		{name: "different probe values", matches: 128, probeRows: 2},
+		{name: "dictionary bulk control", matches: 128, probeRows: 1, dictionary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyType, textType := types.T_int64.ToType(), types.T_varchar.ToType()
+			join := newTestCase(t, []types.Type{keyType, keyType}, []colexec.ResultPos{{Rel: 0, Pos: 1}},
+				[][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}})
+			join.arg.JoinType, join.arg.NonEqCond = plan.Node_INNER, nil
+			join.arg.LeftTypes, join.arg.RightTypes = []types.Type{keyType, textType}, []types.Type{keyType}
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			limit := uint64(64 << 10)
+			if tc.dictionary {
+				// The existing dictionary repeat copier stores each payload.
+				// This control preserves its bulk-copy route and footprint.
+				limit = 4 << 20
+			}
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			// Bound result copies independently of the retained build hash table.
+			join.arg.resultAllocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerHashBuild,
+				hashJoinAllocationSiteResultData, hashJoinAllocationSiteResultArea,
+				hashJoinAllocationSiteResultNulls, hashJoinAllocationSiteResultGrouping)
+			require.NoError(t, err)
+			probe := batch.NewWithSchema(false, nil, join.arg.LeftTypes)
+			build := batch.NewWithSchema(false, nil, join.arg.RightTypes)
+			t.Cleanup(func() {
+				join.arg.Reset(join.proc, false, nil)
+				join.barg.Reset(join.proc, false, nil)
+				join.arg.Free(join.proc, false, nil)
+				join.barg.Free(join.proc, false, nil)
+				probe.Clean(join.proc.Mp())
+				build.Clean(join.proc.Mp())
+				join.proc.GetMessageBoard().Reset()
+				join.cancel()
+				join.proc.Free()
+				require.Zero(t, join.proc.Mp().CurrNB())
+			})
+			for row := range tc.probeRows {
+				require.NoError(t, vector.AppendFixed(probe.Vecs[0], int64(1), false, join.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(probe.Vecs[1], []byte(strings.Repeat(string(rune('a'+row)), 4096)), false, join.proc.Mp()))
+			}
+			probe.SetRowCount(tc.probeRows)
+			if tc.dictionary {
+				selected := make([]*vector.Vector, len(probe.Vecs))
+				admitted, err := vector.TrySelectDictionaryVectors(probe.Vecs, selected, []int64{0}, 1, join.proc.Mp(), nil)
+				require.NoError(t, err)
+				require.True(t, admitted)
+				for _, v := range probe.Vecs {
+					v.Free(join.proc.Mp())
+				}
+				probe.Vecs = selected
+			}
+			for range tc.matches {
+				require.NoError(t, vector.AppendFixed(build.Vecs[0], int64(1), false, join.proc.Mp()))
+			}
+			build.SetRowCount(tc.matches)
+			resetHashBuildChildrenWithBatch(join.barg, build)
+			resetChildrenWithBatch(join.arg, probe)
+			require.NoError(t, join.barg.Prepare(join.proc))
+			require.NoError(t, join.arg.Prepare(join.proc))
+			_, err = vm.Exec(join.barg, join.proc)
+			require.NoError(t, err)
+			result, err := vm.Exec(join.arg, join.proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.probeRows*tc.matches, result.Batch.RowCount())
+			area := tc.probeRows * 4096
+			if tc.dictionary {
+				area *= tc.matches
+			}
+			require.Equal(t, area, len(result.Batch.Vecs[0].GetArea()))
+			for row := range result.Batch.RowCount() {
+				require.Equal(t, strings.Repeat(string(rune('a'+row/tc.matches)), 4096), string(result.Batch.Vecs[0].GetBytesAt(row)))
+			}
+		})
+	}
+}
 
 func BenchmarkHashJoinSmallDuplicatePayload(b *testing.B) {
 	for _, duplicates := range []int{2, 4, 7} {
