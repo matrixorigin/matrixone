@@ -1,0 +1,71 @@
+drop database if exists enum_serial_index_32814;
+create database enum_serial_index_32814;
+use enum_serial_index_32814;
+create table src(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int,key idx_en(e,n));
+insert into src values(1,1,11),(2,2,22),(3,3,33),(5,null,55);
+insert ignore into src values(4,'invalid',44);
+create table dst(id int,e enum('','a','A') collate utf8mb4_bin);
+select 'binary_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from src force index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+binary_force  ¦  5  ¦  null  ¦  null  ¦  1  𝄀
+binary_force  ¦  4  ¦    ¦  0  ¦  0  𝄀
+binary_force  ¦  1  ¦  41  ¦  1  ¦  0  𝄀
+binary_force  ¦  2  ¦  61  ¦  2  ¦  0  𝄀
+binary_force  ¦  3  ¦    ¦  3  ¦  0
+select 'binary_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from src ignore index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+binary_ignore  ¦  5  ¦  null  ¦  null  ¦  1  𝄀
+binary_ignore  ¦  4  ¦    ¦  0  ¦  0  𝄀
+binary_ignore  ¦  1  ¦  41  ¦  1  ¦  0  𝄀
+binary_ignore  ¦  2  ¦  61  ¦  2  ¦  0  𝄀
+binary_ignore  ¦  3  ¦    ¦  3  ¦  0
+insert into dst select id,e from src force index(idx_en) order by e,n,id;
+select 'binary_dst' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from dst order by id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+binary_dst  ¦  1  ¦  41  ¦  3  ¦  0  𝄀
+binary_dst  ¦  2  ¦  61  ¦  2  ¦  0  𝄀
+binary_dst  ¦  3  ¦    ¦  1  ¦  0  𝄀
+binary_dst  ¦  4  ¦    ¦  0  ¦  0  𝄀
+binary_dst  ¦  5  ¦  null  ¦  null  ¦  1
+create table framed(id int primary key,e enum('A,1','a,1','') collate utf8mb4_bin,n int,key idx_en(e,n));
+insert into framed values(1,1,11),(2,2,22),(3,3,33),(5,null,55);
+insert ignore into framed values(4,'invalid',44);
+create table framed_dst(id int,e enum('','a,1','A,1') collate utf8mb4_bin);
+select 'framed_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed force index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+framed_force  ¦  5  ¦  null  ¦  null  ¦  1  𝄀
+framed_force  ¦  4  ¦    ¦  0  ¦  0  𝄀
+framed_force  ¦  1  ¦  412C31  ¦  1  ¦  0  𝄀
+framed_force  ¦  2  ¦  612C31  ¦  2  ¦  0  𝄀
+framed_force  ¦  3  ¦    ¦  3  ¦  0
+select 'framed_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed ignore index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+framed_ignore  ¦  5  ¦  null  ¦  null  ¦  1  𝄀
+framed_ignore  ¦  4  ¦    ¦  0  ¦  0  𝄀
+framed_ignore  ¦  1  ¦  412C31  ¦  1  ¦  0  𝄀
+framed_ignore  ¦  2  ¦  612C31  ¦  2  ¦  0  𝄀
+framed_ignore  ¦  3  ¦    ¦  3  ¦  0
+insert into framed_dst select id,e from framed force index(idx_en) order by e,n,id;
+select 'framed_dst' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed_dst order by id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+framed_dst  ¦  1  ¦  412C31  ¦  3  ¦  0  𝄀
+framed_dst  ¦  2  ¦  612C31  ¦  2  ¦  0  𝄀
+framed_dst  ¦  3  ¦    ¦  1  ¦  0  𝄀
+framed_dst  ¦  4  ¦    ¦  0  ¦  0  𝄀
+framed_dst  ¦  5  ¦  null  ¦  null  ¦  1
+create table ci(id int primary key,e enum('A','b') collate utf8mb4_general_ci,n int,key idx_en(e,n));
+insert into ci values(1,'a',11),(2,'B',22),(4,null,44);
+insert ignore into ci values(3,'invalid',33);
+select 'ci_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from ci force index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+ci_force  ¦  4  ¦  null  ¦  null  ¦  1  𝄀
+ci_force  ¦  3  ¦    ¦  0  ¦  0  𝄀
+ci_force  ¦  1  ¦  41  ¦  1  ¦  0  𝄀
+ci_force  ¦  2  ¦  62  ¦  2  ¦  0
+select 'ci_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from ci ignore index(idx_en) order by e,n,id;
+➤ marker[12,-1,0]  ¦  id[4,32,0]  ¦  label_hex[12,-1,0]  ¦  ordinal[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+ci_ignore  ¦  4  ¦  null  ¦  null  ¦  1  𝄀
+ci_ignore  ¦  3  ¦    ¦  0  ¦  0  𝄀
+ci_ignore  ¦  1  ¦  41  ¦  1  ¦  0  𝄀
+ci_ignore  ¦  2  ¦  62  ¦  2  ¦  0
+drop database enum_serial_index_32814;

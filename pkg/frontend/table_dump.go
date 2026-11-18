@@ -20,12 +20,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -227,6 +230,73 @@ func getTableDumpRelations(
 	return refs, nil
 }
 
+func tableDumpCanReconstruct(def *plan.TableDef) bool {
+	if def == nil || def.TableType == catalog.SystemClusterRel || def.TableType == catalog.SystemExternalRel ||
+		def.Partition != nil || len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// tableDumpSchemaDigest preserves the released hash for unambiguous schemas.
+// The legacy DDL renderer did not escape backslashes in ENUM/SET members and
+// lowercased SET members. For those ambiguous domains, include their exact
+// typed bytes so an archive cannot be installed into a different domain.
+func tableDumpSchemaDigest(def *plan.TableDef, canonical string) string {
+	exact := false
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		typ := col.Typ
+		isEnum := types.T(typ.Id) == types.T_enum
+		isSet := types.T(typ.Id) == types.T_uint64 && typ.Enumvalues != ""
+		if !isEnum && !isSet {
+			continue
+		}
+		if typ.EnumEncoding != types.EnumEncodingLegacy || !utf8.ValidString(typ.Enumvalues) || strings.ContainsRune(typ.Enumvalues, utf8.RuneError) || strings.ContainsAny(typ.Enumvalues, "\\\x00\n\r") {
+			exact = true
+			break
+		}
+		if isSet {
+			for _, r := range typ.Enumvalues {
+				// Lowercase mappings include collisions that SimpleFold alone misses.
+				if unicode.ToLower(r) != r || unicode.SimpleFold(r) != r {
+					exact = true
+					break
+				}
+			}
+			if exact {
+				break
+			}
+		}
+	}
+	if !exact {
+		sum := sha256.Sum256([]byte(canonical))
+		return hex.EncodeToString(sum[:])
+	}
+	h := sha256.New()
+	_, _ = io.WriteString(h, "\x00matrixone-table-dump-domain-v1\x00")
+	_, _ = io.WriteString(h, canonical)
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		typ := col.Typ
+		if types.T(typ.Id) != types.T_enum && !(types.T(typ.Id) == types.T_uint64 && typ.Enumvalues != "") {
+			continue
+		}
+		_, _ = fmt.Fprintf(h, ":%d:%d:%d:", typ.Id, typ.EnumEncoding, len(typ.Enumvalues))
+		_, _ = io.WriteString(h, typ.Enumvalues)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func tableSchemaHash(def *plan.TableDef) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
@@ -234,13 +304,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
-	canReconstruct := def.TableType != catalog.SystemClusterRel &&
-		def.TableType != catalog.SystemExternalRel &&
-		def.Partition == nil && len(def.Fkeys) == 0 && def.ViewSql == nil && def.TblFunc == nil
-	for _, col := range def.Cols {
-		canReconstruct = canReconstruct && col != nil && col.Default != nil
-	}
-	if canReconstruct {
+	if tableDumpCanReconstruct(def) {
 		clone := *def
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
@@ -249,8 +313,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
-		sum := sha256.Sum256([]byte(canonical))
-		return hex.EncodeToString(sum[:]), nil
+		return tableDumpSchemaDigest(def, canonical), nil
 	}
 	// CREATE SQL is catalog-normalized and deliberately excludes physical table,
 	// database, column and constraint IDs, which differ between clusters.
@@ -268,8 +331,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 		create.Table.SchemaName = ""
 		create.Table.ObjectName = "__table_dump_target__"
 		normalized := tree.String(create, dialect.MYSQL)
-		sum := sha256.Sum256([]byte(normalized))
-		return hex.EncodeToString(sum[:]), nil
+		return tableDumpSchemaDigest(def, normalized), nil
 	}
 	// Some old catalog entries do not retain CREATE SQL. Keep a fallback for
 	// those entries while removing the top-level physical identity fields.
@@ -323,7 +385,86 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	if len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with foreign key constraints")
 	}
+	// The fallback hash uses original SQL, which old servers could persist
+	// while ignoring COLLATE. It cannot distinguish that legacy schema from
+	// newly authored identity. Never use it for an identity-bearing table.
+	if !tableDumpCanReconstruct(def) && strings.TrimSpace(def.Createsql) != "" {
+		if def.DefaultCharset != types.EnumCollationLegacy || def.EnumUnsupportedDefault != "" {
+			return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE cannot verify table collation identity")
+		}
+		for _, col := range def.Cols {
+			if col == nil {
+				continue
+			}
+			if col.Typ.EnumCollation != types.EnumCollationLegacy {
+				return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE cannot verify ENUM collation identity")
+			}
+			if col.Typ.EnumEncoding != types.EnumEncodingLegacy {
+				return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE cannot verify ENUM domain encoding")
+			}
+		}
+	}
 	return nil
+}
+
+// Historical CREATE SQL may name a collation that 4.2 ignored. Reconstruct
+// eligible schemas from typed metadata so a new reader does not reinterpret
+// ignored historical options as newly authored table or ENUM identity.
+func tableDumpManifestCreateSQL(def *plan.TableDef) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if !tableDumpCanReconstruct(def) {
+		// The original CREATE may contain options ignored by an older server.
+		// The field is optional; do not publish DDL whose meaning is unverified.
+		return "", nil
+	}
+	omitDDL := false
+	for _, col := range def.Cols {
+		if types.T(col.Typ.Id) == types.T_enum && col.Typ.EnumCollation == types.EnumCollationLegacy {
+			if def.DefaultCharset != types.EnumCollationLegacy ||
+				(col.Typ.EnumEncoding == types.EnumEncodingLegacy && col.Typ.Enumvalues == "") {
+				return "", moerr.NewNotSupportedNoCtx("DUMP TABLE cannot faithfully reconstruct ENUM metadata")
+			}
+		}
+		// The catalog stores the result of evaluating a default at CREATE time.
+		// Its original expression alone cannot reproduce that value under every
+		// SQL mode. The same applies to generated and ON UPDATE expressions.
+		origin := strings.TrimSpace(col.Default.OriginString)
+		if (origin != "" && !strings.EqualFold(origin, "null")) ||
+			(origin == "" && col.Default.Expr != nil) ||
+			(col.GeneratedCol != nil && col.GeneratedCol.Expr != nil) ||
+			(col.OnUpdate != nil && col.OnUpdate.Expr != nil) {
+			omitDDL = true
+		}
+	}
+	// Some legacy catalogs retain an inline CHECK only in the original SQL.
+	// The typed DDL renderer can omit it, so inspect the original as well.
+	if omitDDL || strings.Contains(strings.ToUpper(def.Createsql), "CHECK") {
+		return "", nil
+	}
+	returnSQL, _, err := sqlplan.ConstructCreateTableSQL(nil, def, nil, false, nil)
+	if err != nil {
+		return "", err
+	}
+	// The manifest does not record the reader's SQL mode. These are the four
+	// parser-sensitive spellings: backslash escapes, double quotes, || and REAL.
+	// CHECK expressions can also depend on the replay context. Omit optional
+	// DDL if either parsing or expression semantics may differ.
+	if !utf8.ValidString(returnSQL) || strings.ContainsAny(returnSQL, "\\\"") || strings.Contains(returnSQL, "||") {
+		return "", nil
+	}
+	scanner := mysql.NewScanner(dialect.MYSQL, returnSQL)
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0:
+			return returnSQL, nil
+		case mysql.LEX_ERROR, mysql.REAL, mysql.CHECK:
+			return "", nil
+		}
+	}
 }
 
 func validateTableDumpRelations(ctx context.Context, refs []tableDumpRelationRef) error {
@@ -844,10 +985,14 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err = validateTableDumpRelations(ctx, refs); err != nil {
 		return err
 	}
+	manifestCreateSQL, err := tableDumpManifestCreateSQL(def)
+	if err != nil {
+		return err
+	}
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: manifestCreateSQL, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)

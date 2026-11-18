@@ -80,7 +80,7 @@ func (t *Type) IsEmpty() bool {
 		t.Width == 0 &&
 		t.Scale == 0 &&
 		t.Table == "" &&
-		t.Enumvalues == "" && t.EnumEncoding == 0)
+		t.Enumvalues == "" && t.EnumEncoding == 0 && t.EnumCollation == 0)
 }
 
 func (def *ColDef) GetOriginCaseName() string {

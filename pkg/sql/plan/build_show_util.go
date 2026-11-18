@@ -196,6 +196,17 @@ func constructCreateTableSQLWithFormat(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		if isEnumPlanType(&col.Typ) {
+			switch col.Typ.EnumCollation {
+			case types.EnumCollationLegacy:
+			case types.EnumCollationUTF8Bin:
+				buf.WriteString(" CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+			case types.EnumCollationGeneralCI:
+				buf.WriteString(" CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
+			default:
+				return "", nil, moerr.NewInvalidInputNoCtxf("unsupported ENUM collation %d", col.Typ.EnumCollation)
+			}
+		}
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -466,8 +477,11 @@ func constructCreateTableSQLWithFormat(
 				}
 			}
 			if indexdef.Comment != "" {
-				formattedComment := formatStr(indexdef.Comment)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
+				formattedComment := formatDDLString(indexdef.Comment, noBackslashEscapes)
+				if legacySchemaHash {
+					formattedComment = "'" + formatStr(indexdef.Comment) + "'"
+				}
+				indexStr += " COMMENT " + formattedComment
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -475,7 +489,7 @@ func constructCreateTableSQLWithFormat(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + " COMMENT " + formattedComment,
 					}
 				}
 			}
@@ -632,6 +646,27 @@ func constructCreateTableSQLWithFormat(
 		createStr += "\n"
 	}
 	createStr += ")"
+	if tableDef.EnumUnsupportedDefault != "" {
+		if tableDef.DefaultCharset != types.EnumCollationLegacy {
+			return "", nil, moerr.NewInvalidInputNoCtx("conflicting ENUM table collation metadata")
+		}
+		for _, col := range tableDef.Cols {
+			if isEnumPlanType(&col.Typ) && col.Typ.EnumCollation == types.EnumCollationLegacy {
+				return "", nil, moerr.NewNotSupportedNoCtx("cannot replay a legacy ENUM under an unsupported table collation")
+			}
+		}
+		createStr += " COLLATE=" + sqlquote.Ident(tableDef.EnumUnsupportedDefault)
+	} else {
+		switch tableDef.DefaultCharset {
+		case types.EnumCollationLegacy:
+		case types.EnumCollationUTF8Bin:
+			createStr += " COLLATE=utf8mb4_bin"
+		case types.EnumCollationGeneralCI:
+			createStr += " COLLATE=utf8mb4_general_ci"
+		default:
+			return "", nil, moerr.NewInvalidInputNoCtxf("unsupported table ENUM collation %d", tableDef.DefaultCharset)
+		}
+	}
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause

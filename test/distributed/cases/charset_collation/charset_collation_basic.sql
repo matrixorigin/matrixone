@@ -421,7 +421,8 @@ CREATE TABLE t_alter (
     name VARCHAR(100)
 );
 
--- Alter table charset
+-- 4.2 cannot atomically persist a changed table default for later ENUM ADD.
+-- Reject the former no-op rather than silently author the wrong ENUM identity.
 ALTER TABLE t_alter CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
 

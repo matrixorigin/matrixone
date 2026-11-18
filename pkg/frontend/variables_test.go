@@ -367,3 +367,27 @@ func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
+
+func TestSQLModeSetCanonicalization(t *testing.T) {
+	mode := gSysVarsDefs["sql_mode"].Type
+	for _, tc := range []struct{ input, want string }{
+		{"", ""},
+		{"ANSI", "ANSI"},
+		{"ANSI,NO_BACKSLASH_ESCAPES", "ANSI,NO_BACKSLASH_ESCAPES"},
+		{"ANSI_QUOTES,PIPES_AS_CONCAT", "ANSI_QUOTES,PIPES_AS_CONCAT"},
+		{"ansi,only_full_group_by", "ANSI,ONLY_FULL_GROUP_BY"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := mode.Convert(tc.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	_, err := mode.Convert("ANS")
+	assert.Error(t, err)
+	// Separator placement is based on selected members, even for an empty one.
+	set := InitSystemVariableSetType("test", "", "SECOND")
+	got, err := set.Convert(uint64(3))
+	assert.NoError(t, err)
+	assert.Equal(t, ",SECOND", got)
+}

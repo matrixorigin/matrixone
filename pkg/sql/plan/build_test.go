@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -6414,7 +6415,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJSON(logicPlan.GetDcl(), t)
 	}
 	if toFile {
-		err := os.WriteFile("/tmp/mo_plan_test.json", json, 0777)
+		err := os.WriteFile(filepath.Join(t.TempDir(), "mo_plan_test.json"), json, 0777)
 		if err != nil {
 			t.Logf("%+v", err)
 		}

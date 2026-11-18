@@ -1472,14 +1472,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:           int32(attr.Attr.Type.Oid),
-						Width:        attr.Attr.Type.Width,
-						Scale:        attr.Attr.Type.Scale,
-						AutoIncr:     attr.Attr.AutoIncrement,
-						Table:        tbl.tableName,
-						NotNullable:  attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:   attr.Attr.EnumVlaues,
-						EnumEncoding: attr.Attr.Type.GetEnumEncoding(),
+						Id:            int32(attr.Attr.Type.Oid),
+						Width:         attr.Attr.Type.Width,
+						Scale:         attr.Attr.Type.Scale,
+						AutoIncr:      attr.Attr.AutoIncrement,
+						Table:         tbl.tableName,
+						NotNullable:   attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:    attr.Attr.EnumVlaues,
+						EnumEncoding:  attr.Attr.Type.GetEnumEncoding(),
+						EnumCollation: attr.Attr.Type.GetEnumCollation(),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1607,6 +1608,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
+			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.EnumUnsupportedDefault = tbl.extraInfo.EnumUnsupportedDefault
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks

@@ -434,8 +434,12 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: types.Enum(1), typ: &types.Type{Oid: types.T_enum}, sqlBuff: []byte{}},
-			want:    []byte("'1'"),
+			want:    []byte("1"),
 			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: types.Enum(0), typ: &types.Type{Oid: types.T_enum}, sqlBuff: []byte{}},
+			wantErr: assert.Error,
 		},
 	}
 	for _, tt := range tests {

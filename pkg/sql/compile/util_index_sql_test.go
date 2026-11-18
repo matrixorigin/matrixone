@@ -59,6 +59,25 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
 
+func TestGenInsertIndexTableSql_EscapesBacktickIdentifiers(t *testing.T) {
+	table := &planpb.TableDef{Name: "tick`table", Pkey: &planpb.PrimaryKeyDef{PkeyColName: "p`k", Names: []string{"p`k"}}}
+	index := &planpb.IndexDef{IndexTableName: "idx`name", Parts: []string{"v`1", "v2"}}
+	sql, err := genInsertIndexTableSql(table, index, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`idx``name`")
+	require.Contains(t, sql, "serial_full(`v``1`,`v2`), `p``k` from `db``1`.`tick``table`;")
+}
+
+// Index metadata stores an unqualified column name even when that name
+// itself contains a dot. Do not reinterpret the dot as a table qualifier.
+func TestGenInsertIndexTableSql_QuotesDotInColumnNames(t *testing.T) {
+	table := &planpb.TableDef{Name: "src", Pkey: &planpb.PrimaryKeyDef{PkeyColName: "p.k", Names: []string{"p.k"}}}
+	index := &planpb.IndexDef{IndexTableName: "idx", Parts: []string{"e.x", catalog.CreateAlias("p.k")}}
+	sql, err := genInsertIndexTableSql(table, index, "db", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "serial_full(`e.x`,`p.k`), `p.k` from `db`.`src`;")
+}
+
 func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "orders",

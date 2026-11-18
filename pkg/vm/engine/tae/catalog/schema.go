@@ -459,6 +459,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
 				return
 			}
+			if err = types.ValidateEnumCollation(def.Type.GetEnumCollation()); err != nil {
+				return
+			}
 		}
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
@@ -596,6 +599,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	for _, def := range s.ColDefs {
 		if def.Type.Oid == types.T_enum {
 			if err = types.ValidateEnumEncoding(def.Type.GetEnumEncoding()); err != nil {
+				return
+			}
+			if err = types.ValidateEnumCollation(def.Type.GetEnumCollation()); err != nil {
 				return
 			}
 		}
@@ -820,6 +826,9 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 // make a basic coldef without sortKey info
 func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 	if attr.Type.Oid == types.T_enum {
+		if err := types.ValidateEnumCollation(attr.Type.GetEnumCollation()); err != nil {
+			return nil, err
+		}
 		if _, err := types.DecodeEnumMembers(attr.EnumVlaues, attr.Type.GetEnumEncoding()); err != nil {
 			return nil, err
 		}

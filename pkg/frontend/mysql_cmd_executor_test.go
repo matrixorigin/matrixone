@@ -7256,3 +7256,35 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
 }
+
+func TestLoadLegacyGlobalSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newSes(ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	for _, tc := range []struct {
+		saved, want string
+		invalid     bool
+	}{
+		{"ANS", "", false},
+		{"ANSI_QUOTES", "ANSI_QUOTES", false},
+		{"ANSIONLY_FULL_GROUP_BY", "ANSIONLY_FULL_GROUP_BY", false},
+		{"ANSINO_BACKSLASH_ESCAPES,ONLY_FULL_GROUP_BY", "ANSINO_BACKSLASH_ESCAPES,ONLY_FULL_GROUP_BY", false},
+		{"ANSINOT_A_MODE", "", true},
+		{"ANSIANSI_QUOTES,ALLOW_INVALID_DATES", "", true},
+	} {
+		t.Run(tc.saved, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			query := getSqlForGetSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+			bh.sql2result[query] = newMrsForGlobalSystemVariables([][]interface{}{{"sql_mode", tc.saved}})
+			vars, err := ses.getGlobalSysVars(ctx, bh)
+			if tc.invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vars["sql_mode"])
+		})
+	}
+}

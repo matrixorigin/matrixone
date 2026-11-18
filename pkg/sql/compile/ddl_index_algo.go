@@ -49,11 +49,15 @@ func (s *Scope) handleUniqueIndexTable(
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
 	// it will be processed when inserting into the hidden table.
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, def, indexDef)
+	if err != nil {
+		return err
+	}
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo, spec)
 }
 
 func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable, enumSpecs ...*executor.EnumIndexBackfillSpec) error {
 	// Skip index data population for CCPR tables when this is a CCPR task transaction.
 	// The index data will be synced via CCPR data synchronization instead.
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
@@ -63,10 +67,15 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	if err != nil {
 		return err
 	}
-	if indexDef.Unique {
-		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
+	var enumSpec *executor.EnumIndexBackfillSpec
+	if len(enumSpecs) != 0 {
+		enumSpec = enumSpecs[0]
 	}
-	return c.runSql(insertSQL)
+	stmtOpt := enumIndexStatementOption(executor.StatementOption{}, enumSpec, insertSQL, false)
+	if indexDef.Unique {
+		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL, stmtOpt)
+	}
+	return c.runSqlWithOptions(insertSQL, stmtOpt)
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
@@ -80,7 +89,7 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 		nullChecks := make([]string, 0, len(indexDef.Parts))
 		for _, part := range indexDef.Parts {
 			part = catalog.ResolveAlias(part)
-			partExpr := quoteMySQLQualifiedIdent(part)
+			partExpr := quoteMySQLIdent(part)
 			if length := prefixLengths[part]; length > 0 {
 				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
 			}
@@ -102,14 +111,20 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
 	insertSQL string,
+	options ...executor.StatementOption,
 ) error {
+	stmtOpt := executor.StatementOption{}
+	if len(options) != 0 {
+		stmtOpt = options[0]
+	}
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
 	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
 	if err != nil {
 		return err
 	}
-	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	checkOpt := enumIndexStatementOption(executor.StatementOption{}.WithDisableLog(), stmtOpt.EnumIndexBackfill(), duplicateCheckSQL, true)
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, checkOpt)
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
 		return err
@@ -126,7 +141,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 		TargetTableName: indexDef.IndexTableName,
 		SkipPkDedup:     true,
 	}
-	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt)
+	stmtOpt = stmtOpt.WithAlterCopyOpt(opt)
 
 	restoreCtx := c.proc.Ctx
 	if restoreCtx == nil {
@@ -162,7 +177,11 @@ func (s *Scope) handleRegularSecondaryIndexTable(
 		return err
 	}
 
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	spec, err := newEnumIndexBackfillSpec(c, mainTableID, dbSource, qryDatabase, originalTableDef, def, indexDef)
+	if err != nil {
+		return err
+	}
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo, spec)
 }
 
 func (s *Scope) handleMasterIndexTable(

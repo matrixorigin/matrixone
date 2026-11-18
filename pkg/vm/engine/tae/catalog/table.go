@@ -888,17 +888,19 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 		var hints []apipb.MergeHint
 		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum:     newSchema.Extra.NextColSeqnum,
-			MinOsizeQuailifed: newSchema.Extra.MinOsizeQuailifed,
-			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
-			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
-			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
-			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
-			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
-			Hints:             hints,
-			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
-			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
-			Checks:            checks,
+			NextColSeqnum:          newSchema.Extra.NextColSeqnum,
+			MinOsizeQuailifed:      newSchema.Extra.MinOsizeQuailifed,
+			MaxObjOnerun:           newSchema.Extra.MaxObjOnerun,
+			MaxOsizeMergedObj:      newSchema.Extra.MaxOsizeMergedObj,
+			MinCnMergeSize:         newSchema.Extra.MinCnMergeSize,
+			BlockMaxRows:           newSchema.Extra.BlockMaxRows,
+			ObjectMaxBlocks:        newSchema.Extra.ObjectMaxBlocks,
+			Hints:                  hints,
+			AutoIncrOffset:         newSchema.Extra.AutoIncrOffset,
+			AutoIncrEpoch:          newSchema.Extra.AutoIncrEpoch,
+			DefaultCharset:         newSchema.Extra.DefaultCharset,
+			EnumUnsupportedDefault: newSchema.Extra.EnumUnsupportedDefault,
+			Checks:                 checks,
 		}
 
 	}

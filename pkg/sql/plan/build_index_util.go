@@ -155,11 +155,12 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	// either fails (nil-pointer panic) or compares values in incompatible
 	// representations.
 	return Type{
-		Id:           col.Typ.Id,
-		Width:        col.Typ.Width,
-		Scale:        col.Typ.Scale,
-		Enumvalues:   col.Typ.Enumvalues,
-		EnumEncoding: col.Typ.EnumEncoding,
+		Id:            col.Typ.Id,
+		Width:         col.Typ.Width,
+		Scale:         col.Typ.Scale,
+		Enumvalues:    col.Typ.Enumvalues,
+		EnumEncoding:  col.Typ.EnumEncoding,
+		EnumCollation: col.Typ.EnumCollation,
 	}
 }
 
@@ -203,6 +204,10 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	// Keep identity-zero catalogs on their historical prefix-index path.
+	if indexKind != "primary" && keyPart.Length > 0 && isEnumPlanType(&col.Typ) && col.Typ.EnumCollation != 0 {
+		return moerr.NewNotSupported(ctx, "prefix index on an ENUM column with collation identity")
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):

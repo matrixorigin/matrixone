@@ -1053,3 +1053,34 @@ func mustFormatColType(t *testing.T, typ plan.Type) string {
 	require.NoError(t, err)
 	return formatted
 }
+
+func TestConstructCreateTableSQLIndexCommentRoundTrip(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, "CREATE TABLE comment_src (id INT PRIMARY KEY, KEY idx_id (id))")
+	require.NoError(t, err)
+	require.NotEmpty(t, tableDef.Indexes)
+	for _, comment := range []string{`ends in \\`, `a\nb`, "quote ' ; DROP TABLE t; -- ", "line\nnext"} {
+		t.Run(comment, func(t *testing.T) {
+			tableDef.Indexes[0].Comment = comment
+			for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+				ddl, _, err := constructCreateTableSQLWithFormat(nil, tableDef, nil, false, nil, true, false, mode)
+				require.NoError(t, err)
+				parsed, err := mysql.ParseWithSQLMode(context.Background(), ddl, 1, mode)
+				require.NoError(t, err)
+				require.Len(t, parsed, 1)
+				create, ok := parsed[0].(*tree.CreateTable)
+				require.True(t, ok)
+				found := false
+				for _, def := range create.Defs {
+					if index, ok := def.(*tree.Index); ok && index.Name == "idx_id" {
+						require.NotNil(t, index.IndexOption)
+						require.Equal(t, comment, index.IndexOption.Comment)
+						found = true
+					}
+				}
+				require.True(t, found, ddl)
+				parsed[0].Free()
+			}
+		})
+	}
+}

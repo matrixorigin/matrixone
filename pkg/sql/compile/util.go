@@ -163,11 +163,16 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	if spatialIndex && len(indexDef.Parts) > 0 {
 		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
 	}
+	// These identifiers are embedded inside template backticks; escaping them
+	// keeps unusual legal names inside the generated statement.
+	quotedDBName := strings.ReplaceAll(DBName, "`", "``")
+	quotedIndexTableName := strings.ReplaceAll(indexDef.IndexTableName, "`", "``")
+	quotedTableName := strings.ReplaceAll(originTableDef.Name, "`", "``")
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, quotedDBName, quotedIndexTableName, temp, quotedDBName, quotedTableName, temp)
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, quotedDBName, quotedIndexTableName, temp, quotedDBName, quotedTableName, temp)
 		}
 	} else {
 		pkeyName := originTableDef.Pkey.PkeyColName
@@ -183,15 +188,15 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			}
 			pKeyMsg += ")"
 		} else {
-			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
+			pKeyMsg = quoteMySQLIdent(pkeyName)
 		}
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, temp, pKeyMsg, quotedDBName, quotedTableName, temp)
 		} else {
 			if isUnique {
-				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, temp, pKeyMsg, quotedDBName, quotedTableName, temp)
 			} else {
-				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name)
+				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, temp, pKeyMsg, quotedDBName, quotedTableName)
 			}
 		}
 	}
@@ -216,7 +221,7 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		}
 		pKeyMsg += ")"
 	} else {
-		pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
+		pKeyMsg = quoteMySQLIdent(pkeyName)
 	}
 
 	colSeqNumMap := make(map[string]string)
@@ -231,7 +236,7 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		resolvedPart := catalog.ResolveAlias(part)
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			colSeqNumMap[resolvedPart], quoteMySQLQualifiedIdent(resolvedPart), pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			colSeqNumMap[resolvedPart], quoteMySQLIdent(resolvedPart), pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs
@@ -505,7 +510,7 @@ func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
 	var temp string
 	for i, part := range parts {
 		part = catalog.ResolveAlias(part)
-		partExpr := quoteMySQLQualifiedIdent(part)
+		partExpr := quoteMySQLIdent(part)
 		if length := prefixLengths[part]; length > 0 {
 			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
 		}
@@ -520,14 +525,6 @@ func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
 
 func quoteMySQLIdent(ident string) string {
 	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
-}
-
-func quoteMySQLQualifiedIdent(ident string) string {
-	parts := strings.Split(ident, ".")
-	for i := range parts {
-		parts[i] = quoteMySQLIdent(parts[i])
-	}
-	return strings.Join(parts, ".")
 }
 
 // haveSinkScanInPlan Start from the `curNodeIdx` node, recursively check its Subtree all nodes,

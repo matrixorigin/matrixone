@@ -36,6 +36,7 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	finalValuePos func(string, string, bool) (int32, bool),
 ) (*plan.Expr, error) {
 	if tableDef.ClusterBy == nil || !planutil.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 		return nil, nil
@@ -46,17 +47,19 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	clusterByUpdated := false
 	for i, colName := range clusterByCols {
 		qualifiedName := alias + "." + colName
-		colPos, ok := oldColName2Idx[qualifiedName]
-		if !ok {
+		if _, ok := oldColName2Idx[qualifiedName]; !ok {
 			return nil, moerr.NewInternalErrorf(
 				builder.GetContext(),
 				"bind update err, can not find cluster by column %s",
 				colName,
 			)
 		}
-		if updatedPos, ok := newColName2Idx[qualifiedName]; ok {
-			colPos = updatedPos
+		if _, ok := newColName2Idx[qualifiedName]; ok {
 			clusterByUpdated = true
+		}
+		colPos, ok := finalValuePos(alias, colName, true)
+		if !ok {
+			return nil, moerr.NewInvalidInputNoCtx("cannot locate final ENUM index row image")
 		}
 		args[i] = &plan.Expr{
 			Typ: selectNode.ProjectList[colPos].Typ,
@@ -116,6 +119,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	colOffsets := make([]int32, len(dmlCtx.aliases))
 	updateNumericTargets := make(map[int32]Type)
 	inlineIrregularIndexes := make([][]*plan.IndexDef, len(dmlCtx.aliases))
+
+	// Register before regular/irregular index classification mutates tableDefs.
+	rawOld, err := prepareEnumIndexRawProjections(bindCtx, dmlCtx, true)
+	if err != nil {
+		return 0, err
+	}
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -249,6 +258,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
 
+	// Assigned/recomputed values retain their existing assignment semantics.
+	// An untouched special value must be copied from the physical old image.
+	finalValuePos := func(alias, name string, usePhysical bool) (int32, bool) {
+		key := alias + "." + name
+		if pos, ok := newColName2Idx[key]; ok {
+			return pos, true
+		}
+		if usePhysical {
+			if raw := rawOld[strings.ToLower(key)]; raw != nil {
+				return raw.resultPos, raw.resultPos >= 0
+			}
+		}
+		pos, ok := oldColName2Idx[key]
+		return pos, ok
+	}
+
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -324,7 +349,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
 					newColName2Idx[alias+"."+col.Name] = oldPos
-					oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
+					oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
 					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 					selectNode.ProjectList[oldPos] = newDefExpr
 				}
@@ -375,7 +400,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
-			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
+			generatedInputs := append([]*plan.Expr(nil), selectNode.ProjectList...)
+			for colPos, sourceCol := range tableDef.Cols {
+				if _, assigned := newColName2Idx[alias+"."+sourceCol.Name]; assigned {
+					continue
+				}
+				if raw := rawOld[strings.ToLower(alias+"."+sourceCol.Name)]; raw != nil {
+					inputPos := int(colOffsets[i]) + colPos
+					if raw.resultPos < 0 || int(raw.resultPos) >= len(generatedInputs) || inputPos >= len(generatedInputs) {
+						return 0, moerr.NewInvalidInputNoCtx("cannot locate generated ENUM index input")
+					}
+					generatedInputs[inputPos] = generatedInputs[raw.resultPos]
+				}
+			}
+			genExpr = substituteColRefsInExpr(genExpr, generatedInputs, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
 			newColName2Idx[alias+"."+col.Name] = oldPos
@@ -475,17 +513,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if stmt.HasReturning() {
 		tableDef := dmlCtx.tableDefs[0]
 		alias := dmlCtx.aliases[0]
+		builder.returningRawIndexImage = len(rawOld) > 0
 		colPos := make(map[string]int32, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
-			qualifiedName := alias + "." + col.Name
-			pos, ok := oldColName2Idx[qualifiedName]
+			pos, ok := finalValuePos(alias, col.Name, true)
 			if !ok {
 				return 0, moerr.NewInternalErrorf(
-					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
+					builder.GetContext(), "DML RETURNING cannot locate final image column %s", col.Name,
 				)
-			}
-			if newPos, ok := newColName2Idx[qualifiedName]; ok {
-				pos = newPos
 			}
 			colPos[strings.ToLower(col.Name)] = pos
 		}
@@ -580,9 +615,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					args := make([]*plan.Expr, len(tableDef.Pkey.Names))
 
 					for j, colName := range tableDef.Pkey.Names {
-						colPos := int32(oldColName2Idx[alias+"."+colName])
-						if updateIdx, ok := newColName2Idx[alias+"."+colName]; ok {
-							colPos = int32(updateIdx)
+						colPos, ok := finalValuePos(alias, colName, true)
+						if !ok {
+							return 0, moerr.NewInvalidInputNoCtx("cannot locate final composite primary key value")
 						}
 
 						args[j] = &plan.Expr{
@@ -676,6 +711,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if !idxDef.Unique || !idxNeedUpdate[i][j] {
 					continue
 				}
+				usesNew, err := EnumIndexUsesNewIdentity(tableDef, idxDef)
+				if err != nil {
+					return 0, err
+				}
 
 				idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
 				if err != nil {
@@ -708,6 +747,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						if !ok {
 							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", colName)
 						}
+						colPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, alias, colName, colPos)
+						if err != nil {
+							return 0, err
+						}
 						oldArgs[j], err = makeUpdateIndexPartExpr(colPos, colName, prefixLengths)
 						if err != nil {
 							return 0, err
@@ -722,12 +765,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 					for j, colName := range idxDef.Parts {
 						colName = catalog.ResolveAlias(colName)
-						colPos, ok := oldColName2Idx[alias+"."+colName]
+						colPos, ok := finalValuePos(alias, colName, usesNew)
 						if !ok {
-							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", colName)
-						}
-						if updateIdx, ok := newColName2Idx[alias+"."+colName]; ok {
-							colPos = updateIdx
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find final colName = %s", colName)
 						}
 
 						newArgs[j], err = makeUpdateIndexPartExpr(colPos, colName, prefixLengths)
@@ -746,6 +786,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						if !ok {
 							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", partName)
 						}
+						oldPartPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, alias, partName, oldPartPos)
+						if err != nil {
+							return 0, err
+						}
 						oldPartExpr, err := makeUpdateIndexPartExpr(oldPartPos, partName, prefixLengths)
 						if err != nil {
 							return 0, err
@@ -753,9 +797,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						newProjNode.ProjectList = append(newProjNode.ProjectList, oldPartExpr)
 
 						newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
-						newPartPos, ok := newColName2Idx[alias+"."+partName]
+						newPartPos, ok := finalValuePos(alias, partName, usesNew)
 						if !ok {
-							newPartPos = oldPartPos
+							return 0, moerr.NewInvalidInputNoCtx("cannot locate final unique index value")
 						}
 						newPartExpr, err := makeUpdateIndexPartExpr(newPartPos, partName, prefixLengths)
 						if err != nil {
@@ -763,8 +807,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 						newProjNode.ProjectList = append(newProjNode.ProjectList, newPartExpr)
 					} else {
-						oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = oldColName2Idx[alias+"."+partName]
-						newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = newColName2Idx[alias+"."+partName]
+						oldPartPos, ok := oldColName2Idx[alias+"."+partName]
+						if !ok {
+							return 0, moerr.NewInvalidInputNoCtx("cannot locate unique index old value")
+						}
+						oldPartPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, alias, partName, oldPartPos)
+						if err != nil {
+							return 0, err
+						}
+						newPartPos, ok := finalValuePos(alias, partName, usesNew)
+						if !ok {
+							return 0, moerr.NewInvalidInputNoCtx("cannot locate unique index final value")
+						}
+						oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = oldPartPos
+						newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = newPartPos
 					}
 				}
 
@@ -847,6 +903,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if !pkNeedUpdate[i] && !idxNeedUpdate[i][j] {
 				continue
 			}
+			usesNew, err := EnumIndexUsesNewIdentity(tableDef, idxDef)
+			if err != nil {
+				return 0, err
+			}
 
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
@@ -905,6 +965,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					if colPos, ok = oldColName2Idx[alias+"."+colName]; !ok {
 						errMsg := fmt.Sprintf("bind update err, can not find colName = %s", colName)
 						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					}
+					colPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, alias, colName, colPos)
+					if err != nil {
+						return 0, err
 					}
 					inputExpr := &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
@@ -978,6 +1042,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			selectNodeTag,
 			oldColName2Idx,
 			newColName2Idx,
+			finalValuePos,
 		)
 		if err != nil {
 			return 0, err
@@ -995,9 +1060,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if updatedClusterByExpr != nil && col.Name == tableDef.ClusterBy.Name {
 				finalExpr = updatedClusterByExpr
 			} else {
-				colIdx := oldColName2Idx[alias+"."+col.Name]
-				if updateIdx, ok := newColName2Idx[alias+"."+col.Name]; ok {
-					colIdx = updateIdx
+				colIdx, ok := finalValuePos(alias, col.Name, true)
+				if !ok || colIdx < 0 || int(colIdx) >= len(selectNode.ProjectList) {
+					return 0, moerr.NewInvalidInputNoCtx("cannot locate final ENUM index row image")
 				}
 				finalExpr = &plan.Expr{
 					Typ: selectNode.ProjectList[colIdx].Typ,
@@ -1104,6 +1169,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			newIdx := oldIdx
 
 			idxDef := tableDef.Indexes[j]
+			usesNew, err := EnumIndexUsesNewIdentity(tableDef, idxDef)
+			if err != nil {
+				return 0, err
+			}
 			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 			if err != nil {
 				return 0, err
@@ -1128,9 +1197,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				var newIdxExpr *plan.Expr
 				if !indexTableStoresSerializedKey(idxDef) {
 					realColName := indexPrimaryPartName(idxDef)
-					colPos := int32(oldColName2Idx[alias+"."+realColName])
-					if updateIdx, ok := newColName2Idx[alias+"."+realColName]; ok {
-						colPos = int32(updateIdx)
+					colPos, ok := finalValuePos(alias, realColName, usesNew)
+					if !ok {
+						return 0, moerr.NewInvalidInputNoCtx("cannot locate final index value")
 					}
 					inputExpr := &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
@@ -1151,9 +1220,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 					for k, colName := range idxDef.Parts {
 						realColName := catalog.ResolveAlias(colName)
-						colPos := int32(oldColName2Idx[alias+"."+realColName])
-						if updateIdx, ok := newColName2Idx[alias+"."+realColName]; ok {
-							colPos = int32(updateIdx)
+						colPos, ok := finalValuePos(alias, realColName, usesNew)
+						if !ok {
+							return 0, moerr.NewInvalidInputNoCtx("cannot locate final composite index value")
 						}
 						args[k] = &plan.Expr{
 							Typ: selectNode.ProjectList[colPos].Typ,

@@ -62,7 +62,22 @@ func (r *CheckpointReader) BuildLogicalTableViewLimited(
 	maxRows int,
 	maxBytes int64,
 ) (*LogicalTableView, error) {
+	return r.buildLogicalTableViewLimited(ctx, snapshotTS, dataEntries, tombEntries, maxRows, maxBytes, false)
+}
+
+// Catalog consumers retain NULL and missing-column bits so an absent ENUM
+// domain is not confused with the valid non-NULL empty domain.
+func (r *CheckpointReader) buildLogicalTableViewLimited(
+	ctx context.Context,
+	snapshotTS types.TS,
+	dataEntries []*ObjectEntryInfo,
+	tombEntries []*ObjectEntryInfo,
+	maxRows int,
+	maxBytes int64,
+	retainNulls bool,
+) (*LogicalTableView, error) {
 	view := newLogicalTableView()
+	view.NullsKnown = retainNulls
 	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
 		func(cols []objecttool.ColInfo) error {
 			if len(view.Headers) != view.MetaWidth() {
@@ -75,7 +90,7 @@ func (r *CheckpointReader) BuildLogicalTableViewLimited(
 			}
 			return nil
 		},
-		func(objShort string, blockIdx int, rowIdx int, values []string, _ []bool) error {
+		func(objShort string, blockIdx int, rowIdx int, values []string, nulls []bool) error {
 			if maxRows > 0 && len(view.Rows) >= maxRows {
 				view.Truncated = true
 				return errLogicalTableViewLimit
@@ -83,6 +98,9 @@ func (r *CheckpointReader) BuildLogicalTableViewLimited(
 			rowBytes := int64(len(objShort))
 			for _, value := range values {
 				rowBytes += int64(len(value))
+			}
+			if retainNulls {
+				rowBytes += int64(((len(values)+63)/64)*8 + 24)
 			}
 			if maxBytes > 0 && view.MaterializedBytes+rowBytes > maxBytes {
 				view.Truncated = true
@@ -92,6 +110,15 @@ func (r *CheckpointReader) BuildLogicalTableViewLimited(
 			row = append(row, objShort, fmt.Sprintf("%d", blockIdx), fmt.Sprintf("%d", rowIdx))
 			row = append(row, values...)
 			view.Rows = append(view.Rows, row)
+			if retainNulls {
+				bits := make([]uint64, (len(values)+63)/64)
+				for i := range values {
+					if i >= len(nulls) || nulls[i] {
+						bits[i/64] |= uint64(1) << uint(i%64)
+					}
+				}
+				view.RowNulls = append(view.RowNulls, bits)
+			}
 			view.MaterializedBytes += rowBytes
 			return nil
 		},

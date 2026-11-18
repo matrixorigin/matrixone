@@ -1,0 +1,29 @@
+-- @suite
+-- @case
+-- @desc: ENUM composite index decoding preserves collation and ordinal
+-- @label:bvt
+drop database if exists enum_serial_index_32814;
+create database enum_serial_index_32814;
+use enum_serial_index_32814;
+create table src(id int primary key,e enum('A','a','') collate utf8mb4_bin,n int,key idx_en(e,n));
+insert into src values(1,1,11),(2,2,22),(3,3,33),(5,null,55);
+insert ignore into src values(4,'invalid',44);
+create table dst(id int,e enum('','a','A') collate utf8mb4_bin);
+select 'binary_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from src force index(idx_en) order by e,n,id;
+select 'binary_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from src ignore index(idx_en) order by e,n,id;
+insert into dst select id,e from src force index(idx_en) order by e,n,id;
+select 'binary_dst' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from dst order by id;
+create table framed(id int primary key,e enum('A,1','a,1','') collate utf8mb4_bin,n int,key idx_en(e,n));
+insert into framed values(1,1,11),(2,2,22),(3,3,33),(5,null,55);
+insert ignore into framed values(4,'invalid',44);
+create table framed_dst(id int,e enum('','a,1','A,1') collate utf8mb4_bin);
+select 'framed_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed force index(idx_en) order by e,n,id;
+select 'framed_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed ignore index(idx_en) order by e,n,id;
+insert into framed_dst select id,e from framed force index(idx_en) order by e,n,id;
+select 'framed_dst' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from framed_dst order by id;
+create table ci(id int primary key,e enum('A','b') collate utf8mb4_general_ci,n int,key idx_en(e,n));
+insert into ci values(1,'a',11),(2,'B',22),(4,null,44);
+insert ignore into ci values(3,'invalid',33);
+select 'ci_force' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from ci force index(idx_en) order by e,n,id;
+select 'ci_ignore' as marker,id,hex(cast(e as char)) as label_hex,e+0 as ordinal,e is null as is_null from ci ignore index(idx_en) order by e,n,id;
+drop database enum_serial_index_32814;

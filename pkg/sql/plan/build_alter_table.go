@@ -53,6 +53,17 @@ func skipPkDedup(old, new *TableDef) bool {
 	return slices.Equal(oldPk.Names, newPk.Names)
 }
 
+func dropAlterCopyUniqueDedupForAffectedIndexes(opt *plan.AlterCopyOpt) {
+	if opt == nil {
+		return
+	}
+	for indexName := range opt.SkipUniqueIdxDedup {
+		if !opt.SkipIndexesCopy[indexName] {
+			delete(opt.SkipUniqueIdxDedup, indexName)
+		}
+	}
+}
+
 func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	var skip map[string]bool
 	// In spite of the O(n^2) complexity,
@@ -219,12 +230,42 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if err := validateNewEnumIndexSafety(copyTableDef, copyTableDef.Indexes); err != nil {
+		return nil, err
+	}
+	if err := rejectUnsafeEnumIdentityDowngrade(tableDef, copyTableDef, alterTableCtx.alterColMap); err != nil {
+		return nil, err
+	}
+
 	if pkAffected {
 		affectedAllIdxCols()
 	} else {
-		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
+		affectedColumnNames := slices.Clone(affectedCols)
+		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedColumnNames)
 		if err != nil {
 			return nil, err
+		}
+		// Include generated-key and transitive INCLUDE dependencies that the
+		// name-only index collector cannot see.
+		seenAffected := make(map[string]bool, len(affectedCols))
+		for _, name := range affectedCols {
+			seenAffected[strings.ToLower(name)] = true
+		}
+		for _, index := range tableDef.Indexes {
+			if index == nil {
+				return nil, moerr.NewInvalidInputNoCtx("invalid ALTER index definition")
+			}
+			for _, changed := range affectedColumnNames {
+				depends, depErr := indexReferencesColumn(tableDef, index, changed)
+				if depErr != nil {
+					return nil, depErr
+				}
+				if depends && !seenAffected[strings.ToLower(index.IndexName)] {
+					affectedCols = append(affectedCols, index.IndexName)
+					seenAffected[strings.ToLower(index.IndexName)] = true
+					break
+				}
+			}
 		}
 	}
 
@@ -259,6 +300,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		}
 	}
+
+	// An affected unique index is rebuilt from converted target values. Even
+	// unchanged index names and parts do not prove those values remain unique
+	// after a type, domain, or collation change.
+	dropAlterCopyUniqueDedupForAffectedIndexes(opt)
 
 	alterTablePlan.Options = opt
 	logutil.Info("alter copy option",
@@ -389,6 +435,32 @@ type selectExpr struct {
 	sexprStr  string
 }
 
+// remapAlterColumnSource carries a target column's original-table source
+// through repeated CHANGE/RENAME/MODIFY operations. A missing source stays
+// missing, which distinguishes a newly added column from a renamed old one.
+func remapAlterColumnSource(alterCtx *AlterTableContext, oldName, newName string) {
+	if alterCtx == nil {
+		return
+	}
+	source, found := alterCtx.alterColMap[oldName]
+	if !found {
+		for name, candidate := range alterCtx.alterColMap {
+			if strings.EqualFold(name, oldName) {
+				source, found = candidate, true
+				break
+			}
+		}
+	}
+	for name := range alterCtx.alterColMap {
+		if strings.EqualFold(name, oldName) || strings.EqualFold(name, newName) {
+			delete(alterCtx.alterColMap, name)
+		}
+	}
+	if found {
+		alterCtx.alterColMap[newName] = source
+	}
+}
+
 func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, schemaName string) *AlterTableContext {
 	alterTblColMap := make(map[string]selectExpr)
 	changTblColIdMap := make(map[uint64]*ColDef)
@@ -442,6 +514,19 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+	}
+	if err := RequireEnumCollationProtocol(ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
+	for _, option := range stmt.Options {
+		if charset, ok := option.(*tree.TableOptionCharset); ok {
+			switch charset.LegacyAlterKind {
+			case tree.LegacyAlterKeys, tree.LegacyAlterTablespace, tree.LegacyAlterForce, tree.LegacyAlterValidation:
+				// Preserve the original INPLACE/COPY dispatch for these no-ops.
+			default:
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "ALTER TABLE charset/collation defaults and conversion")
+			}
+		}
 	}
 	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 	if err != nil {

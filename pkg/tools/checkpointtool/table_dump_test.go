@@ -1001,6 +1001,8 @@ func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
 			moIndexesCatalogTestRow(t, "1", "100", "idx_users_name", "INDEX", "", "", "name", "1"),
 		},
 	}
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	reader := &CheckpointReader{}
 	reader.SetGetLogicalViewForTest(func(_ *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
 		switch tableID {
@@ -1621,13 +1623,13 @@ func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *te
 		Headers: []string{
 			"object", "block", "row",
 			"rel_id", "relname", "reldatabase", "reldatabase_id",
-			"col_4", "col_5", "col_6", "rel_createsql",
+			"col_4", "col_5", "col_6", "rel_createsql", catalog.SystemRelAttr_ExtraInfo,
 		},
 		Rows: [][]string{
 			{
 				"obj1", "0", "0",
 				"12345", "t", "db", "100",
-				"", "", "", "CREATE TABLE t (a INT, b VARCHAR(100))",
+				"", "", "", "CREATE TABLE t (a INT, b VARCHAR(100))", "",
 			},
 		},
 	}
@@ -1639,6 +1641,8 @@ func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *te
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(12345, moTablesView, moColumnsView)
 	assert.Contains(t, ddl, "CREATE TABLE `t`")
 	assert.Contains(t, ddl, "`a` INT")
@@ -1670,13 +1674,13 @@ func TestCreateTableDDLFromCatalogViews_DecodesMoColumnTypes(t *testing.T) {
 		Headers: []string{
 			"object", "block", "row",
 			"rel_id", "relname", "reldatabase", "reldatabase_id",
-			"col_4", "col_5", "col_6", "rel_createsql",
+			"col_4", "col_5", "col_6", "rel_createsql", catalog.SystemRelAttr_ExtraInfo,
 		},
 		Rows: [][]string{
 			{
 				"obj1", "0", "0",
 				"333999", "parent", "ckp_constraints", "333997",
-				"", "", "", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)",
+				"", "", "", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", "",
 			},
 		},
 	}
@@ -1688,6 +1692,8 @@ func TestCreateTableDDLFromCatalogViews_DecodesMoColumnTypes(t *testing.T) {
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
 	assert.Contains(t, ddl, "CREATE TABLE `parent`")
 	assert.Contains(t, ddl, "`id` INT")
@@ -1700,7 +1706,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 		Headers: []string{
 			"object", "block", "row",
 			"rel_id", "relname", "reldatabase", "reldatabase_id",
-			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint", catalog.SystemRelAttr_ExtraInfo,
 		},
 		Rows: [][]string{
 			{
@@ -1715,7 +1721,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 						{IndexName: "ivf_500", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"500","op_type":"vector_l2_ops"}`},
 						{IndexName: "ivf_2000", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"2000","op_type":"vector_l2_ops"}`},
 					}},
-				),
+				), "",
 			},
 		},
 	}
@@ -1768,6 +1774,8 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView, partitionMetadataView)
 	assert.Contains(t, ddl, "CREATE TABLE `parent`")
 	assert.Contains(t, ddl, "`id` INT NOT NULL")
@@ -1788,13 +1796,13 @@ func TestCreateTableDDLFromCatalogViews_PreservesCompositeClusterByFromMoColumns
 		Headers: []string{
 			"object", "block", "row",
 			"rel_id", "relname", "reldatabase", "reldatabase_id",
-			"relpersistence", "relkind", "rel_comment",
+			"relpersistence", "relkind", "rel_comment", catalog.SystemRelAttr_ExtraInfo,
 		},
 		Rows: [][]string{
 			{
 				"obj1", "0", "0",
 				"272528", "statement_info", "system", "272500",
-				"", "r", "record each statement and stats info[mo_no_del_hint]",
+				"", "r", "record each statement and stats info[mo_no_del_hint]", "",
 			},
 		},
 	}
@@ -1808,6 +1816,8 @@ func TestCreateTableDDLFromCatalogViews_PreservesCompositeClusterByFromMoColumns
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(272528, moTablesView, moColumnsView)
 	assert.Contains(t, ddl, "CREATE TABLE `statement_info`")
 	assert.Contains(t, ddl, "`request_at` DATETIME(6) NOT NULL")
@@ -1912,6 +1922,8 @@ func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(101, moTablesView, moColumnsView)
 	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `ckp_constraints`.`parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
 }
@@ -2041,13 +2053,13 @@ func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint
 		Headers: []string{
 			"object", "block", "row",
 			"rel_id", "relname", "reldatabase", "reldatabase_id",
-			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint", catalog.SystemRelAttr_ExtraInfo,
 		},
 		Rows: [][]string{
 			{
 				"obj1", "0", "0",
 				"334100", "t_int_signed", "ckp_types", "334099",
-				"", "r", "", "", "",
+				"", "r", "", "", "", "",
 			},
 		},
 	}
@@ -2086,6 +2098,8 @@ func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint
 		},
 	}
 
+	setCatalogViewNonNullForTest(moTablesView)
+	setCatalogViewNonNullForTest(moColumnsView)
 	ddl := createTableDDLFromCatalogViews(334100, moTablesView, moColumnsView)
 	assert.Contains(t, ddl, "`id` INT NOT NULL")
 	assert.NotContains(t, ddl, "PRIMARY KEY")
@@ -3111,4 +3125,16 @@ func TestParseCSVRowOrder(t *testing.T) {
 
 	_, err = ParseCSVRowOrder("unknown")
 	require.Error(t, err)
+}
+
+// Synthetic catalog cells are explicitly non-NULL unless a test says otherwise.
+func setCatalogViewNonNullForTest(view *LogicalTableView) {
+	if view == nil {
+		return
+	}
+	view.NullsKnown = true
+	view.RowNulls = make([][]uint64, len(view.Rows))
+	for i := range view.RowNulls {
+		view.RowNulls[i] = make([]uint64, (view.DataWidth()+63)/64)
+	}
 }

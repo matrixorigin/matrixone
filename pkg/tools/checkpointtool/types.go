@@ -85,8 +85,12 @@ type ComposedView struct {
 
 // LogicalTableView contains a tombstone-applied table view for a checkpoint table.
 type LogicalTableView struct {
-	Headers           []string
-	Rows              [][]string
+	Headers []string
+	Rows    [][]string
+	// RowNulls records data-cell NULL/physically absent bits for catalog rows.
+	// A nil bitmap is unknown, not proof that every cell is non-NULL.
+	RowNulls          [][]uint64
+	NullsKnown        bool
 	ColTypes          []types.Type // column types for data columns (after meta cols)
 	ColSeqNums        []uint16     // object seqnums for data columns (after meta cols)
 	PhysicalRows      int
@@ -94,6 +98,13 @@ type LogicalTableView struct {
 	VisibleRows       int
 	Truncated         bool
 	MaterializedBytes int64
+}
+
+func (v *LogicalTableView) cellNull(row, column int) (bool, bool) {
+	if v == nil || !v.NullsKnown || row < 0 || row >= len(v.RowNulls) || column < 0 || column >= v.DataWidth() || column/64 >= len(v.RowNulls[row]) {
+		return false, false
+	}
+	return v.RowNulls[row][column/64]&(uint64(1)<<uint(column%64)) != 0, true
 }
 
 var logicalTableViewMetaHeaders = []string{"object", "block", "row"}

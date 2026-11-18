@@ -50,7 +50,7 @@ func isEnumPlanType(typ *plan.Type) bool {
 // path should populate Enumvalues on a T_uint64 type.
 func sameTypeMemberDomain(left, right *plan.Type) bool {
 	if left.Id == int32(types.T_enum) && right.Id == int32(types.T_enum) {
-		return types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding)
+		return left.EnumCollation == right.EnumCollation && types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding)
 	}
 	return left.Enumvalues == right.Enumvalues && left.EnumEncoding == right.EnumEncoding
 }
@@ -62,6 +62,14 @@ func mysqlSpecialTypeArgs(typ *plan.Type, value *plan.Expr) []*plan.Expr {
 		args = append(args, makePlan2Int64ConstExprWithType(int64(typ.EnumEncoding)))
 	}
 	return args
+}
+
+func enumValueToIndexArgs(typ *plan.Type, value *plan.Expr) []*plan.Expr {
+	if isEnumPlanType(typ) && typ.EnumCollation != 0 {
+		return []*plan.Expr{makePlan2StringConstExprWithType(typ.Enumvalues), value,
+			makePlan2Int64ConstExprWithType(int64(typ.EnumEncoding)), makePlan2Int64ConstExprWithType(int64(typ.EnumCollation))}
+	}
+	return mysqlSpecialTypeArgs(typ, value)
 }
 
 func isSetPlanType(typ *plan.Type) bool {
@@ -90,7 +98,10 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 		if err != nil {
 			return nil, true, err
 		}
-		index, err := mysqlEnumMembersLiteralIndex(members, value)
+		if err := types.ValidateEnumCollation(targetType.EnumCollation); err != nil {
+			return nil, true, err
+		}
+		index, err := mysqlEnumMembersLiteralIndex(members, value, targetType.EnumCollation)
 		if err != nil {
 			index = 0 // invalid ENUM values are stored as the empty-error member
 		}
@@ -121,7 +132,7 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	return nil, false, nil
 }
 
-func mysqlEnumMembersLiteralIndex(members types.EnumMembers, value *tree.NumVal) (types.Enum, error) {
+func mysqlEnumMembersLiteralIndex(members types.EnumMembers, value *tree.NumVal, collation uint32) (types.Enum, error) {
 	switch value.ValType {
 	case tree.P_int64:
 		v, ok := value.Int64()
@@ -136,7 +147,7 @@ func mysqlEnumMembersLiteralIndex(members types.EnumMembers, value *tree.NumVal)
 		}
 		return members.ParseValue(uint16(v))
 	default:
-		return members.Parse(value.String())
+		return members.ParseCollated(value.String(), collation)
 	}
 }
 
@@ -494,7 +505,18 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 			if value == "" {
 				return false
 			} // Ordinal zero has the same display.
-			key := enumFoldKey(value)
+			var key string
+			if typ.EnumCollation != 0 {
+				if strings.HasSuffix(value, " ") {
+					return false
+				}
+				key, err = types.EnumMemberKey(typ.EnumCollation, value)
+				if err != nil {
+					return false
+				}
+			} else {
+				key = enumFoldKey(value)
+			}
 			if _, exists := seen[key]; exists {
 				return false
 			}
@@ -945,13 +967,14 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
-		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, safeDisplay))
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, safeDisplay))
 		if err != nil {
 			return nil, err
 		}
 		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
 		numericExpr.Typ.Enumvalues = storageType.Enumvalues
 		numericExpr.Typ.EnumEncoding = storageType.EnumEncoding
+		numericExpr.Typ.EnumCollation = storageType.EnumCollation
 
 		numericZero := &plan.Expr{
 			Typ: *DeepCopyType(storageType),
@@ -968,6 +991,7 @@ func makeMySQLSpecialNumericValue(
 		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
 		recovered.Typ.Enumvalues = storageType.Enumvalues
 		recovered.Typ.EnumEncoding = storageType.EnumEncoding
+		recovered.Typ.EnumCollation = storageType.EnumCollation
 		return recovered, nil
 	}
 
@@ -997,13 +1021,14 @@ func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, stora
 	if err != nil {
 		return nil, err
 	}
-	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, DeepCopyExpr(displayExpr)))
+	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, DeepCopyExpr(displayExpr)))
 	if err != nil {
 		return nil, err
 	}
 	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
 	orderKey.Typ.Enumvalues = storageType.Enumvalues
 	orderKey.Typ.EnumEncoding = storageType.EnumEncoding
+	orderKey.Typ.EnumCollation = storageType.EnumCollation
 	return orderKey, nil
 }
 
@@ -1029,8 +1054,11 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 	}
 
 	args := []tree.Expr{tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char), astExpr}
-	if targetType.Id == int32(types.T_enum) && targetType.EnumEncoding != 0 {
+	if targetType.Id == int32(types.T_enum) && (targetType.EnumEncoding != 0 || (funcName == valueToIndex && targetType.EnumCollation != 0)) {
 		args = append(args, tree.NewNumVal(int64(targetType.EnumEncoding), strconv.FormatUint(uint64(targetType.EnumEncoding), 10), false, tree.P_int64))
+	}
+	if funcName == valueToIndex && isEnumPlanType(&targetType) && targetType.EnumCollation != 0 {
+		args = append(args, tree.NewNumVal(int64(targetType.EnumCollation), strconv.FormatUint(uint64(targetType.EnumCollation), 10), false, tree.P_int64))
 	}
 	return &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),

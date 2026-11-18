@@ -98,11 +98,7 @@ func ChangeColumn(
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	remapAlterColumnSource(alterCtx, oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oCol.ColId]; ok {
 		tmpCol.Name = newColName
@@ -231,6 +227,16 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCollate:
+			if !isEnumPlanType(&colType) {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
+			}
+		case *tree.AttributeCharset:
+			// Before ENUM charset attributes were retained, the ordinary
+			// MODIFY/CHANGE path rejected the parser's nil placeholder.
+			if !isEnumPlanType(&colType) {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", nil)
+			}
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}

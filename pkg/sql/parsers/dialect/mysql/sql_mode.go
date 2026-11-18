@@ -14,7 +14,59 @@
 
 package mysql
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
+
+// SystemSQLModes is the ordered set accepted by the sql_mode system variable.
+// Its order defines the corresponding SET bit values.
+func SystemSQLModes() []string {
+	return []string{
+		"ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES",
+		"ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE",
+		"MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES",
+		"NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION",
+		"NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY",
+		"PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT",
+		"STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL",
+	}
+}
+
+// IsLegacySQLMode reports only strings the old SET formatter could have
+// emitted when ANSI was selected. Preserve composite values verbatim: some
+// consumers used substring checks while the parser ignored the glued token.
+func IsLegacySQLMode(mode string) bool {
+	if mode == "ANS" {
+		return true
+	}
+	if len(mode) > 4096 || !strings.HasPrefix(mode, "ANSI") {
+		return false
+	}
+	parts := strings.Split(mode, ",")
+	modes := SystemSQLModes()
+	previous := slices.Index(modes, strings.TrimPrefix(parts[0], "ANSI"))
+	if previous <= 0 {
+		return false
+	}
+	for _, part := range parts[1:] {
+		index := slices.Index(modes, part)
+		if index <= previous {
+			return false
+		}
+		previous = index
+	}
+	return true
+}
+
+// NormalizeLegacySQLMode repairs the old SQL-mode SET formatter's standalone ANSI
+// value. The stored "ANS" was unrecognized by the parser and had no effect.
+func NormalizeLegacySQLMode(mode string) string {
+	if mode == "ANS" {
+		return ""
+	}
+	return mode
+}
 
 type SQLModeFlag uint8
 

@@ -256,15 +256,33 @@ func TestGroupedNumericFramedEnumPlan(t *testing.T) {
 	require.Equal(t, encoding, found[0].Typ.EnumEncoding)
 }
 
+func TestGroupedNumericCollatedEnumPlan(t *testing.T) {
+	mock := newMySQLSpecialOrderMock()
+	mock.ctxt.tables["enum_order_t"].Cols[1].Typ.Enumvalues = "A,a"
+	mock.ctxt.tables["enum_order_t"].Cols[1].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	p, err := runOneStmt(mock, t, "select e+0 from enum_order_t group by e")
+	require.NoError(t, err)
+	found := groupedNumericFunctions(p, moEnumCastValueToIndexFun)
+	require.NotEmpty(t, found)
+	require.Len(t, found[0].GetF().Args, 4)
+	_, overload := planfunction.DecodeOverloadID(found[0].GetF().Func.Obj)
+	require.Equal(t, int32(2), overload)
+	require.Equal(t, types.EnumCollationUTF8Bin, found[0].Typ.EnumCollation)
+
+	identity := found[0].GetF().Args[3].GetLit().GetI64Val()
+	require.Equal(t, int64(types.EnumCollationUTF8Bin), identity)
+}
+
 func TestGroupedEnumNumericExecution(t *testing.T) {
 	for _, domain := range []struct {
-		name    string
-		members []string
-	}{{"legacy", []string{"2", "red"}}, {"framed", []string{"a,b", "red"}}} {
+		name      string
+		members   []string
+		collation uint32
+	}{{"legacy", []string{"2", "red"}, types.EnumCollationLegacy}, {"framed", []string{"a,b", "red"}, types.EnumCollationLegacy}, {"binary duplicate labels", []string{"A", "a"}, types.EnumCollationUTF8Bin}} {
 		t.Run(domain.name, func(t *testing.T) {
 			payload, encoding, err := types.EncodeEnumMembers(domain.members)
 			require.NoError(t, err)
-			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding}
+			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding, EnumCollation: domain.collation}
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			null := makePlan2NullConstExprWithType()
@@ -277,7 +295,7 @@ func TestGroupedEnumNumericExecution(t *testing.T) {
 			}{
 				{"zero", makePlan2StringConstExprWithType(""), 0, false},
 				{"first", makePlan2StringConstExprWithType(domain.members[0]), 1, false},
-				{"second", makePlan2StringConstExprWithType("red"), 2, false},
+				{"second", makePlan2StringConstExprWithType(domain.members[1]), 2, false},
 				{"null", null, 0, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -298,6 +316,17 @@ func TestGroupedEnumNumericExecution(t *testing.T) {
 						require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint16](out)[0])
 					}
 				})
+			}
+			if domain.collation == types.EnumCollationUTF8Bin {
+				expr, err := makeMySQLSpecialNumericValue(context.Background(), makePlan2StringConstExprWithType("a"), typ)
+				require.NoError(t, err)
+				require.Equal(t, types.EnumCollationUTF8Bin, expr.Typ.EnumCollation)
+				exec, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer exec.Free()
+				out, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, uint16(2), vector.MustFixedColWithTypeCheck[uint16](out)[0])
 			}
 		})
 	}

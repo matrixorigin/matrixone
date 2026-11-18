@@ -4166,15 +4166,15 @@ alter_option:
     }
 |   able_type KEYS
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterKeys)
     }
 |   space_type TABLESPACE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterTablespace)
     }
 |   FORCE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterForce)
     }
 |   LOCK equal_opt lock_type
     {
@@ -4182,7 +4182,7 @@ alter_option:
     }
 |   with_type VALIDATION
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewLegacyAlterNoopOption($1, tree.LegacyAlterValidation)
     }
 
 rename_type:
@@ -11666,7 +11666,7 @@ column_attribute_elem:
     }
 |   default_opt CHARACTER SET equal_opt ident
     {
-        $$ = nil
+        $$ = tree.NewAttributeCharset($5.Compare())
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {

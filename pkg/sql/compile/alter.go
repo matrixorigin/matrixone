@@ -1249,6 +1249,13 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	}
 	opt := alterCopyStatementOption(alterCopyOpt)
 	insertTmpDataSQL := alterCopySQLAtLineageSnapshot(qry.InsertTmpDataSql, lineagePlan)
+	if plan2.NeedsAlterEnumTransfer(qry.TableDef, qry.CopyTableDef) {
+		opt = opt.WithAlterEnumTransfer(&executor.AlterEnumTransferSpec{
+			AccountID: accountId, Database: dbName, SourceID: oldId,
+			TargetID: newRel.GetTableID(c.proc.Ctx), Source: qry.TableDef,
+			Target: qry.CopyTableDef, SQL: insertTmpDataSQL,
+		})
+	}
 	err = func() error {
 		if !shouldEnableAlterCopyPipelineFlush(alterCopyOpt) {
 			return c.runSqlWithOptions(insertTmpDataSQL, opt)

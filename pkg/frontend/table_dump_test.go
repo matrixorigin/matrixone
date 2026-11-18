@@ -41,7 +41,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -851,6 +853,29 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestTableDumpManifestPreservesEnumIdentity(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(e ENUM('A','a') COLLATE utf8mb4_bin)",
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	legacySQL, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, legacySQL, "enum('A','a')")
+	require.NotContains(t, legacySQL, "utf8mb4_bin")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	binarySQL, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, binarySQL, "COLLATE utf8mb4_bin")
+	def.EnumUnsupportedDefault = "utf8mb4_unicode_ci"
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationLegacy
+	_, err = tableDumpManifestCreateSQL(def)
+	require.ErrorContains(t, err, "cannot replay a legacy ENUM")
+}
+
 func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalETLFS("fixture", t.TempDir())
@@ -1285,4 +1310,233 @@ func TestTableSchemaHashFallback(t *testing.T) {
 	require.Error(t, err)
 	_, err = tableSchemaHash(&plan.TableDef{Createsql: "not valid sql", Cols: []*plan.ColDef{{Name: "a"}}})
 	require.Error(t, err)
+}
+
+func TestTableDumpManifestReconstructsLegacyOrdinaryTable(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(v varchar(32)) COLLATE utf8mb4_bin",
+		Cols: []*plan.ColDef{{
+			Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 32},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "varchar(32)")
+	require.NotContains(t, ddl, "COLLATE")
+
+	def.DefaultCharset = types.EnumCollationUTF8Bin
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "COLLATE=utf8mb4_bin")
+
+	def.TableType = catalog.SystemClusterRel
+	def.DefaultCharset = 0
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl, "unverified CREATE SQL must not be published")
+}
+
+func TestTableDumpManifestRejectsUnrepresentableLegacyEnum(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemOrdinaryRel,
+		DefaultCharset: types.EnumCollationUTF8Bin,
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	_, err := tableDumpManifestCreateSQL(def)
+	require.Error(t, err, "a table default would reauthor the legacy ENUM identity")
+	def.DefaultCharset = 0
+	def.Cols[0].Typ.Enumvalues = ""
+	_, err = tableDumpManifestCreateSQL(def)
+	require.Error(t, err, "a singleton empty legacy domain reauthors its encoding")
+}
+
+func TestTableDumpRejectsUnverifiableTextHashIdentity(t *testing.T) {
+	def := &plan.TableDef{
+		Name: "source", TableType: catalog.SystemClusterRel,
+		Createsql: "CREATE CLUSTER TABLE source(id int primary key, e enum('A','a') COLLATE utf8mb4_bin)",
+		Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	require.NoError(t, validateTableDumpSchema(def), "legacy identity remains admissible")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationUTF8Bin
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify ENUM collation identity")
+	def.Cols[0].Typ.EnumCollation = types.EnumCollationLegacy
+	def.Cols[0].Typ.EnumEncoding = types.EnumEncodingFramed
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify ENUM domain encoding")
+	def.Cols[0].Typ.EnumEncoding = types.EnumEncodingLegacy
+	def.DefaultCharset = types.EnumCollationUTF8Bin
+	require.ErrorContains(t, validateTableDumpSchema(def), "cannot verify table collation identity")
+	def.TableType = catalog.SystemOrdinaryRel
+	require.NoError(t, validateTableDumpSchema(def), "typed hashes cover ordinary tables")
+}
+
+func TestTableDumpSchemaHashDistinguishesAmbiguousDomains(t *testing.T) {
+	table := func(typ types.T, values string) *plan.TableDef {
+		return &plan.TableDef{Name: "__table_dump_target__", TableType: catalog.SystemOrdinaryRel,
+			Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(typ), Enumvalues: values}, Default: &plan.Default{NullAbility: true}}}}
+	}
+	for _, tc := range []struct {
+		name          string
+		typ           types.T
+		first, second string
+	}{
+		{"enum newline", types.T_enum, "a\nb", `a\nb`},
+		{"enum nul", types.T_enum, "a\x00b", `a\0b`},
+		{"set case", types.T_uint64, "Alpha,beta", "alpha,beta"},
+		{"set dotted I", types.T_uint64, "i", "İ"},
+		{"enum invalid UTF8", types.T_enum, string([]byte{0xff}), "�"},
+		{"set invalid UTF8", types.T_uint64, string([]byte{0xff}), "�"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := table(tc.typ, tc.first), table(tc.typ, tc.second)
+			oldLeft, err := sqlplan.ConstructCreateTableSQLForSchemaHash(left)
+			require.NoError(t, err)
+			oldRight, err := sqlplan.ConstructCreateTableSQLForSchemaHash(right)
+			require.NoError(t, err)
+			require.Equal(t, oldLeft, oldRight, "fixture must exercise a historical collision")
+			leftHash, err := tableSchemaHash(left)
+			require.NoError(t, err)
+			rightHash, err := tableSchemaHash(right)
+			require.NoError(t, err)
+			require.NotEqual(t, leftHash, rightHash)
+			legacyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldLeft)))
+			require.NotEqual(t, legacyHash, leftHash, "old ambiguous archives must not match either target")
+			require.NotEqual(t, legacyHash, rightHash, "the reverse target must also reject an old archive")
+			same := table(tc.typ, tc.first)
+			same.Name = "different_table_name"
+			sameHash, err := tableSchemaHash(same)
+			require.NoError(t, err)
+			require.Equal(t, leftHash, sameHash)
+		})
+	}
+	// Keep the released digest where the legacy rendering is injective.
+	for _, tc := range []struct {
+		name   string
+		typ    types.T
+		values string
+	}{
+		{"plain enum", types.T_enum, "red,blue"},
+		{"numeric set", types.T_uint64, "1,2"},
+		{"uncased set", types.T_uint64, "中,☃"},
+		{"dotless set", types.T_uint64, "ı"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stable := table(tc.typ, tc.values)
+			canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(stable)
+			require.NoError(t, err)
+			hash, err := tableSchemaHash(stable)
+			require.NoError(t, err)
+			require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(canonical))), hash)
+		})
+	}
+}
+
+func TestTableDumpManifestOmitsModeSensitiveDDL(t *testing.T) {
+	enumTable := func(value string) *plan.TableDef {
+		return &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: value}, Default: &plan.Default{NullAbility: true},
+		}}}
+	}
+	ddl, err := tableDumpManifestCreateSQL(enumTable("realistic"))
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl, "the word REAL inside a string does not change its meaning")
+	ddl, err = tableDumpManifestCreateSQL(enumTable("A,a"))
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl)
+	for _, mode := range mysql.ParserSQLModeCombinations() {
+		stmt, err := mysql.ParseOneWithSQLMode(context.Background(), ddl, 1, mode)
+		require.NoErrorf(t, err, "mode %s", mode)
+		create, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok)
+		column, ok := create.Defs[0].(*tree.ColumnTableDef)
+		require.True(t, ok)
+		typ, ok := column.Type.(*tree.T)
+		require.True(t, ok)
+		require.Equal(t, []string{"A", "a"}, typ.InternalType.EnumValues)
+		stmt.Free()
+	}
+	for _, value := range []string{`a\b`, "a\nb", string([]byte{0xff})} {
+		ddl, err = tableDumpManifestCreateSQL(enumTable(value))
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	for _, origin := range []string{`"text"`, `('a'||'b')`, `(cast(1 as real))`} {
+		def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}, Default: &plan.Default{NullAbility: true, OriginString: origin},
+		}}}
+		ddl, err = tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}}},
+		Indexes: []*plan.IndexDef{{IndexName: "idx", Parts: []string{"v"}, IndexAlgoTableType: "regular", Comment: `a\b`}}}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+}
+
+func TestTableDumpManifestOmitsUnprovenExpressions(t *testing.T) {
+	table := func() *plan.TableDef {
+		return &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+			Name: "d", Typ: plan.Type{Id: int32(types.T_date)}, Default: &plan.Default{NullAbility: true},
+		}}}
+	}
+	for _, origin := range []string{"(cast('0000-00-00' as date))", "'2026-01-01'", "current_date()"} {
+		def := table()
+		def.Cols[0].Default.OriginString = origin
+		ddl, err := tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl, "default %s needs its original evaluation context", origin)
+	}
+	def := table()
+	def.Cols[0].Default.OriginString = "NULL"
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.NotEmpty(t, ddl)
+
+	def = table()
+	def.Cols[0].GeneratedCol = &plan.GeneratedCol{Expr: &plan.Expr{}, OriginString: "cast('0000-00-00' as date)"}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+
+	def = table()
+	def.Cols[0].OnUpdate = &plan.OnUpdate{Expr: &plan.Expr{}, OriginString: "current_date()"}
+	ddl, err = tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+
+	def = table()
+	for _, original := range []string{
+		"CREATE TABLE source (d DATE, CHECK (cast('0000-00-00' as date) IS NULL))",
+		"CREATE TABLE source (d DATE CHECK (d > cast('0000-00-00' as date)))",
+	} {
+		def.Createsql = original
+		ddl, err = tableDumpManifestCreateSQL(def)
+		require.NoError(t, err)
+		require.Empty(t, ddl)
+	}
+	// Omitting optional DDL must not bypass validation of a later ENUM column.
+	def = table()
+	def.Cols[0].Default.OriginString = "'2026-01-01'"
+	def.Cols = append(def.Cols, &plan.ColDef{Name: "e", Typ: plan.Type{Id: int32(types.T_enum)}, Default: &plan.Default{NullAbility: true}})
+	_, err = tableDumpManifestCreateSQL(def)
+	require.ErrorContains(t, err, "cannot faithfully reconstruct ENUM metadata")
+}
+
+func TestTableDumpManifestOmitsUnverifiableLegacyClusterDDL(t *testing.T) {
+	def := &plan.TableDef{Name: "source", TableType: catalog.SystemClusterRel,
+		Createsql: "CREATE CLUSTER TABLE source (id int primary key, e enum('A','a'))",
+		Cols:      []*plan.ColDef{{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a"}, Default: &plan.Default{NullAbility: true}}}}
+	require.NoError(t, validateTableDumpSchema(def))
+	ddl, err := tableDumpManifestCreateSQL(def)
+	require.NoError(t, err)
+	require.Empty(t, ddl)
 }

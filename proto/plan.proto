@@ -34,6 +34,8 @@ message Type {
   string table = 6;
   string enumvalues = 7;
   uint32 enum_encoding = 8;
+  // ENUM member-lookup collation. Zero preserves legacy lookup semantics.
+  uint32 enum_collation = 15;
 }
 
 message msgHeader {
@@ -470,6 +472,10 @@ message TableDef {
   string original_name = 37;
   // Persistent cache epoch for AUTO_INCREMENT allocation.
   uint32 auto_incr_epoch = 38;
+  // Default ENUM collation declared on this table; zero preserves legacy behavior.
+  uint32 default_charset = 39;
+  // Explicit table collation not implemented for ENUM inheritance.
+  string enum_unsupported_default = 43;
 }
 
 message TableFunction {

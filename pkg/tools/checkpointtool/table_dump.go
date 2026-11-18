@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -126,6 +127,13 @@ type TableColumn struct {
 	ClusterBy        bool
 	EnumValues       string
 	EnumEncoding     uint32
+	EnumCollation    uint32
+	// EnumValuesAreRaw identifies an atttyp-backed catalog member payload.
+	EnumValuesAreRaw     bool
+	enumDomainUnverified bool
+	enumDefaultNoExpr    bool
+	enumDefaultLiteral   bool
+	enumDefaultError     string
 }
 
 type TableUniqueKey struct {
@@ -149,17 +157,22 @@ type TableForeignKey struct {
 
 // TableSchema holds the decoded schema for one user table.
 type TableSchema struct {
-	TableName    string
-	DatabaseName string
-	AccountID    uint32
-	Columns      []TableColumn // sorted by Position
-	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
-	Comment      string
-	UniqueKeys   []TableUniqueKey
-	PrimaryKey   []string
-	ForeignKeys  []TableForeignKey
-	Partition    string
-	ClusterBy    []string
+	TableName              string
+	DatabaseName           string
+	AccountID              uint32
+	Columns                []TableColumn // sorted by Position
+	CreateSQL              string        // raw CREATE TABLE from mo_tables.rel_createsql
+	ViewDefinition         string        // stored view definition and creation context
+	ViewDefinitionKnown    bool
+	Comment                string
+	UniqueKeys             []TableUniqueKey
+	PrimaryKey             []string
+	ForeignKeys            []TableForeignKey
+	Partition              string
+	ClusterBy              []string
+	DefaultCharset         uint32
+	EnumUnsupportedDefault string
+	enumDefaultDecodeError string
 }
 
 type TableCatalogEntry struct {
@@ -476,7 +489,7 @@ func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColum
 	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, comment, partition, primaryKey, uniqueKeys, foreignKeys, nil)
 }
 
-func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey, clusterBy []string) string {
+func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey, clusterBy []string, tableCollation ...string) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
@@ -497,6 +510,13 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		sb.WriteString("  ")
 		sb.WriteString(quoteDDLIdent(col.Name))
 		sqlType := renderColumnSQLType(col)
+		if col.EnumCollation != types.EnumCollationLegacy {
+			name, ok := checkpointEnumCollationName(col.EnumCollation)
+			if !ok || !strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") || sqlType == "" {
+				return ""
+			}
+			sqlType += " CHARACTER SET utf8mb4 COLLATE " + name
+		}
 		if col.EnumEncoding != 0 && sqlType == "" {
 			return ""
 		}
@@ -579,6 +599,9 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	sb.WriteString(")")
+	if len(tableCollation) > 0 {
+		sb.WriteString(tableCollation[0])
+	}
 	if comment != "" {
 		sb.WriteString(" COMMENT=")
 		sb.WriteString(quoteDDLString(comment))
@@ -608,7 +631,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
 	upperType := strings.ToUpper(sqlType)
-	if col.EnumEncoding != 0 {
+	if col.EnumValuesAreRaw || col.EnumEncoding != 0 {
 		if upperType != "ENUM" {
 			return ""
 		}
@@ -746,12 +769,16 @@ func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
 		if col.AutoIncrement {
 			sb.WriteString(" AUTO_INCREMENT")
 		}
-		if col.HasDefault && !col.AutoIncrement {
+		if col.HasDefault && !col.AutoIncrement && !col.enumDefaultNoExpr {
 			if strings.TrimSpace(col.Default) == "" {
 				sb.WriteString(" DEFAULT NULL")
 			} else {
 				sb.WriteString(" DEFAULT ")
-				sb.WriteString(formatDDLDefault(col.Default))
+				if col.enumDefaultLiteral {
+					sb.WriteString(col.Default)
+				} else {
+					sb.WriteString(formatDDLDefault(col.Default))
+				}
 			}
 		}
 		if col.OnUpdate != "" {
@@ -955,10 +982,178 @@ func formatDDLDefault(defaultExpr string) string {
 	return defaultExpr
 }
 
+func checkpointEnumCollationName(id uint32) (string, bool) {
+	switch id {
+	case types.EnumCollationUTF8Bin:
+		return "utf8mb4_bin", true
+	case types.EnumCollationGeneralCI:
+		return "utf8mb4_general_ci", true
+	default:
+		return "", false
+	}
+}
+
+// ValidateEnumReplaySchema rejects checkpoint metadata that SQL cannot recreate
+// without changing ENUM assignment or the table default for future columns.
+func ValidateEnumReplaySchema(schema *TableSchema) error {
+	if schema == nil {
+		return moerr.NewInvalidInputNoCtxf("missing checkpoint table schema")
+	}
+	if schema.enumDefaultDecodeError != "" {
+		return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM default: %s", schema.enumDefaultDecodeError)
+	}
+	if schema.DefaultCharset != types.EnumCollationLegacy {
+		if _, ok := checkpointEnumCollationName(schema.DefaultCharset); !ok || schema.EnumUnsupportedDefault != "" {
+			return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM default %d", schema.DefaultCharset)
+		}
+	}
+	if marker := schema.EnumUnsupportedDefault; marker != "" {
+		if !isPrintableSQLText(marker) || strings.EqualFold(marker, "utf8mb4_bin") || strings.EqualFold(marker, "utf8mb4_general_ci") {
+			return moerr.NewInvalidInputNoCtxf("invalid checkpoint table ENUM collation marker")
+		}
+	}
+	for _, col := range schema.Columns {
+		if !strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") {
+			if col.EnumCollation != types.EnumCollationLegacy {
+				return moerr.NewInvalidInputNoCtxf("ENUM identity on non-ENUM column %q", col.Name)
+			}
+			continue
+		}
+		if col.enumDomainUnverified {
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM metadata on column %q", col.Name)
+		}
+		if col.enumDefaultError != "" {
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM default on column %q: %s", col.Name, col.enumDefaultError)
+		}
+		if err := types.ValidateEnumCollation(col.EnumCollation); err != nil {
+			return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM identity on column %q", col.Name), err)
+		}
+		if col.EnumValuesAreRaw {
+			if _, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding); err != nil {
+				return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM domain on column %q", col.Name), err)
+			}
+			// CREATE ENUM('') uses framed encoding. An old empty payload has
+			// different planner semantics and cannot be faithfully recreated.
+			if col.EnumEncoding == types.EnumEncodingLegacy && col.EnumValues == "" {
+				return moerr.NewInvalidInputNoCtxf("cannot replay legacy empty ENUM column %q", col.Name)
+			}
+		}
+		if col.EnumCollation == types.EnumCollationLegacy && (schema.DefaultCharset != types.EnumCollationLegacy || schema.EnumUnsupportedDefault != "") {
+			return moerr.NewInvalidInputNoCtxf("cannot replay legacy ENUM column %q under a table collation", col.Name)
+		}
+	}
+	return nil
+}
+
+// ValidateEnumLoadReplay checks the decimal ordinals written by checkpoint CSV
+// against LOAD DATA's label-first ENUM lookup. The check is per schema, not per
+// row; a possibly ambiguous domain is rejected before publishing restore.sql.
+func ValidateEnumLoadReplay(schema *TableSchema) error {
+	if err := ValidateEnumReplaySchema(schema); err != nil {
+		return err
+	}
+	for _, col := range tableLoadColumns(schema.Columns) {
+		if !strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") {
+			continue
+		}
+		if !col.EnumValuesAreRaw {
+			return moerr.NewInvalidInputNoCtxf("cannot verify checkpoint ENUM domain on column %q", col.Name)
+		}
+		members, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding)
+		if err != nil {
+			return errors.Join(moerr.NewInvalidInputNoCtxf("invalid ENUM domain on column %q", col.Name), err)
+		}
+		digitWeights := make(map[string]byte, 10)
+		if col.EnumCollation == types.EnumCollationGeneralCI {
+			for digit := byte('0'); digit <= '9'; digit++ {
+				key, keyErr := types.EnumMemberKey(col.EnumCollation, string([]byte{digit}))
+				if keyErr != nil {
+					return keyErr
+				}
+				if prior, ok := digitWeights[key]; ok && prior != digit {
+					return moerr.NewInvalidInputNoCtxf("ambiguous ENUM numeric collation on column %q", col.Name)
+				}
+				digitWeights[key] = digit
+			}
+		}
+		// Historical data can contain any uint16 ordinal, even one beyond the
+		// declared member count. Track the first match for the full domain.
+		var seen [1 << 10]uint64
+		for i, member := range members {
+			var digits string
+			if col.EnumCollation == types.EnumCollationGeneralCI {
+				// A physical ordinal is at most five ASCII digits. General-CI
+				// emits one four-byte weight per rune; longer members cannot
+				// match and need no potentially large collation key allocation.
+				if len(member) > 5*utf8.UTFMax || utf8.RuneCountInString(member) > 5 {
+					continue
+				}
+				key, keyErr := types.EnumMemberKey(col.EnumCollation, member)
+				if keyErr != nil {
+					return keyErr
+				}
+				if len(key) == 0 || len(key)%4 != 0 || len(key) > 20 {
+					continue
+				}
+				var candidate [5]byte
+				valid := true
+				for j := 0; j < len(key); j += 4 {
+					digit, ok := digitWeights[key[j:j+4]]
+					if !ok {
+						valid = false
+						break
+					}
+					candidate[j/4] = digit
+				}
+				if !valid {
+					continue
+				}
+				digits = string(candidate[:len(key)/4])
+			} else {
+				// EqualFold and binary matching both compare canonical ASCII
+				// decimal digits exactly; digits have no case-fold variants.
+				if len(member) == 0 || len(member) > 5 {
+					continue
+				}
+				digits = member
+			}
+			if len(digits) > 1 && digits[0] == '0' {
+				continue
+			}
+			ordinal, parseErr := strconv.Atoi(digits)
+			if parseErr != nil || ordinal < 0 || ordinal > types.MaxEnumLen || strconv.Itoa(ordinal) != digits {
+				continue
+			}
+			word, bit := ordinal>>6, uint(ordinal&63)
+			if seen[word]&(uint64(1)<<bit) != 0 {
+				continue
+			}
+			seen[word] |= uint64(1) << bit
+			if ordinal != i+1 {
+				return moerr.NewInvalidInputNoCtxf("cannot replay checkpoint ENUM column %q: decimal ordinal %d matches member %d", col.Name, ordinal, i+1)
+			}
+		}
+	}
+	return nil
+}
+
+func checkpointTableCollationClause(schema *TableSchema) string {
+	if schema.EnumUnsupportedDefault != "" {
+		return " COLLATE=" + sqlquote.Ident(schema.EnumUnsupportedDefault)
+	}
+	if name, ok := checkpointEnumCollationName(schema.DefaultCharset); ok {
+		return " COLLATE=" + name
+	}
+	return ""
+}
+
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
 // checkpoint column metadata.
 func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 	if schema == nil {
+		return ""
+	}
+	if err := ValidateEnumReplaySchema(schema); err != nil {
 		return ""
 	}
 	if schema.TableName == "" || len(schema.Columns) == 0 {
@@ -984,7 +1179,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys, schema.ClusterBy)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys, schema.ClusterBy, checkpointTableCollationClause(schema))
 }
 
 func inferBuiltinCatalogLayout(
@@ -1093,6 +1288,170 @@ func fallbackCatalogColIndex(view *LogicalTableView, tableID uint64, colName str
 	return -1
 }
 
+// checkpointCatalogColumnIndex uses named or seqnum-mapped columns directly.
+// A purely positional catalog is safe only when every exact historical layout
+// gives this column the same position; a partial named layout cannot fall back.
+func checkpointCatalogColumnIndex(view *LogicalTableView, tableID uint64, column string) int {
+	if view == nil {
+		return -1
+	}
+	if idx := view.columnDataIndex(column); idx >= 0 {
+		return idx
+	}
+	if len(view.ColSeqNums) != 0 || !positionalCatalogHeaders(view) {
+		return -1
+	}
+	width := len(view.Headers) - logicalViewDataOffset(view)
+	found, result := false, -1
+	for _, match := range catalogLayoutMatches(width, tableID) {
+		if len(schemaForLayout(match.layout, tableID))+match.offset != width {
+			continue
+		}
+		candidate := catalogColIndexForLayout(match.layout, tableID, column, match.offset)
+		if found && candidate != result {
+			return -1
+		}
+		found, result = true, candidate
+	}
+	if !found {
+		return -1
+	}
+	return result
+}
+
+// checkpointEnumValuesIndex trusts an explicit header (or mapped seqnum), and
+// only uses positional history when the exact layout agrees with the columns
+// already selected for the same mo_columns row. Mixed named/positional or
+// ambiguous headers cannot prove an ENUM domain.
+func checkpointEnumValuesIndex(view *LogicalTableView, relID, name, typ, num, hidden, seq int) int {
+	if idx := view.columnDataIndex(catalog.SystemColAttr_EnumValues); idx >= 0 {
+		return idx
+	}
+	if len(view.ColSeqNums) != 0 || !positionalCatalogHeaders(view) {
+		return -1
+	}
+	width := len(view.Headers) - logicalViewDataOffset(view)
+	found, result := false, -1
+	for _, match := range catalogLayoutMatches(width, moColumnsID) {
+		if len(schemaForLayout(match.layout, moColumnsID))+match.offset != width {
+			continue
+		}
+		index := func(col string) int { return catalogColIndexForLayout(match.layout, moColumnsID, col, match.offset) }
+		if index(catalog.SystemColAttr_RelID) != relID || index(catalog.SystemColAttr_Name) != name || index(catalog.SystemColAttr_Type) != typ || index(catalog.SystemColAttr_Num) != num || index(catalog.SystemColAttr_IsHidden) != hidden || index(catalog.SystemColAttr_Seqnum) != seq {
+			return -1
+		}
+		candidate := index(catalog.SystemColAttr_EnumValues)
+		if found && candidate != result {
+			return -1
+		}
+		found, result = true, candidate
+	}
+	if !found {
+		return -1
+	}
+	return result
+}
+
+func positionalCatalogHeaders(view *LogicalTableView) bool {
+	if view == nil {
+		return false
+	}
+	for _, header := range view.Headers[logicalViewDataOffset(view):] {
+		if header == "" {
+			continue
+		}
+		if !strings.HasPrefix(header, "col_") {
+			return false
+		}
+		if _, err := strconv.Atoi(strings.TrimPrefix(header, "col_")); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func checkpointViewDefinitionIndex(view *LogicalTableView) int {
+	if idx := view.columnDataIndex(catalog.SystemRelAttr_ViewDef); idx >= 0 {
+		return idx
+	}
+	if len(view.ColSeqNums) != 0 || !positionalCatalogHeaders(view) {
+		return -1
+	}
+	width := len(view.Headers) - logicalViewDataOffset(view)
+	found, result := false, -1
+	for _, match := range catalogLayoutMatches(width, moTablesID) {
+		if len(schemaForLayout(match.layout, moTablesID))+match.offset != width {
+			continue
+		}
+		idx := catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_ViewDef, match.offset)
+		if found && idx != result {
+			return -1
+		}
+		found, result = true, idx
+	}
+	if !found {
+		return -1
+	}
+	return result
+}
+
+// checkpointExtraInfoIndex returns -1 only for a known catalog layout predating
+// extra_info, and -2 when the layout does not prove whether that field exists.
+func checkpointExtraInfoIndex(view *LogicalTableView) int {
+	if view == nil {
+		return -2
+	}
+	if index := view.columnDataIndex(catalog.SystemRelAttr_ExtraInfo); index >= 0 {
+		return index
+	}
+	headers := view.Headers[logicalViewDataOffset(view):]
+	// Named headers distinguish historical layouts even when widths overlap.
+	for _, layout := range knownCatalogLayouts() {
+		columns := schemaForLayout(layout, moTablesID)
+		for offset := 0; offset <= 2; offset++ {
+			if len(headers) != len(columns)+offset {
+				continue
+			}
+			matched := true
+			for i, name := range columns {
+				if headers[i+offset] != name {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return catalogColIndexForLayout(layout, moTablesID, catalog.SystemRelAttr_ExtraInfo, offset)
+			}
+		}
+	}
+	// A partial named or seqnum-mapped catalog does not prove a historical
+	// positional layout merely because its width happens to match one.
+	if len(view.ColSeqNums) != 0 || !positionalCatalogHeaders(view) {
+		return -2
+	}
+	// Positional headers are usable only when every matching exact-width layout
+	// agrees on the field position (including historical absence).
+	found := false
+	index := -2
+	for _, layout := range knownCatalogLayouts() {
+		columns := schemaForLayout(layout, moTablesID)
+		for offset := 0; offset <= 2; offset++ {
+			if len(headers) != len(columns)+offset {
+				continue
+			}
+			candidate := catalogColIndexForLayout(layout, moTablesID, catalog.SystemRelAttr_ExtraInfo, offset)
+			if found && candidate != index {
+				return -2
+			}
+			found, index = true, candidate
+		}
+	}
+	if !found {
+		return -2
+	}
+	return index
+}
+
 func catalogColIndexForLayout(layout catalogLayout, tableID uint64, colName string, offset int) int {
 	for i, name := range schemaForLayout(layout, tableID) {
 		if name == colName {
@@ -1189,35 +1548,59 @@ func buildTableSchemasForIDs(
 	return schemas
 }
 
-func groupCatalogRowsByUintColumn(view *LogicalTableView, columnName string) map[uint64][][]string {
-	result := make(map[uint64][][]string)
+func groupCatalogRowsByUintColumn(view *LogicalTableView, columnName string) map[uint64][]int {
+	result := make(map[uint64][]int)
 	if view == nil {
 		return result
 	}
 	column := view.columnDataIndex(columnName)
+	if column < 0 && len(view.ColSeqNums) == 0 && positionalCatalogHeaders(view) {
+		switch columnName {
+		case catalog.SystemColAttr_RelID:
+			column = checkpointCatalogColumnIndex(view, moColumnsID, columnName)
+		case catalog.SystemRelAttr_ID:
+			column = checkpointCatalogColumnIndex(view, moTablesID, columnName)
+		}
+	}
 	if column < 0 {
 		return result
 	}
 	dataOffset := logicalViewDataOffset(view)
-	for _, fullRow := range view.Rows {
+	for rowIdx, fullRow := range view.Rows {
 		row := fullRow[dataOffset:]
 		if column >= len(row) {
 			continue
 		}
 		id, ok := parseUintCell(row[column])
 		if ok {
-			result[id] = append(result[id], fullRow)
+			result[id] = append(result[id], rowIdx)
 		}
 	}
 	return result
 }
 
-func logicalViewWithRows(view *LogicalTableView, rows [][]string) *LogicalTableView {
+func logicalViewWithRows(view *LogicalTableView, rowIndexes []int) *LogicalTableView {
 	if view == nil {
 		return nil
 	}
 	copy := *view
-	copy.Rows = rows
+	copy.Rows = make([][]string, 0, len(rowIndexes))
+	if view.NullsKnown {
+		copy.RowNulls = make([][]uint64, 0, len(rowIndexes))
+	}
+	for _, row := range rowIndexes {
+		if row < 0 || row >= len(view.Rows) {
+			continue
+		}
+		copy.Rows = append(copy.Rows, view.Rows[row])
+		if view.NullsKnown {
+			if row < len(view.RowNulls) {
+				copy.RowNulls = append(copy.RowNulls, view.RowNulls[row])
+			} else {
+				copy.RowNulls = append(copy.RowNulls, nil)
+			}
+		}
+	}
 	return &copy
 }
 
@@ -1236,7 +1619,7 @@ func (r *CheckpointReader) getTableLogicalView(
 	if err != nil {
 		return nil, err
 	}
-	view, err := r.BuildLogicalTableView(ctx, snapshotTS, allData, allTomb)
+	view, err := r.buildLogicalTableViewLimited(ctx, snapshotTS, allData, allTomb, 0, 0, tableID == moColumnsID || tableID == moTablesID)
 	if err != nil {
 		return nil, err
 	}
@@ -1599,12 +1982,17 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		return nil
 	}
 	clone := &TableSchema{
-		TableName:    strings.Clone(schema.TableName),
-		DatabaseName: strings.Clone(schema.DatabaseName),
-		AccountID:    schema.AccountID,
-		CreateSQL:    strings.Clone(schema.CreateSQL),
-		Comment:      strings.Clone(schema.Comment),
-		Partition:    strings.Clone(schema.Partition),
+		TableName:              strings.Clone(schema.TableName),
+		DatabaseName:           strings.Clone(schema.DatabaseName),
+		AccountID:              schema.AccountID,
+		CreateSQL:              strings.Clone(schema.CreateSQL),
+		ViewDefinition:         strings.Clone(schema.ViewDefinition),
+		ViewDefinitionKnown:    schema.ViewDefinitionKnown,
+		Comment:                strings.Clone(schema.Comment),
+		Partition:              strings.Clone(schema.Partition),
+		DefaultCharset:         schema.DefaultCharset,
+		EnumUnsupportedDefault: strings.Clone(schema.EnumUnsupportedDefault),
+		enumDefaultDecodeError: strings.Clone(schema.enumDefaultDecodeError),
 	}
 	if len(schema.PrimaryKey) > 0 {
 		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
@@ -1622,23 +2010,29 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.Columns = make([]TableColumn, len(schema.Columns))
 		for i, col := range schema.Columns {
 			clone.Columns[i] = TableColumn{
-				Name:             strings.Clone(col.Name),
-				SQLType:          strings.Clone(col.SQLType),
-				Position:         col.Position,
-				PhysicalPosition: col.PhysicalPosition,
-				Unsigned:         col.Unsigned,
-				NotNull:          col.NotNull,
-				Default:          strings.Clone(col.Default),
-				HasDefault:       col.HasDefault,
-				OnUpdate:         strings.Clone(col.OnUpdate),
-				Generated:        strings.Clone(col.Generated),
-				GeneratedStored:  col.GeneratedStored,
-				Comment:          strings.Clone(col.Comment),
-				ConstraintType:   strings.Clone(col.ConstraintType),
-				AutoIncrement:    col.AutoIncrement,
-				ClusterBy:        col.ClusterBy,
-				EnumValues:       strings.Clone(col.EnumValues),
-				EnumEncoding:     col.EnumEncoding,
+				Name:                 strings.Clone(col.Name),
+				SQLType:              strings.Clone(col.SQLType),
+				Position:             col.Position,
+				PhysicalPosition:     col.PhysicalPosition,
+				Unsigned:             col.Unsigned,
+				NotNull:              col.NotNull,
+				Default:              strings.Clone(col.Default),
+				HasDefault:           col.HasDefault,
+				OnUpdate:             strings.Clone(col.OnUpdate),
+				Generated:            strings.Clone(col.Generated),
+				GeneratedStored:      col.GeneratedStored,
+				Comment:              strings.Clone(col.Comment),
+				ConstraintType:       strings.Clone(col.ConstraintType),
+				AutoIncrement:        col.AutoIncrement,
+				ClusterBy:            col.ClusterBy,
+				EnumValues:           strings.Clone(col.EnumValues),
+				EnumEncoding:         col.EnumEncoding,
+				EnumCollation:        col.EnumCollation,
+				EnumValuesAreRaw:     col.EnumValuesAreRaw,
+				enumDomainUnverified: col.enumDomainUnverified,
+				enumDefaultNoExpr:    col.enumDefaultNoExpr,
+				enumDefaultLiteral:   col.enumDefaultLiteral,
+				enumDefaultError:     strings.Clone(col.enumDefaultError),
 			}
 		}
 	}
@@ -3339,6 +3733,7 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
 		fallbackCatalogColIndex(view, moTablesID, "account_id"),
+		checkpointExtraInfoIndex(view),
 	)
 }
 
@@ -3351,6 +3746,7 @@ func buildSchemaFromMoTablesRowAt(
 	commentIdx int,
 	constraintIdx int,
 	accountIDIdx int,
+	extraInfoIdx int,
 ) *TableSchema {
 	schema := &TableSchema{}
 	dataRow := fullRow[logicalViewDataOffset(view):]
@@ -3380,21 +3776,49 @@ func buildSchemaFromMoTablesRowAt(
 			schema.AccountID = uint32(accountID)
 		}
 	}
+	if extraInfoIdx == -2 {
+		schema.enumDefaultDecodeError = "unrecognized mo_tables extra_info layout"
+	} else if extraInfoIdx >= len(dataRow) {
+		schema.enumDefaultDecodeError = "missing extra_info cell"
+	} else if extraInfoIdx >= 0 && dataRow[extraInfoIdx] != "" {
+		var extra api.SchemaExtra
+		if err := extra.Unmarshal([]byte(dataRow[extraInfoIdx])); err != nil {
+			schema.enumDefaultDecodeError = err.Error()
+		} else {
+			schema.DefaultCharset = extra.DefaultCharset
+			schema.EnumUnsupportedDefault = strings.Clone(extra.EnumUnsupportedDefault)
+		}
+	}
 	return schema
 }
 
 func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableSchema {
 	tableIDStr := fmt.Sprintf("%d", tableID)
-	try := func(relIDCol, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol int) *TableSchema {
+	try := func(relIDCol, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol, extraInfoCol int) *TableSchema {
 		if relIDCol < 0 {
 			return nil
 		}
-		for _, fullRow := range view.Rows {
+		for rowIdx, fullRow := range view.Rows {
 			row := fullRow[logicalViewDataOffset(view):]
 			if relIDCol >= len(row) || row[relIDCol] != tableIDStr {
 				continue
 			}
-			return buildSchemaFromMoTablesRowAt(view, fullRow, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol)
+			schema := buildSchemaFromMoTablesRowAt(view, fullRow, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol, extraInfoCol)
+			if extraInfoCol >= 0 && extraInfoCol < len(row) {
+				isNull, known := view.cellNull(rowIdx, extraInfoCol)
+				if !known || isNull {
+					schema.enumDefaultDecodeError = "missing or NULL extra_info cell"
+				}
+			}
+			viewCol := checkpointViewDefinitionIndex(view)
+			if viewCol >= 0 && viewCol < len(row) {
+				isNull, known := view.cellNull(rowIdx, viewCol)
+				if known && !isNull {
+					schema.ViewDefinition = strings.Clone(row[viewCol])
+					schema.ViewDefinitionKnown = true
+				}
+			}
+			return schema
 		}
 		return nil
 	}
@@ -3407,6 +3831,7 @@ func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableS
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
 		fallbackCatalogColIndex(view, moTablesID, "account_id"),
+		checkpointExtraInfoIndex(view),
 	); schema != nil {
 		return schema
 	}
@@ -3421,6 +3846,7 @@ func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableS
 			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Comment, match.offset),
 			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Constraint, match.offset),
 			catalogColIndexForLayout(match.layout, moTablesID, "account_id", match.offset),
+			checkpointExtraInfoIndex(view),
 		); schema != nil {
 			return schema
 		}
@@ -3461,63 +3887,6 @@ func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
 		}
 	}
 	return ""
-}
-
-func findTableCommentFromMoTables(view *LogicalTableView, tableID uint64) string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
-	commentCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment)
-	if relIDCol < 0 || commentCol < 0 {
-		return ""
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || commentCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr && isPrintableSQLText(row[commentCol]) {
-			return strings.Clone(row[commentCol])
-		}
-	}
-	return ""
-}
-
-func findUniqueKeysFromMoTables(view *LogicalTableView, tableID uint64) []TableUniqueKey {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
-	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
-	if relIDCol < 0 || constraintCol < 0 {
-		return nil
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || constraintCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr {
-			return decodeUniqueKeysFromMoTablesConstraint(row[constraintCol])
-		}
-	}
-	return nil
-}
-
-func findPrimaryKeyFromMoTables(view *LogicalTableView, tableID uint64) []string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
-	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
-	if relIDCol < 0 || constraintCol < 0 {
-		return nil
-	}
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if relIDCol >= len(row) || constraintCol >= len(row) {
-			continue
-		}
-		if row[relIDCol] == tableIDStr {
-			return decodePrimaryKeyFromMoTablesConstraint(row[constraintCol])
-		}
-	}
-	return nil
 }
 
 func findForeignKeysFromCatalogViews(moTablesView, moColumnsView *LogicalTableView, tableID uint64) []TableForeignKey {
@@ -3635,34 +4004,14 @@ func findMoTablesConstraint(view *LogicalTableView, tableID uint64) string {
 }
 
 func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView, partitionMetadataView ...*LogicalTableView) string {
-	tableName := ""
-	tableComment := ""
-	uniqueKeys := []TableUniqueKey(nil)
-	primaryKey := []string(nil)
-	foreignKeys := []TableForeignKey(nil)
-	clusterBy := []string(nil)
-	partition := ""
-	if moTablesView != nil {
-		tableName = findTableNameFromMoTables(moTablesView, tableID)
-		tableComment = findTableCommentFromMoTables(moTablesView, tableID)
-		uniqueKeys = findUniqueKeysFromMoTables(moTablesView, tableID)
-		primaryKey = findPrimaryKeyFromMoTables(moTablesView, tableID)
-		if moColumnsView != nil {
-			foreignKeys = findForeignKeysFromCatalogViews(moTablesView, moColumnsView, tableID)
-		}
+	if moTablesView == nil || moColumnsView == nil || findTableNameFromMoTables(moTablesView, tableID) == "" {
+		return ""
 	}
-	if moColumnsView != nil {
-		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
-	}
+	schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, moColumnsView)
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
-		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
+		schema.Partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
 	}
-	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy); ddl != "" {
-			return ddl
-		}
-	}
-	return ""
+	return RenderCreateTableDDLFromSchema(schema)
 }
 
 func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEntry {
@@ -3886,10 +4235,10 @@ func buildColumnsFromMoColumnsRowsAt(
 	hasUpdateCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasUpdate)
 	updateCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Update)
 	clusterByCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsClusterBy)
-	enumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_EnumValues)
+	enumCol := checkpointEnumValuesIndex(view, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol)
 	hasGeneratedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasGenerated)
 	generatedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
-	for _, fullRow := range view.Rows {
+	for rowIdx, fullRow := range view.Rows {
 		row := fullRow[logicalViewDataOffset(view):]
 
 		// Skip hidden columns
@@ -3935,6 +4284,10 @@ func buildColumnsFromMoColumnsRowsAt(
 				var nativeType types.Type
 				if err := types.Decode([]byte(row[typCol]), &nativeType); err == nil && nativeType.Oid == types.T_enum {
 					col.EnumEncoding = nativeType.GetEnumEncoding()
+					col.EnumCollation = nativeType.GetEnumCollation()
+					col.EnumValuesAreRaw = true
+				} else if strings.EqualFold(strings.TrimSpace(sqlType), "ENUM") {
+					col.enumDomainUnverified = true
 				}
 			} else {
 				typeDecodeFailures++
@@ -3985,6 +4338,32 @@ func buildColumnsFromMoColumnsRowsAt(
 		}
 		if enumCol >= 0 && enumCol < len(row) {
 			col.EnumValues = row[enumCol]
+			if strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") {
+				isNull, known := view.cellNull(rowIdx, enumCol)
+				if !known || isNull {
+					col.enumDomainUnverified = true
+				}
+			}
+		} else if strings.EqualFold(strings.TrimSpace(col.SQLType), "ENUM") {
+			col.enumDomainUnverified = true
+		}
+		if col.EnumValuesAreRaw {
+			for _, anchor := range []struct {
+				name     string
+				selected int
+			}{
+				{catalog.SystemColAttr_RelID, relnameIDCol}, {catalog.SystemColAttr_Name, nameCol},
+				{catalog.SystemColAttr_Type, typCol}, {catalog.SystemColAttr_Num, numCol},
+				{catalog.SystemColAttr_IsHidden, hiddenCol}, {catalog.SystemColAttr_Seqnum, seqNumCol},
+			} {
+				if checkpointCatalogColumnIndex(view, moColumnsID, anchor.name) != anchor.selected {
+					col.enumDomainUnverified = true
+				}
+			}
+			verifyCheckpointEnumDefault(view, rowIdx, row,
+				checkpointCatalogColumnIndex(view, moColumnsID, catalog.SystemColAttr_HasExpr),
+				checkpointCatalogColumnIndex(view, moColumnsID, catalog.SystemColAttr_DefaultExpr),
+				checkpointCatalogColumnIndex(view, moColumnsID, catalog.SystemColAttr_NullAbility), &col)
 		}
 		if hasGeneratedCol >= 0 && hasGeneratedCol < len(row) && isTruthyCatalogValue(row[hasGeneratedCol]) &&
 			generatedCol >= 0 && generatedCol < len(row) {
@@ -4151,6 +4530,12 @@ func (r *CheckpointReader) ShowCreateTable(
 		partitionMetadataView = view
 	}
 
+	if moTablesView != nil {
+		schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, moColumnsView)
+		if err := ValidateEnumReplaySchema(schema); err != nil {
+			return "", errors.Join(moerr.NewInvalidInputNoCtxf("cannot replay checkpoint table %d", tableID), err)
+		}
+	}
 	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView, partitionMetadataView); ddl != "" {
 		return ddl, nil
 	}
@@ -5247,6 +5632,9 @@ func buildCreateTableFromMoColumnsAt(
 	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Seqnum)
 	cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol)
 	if len(cols) == 0 {
+		return ""
+	}
+	if err := ValidateEnumReplaySchema(&TableSchema{Columns: cols}); err != nil {
 		return ""
 	}
 	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy)

@@ -46,6 +46,15 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
+		// Until truncate/index atomicity has been verified for the new format,
+		// keep this DELETE on the row-level planner.
+		usesNew, err := tableHasNewEnumIndex(tableDef)
+		if err != nil {
+			return false, err
+		}
+		if usesNew {
+			return false, nil
+		}
 		if enabled && len(tableDef.RefChildTbls) > 0 ||
 			tableDef.ViewSql != nil ||
 			(dmlCtx.isClusterTable[i] && accountId != catalog.System_Account) ||
@@ -161,6 +170,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectCtx := NewBindContext(builder, bindCtx)
+	rawOld, err := prepareEnumIndexRawProjections(selectCtx, dmlCtx, false)
+	if err != nil {
+		return 0, err
+	}
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, err
@@ -183,6 +196,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		tableDef := dmlCtx.tableDefs[0]
 		returningIrregularIndexes = getIrregularIndexes(tableDef)
 		alias := dmlCtx.aliases[0]
+		builder.returningRawIndexImage = len(rawOld) > 0
 		colPos := make(map[string]int32, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
 			pos, ok := colName2Idx[0][col.Name]
@@ -190,6 +204,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				return 0, moerr.NewInternalErrorf(
 					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
 				)
+			}
+			if raw := rawOld[strings.ToLower(alias+"."+col.Name)]; raw != nil {
+				if raw.resultPos < 0 {
+					return 0, moerr.NewInvalidInputNoCtx("cannot locate DELETE RETURNING physical image")
+				}
+				pos = raw.resultPos
 			}
 			colPos[strings.ToLower(col.Name)] = pos
 		}
@@ -212,6 +232,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
+		if colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
+			return nil, moerr.NewInvalidInputNoCtx("cannot locate ENUM index old-image projection")
+		}
 		partName = catalog.ResolveAlias(partName)
 		inputExpr := &plan.Expr{
 			Typ: selectNode.ProjectList[colPos].Typ,
@@ -239,6 +262,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
+			usesNew, err := EnumIndexUsesNewIdentity(tableDef, idxDef)
+			if err != nil {
+				return 0, err
+			}
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
@@ -299,6 +326,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				if !ok {
 					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind delete err, can not find colName = %s", partName)
 				}
+				colPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, dmlCtx.aliases[i], partName, colPos)
+				if err != nil {
+					return 0, err
+				}
 				leftExpr, err = makeDeleteIndexPartExpr(colPos, partName, prefixLengths)
 				if err != nil {
 					return 0, err
@@ -317,6 +348,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 						errMsg := fmt.Sprintf("bind delete err, can not find colName = %s", colName)
 						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
 					}
+					colPos, err = enumIndexOldValuePos(tableDef, usesNew, rawOld, dmlCtx.aliases[i], colName, colPos)
+					if err != nil {
+						return 0, err
+					}
 					args[k], err = makeDeleteIndexPartExpr(colPos, colName, prefixLengths)
 					if err != nil {
 						return 0, err
@@ -327,13 +362,19 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				if !idxDef.Unique {
 					fnName = "serial_full"
 				}
-				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+				leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+				if err != nil {
+					return 0, err
+				}
 			}
 
-			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 				leftExpr,
 				rightExpr,
 			})
+			if err != nil {
+				return 0, err
+			}
 
 			joinType := plan.Node_INNER
 			if idxDef.Unique || isSpatialIndexDef(idxDef) {

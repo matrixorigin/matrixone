@@ -304,7 +304,7 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = newInternalStatementContext(plan.WithoutAlterEnumTransfer(plan.WithoutEnumIndexBackfill(parentCtx)))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -368,6 +368,40 @@ func (exec *txnExecutor) Exec(
 	}()
 	if err != nil {
 		return executor.Result{}, err
+	}
+	if enumSpec := statementOption.EnumIndexBackfill(); enumSpec != nil {
+		if len(stmts) != 1 || enumSpec.SQL != sql || enumSpec.Source == nil || enumSpec.Index == nil {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid internal ENUM index statement")
+		}
+		var expected string
+		if enumSpec.DuplicateCheck {
+			if !enumSpec.Index.Unique {
+				return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid ENUM uniqueness check")
+			}
+			expected, err = buildCreateUniqueIndexDuplicateCheckSQL(enumSpec.Database, enumSpec.Source, enumSpec.Index)
+		} else {
+			expected, err = genInsertIndexTableSql(enumSpec.Source, enumSpec.Index, enumSpec.Database, enumSpec.Index.Unique)
+		}
+		if err != nil {
+			return executor.Result{}, err
+		}
+		if expected != sql {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("ENUM index statement changed")
+		}
+		exec.ctx, err = plan.WithEnumIndexBackfill(exec.ctx, stmts[0], enumSpec)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+
+	if alterSpec := statementOption.AlterEnumTransfer(); alterSpec != nil {
+		if len(stmts) != 1 || alterSpec.SQL != sql {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid internal ALTER ENUM statement")
+		}
+		exec.ctx, err = plan.WithAlterEnumTransfer(exec.ctx, stmts[0], alterSpec)
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
 	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
@@ -491,6 +525,12 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	}
+	if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
+		return executor.Result{}, err
+	}
+	if err := plan.ValidateAlterEnumTransferPlan(exec.ctx, pn); err != nil {
+		return executor.Result{}, err
+	}
 
 	c := NewCompile(
 		exec.s.addr,
@@ -517,28 +557,43 @@ func (exec *txnExecutor) Exec(
 
 	defer c.Release()
 
-	if prepared {
-		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+		if spec := statementOption.EnumIndexBackfill(); spec != nil {
+			var err error
+			ctx, err = plan.WithEnumIndexBackfill(plan.WithoutEnumIndexBackfill(ctx), stmts[0], spec)
 			if err != nil {
+				return nil, err
+			}
+		}
+		if spec := statementOption.AlterEnumTransfer(); spec != nil {
+			var err error
+			ctx, err = plan.WithAlterEnumTransfer(plan.WithoutAlterEnumTransfer(ctx), stmts[0], spec)
+			if err != nil {
+				return nil, err
+			}
+			// compilerContext.GetContext reads the process, not its ctx field.
+			// The retry's proof must be the one used and validated by planning.
+			previous := proc.GetTopContext()
+			proc.ReplaceTopCtx(ctx)
+			defer proc.ReplaceTopCtx(previous)
+		}
+		pn, err := plan.BuildPlan(
+			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+			stmts[0], prepared,
+		)
+		if err != nil {
+			return pn, err
+		}
+		if prepared {
+			if err = normalizeInternalPreparePlan(compileContext, pn); err != nil {
 				return pn, err
 			}
-			err = normalizeInternalPreparePlan(compileContext, pn)
-			if err != nil {
-				return pn, err
-			}
-			return pn, nil
-		})
-	} else {
-		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
-		})
-	}
+		}
+		if err := validateEnumIndexBackfillPlan(pn, statementOption.EnumIndexBackfill()); err != nil {
+			return pn, err
+		}
+		return pn, plan.ValidateAlterEnumTransferPlan(ctx, pn)
+	})
 
 	result := executor.NewResult(exec.s.mp)
 

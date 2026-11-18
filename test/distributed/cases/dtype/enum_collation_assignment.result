@@ -1,0 +1,210 @@
+drop database if exists enum_collation_assignment;
+create database enum_collation_assignment;
+use enum_collation_assignment;
+set @saved_mode=@@sql_mode;
+set sql_mode='STRICT_TRANS_TABLES';
+create table src(id int, e enum('A','a','x') collate utf8mb4_bin);
+create table dst(id int, e enum('x','a','A') collate utf8mb4_bin);
+insert into src values (1,1),(2,2),(3,3);
+insert into dst select id,e from src;
+select id,hex(cast(e as char)),e+0 from dst order by id;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+1  ¦  41  ¦  3  𝄀
+2  ¦  61  ¦  2  𝄀
+3  ¦  78  ¦  1
+create table distinct_dst(e enum('x','a','A') collate utf8mb4_bin);
+insert into distinct_dst select distinct e from src;
+select hex(cast(e as char)),e+0 from distinct_dst order by e+0;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+78  ¦  1  𝄀
+61  ¦  2  𝄀
+41  ¦  3
+create table same_src(e enum('A','a') collate utf8mb4_bin);
+create table same_dst(e enum('A','a') collate utf8mb4_general_ci);
+insert into same_src values ('a');
+insert into same_dst select e from same_src;
+select hex(cast(e as char)),e+0 from same_dst;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+41  ¦  1
+create table assignment(id int primary key,e enum('a','A') collate utf8mb4_bin);
+prepare p from 'insert into assignment values (?,?)';
+set @id=1,@value='A';
+execute p using @id,@value;
+deallocate prepare p;
+update assignment set e='a' where id=1;
+select hex(cast(e as char)),e+0 from assignment;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1
+update assignment set e='Z' where id=1;
+internal error: convert to MySQL enum failed: item Z is not in enum [a A]
+select hex(cast(e as char)),e+0 from assignment;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1
+create table ci(e enum('a','b') collate utf8mb4_general_ci);
+insert into ci values ('A'),('á');
+select hex(cast(e as char)),e+0 from ci;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1  𝄀
+61  ¦  1
+create table overflow_bin(e enum('a','b') collate utf8mb4_bin);
+create table overflow_ci(e enum('a','b') collate utf8mb4_general_ci);
+insert into overflow_bin values('b');
+insert into overflow_ci values('b');
+insert into overflow_bin values('a'),('65537 ');
+internal error: convert to MySQL enum failed: number 65537 overflow enum boundary [1, 2]
+insert into overflow_ci values('a'),('65537 ');
+internal error: convert to MySQL enum failed: number 65537 overflow enum boundary [1, 2]
+insert into overflow_bin values('65536');
+internal error: convert to MySQL enum failed: number 65536 overflow enum boundary [1, 2]
+insert into overflow_ci values('65535 ');
+internal error: convert to MySQL enum failed: number 65535 overflow enum boundary [1, 2]
+select hex(cast(e as char)),e+0 from overflow_bin;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+62  ¦  2
+select hex(cast(e as char)),e+0 from overflow_ci;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+62  ¦  2
+create table alter_inherit(e enum('A','a') collate utf8mb4_bin) collate utf8mb4_general_ci;
+insert into alter_inherit values (2);
+alter table alter_inherit modify e enum('A','a');
+select hex(cast(e as char)),e+0 from alter_inherit;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  2
+alter table alter_inherit change e e enum('A','a') collate utf8mb4_bin;
+alter table alter_inherit change e e enum('A','a');
+select hex(cast(e as char)),e+0 from alter_inherit;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  2
+create table alter_reject(e enum('a') collate utf8mb4_bin) collate utf8mb4_unicode_ci;
+insert into alter_reject values ('a');
+alter table alter_reject modify e enum('a');
+not supported: ENUM cannot inherit unsupported table collation utf8mb4_unicode_ci; specify a supported column COLLATE
+alter table alter_reject change e e enum('a');
+not supported: ENUM cannot inherit unsupported table collation utf8mb4_unicode_ci; specify a supported column COLLATE
+select hex(cast(e as char)),e+0 from alter_reject;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1
+create table legacy_src(e enum('A','a'));
+insert into legacy_src values (2);
+create table legacy_ctas as select e from legacy_src;
+show create table legacy_ctas;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+legacy_ctas  ¦  CREATE TABLE `legacy_ctas` (
+  `e` enum('A','a') DEFAULT NULL
+)
+create table legacy_like like legacy_ctas;
+insert into legacy_like values ('a');
+select hex(cast(e as char)),e+0 from legacy_like;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+41  ¦  1
+alter table legacy_like add another enum('x');
+create table invalid_column(e enum('a') character set latin1 collate utf8mb4_bin);
+invalid input: COLLATION 'utf8mb4_bin' is not valid for CHARACTER SET 'latin1'
+create table invalid_table(e int) character set latin1 collate utf8mb4_bin;
+show create table invalid_table;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+invalid_table  ¦  CREATE TABLE `invalid_table` (
+  `e` int DEFAULT NULL
+) COLLATE=utf8mb4_bin
+alter table invalid_table add choice enum('a','A');
+insert into invalid_table values (1,'a'),(2,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table order by e;
+➤ e[4,32,0]  ¦  hex(cast(choice as varchar))[12,-1,0]  ¦  choice + 0[-5,64,0]  𝄀
+1  ¦  61  ¦  1  𝄀
+2  ¦  41  ¦  2
+create table invalid_table_copy like invalid_table;
+insert into invalid_table_copy values (3,'A');
+select e,hex(cast(choice as char)),choice+0 from invalid_table_copy;
+➤ e[4,32,0]  ¦  hex(cast(choice as varchar))[12,-1,0]  ¦  choice + 0[-5,64,0]  𝄀
+3  ¦  41  ¦  2
+create table invalid_table_with_enum(e enum('a')) character set latin1 collate utf8mb4_bin;
+invalid input: COLLATION 'utf8mb4_bin' is not valid for CHARACTER SET 'latin1'
+create table empty_charset_ordinary(i int) character set '' collate utf8mb4_bin;
+show create table empty_charset_ordinary;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+empty_charset_ordinary  ¦  CREATE TABLE `empty_charset_ordinary` (
+  `i` int DEFAULT NULL
+) COLLATE=utf8mb4_bin
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '';
+invalid input: empty table CHARACTER SET for ENUM
+create table empty_charset_enum(e enum('a') collate utf8mb4_bin) character set '' collate utf8mb4_bin;
+invalid input: empty table CHARACTER SET for ENUM
+create table empty_table_default(i int) collate '';
+invalid input: empty table COLLATE
+create table empty_column(e enum('a') collate '') collate utf8mb4_bin;
+invalid input: empty ENUM COLLATE
+alter table alter_reject modify e enum('a') collate '';
+invalid input: empty ENUM COLLATE
+create table mb3_column(e enum('😀') character set utf8mb3 collate utf8mb3_bin);
+not supported: ENUM CHARACTER SET utf8mb3
+create table mb4_column(e enum('😀') character set utf8mb4 collate utf8mb4_bin);
+insert into mb4_column values ('😀');
+select hex(cast(e as char)),e+0 from mb4_column;
+➤ hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+F09F9880  ¦  1
+create table empty_src(id int,e enum('','x') collate utf8mb4_bin);
+create table empty_dst(id int,e enum('x','') collate utf8mb4_bin);
+insert into empty_src values (1,1),(3,null);
+insert ignore into empty_src values (2,'invalid');
+insert into empty_dst select id,e from empty_src;
+select id,e+0,e is null from empty_dst order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  e is null[-7,1,0]  𝄀
+1  ¦  2  ¦  0  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  1
+create table no_empty(id int,e enum('x') collate utf8mb4_bin);
+insert into no_empty select id,e from empty_src where id=2;
+insert into no_empty select id,e from empty_src where id=1;
+internal error: convert to MySQL enum failed: item  is not in enum [x]
+select id,e+0 from no_empty;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  𝄀
+2  ¦  0
+create table unsupported_default(id int) collate=utf8mb4_unicode_ci;
+alter table unsupported_default add e enum('a','A');
+not supported: ENUM cannot inherit unsupported table collation utf8mb4_unicode_ci; specify a supported column COLLATE
+alter table unsupported_default add e enum('a','A') collate utf8mb4_bin;
+insert into unsupported_default values(1,'A');
+create table unsupported_copy like unsupported_default;
+insert into unsupported_copy values(2,'A');
+select id,hex(cast(e as char)),e+0 from unsupported_copy;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+2  ¦  41  ¦  2
+alter table unsupported_default add x int;
+alter table unsupported_default add missing enum('x','X');
+not supported: ENUM cannot inherit unsupported table collation utf8mb4_unicode_ci; specify a supported column COLLATE
+show create table unsupported_default;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+unsupported_default  ¦  CREATE TABLE `unsupported_default` (
+  `id` int DEFAULT NULL,
+  `e` enum('a','A') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
+  `x` int DEFAULT NULL
+) COLLATE=`utf8mb4_unicode_ci`
+create table legacy_reauthor(id int primary key,e enum('A','a',''));
+insert into legacy_reauthor values (1,1),(2,2),(3,3),(5,null);
+insert ignore into legacy_reauthor values (4,'invalid');
+alter table legacy_reauthor modify e enum('A','a','') collate utf8mb4_general_ci;
+select id,hex(cast(e as char)),e+0,e is null from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(e as varchar))[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  e is null[-7,1,0]  𝄀
+1  ¦  41  ¦  1  ¦  0  𝄀
+2  ¦  61  ¦  2  ¦  0  𝄀
+3  ¦    ¦  3  ¦  0  𝄀
+4  ¦    ¦  0  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  1
+alter table legacy_reauthor change e h enum('A','a','') collate utf8mb4_bin, change h k enum('A','a','') collate utf8mb4_bin, add column e int default 7;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(k as varchar))[12,-1,0]  ¦  k + 0[-5,64,0]  ¦  k is null[-7,1,0]  ¦  e[4,32,0]  𝄀
+1  ¦  41  ¦  1  ¦  0  ¦  7  𝄀
+2  ¦  61  ¦  2  ¦  0  ¦  7  𝄀
+3  ¦    ¦  3  ¦  0  ¦  7  𝄀
+4  ¦    ¦  0  ¦  0  ¦  7  𝄀
+5  ¦  null  ¦  null  ¦  1  ¦  7
+alter table legacy_reauthor modify k enum('','x','a','A') collate utf8mb4_bin;
+select id,hex(cast(k as char)),k+0,k is null,e from legacy_reauthor order by id;
+➤ id[4,32,0]  ¦  hex(cast(k as varchar))[12,-1,0]  ¦  k + 0[-5,64,0]  ¦  k is null[-7,1,0]  ¦  e[4,32,0]  𝄀
+1  ¦  41  ¦  4  ¦  0  ¦  7  𝄀
+2  ¦  61  ¦  3  ¦  0  ¦  7  𝄀
+3  ¦    ¦  1  ¦  0  ¦  7  𝄀
+4  ¦    ¦  0  ¦  0  ¦  7  𝄀
+5  ¦  null  ¦  null  ¦  1  ¦  7
+set sql_mode=@saved_mode;
+drop database enum_collation_assignment;

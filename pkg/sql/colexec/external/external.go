@@ -1006,7 +1006,7 @@ func isLegalLineWithEnums(param *tree.ExternParam, cols []*plan.ColDef, fields [
 				return false
 			}
 		case types.T_enum:
-			if _, err := parseExternalEnum(enumMembers[idx], field.Val); err != nil {
+			if _, err := parseExternalEnum(enumMembers[idx], field.Val, col.Typ.EnumCollation); err != nil {
 				return false
 			}
 		case types.T_decimal64:
@@ -1996,7 +1996,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := param.initEnumMembers(); err != nil {
 			return err
 		}
-		value, err := parseExternalEnum(param.enumMembers[colIdx], field.Val)
+		value, err := parseExternalEnum(param.enumMembers[colIdx], field.Val, param.Cols[colIdx].Typ.EnumCollation)
 		if err != nil {
 			return err
 		}
@@ -2113,6 +2113,9 @@ func decodeExternalEnumMembers(cols []*plan.ColDef) ([]types.EnumMembers, error)
 			members = make([]types.EnumMembers, len(cols))
 		}
 		var err error
+		if err = types.ValidateEnumCollation(col.Typ.EnumCollation); err != nil {
+			return nil, err
+		}
 		members[i], err = types.DecodeEnumMembers(col.Typ.Enumvalues, col.Typ.EnumEncoding)
 		if err != nil {
 			return nil, err
@@ -2135,13 +2138,21 @@ func (param *ExternalParam) initEnumMembers() error {
 
 // Textual labels take precedence over numeric fallback, including numeric-looking
 // declared labels. Domain parsing belongs to the scan; this helper never frames.
-func parseExternalEnum(members types.EnumMembers, value string) (types.Enum, error) {
-	if ordinal, _ := members.ParseName(value); ordinal != 0 {
+func parseExternalEnum(members types.EnumMembers, value string, identity uint32) (types.Enum, error) {
+	ordinal, err := members.ParseCollatedName(value, identity)
+	if err != nil {
+		return 0, err
+	}
+	if ordinal != 0 {
 		return ordinal, nil
 	}
-	number, err := strconv.ParseUint(value, 10, 16)
+	input := value
+	if identity != types.EnumCollationLegacy {
+		input = strings.TrimRight(input, " ")
+	}
+	number, err := strconv.ParseUint(input, 10, 16)
 	if errors.Is(err, strconv.ErrSyntax) {
-		number, err = strconv.ParseUint(value, 0, 16)
+		number, err = strconv.ParseUint(input, 0, 16)
 	}
 	if err != nil {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid ENUM input %q", value)

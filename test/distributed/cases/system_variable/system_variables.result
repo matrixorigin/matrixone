@@ -492,6 +492,14 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set @@sql_mode = 'ANSI';
+select @@sql_mode;
+@@sql_mode
+ANSI
+set @@sql_mode = 'ANSI,NO_BACKSLASH_ESCAPES';
+select @@sql_mode;
+@@sql_mode
+ANSI,NO_BACKSLASH_ESCAPES
 set @@sql_mode = default;
 set global long_query_time = 1.1;
 show global variables like 'long_query_time';

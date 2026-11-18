@@ -209,3 +209,17 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), keyPart, "secondary"))
 	})
 }
+
+func TestEnumIdentityPrefixIndexAdmission(t *testing.T) {
+	ctx := context.Background()
+	col := &ColDef{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "A,a", EnumCollation: 2}}
+	for _, kind := range []string{"secondary", "unique"} {
+		require.Error(t, checkIndexColumnSupportability(ctx, col, keyPartWithLength("e", 1), kind))
+		require.NoError(t, checkIndexColumnSupportability(ctx, col, keyPartWithLength("e", 0), kind))
+	}
+	col.Typ.EnumCollation = 0
+	require.NoError(t, checkIndexColumnSupportability(ctx, col, keyPartWithLength("e", 1), "secondary"))
+	require.NoError(t, checkIndexColumnSupportability(ctx, col, keyPartWithLength("e", 1), "unique"))
+	// 4.2 does not support ENUM primary keys, with or without a prefix.
+	require.Error(t, checkIndexColumnSupportability(ctx, col, keyPartWithLength("e", 1), "primary"))
+}

@@ -769,6 +769,9 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if _, err := types.DecodeEnumMembers(targetType.Enumvalues, targetType.EnumEncoding); err != nil {
 		return nil, err
 	}
+	if err := types.ValidateEnumCollation(targetType.EnumCollation); err != nil {
+		return nil, err
+	}
 	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok && isEnumPlanType(&raw.Typ) {
 		expr = raw
 	}
@@ -789,7 +792,11 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if types.T(expr.Typ.Id).IsInteger() {
 		funcName = moEnumCastIndexValueToIndexFun
 	}
-	converted, err := BindFuncExprImplByPlanExpr(ctx, funcName, mysqlSpecialTypeArgs(&targetType, expr))
+	args := mysqlSpecialTypeArgs(&targetType, expr)
+	if funcName == moEnumCastValueToIndexFun {
+		args = enumValueToIndexArgs(&targetType, expr)
+	}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, funcName, args)
 	if err != nil {
 		return nil, err
 	}

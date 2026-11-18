@@ -527,3 +527,23 @@ func (opts StatementOption) WithDisableLock() StatementOption {
 func (opts StatementOption) DisableLock() bool {
 	return opts.disableLock
 }
+
+// WithEnumIndexBackfill attaches a single index-build operation to this call.
+func (opts StatementOption) WithEnumIndexBackfill(spec *EnumIndexBackfillSpec) StatementOption {
+	opts.enumIndexBackfill = spec
+	return opts
+}
+
+func (opts StatementOption) EnumIndexBackfill() *EnumIndexBackfillSpec {
+	return opts.enumIndexBackfill
+}
+
+// WithAlterEnumTransfer scopes the transfer proof to one internal statement.
+func (opts StatementOption) WithAlterEnumTransfer(spec *AlterEnumTransferSpec) StatementOption {
+	opts.alterEnumTransfer = spec
+	return opts
+}
+
+func (opts StatementOption) AlterEnumTransfer() *AlterEnumTransferSpec {
+	return opts.alterEnumTransfer
+}

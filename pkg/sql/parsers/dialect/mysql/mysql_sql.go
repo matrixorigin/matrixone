@@ -18189,7 +18189,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:4168
 		{
-			yyLOCAL = tree.NewTableOptionCharset(yyDollar[1].str)
+			yyLOCAL = tree.NewLegacyAlterNoopOption(yyDollar[1].str, tree.LegacyAlterKeys)
 		}
 		yyVAL.union = yyLOCAL
 	case 545:
@@ -18197,7 +18197,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:4172
 		{
-			yyLOCAL = tree.NewTableOptionCharset(yyDollar[1].str)
+			yyLOCAL = tree.NewLegacyAlterNoopOption(yyDollar[1].str, tree.LegacyAlterTablespace)
 		}
 		yyVAL.union = yyLOCAL
 	case 546:
@@ -18205,7 +18205,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:4176
 		{
-			yyLOCAL = tree.NewTableOptionCharset(yyDollar[1].str)
+			yyLOCAL = tree.NewLegacyAlterNoopOption(yyDollar[1].str, tree.LegacyAlterForce)
 		}
 		yyVAL.union = yyLOCAL
 	case 547:
@@ -18221,7 +18221,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:4184
 		{
-			yyLOCAL = tree.NewTableOptionCharset(yyDollar[1].str)
+			yyLOCAL = tree.NewLegacyAlterNoopOption(yyDollar[1].str, tree.LegacyAlterValidation)
 		}
 		yyVAL.union = yyLOCAL
 	case 549:
@@ -28588,7 +28588,7 @@ yydefault:
 		var yyLOCAL tree.ColumnAttribute
 //line mysql_sql.y:11668
 		{
-			yyLOCAL = nil
+			yyLOCAL = tree.NewAttributeCharset(yyDollar[5].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 1755:

@@ -997,9 +997,21 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// ordinary SQL mode, then restore the structured metadata below.
+		likeSkeletonDef := tableDef
+		if tableDef.EnumUnsupportedDefault != "" {
+			// A legacy ENUM under an unsupported default has no faithful public
+			// SQL spelling. LIKE uses this SQL only as a parser skeleton and
+			// restores each original identity through ReplayEnumCollation below.
+			likeSkeletonDef = DeepCopyTableDef(tableDef, true)
+			for _, col := range likeSkeletonDef.Cols {
+				if isEnumPlanType(&col.Typ) && col.Typ.EnumCollation == types.EnumCollationLegacy {
+					col.Typ.EnumCollation = types.EnumCollationUTF8Bin
+				}
+			}
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
-			tableDef,
+			likeSkeletonDef,
 			snapshot,
 			true,
 			cloneStmt,
@@ -1014,6 +1026,14 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
+			for _, item := range stmtLike.Defs {
+				if col, ok := item.(*tree.ColumnTableDef); ok {
+					if old := FindColumn(tableDef.Cols, col.Name.ColName()); old != nil && isEnumPlanType(&old.Typ) {
+						id := old.Typ.EnumCollation
+						col.ReplayEnumCollation = &id
+					}
+				}
+			}
 			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
@@ -1025,6 +1045,10 @@ func buildCreateTable(
 			// kmeans_train_percent) and falls back to defaults.
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
+			}
+			if ct := p.GetDdl().GetCreateTable(); ct != nil && ct.TableDef != nil {
+				ct.TableDef.DefaultCharset = tableDef.DefaultCharset
+				ct.TableDef.EnumUnsupportedDefault = tableDef.EnumUnsupportedDefault
 			}
 			preserveChecksForCreateLike(p, tableDef)
 			return p, nil
@@ -1074,6 +1098,9 @@ func buildCreateTable(
 	}
 
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
+		return nil, err
+	}
+	if err = RequireEnumCollationProtocol(ctx.GetProcess(), createTable.TableDef); err != nil {
 		return nil, err
 	}
 
@@ -1389,6 +1416,34 @@ func buildCreateTable(
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	var tableCharset, tableCollation string
+	var tableCharsetSpecified bool
+	for _, option := range stmt.Options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			tableCharset = opt.Charset
+			tableCharsetSpecified = true
+		case *tree.TableOptionCollate:
+			if opt.Collate == "" {
+				return moerr.NewInvalidInput(ctx.GetContext(), "empty table COLLATE")
+			}
+			tableCollation = opt.Collate
+		}
+	}
+	// 4.2 historically did not retain table collations. Record supported
+	// explicit defaults so subsequent ENUM columns use the same identity.
+	for _, option := range stmt.Options {
+		if opt, ok := option.(*tree.TableOptionCollate); ok {
+			id, err := enumCollationForName(ctx.GetContext(), opt.Collate)
+			if err == nil {
+				createTable.TableDef.DefaultCharset = id
+				createTable.TableDef.EnumUnsupportedDefault = ""
+			} else {
+				createTable.TableDef.DefaultCharset = 0
+				createTable.TableDef.EnumUnsupportedDefault = opt.Collate
+			}
+		}
+	}
 	// all below fields' key is lower case
 	var primaryKeys []string
 	colMap := make(map[string]*ColDef)
@@ -1422,6 +1477,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+			unsupportedDefault := createTable.TableDef.EnumUnsupportedDefault
+			if def.ReplayEnumCollation != nil {
+				unsupportedDefault = ""
+			}
+			if err = applyEnumColumnCollation(ctx.GetContext(), &cType, def.Attributes, createTable.TableDef.DefaultCharset, unsupportedDefault); err != nil {
+				return err
+			}
+			if def.ReplayEnumCollation != nil && isEnumPlanType(&cType) {
+				cType.EnumCollation = *def.ReplayEnumCollation
+			}
 			isGen := false
 			for _, attr := range def.Attributes {
 				switch attr.(type) {
@@ -1446,6 +1511,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
+			}
+			unsupportedDefault := createTable.TableDef.EnumUnsupportedDefault
+			if def.ReplayEnumCollation != nil {
+				unsupportedDefault = ""
+			}
+			if err = applyEnumColumnCollation(ctx.GetContext(), &colType, def.Attributes, createTable.TableDef.DefaultCharset, unsupportedDefault); err != nil {
+				return err
+			}
+			if def.ReplayEnumCollation != nil && isEnumPlanType(&colType) {
+				colType.EnumCollation = *def.ReplayEnumCollation
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
@@ -1830,6 +1905,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
+	// 4.2 historically ignored table CHARACTER SET on ordinary tables. Keep
+	// that compatibility, but never author an ENUM under a contradictory table
+	// charset/collation pair. Check final columns after CTAS name overrides.
+	if tableCharsetSpecified && (tableCharset == "" || tableCollation != "" && !enumCharsetCollationCompatible(tableCharset, tableCollation)) {
+		for _, col := range createTable.TableDef.Cols {
+			if isEnumPlanType(&col.Typ) {
+				if tableCharset == "" {
+					return moerr.NewInvalidInput(ctx.GetContext(), "empty table CHARACTER SET for ENUM")
+				}
+				return moerr.NewInvalidInputf(ctx.GetContext(), "COLLATION '%s' is not valid for CHARACTER SET '%s'", tableCollation, tableCharset)
+			}
+		}
+	}
 
 	for _, check := range pendingChecks {
 		if !check.enforced {
@@ -2056,6 +2144,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if err != nil {
 			return err
 		}
+	}
+
+	if err := validateNewEnumIndexSafety(createTable.TableDef, createTable.TableDef.Indexes); err != nil {
+		return err
 	}
 
 	// process self reference foreign keys after colDefs and indexes are processed.
@@ -3746,6 +3838,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 		createIndex.TableExist = true
 	}
+	if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
+		return nil, err
+	}
+
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
@@ -4280,6 +4376,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
+					return nil, err
+				}
+
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
 						AddIndex: &plan.AlterTableAddIndex{
@@ -4345,6 +4445,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
+					return nil, err
+				}
+
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
 						AddIndex: &plan.AlterTableAddIndex{
@@ -4401,6 +4505,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					oriPriKeyName,
 					ctx,
 				); err != nil {
+					return nil, err
+				}
+
+				if err := validateNewEnumIndexSafety(tableDef, indexInfo.TableDef.Indexes); err != nil {
 					return nil, err
 				}
 
@@ -5785,12 +5893,13 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:           col.Typ.Id,
-			Width:        col.Typ.Width,
-			Scale:        col.Typ.Scale,
-			Enumvalues:   col.Typ.Enumvalues,
-			EnumEncoding: col.Typ.EnumEncoding,
-			NullAbility:  nullable,
+			Id:            col.Typ.Id,
+			Width:         col.Typ.Width,
+			Scale:         col.Typ.Scale,
+			Enumvalues:    col.Typ.Enumvalues,
+			EnumEncoding:  col.Typ.EnumEncoding,
+			EnumCollation: col.Typ.EnumCollation,
+			NullAbility:   nullable,
 		})
 	}
 

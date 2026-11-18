@@ -403,6 +403,9 @@ message SchemaExtra {
     // CHECK metadata uses this length-delimited protobuf field so older CNs
     // safely skip it instead of misreading the legacy constraint byte stream.
     repeated plan.CheckDef checks = 18;
+    uint32 default_charset = 19;
+    // Explicit table collation not implemented for ENUM inheritance.
+    string enum_unsupported_default = 23;
 }
 
 // Int64Map mainly used in unit test

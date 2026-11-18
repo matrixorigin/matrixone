@@ -125,6 +125,12 @@ func init() {
 		reuse.DefaultOptions[AttributeCollate](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeCharset](
+		func() *AttributeCharset { return &AttributeCharset{} },
+		func(a *AttributeCharset) { a.reset() },
+		reuse.DefaultOptions[AttributeCharset](),
+	)
+
 	reuse.CreatePool[AttributeColumnFormat](
 		func() *AttributeColumnFormat { return &AttributeColumnFormat{} },
 		func(a *AttributeColumnFormat) { a.reset() },
@@ -1254,6 +1260,8 @@ type ColumnTableDef struct {
 	Name       *UnresolvedName
 	Type       ResolvableTypeReference
 	Attributes []ColumnAttribute
+	// ReplayEnumCollation is set only by internal schema reconstruction.
+	ReplayEnumCollation *uint32
 }
 
 func (node *ColumnTableDef) Format(ctx *FmtCtx) {
@@ -1299,6 +1307,8 @@ func (node *ColumnTableDef) reset() {
 			case *AttributeComment:
 				opt.Free()
 			case *AttributeCollate:
+				opt.Free()
+			case *AttributeCharset:
 				opt.Free()
 			case *AttributeColumnFormat:
 				opt.Free()
@@ -1575,6 +1585,28 @@ func NewAttributeCollate(c string) *AttributeCollate {
 	ac := reuse.Alloc[AttributeCollate](nil)
 	ac.Collate = c
 	return ac
+}
+
+type AttributeCharset struct {
+	columnAttributeImpl
+	Charset string
+}
+
+func (node *AttributeCharset) Format(ctx *FmtCtx) {
+	ctx.WriteString("character set ")
+	ctx.WriteString(node.Charset)
+}
+
+func (node AttributeCharset) TypeName() string { return "tree.AttributeCharset" }
+
+func (node *AttributeCharset) reset() { *node = AttributeCharset{} }
+
+func (node *AttributeCharset) Free() { reuse.Free[AttributeCharset](node, nil) }
+
+func NewAttributeCharset(charset string) *AttributeCharset {
+	attr := reuse.Alloc[AttributeCharset](nil)
+	attr.Charset = charset
+	return attr
 }
 
 type AttributeColumnFormat struct {
@@ -2815,12 +2847,42 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 	return reuse.Alloc[TableOptionSecondaryEngineNull](nil)
 }
 
+type LegacyAlterNoopKind uint8
+
+const (
+	LegacyAlterNotNoop LegacyAlterNoopKind = iota
+	LegacyAlterKeys
+	LegacyAlterTablespace
+	LegacyAlterForce
+	LegacyAlterValidation
+)
+
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	// LegacyAlterKind preserves unrelated historical ALTER placeholders when
+	// the statement is formatted and reparsed for partition execution.
+	LegacyAlterKind LegacyAlterNoopKind
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
+	switch node.LegacyAlterKind {
+	case LegacyAlterKeys:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" keys")
+		return
+	case LegacyAlterTablespace:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" tablespace")
+		return
+	case LegacyAlterForce:
+		ctx.WriteString("force")
+		return
+	case LegacyAlterValidation:
+		ctx.WriteString(node.Charset)
+		ctx.WriteString(" validation")
+		return
+	}
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
 }
@@ -2838,6 +2900,12 @@ func (node *TableOptionCharset) Free() {
 func NewTableOptionCharset(s string) *TableOptionCharset {
 	t := reuse.Alloc[TableOptionCharset](nil)
 	t.Charset = s
+	return t
+}
+
+func NewLegacyAlterNoopOption(s string, kind LegacyAlterNoopKind) *TableOptionCharset {
+	t := NewTableOptionCharset(s)
+	t.LegacyAlterKind = kind
 	return t
 }
 

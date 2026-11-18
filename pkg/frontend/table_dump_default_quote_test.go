@@ -57,7 +57,7 @@ func TestTableDumpDefaultHashesPreserve42(t *testing.T) {
 	}
 }
 
-func TestTableDumpEnumHashPreserves42(t *testing.T) {
+func TestTableDumpEnumHashRejectsAmbiguous42(t *testing.T) {
 	def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
 		Name:    "e",
 		Typ:     plan.Type{Id: int32(types.T_enum), Enumvalues: "line\nbreak,cr\rend,nul\x00byte,literal\\t"},
@@ -65,8 +65,8 @@ func TestTableDumpEnumHashPreserves42(t *testing.T) {
 	}}}
 	got, err := tableSchemaHash(def)
 	require.NoError(t, err)
-	// The historical ENUM formatter escaped control bytes, but not a
-	// literal backslash. That spelling is part of the archive hash.
+	// Historical hashes cannot distinguish escaped control bytes from literal
+	// backslashes. A target must not accept such an ambiguous old archive.
 	legacySQL := "CREATE TABLE `__table_dump_target__` (\n  `e` enum('line\\nbreak','cr\\rend','nul\\0byte','literal\\t') DEFAULT NULL\n)"
-	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(legacySQL))), got)
+	require.NotEqual(t, fmt.Sprintf("%x", sha256.Sum256([]byte(legacySQL))), got)
 }

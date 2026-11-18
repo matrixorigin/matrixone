@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -724,6 +725,7 @@ func (svst SystemVariableSetType) bitmap() uint64 {
 
 func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 	bld := strings.Builder{}
+	first := true
 	bitCount := 64 - bits2.LeadingZeros64(bits)
 	if bitCount > len(svst.bitIndex2Value) {
 		return "", errorValuesAreNotEnough
@@ -736,18 +738,14 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if !first {
 				bld.WriteByte(',')
 			}
+			first = false
+			bld.WriteString(v)
 		}
 	}
-
-	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bld.String(), nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -1298,7 +1296,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
+		Type:              InitSystemVariableSetType("sql_mode", mysql.SystemSQLModes()...),
 		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
 	},
 	"completion_type": {

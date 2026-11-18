@@ -1961,6 +1961,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
 
 	etlFS, targetPath, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -1989,6 +1990,7 @@ func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector
 type lateFailingWriteFS struct {
 	fileservice.FileService
 	deleteCalls int
+	cleanupErr  error
 }
 
 func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
@@ -2004,6 +2006,9 @@ func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVe
 
 func (fs *lateFailingWriteFS) Delete(ctx context.Context, filePaths ...string) error {
 	fs.deleteCalls++
+	if fs.deleteCalls > 1 && fs.cleanupErr != nil {
+		return fs.cleanupErr
+	}
 	return fs.FileService.Delete(ctx, filePaths...)
 }
 
@@ -2054,6 +2059,7 @@ func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testin
 	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -2112,6 +2118,34 @@ func TestDataBranchOutputReturnsLateFileWriteFailure(t *testing.T) {
 	require.Equal(t, 2, targetFS.deleteCalls, "prepare and failed-output cleanup must both delete")
 }
 
+func TestDataBranchOutputReportsFileCleanupFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	cleanupErr := moerr.NewInternalErrorNoCtx("mock cleanup delete failure")
+	targetFS := &lateFailingWriteFS{FileService: localFS, cleanupErr: cleanupErr}
+	installDataBranchTestFileService(t, ses, targetFS)
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.worker = pool
+	retCh := make(chan batchWithKind)
+	close(retCh)
+	stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"}}
+	err = satisfyDiffOutputOpt(ctx, cancel, func() {}, ses, nil, stmt, branchMetaInfo{}, tblStuff, retCh)
+	require.ErrorContains(t, err, "mock late write failure")
+	require.ErrorContains(t, err, "remove incomplete DATA BRANCH SQL output: internal error: mock cleanup delete failure")
+	require.ErrorIs(t, err, cleanupErr)
+	require.Equal(t, 2, targetFS.deleteCalls)
+	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
+}
+
 func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
@@ -2149,6 +2183,7 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -2173,6 +2208,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
 	require.NoError(t, err)
+	defer etlFS.Close(ctx)
 
 	pool, err := ants.NewPool(1)
 	require.NoError(t, err)

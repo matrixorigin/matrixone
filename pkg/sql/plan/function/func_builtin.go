@@ -3091,6 +3091,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uuid:
 		rs := vector.MustFunctionResult[types.Uuid](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -3117,7 +3120,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
