@@ -44,6 +44,10 @@ from outer_rows o order by o.a;
 -- A nested zero boundary does not erase its enclosing aggregate.
 select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
 
+-- A discarded wrapper retains its authorization source, and an untyped NULL
+-- remains valid when a dependent plan materializes the output.
+select null + (select (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+
 -- The discarded SQL-UDF argument must not erase a nested correlated LIMIT 0
 -- table dependency before privilege checking.
 create table secret_rows (s int);
@@ -76,6 +80,7 @@ select issue_32869_keep_second(
    union all select 5 limit 1),
   a
 ) from test_issue_32869.outer_rows;
+select cast(null as signed) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0) from test_issue_32869.restricted_wrapper c limit 1) from test_issue_32869.outer_rows;
 select s from test_issue_32869.secret_rows;
 -- @session
 drop user issue_32869_reader;

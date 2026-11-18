@@ -1241,6 +1241,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	var nodeID int32
 	var err error
+	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -1255,6 +1256,15 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration {
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
+		if err != nil {
+			return nil, err
+		}
+		if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+			return nil, err
+		}
 	}
 
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
@@ -1287,7 +1297,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 	}
 
-	subCtx.zeroScalarRootCandidate = subCtx.zeroScalarRootSourceSafe && subCtx.isCorrelated
 	return returnExpr, nil
 }
 
@@ -5669,6 +5678,7 @@ func collectUDFArgumentAuthorizationSources(
 	builder *QueryBuilder,
 	exprs []*plan.Expr,
 	roots []int32,
+	observers ...func(*plan.Expr),
 ) (map[int32]struct{}, error) {
 	if builder == nil || builder.qry == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
@@ -5677,6 +5687,9 @@ func collectUDFArgumentAuthorizationSources(
 	pending := append([]int32(nil), roots...)
 	visitExpr := func(expr *plan.Expr) error {
 		return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			for _, observe := range observers {
+				observe(e)
+			}
 			if sub := e.GetSub(); sub != nil {
 				pending = append(pending, sub.NodeId)
 			}
@@ -5730,6 +5743,21 @@ func collectUDFArgumentAuthorizationSources(
 	return sources, nil
 }
 
+// udfArgumentNeedsZeroScalarRemap checks only the repeated argument's graph.
+func udfArgumentNeedsZeroScalarRemap(builder *QueryBuilder, arg *plan.Expr) (bool, error) {
+	found := false
+	_, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{arg}, nil, func(e *plan.Expr) {
+		if sub := e.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+			found = true
+		}
+		if dependent := e.GetDependent(); dependent != nil {
+			_, marked := builder.zeroScalarPrograms[dependent.ProgramId]
+			found = found || marked
+		}
+	})
+	return found, err
+}
+
 func udfArgsContainCorrelatedRootZero(builder *QueryBuilder, args []*plan.Expr) bool {
 	if builder == nil {
 		return false
@@ -5740,11 +5768,8 @@ func udfArgsContainCorrelatedRootZero(builder *QueryBuilder, args []*plan.Expr) 
 		}
 		found := false
 		_ = plan.VisitExprTree(arg, func(expr *plan.Expr) error {
-			sub := expr.GetSub()
-			if sub != nil && sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
-				if ctx := builder.ctxByNode[sub.NodeId]; ctx != nil {
-					found = found || ctx.zeroScalarRootCandidate
-				}
+			if sub := expr.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+				found = true
 			}
 			return nil
 		})
@@ -5856,10 +5881,11 @@ func bindFuncExprImplUdf(
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		if requiresUDFSourceValidation && hasRepeatedSQLUdfArgument(udf.Body, len(boundArgs), parserSQLMode) {
-			return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
+		guardRemap := requiresUDFSourceValidation || b.builder != nil && len(b.builder.zeroScalarPrograms) > 0
+		sql, udfArgs, err := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode, guardRemap)
+		if err != nil {
+			return nil, err
 		}
-		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
@@ -5929,9 +5955,9 @@ func bindFuncExprImplUdf(
 // name. Checking the entire body (including quotes and comments) is deliberately
 // conservative: absence from the raw text guarantees that no user-authored
 // identifier in the parsed tree can be captured by the marker.
-func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string, guardRemap bool) (string, map[string]*plan.Expr, error) {
 	if len(args) == 0 {
-		return sql, nil
+		return sql, nil, nil
 	}
 
 	var callID uint64
@@ -5943,8 +5969,17 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 	markers := make(map[string]*plan.Expr, len(args))
 	markerByOrdinal := make(map[int]string, len(args))
 	foldedBody := strings.ToLower(sql)
+	var repeatedErr error
 	markerForOrdinal := func(ordinal int) string {
 		if name, ok := markerByOrdinal[ordinal]; ok {
+			if guardRemap && repeatedErr == nil {
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, args[ordinal-1])
+				if err != nil {
+					repeatedErr = err
+				} else if needsRemap {
+					repeatedErr = moerr.NewNYI(b.GetContext(), "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
+				}
+			}
 			return "`" + name + "`"
 		}
 
@@ -5958,7 +5993,7 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 		return "`" + name + "`"
 	}
 	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
-	return rewritten, markers
+	return rewritten, markers, repeatedErr
 }
 
 func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
@@ -5997,39 +6032,6 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 
 	result.WriteString(sql[written:])
 	return result.String()
-}
-
-// hasRepeatedSQLUdfArgument reports when a raw parameter marker is referenced
-// more than once. Duplicating a plan-level scalar subquery currently reuses its
-// relational owner, so calls with a root-zero argument fail closed rather than
-// mutating the shared dependent plan twice.
-func hasRepeatedSQLUdfArgument(sql string, argCount int, sqlMode string) bool {
-	scanner := mysqlparser.NewScannerWithSQLMode(
-		dialect.MYSQL,
-		sql,
-		mysqlparser.ParseSQLModeFlags(sqlMode),
-	)
-	defer mysqlparser.PutScanner(scanner)
-
-	counts := make([]uint8, argCount+1)
-	previousToken := 0
-	for {
-		token, value := scanSQLToken(scanner, &previousToken)
-		if token == 0 || token == mysqlparser.LEX_ERROR {
-			return false
-		}
-		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
-			continue
-		}
-		ordinal, err := strconv.Atoi(value[1:])
-		if err != nil || ordinal < 1 || ordinal > argCount {
-			continue
-		}
-		if counts[ordinal] == 1 {
-			return true
-		}
-		counts[ordinal]++
-	}
 }
 
 // scanSQLToken keeps secondary SQL scans consistent with qualified identifiers.

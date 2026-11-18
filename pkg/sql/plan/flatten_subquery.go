@@ -494,6 +494,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 		}
 		bound, err := builder.bindDependentSubquery(subquery)
+		if err == nil && rootZeroDependent {
+			if bound.GetDependent() == nil {
+				return 0, nil, moerr.NewInternalError(builder.GetContext(), "missing root-zero dependent program")
+			}
+			if builder.zeroScalarPrograms == nil {
+				builder.zeroScalarPrograms = make(map[uint32]struct{})
+			}
+			builder.zeroScalarPrograms[bound.GetDependent().ProgramId] = struct{}{}
+		}
 		return nodeID, bound, err
 	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {

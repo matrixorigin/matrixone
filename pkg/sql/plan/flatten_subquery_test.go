@@ -3242,3 +3242,38 @@ func TestValidateUDFArgumentTableScansKeepsUnregisteredWrapperSource(t *testing.
 	err = validateUDFArgumentAuthorizationSources(builder, required, arg)
 	require.NoError(t, err)
 }
+
+func TestZeroScalarDiscardedWrapperRetainsAuthorizationSource(t *testing.T) {
+	sql := `select n.n_nationkey, null + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n`
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	require.NoError(t, err)
+	require.False(t, queryHasReachableTable(query, "customer"))
+	found := false
+	for _, node := range query.Nodes {
+		if isWindowValidationPrivilegeCarrier(node) && node.GetObjRef().GetObjName() == "customer" {
+			found = true
+		}
+	}
+	require.True(t, found, "discarded wrapper must retain its authorization source")
+}
+
+func TestValidationCarrierPreservesCatalogIdentity(t *testing.T) {
+	def := &plan.TableDef{Name: "t", TblId: 4, Version: 5, DbId: 6, DbName: "db", TableType: "ordinary"}
+	node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "db", ObjName: "t"}, TableDef: def}
+	carrier := windowValidationPrivilegeCarrier(node)
+	require.NotNil(t, carrier)
+	require.Equal(t, def, carrier.TableDef)
+	require.NotSame(t, def, carrier.TableDef)
+
+	node.NodeType = plan.Node_FUNCTION_SCAN
+	node.TableDef = &plan.TableDef{TblFunc: &plan.TableFunction{Name: "table_changes"}}
+	carrier = windowValidationPrivilegeCarrier(node)
+	require.NotNil(t, carrier)
+	require.Equal(t, plan.Node_TABLE_SCAN, carrier.NodeType)
+	require.Nil(t, carrier.TableDef, "synthetic function schemas are not catalog objects")
+	require.Equal(t, node.ObjRef, carrier.ObjRef)
+}
