@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -809,10 +810,63 @@ func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	source := hashbuild.NewArgument()
 	defer source.Release()
 	source.TrackNullKeys = true
+	source.AuxiliaryRowIdColIdx = 4
 
 	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
 	defer duplicated.Release()
 	require.True(t, duplicated.TrackNullKeys)
+	require.Equal(t, source.AuxiliaryRowIdColIdx, duplicated.AuxiliaryRowIdColIdx)
+}
+
+func TestAuxiliaryArbitrationRemoteCodec(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctx := &scopeContext{id: 1}
+	for _, buildMode := range []bool{false, true} {
+		t.Run(map[bool]string{false: "join", true: "build"}[buildMode], func(t *testing.T) {
+			intType := types.T_int32.ToType()
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			var original vm.Operator
+			if buildMode {
+				op := hashbuild.NewArgument()
+				op.Conditions = []*plan.Expr{key}
+				op.NeedHashMap, op.NeedBatches, op.NeedAllocateSels = true, true, true
+				op.IsDedup, op.OnDuplicateAction = true, plan.Node_IGNORE
+				op.DelColIdx, op.DedupDeleteMarkerColIdx, op.AuxiliaryRowIdColIdx = 1, 2, 4
+				original = op
+			} else {
+				op := dedupjoin.NewArgument()
+				op.Conditions = [][]*plan.Expr{{key}, {key}}
+				op.LeftTypes = []types.Type{intType}
+				op.RightTypes = []types.Type{intType, intType, types.T_bool.ToType(), intType}
+				op.Result = []colexec.ResultPos{colexec.NewResultPos(1, 3)}
+				op.OnDuplicateAction = plan.Node_IGNORE
+				op.DelColIdx, op.DedupDeleteMarkerColIdx, op.AuxiliaryRowIdColIdx = 1, 2, 4
+				original = op
+			}
+			defer original.Release()
+			_, instruction, err := convertToPipelineInstruction(original, proc, ctx, 1)
+			require.NoError(t, err)
+			data, err := instruction.Marshal()
+			require.NoError(t, err)
+			var wire pipeline.Instruction
+			require.NoError(t, wire.Unmarshal(data))
+			restored, err := convertToVmOperator(&wire, ctx, nil)
+			require.NoError(t, err)
+			defer restored.Release()
+			if buildMode {
+				op := restored.(*hashbuild.HashBuild)
+				require.Equal(t, int32(4), op.AuxiliaryRowIdColIdx)
+				require.Equal(t, int32(2), op.DedupDeleteMarkerColIdx)
+				require.Equal(t, int32(1), op.DelColIdx)
+			} else {
+				op := restored.(*dedupjoin.DedupJoin)
+				require.Equal(t, int32(4), op.AuxiliaryRowIdColIdx)
+				require.Equal(t, int32(2), op.DedupDeleteMarkerColIdx)
+				require.Equal(t, int32(1), op.DelColIdx)
+			}
+		})
+	}
 }
 
 func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
@@ -1578,6 +1632,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := dedupjoin.NewArgument()
+	op.AuxiliaryRowIdColIdx = 4
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*dedupjoin.DedupJoin)
@@ -1585,8 +1640,11 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 
 	require.Nil(t, op.Mailbox, "duplicating must not mutate the reusable template")
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, dup1.AuxiliaryRowIdColIdx)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, dup2.AuxiliaryRowIdColIdx)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, nextGeneration.AuxiliaryRowIdColIdx)
 }
 
 func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {

@@ -1440,6 +1440,95 @@ func TestDedupBuildIgnoreRebuildsAfterOwnerReplacement(t *testing.T) {
 	require.True(t, hb.DelRows.Contains(1), "delRows=%s count=%d", hb.DelRows.String(), hb.DelRows.Count())
 }
 
+func TestDedupBuildIgnoreAuxiliaryPriority(t *testing.T) {
+	type row struct {
+		key, previous, id  int32
+		auxiliary, release bool
+	}
+	reservation := row{key: 30, auxiliary: true}
+	claimant := row{key: 30, previous: 20, id: 2}
+	owner := row{key: 30, previous: 30, id: 1}
+	release := row{key: 30, previous: 30, auxiliary: true, release: true}
+	for _, tt := range []struct {
+		name     string
+		rows     []row
+		wantIDs  []int32
+		warnings uint64
+	}{
+		{"reservation first", []row{reservation, claimant}, nil, 1},
+		{"claimant first", []row{claimant, reservation}, nil, 1},
+		{"owner after reservation", []row{reservation, claimant, owner}, []int32{1}, 1},
+		{"owner before reservation", []row{owner, reservation, claimant}, []int32{1}, 1},
+		{"claimant reservation owner", []row{claimant, reservation, owner}, []int32{1}, 1},
+		{"claimant owner reservation", []row{claimant, owner, reservation}, []int32{1}, 1},
+		{"release before claimant", []row{release, claimant}, []int32{2}, 0},
+		{"release after claimant", []row{claimant, release}, []int32{2}, 0},
+		{"release survives discarded claimant", []row{claimant, release, reservation}, nil, 1},
+		{"release reservation claimant", []row{release, reservation, claimant}, nil, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			hb := newTestHashmapBuilder(t)
+			defer func() {
+				hb.Reset(proc, true)
+				hb.Free(proc)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			}()
+			session := &hashBuildWarningSession{}
+			proc.Session = session
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Update", "DML", true)
+			hb.IsDedup = true
+			hb.OnDuplicateAction = plan.Node_IGNORE
+			hb.DedupColName = "uk"
+			hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+			hb.AuxiliaryRowIdColIdx = 4
+			require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, 2, nil, proc))
+			bat := batch.NewWithSize(4)
+			defer bat.Clean(proc.Mp())
+			for i, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_bool.ToType(), types.T_int32.ToType()} {
+				bat.Vecs[i] = vector.NewVec(typ)
+			}
+			wantReleases := 0
+			for _, r := range tt.rows {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], r.key, false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[1], r.previous, r.auxiliary && !r.release, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[2], r.release, false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[3], r.id, r.auxiliary, proc.Mp()))
+				if r.release {
+					wantReleases++
+				}
+			}
+			bat.SetRowCount(len(tt.rows))
+			require.NoError(t, hb.CopyBuildBatch(bat, proc))
+			hb.InputBatchRowCount = bat.RowCount()
+			require.NoError(t, hb.BuildHashmap(false, true, false, proc))
+			var ids []int32
+			releases := 0
+			for _, output := range hb.Batches.Buf {
+				for i := 0; i < output.RowCount(); i++ {
+					if !output.Vecs[3].IsNull(uint64(i)) {
+						ids = append(ids, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[3], i))
+					}
+					if vector.GetFixedAtNoTypeCheck[bool](output.Vecs[2], i) {
+						releases++
+					}
+				}
+			}
+			require.Equal(t, tt.wantIDs, ids)
+			require.Equal(t, wantReleases, releases, "release evidence must survive compaction")
+			require.Equal(t, tt.warnings, session.total)
+			if tt.warnings > 0 {
+				require.Equal(t, []hashBuildWarning{{code: moerr.ER_DUP_ENTRY, msg: "Duplicate entry '30' for key 'uk'"}}, session.warnings)
+			}
+			if wantReleases > 0 {
+				require.True(t, hb.DelRows.Contains(0))
+			}
+		})
+	}
+}
+
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
 	mp := mpool.MustNewZero()
