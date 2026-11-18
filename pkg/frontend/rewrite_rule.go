@@ -417,7 +417,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: normalizeRewriteSQL(tree.String(&clause.Exprs, dialect.MYSQL)),
+		selectList: rewriteRuleProjectionKey(&clause.Exprs),
 		table:      table,
 	}, true
 }
@@ -506,6 +506,26 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 			),
 		}
 	}
+}
+
+// Fold SQL syntax as before, but retain the type boundary and case of string literals.
+func rewriteRuleProjectionKey(exprs *tree.SelectExprs) string {
+	var literals []tree.StringLiteralPosition
+	sql := tree.StringWithOpts(exprs, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(&literals))
+	if len(literals) == 0 {
+		return normalizeRewriteSQL(sql)
+	}
+
+	var key strings.Builder
+	key.Grow(len(sql))
+	start := 0
+	for _, literal := range literals {
+		key.WriteString(strings.ToLower(sql[start:literal.Start]))
+		key.WriteString(sql[literal.Start:literal.End])
+		start = literal.End
+	}
+	key.WriteString(strings.ToLower(sql[start:]))
+	return strings.TrimSpace(key.String())
 }
 
 func normalizeRewriteSQL(sql string) string {

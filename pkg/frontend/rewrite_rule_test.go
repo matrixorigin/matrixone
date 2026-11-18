@@ -812,6 +812,50 @@ func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestMergeRewriteRulesPreservesKeywordArguments(t *testing.T) {
+	ctx := context.Background()
+	const base = "select a from db1.t1 where "
+	for _, predicate := range []string{
+		"trim(leading from code) = '0001'",
+		"trim(trailing 'x' from code) = '0001'",
+		"trim('leading' from code) = '0001'",
+		"timestampadd(DAY, 1, dt) = '2026-11-18'",
+		"get_format(DATE, 'ISO') = '%Y-%m-%d'",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			merged, err := mergeRewriteRules(ctx, base+predicate, base+"a = 2")
+			require.NoError(t, err)
+			want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"("+predicate+") or (a = 2)", 1)
+			require.NoError(t, err)
+			got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
+	ctx := context.Background()
+	merged, err := mergeRewriteRules(ctx,
+		"select concat(A, 'UP', 'O''Brien') as x from db1.t1 where a = 1",
+		"select concat(a, 'UP', 'O''Brien') as x from db1.t1 where a = 2")
+	require.NoError(t, err)
+	require.Equal(t, "select concat(A, 'UP', 'O''Brien') as x from db1.t1 where (a = 1) or (a = 2)", merged)
+
+	for _, tc := range []struct{ left, right string }{
+		{"'1'", "1"},
+		{"'UP'", "'up'"},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " as x from db1.t1 where a = 1"
+			right := "select " + tc.right + " as x from db1.t1 where a = 2"
+			merged, err := mergeRewriteRules(ctx, left, right)
+			require.NoError(t, err)
+			require.Equal(t, right, merged)
+		})
+	}
+}
+
 func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 	ctx := context.Background()
 
