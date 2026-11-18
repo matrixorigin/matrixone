@@ -7803,7 +7803,45 @@ func (builder *QueryBuilder) bindOrderBy(
 // back to its storage index.
 func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, expr *plan.Expr) (*plan.Expr, error) {
 	col := expr.GetCol()
-	if col == nil || col.RelPos != ctx.projectTag || col.ColPos < 0 || int(col.ColPos) >= len(ctx.projects) {
+	if col == nil || col.ColPos < 0 {
+		return expr, nil
+	}
+
+	// An aggregated scope binds the ORDER BY of a grouping column to the
+	// AGG output (groupTag) while `order by <projected column>` keeps the
+	// project-tag reference below. Both transports carry the same hidden
+	// digit-render domain, so recover it for the group transport here
+	// instead of letting the sort compare the rendered VARCHAR bytes
+	// (#32336, #32374, PR #32438 review): base grouped queries ordered
+	// numerically because their group inputs were numeric end to end.
+	if col.RelPos == ctx.groupTag {
+		if int(col.ColPos) >= len(ctx.groups) {
+			return expr, nil
+		}
+		groupExpr := ctx.groups[col.ColPos]
+		numericTarget, matched := ceilFloorTextRenderNumericTarget(groupExpr)
+		if !matched {
+			numericTarget, matched = builder.projectedCeilFloorRenderDomain(ctx, groupExpr)
+		}
+		if !matched {
+			return expr, nil
+		}
+		// The hidden key may only reference the AGG output above it, never
+		// the group expression's own inputs, which already left scope.
+		orderKeyExpr, err := appendCastBeforeExpr(
+			builder.GetContext(), DeepCopyExpr(expr), makePlan2Type(&numericTarget),
+		)
+		if err != nil {
+			return nil, err
+		}
+		colPos, err := appendOrderByProjectExpr(ctx, orderKeyExpr)
+		if err != nil {
+			return nil, err
+		}
+		return GetColExpr(orderKeyExpr.Typ, ctx.projectTag, colPos), nil
+	}
+
+	if col.RelPos != ctx.projectTag || int(col.ColPos) >= len(ctx.projects) {
 		return expr, nil
 	}
 
@@ -7868,19 +7906,17 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 
 // projectedCeilFloorRenderDomain resolves the hidden numeric domain of a
 // digit-rendering one-argument CEIL/FLOOR result that a derived-table/CTE
-// projection exported as a plain column reference (#32336, #32374, PR
-// #32438 review). It reuses the binder's projection provenance descent, so
-// the ORDER BY hidden key above and the numeric retype in the binder keep
-// the same domain for the same projected column.
+// or set-operation projection exported as a plain column reference
+// (#32336, #32374, PR #32438 review). It reuses the binder's projection
+// provenance descent over every set branch, so the ORDER BY hidden key
+// above and the numeric retype in the binder keep the same domain for the
+// same projected column.
 func (builder *QueryBuilder) projectedCeilFloorRenderDomain(ctx *BindContext, expr *plan.Expr) (types.Type, bool) {
 	if expr.GetCol() == nil {
 		return types.Type{}, false
 	}
-	_, defining, _, ok := resolveProjectedColumnSource(builder, ctx, expr)
-	if !ok {
-		return types.Type{}, false
-	}
-	return ceilFloorTextRenderNumericTarget(defining)
+	leaves := resolveProjectedColumnSource(builder, ctx, expr)
+	return resolvedProjectedColumnDomain(leaves)
 }
 
 // projectExprKey uses the full proto encoding so large ORDER BY expressions

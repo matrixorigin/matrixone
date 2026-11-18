@@ -950,3 +950,109 @@ func TestCeilFloorTextRenderNumbersSurviveQueryBoundaries(t *testing.T) {
 		"select max(vrt) from (select vrt from text_render_t where id > 0) d",
 		"max", types.T_varchar)
 }
+
+// TestCeilFloorSetOutputsKeepBaseNumericDomains pins the numeric contract
+// of the omitted-CHAR render/widen provenance through set-operation
+// outputs (PR #32438 review: the mo-bot P1/P2 findings). A set output is
+// the one boundary whose exported column no table binding owns — the
+// outer scope references the set node's own binding tag — so the
+// provenance walk descends the plan node graph and recovers the domain
+// only when every branch leaf agrees with it: the homogeneous omitted-CHAR
+// unions keep the base FLOAT64 semantics for aggregates, ORDER BY,
+// grouped ORDER BY and composed CEIL/FLOOR, while a branch through an
+// explicit TEXT render/cast lost on the base too and keeps the ordinary
+// unprovenanced binding (overload 13 / exact-integer DECIMAL128).
+// Control-flow value arms retype the same way before the CASE/IF result
+// unification so the composed outputs keep the base's result typing.
+func TestCeilFloorSetOutputsKeepBaseNumericDomains(t *testing.T) {
+	// P1: numeric aggregates over a homogeneous render union bind through
+	// the base domains (SUM/AVGSTRING reject the raw VARCHAR render).
+	for _, tc := range []struct{ sql, fnName string }{
+		{"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t) d", "sum"},
+		{"select max(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select floor(convert(vrt, char)) as c from text_render_t) d", "max"},
+		{"select min(c) from (select floor(cast(vrt as char)) as c from text_render_t union all select ceil(convert(vrt, char)) as c from text_render_t) d", "min"},
+		{"select avg(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t) d", "avg"},
+		// UNION DISTINCT shares the same set-node output schema.
+		{"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union select ceil(cast(vrt as char)) as c from text_render_t) d", "sum"},
+		// three branches fan out over one chain of set nodes
+		{"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t union all select floor(convert(vrt, char)) as c from text_render_t) d", "sum"},
+	} {
+		requirePlanFnResultType(t, tc.sql, tc.fnName, types.T_float64)
+	}
+
+	// P1: ORDER BY over the render union keeps the base numeric key, both
+	// plainly and through a GROUP BY over the same set output.
+	requireSingleSortKeyType(t, mustBuildPlan(t,
+		"select c from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t) d order by c",
+	), types.T_float64)
+	requireSingleSortKeyType(t, mustBuildPlan(t,
+		"select c, count(*) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t) d group by c order by c",
+	), types.T_float64)
+
+	// A derived chain above the set output still resolves: the branch
+	// projection passes the exported column through a nested derived
+	// table before the union combines the two arms.
+	requirePlanFnResultType(t,
+		"select max(c2) from (select c as c2 from (select ceil(cast(vrt as char)) as c from text_render_t) d1 union all select c as c2 from (select ceil(convert(vrt, char)) as c from text_render_t) d2) d0",
+		"max", types.T_float64)
+
+	// P2: CEIL over a homogeneous widen union keeps the provenance marker
+	// and the base FLOAT64 composition of the outer expression.
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t union all select convert(vrt, char) as c from text_render_t) d")
+	require.NoError(t, err)
+	fns := collectPlanFuncs(t, logicPlan, ceilFloorRenderNames())
+	require.NotEmpty(t, fns)
+	requireRenderOverload(t, fns[0], function.CeilTextOmittedCharRenderOverload,
+		"a homogeneous omitted-CHAR widen union keeps the provenance marker")
+	requirePlanFnResultType(t,
+		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t union all select convert(vrt, char) as c from text_render_t) d",
+		"+", types.T_float64)
+
+	// P2 control: one explicit TEXT branch breaks the homogeneous
+	// provenance, so the outer CEIL keeps the ordinary overload 13 and
+	// the exact-integer DECIMAL128 composition (the base lost the
+	// omitted-CHAR domain through that set output as well).
+	logicPlan, err = runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t union all select cast(vrt as text) as c from text_render_t) d")
+	require.NoError(t, err)
+	fns = collectPlanFuncs(t, logicPlan, ceilFloorRenderNames())
+	require.NotEmpty(t, fns)
+	requireRenderOverload(t, fns[0], 13,
+		"an explicit-TEXT branch keeps the ordinary render overload")
+	requirePlanFnResultType(t,
+		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t union all select cast(vrt as text) as c from text_render_t) d",
+		"+", types.T_decimal128)
+
+	// Heterogeneous render unions keep their ordinary binding: the outer
+	// aggregate cannot assume one branch's domain over the other's.
+	_, err = runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(vt) as c from text_render_t) d")
+	require.Error(t, err,
+		"a marker/TEXT-render union does not collapse to one numeric domain")
+
+	// Control-flow value arms: the render arm retypes to its own base
+	// domain before the CASE/IF result unification, so the composed case
+	// output keeps the base numeric typing for numeric consumers.
+	for _, tc := range []struct{ sql, fnName string }{
+		{"select sum(c) from (select case when id > 0 then ceil(cast(vrt as char)) else floor(cast(vrt as char)) end as c from text_render_t) d", "sum"},
+		{"select sum(c) from (select case when id > 0 then ceil(cast(vrt as char)) else 0 end as c from text_render_t) d", "sum"},
+		{"select sum(c) from (select if(id > 0, ceil(cast(vrt as char)), 0) as c from text_render_t) d", "sum"},
+	} {
+		requirePlanFnResultType(t, tc.sql, tc.fnName, types.T_float64)
+	}
+	// Control: CASE/IF arms of plain TEXT renders keep the established
+	// exact-integer DECIMAL128 domain through the same composition.
+	requirePlanFnResultType(t,
+		"select sum(c) from (select case when id > 0 then ceil(vt) else floor(vt) end as c from text_render_t) d",
+		"sum", types.T_decimal128)
+}
+
+// mustBuildPlan binds one SQL statement through the mock optimizer and
+// fails the test on bind errors.
+func mustBuildPlan(t *testing.T, sql string) *plan.Plan {
+	t.Helper()
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+	require.NoError(t, err, sql)
+	return logicPlan
+}

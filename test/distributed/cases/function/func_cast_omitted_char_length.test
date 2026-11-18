@@ -598,3 +598,58 @@ select dom_up from func_cast_omit_char_ctas3 order by dom_up;
 show create table func_cast_omit_char_ctas3;
 drop table if exists func_cast_omit_char_ctas3;
 drop table if exists func_cast_omit_char_dom;
+
+-- Set-operation outputs keep every branch's omitted-CHAR numeric domain
+-- (#32336, #32374, PR #32438 review): homogeneous render unions keep the
+-- base FLOAT64 aggregates and numeric ordering; a mixed-domain branch keeps
+-- the ordinary unprovenanced binding, and the explicit-TEXT composition
+-- keeps its exact-integer DECIMAL128 route.
+create table func_cast_omit_char_seto (v varchar(16));
+insert into func_cast_omit_char_seto values ('2'), ('10');
+-- four-row render union aggregate: the frozen base summed 24 over FLOAT64
+select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d;
+select max(n), min(n), avg(n)
+  from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
+-- numeric ordering: 2 sorts before 10
+select n from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d order by n;
+select n, count(*) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d group by n order by n;
+-- distinct and three-branch variants share the same recovered domain
+select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
+select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select floor(cast(v as char)) as n from func_cast_omit_char_seto
+  union all select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
+-- deep derived chain above the set output
+select max(c2) from (select c as c2 from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto) d1
+  union all select c as c2 from (select ceil(convert(v, char)) as c from func_cast_omit_char_seto) d2) d0;
+-- CASE render arms through the boundary keep the base numeric typing
+select sum(c) from (select case when v = '2' then ceil(cast(v as char))
+  else floor(convert(v, char)) end as c from func_cast_omit_char_seto) d;
+-- mixed-domain branches keep the ordinary binding: the outer aggregate
+-- does not assume one branch's domain over the other's
+create table func_cast_omit_char_setm (v varchar(16));
+insert into func_cast_omit_char_setm values ('2.5');
+select sum(c) from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select floor(cast(v as text)) as c from func_cast_omit_char_setm) d;
+drop table if exists func_cast_omit_char_setm;
+-- CEIL over a homogeneous omitted-CHAR widen union composes via FLOAT64:
+-- both '1e40' rows evaluate like the frozen base (review head errored 20301)
+create table func_cast_omit_char_setw (v varchar(16));
+insert into func_cast_omit_char_setw values ('1e40');
+select ceil(n) + 1 as dom_set_ceil
+  from (select cast(v as char) as n from func_cast_omit_char_setw
+  union all select convert(v, char) as n from func_cast_omit_char_setw) d order by dom_set_ceil;
+-- control: one explicit-TEXT branch breaks the homogeneous provenance and
+-- keeps the ordinary exact-integer DECIMAL128 composition
+create table func_cast_omit_char_setc (v varchar(16));
+insert into func_cast_omit_char_setc values ('2.5');
+select ceil(n) + 1 as dom_set_text_ctrl
+  from (select cast(v as char) as n from func_cast_omit_char_setc
+  union all select cast(v as text) as n from func_cast_omit_char_setc) d order by dom_set_text_ctrl;
+drop table if exists func_cast_omit_char_setw;
+drop table if exists func_cast_omit_char_setc;
+drop table if exists func_cast_omit_char_seto;

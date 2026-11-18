@@ -3596,61 +3596,221 @@ func (b *baseBinder) bindUnaryMathOmittedCharTextExpr(name string, arg *Expr) (*
 	}, nil
 }
 
-// maxProjectedProvenanceWalk bounds the derived-table/CTE descent of
+// maxProjectedProvenanceWalk bounds the total descent of
 // resolveProjectedColumnSource: a cyclic or pathological chain must
-// terminate without provenance instead of looping the binder.
-const maxProjectedProvenanceWalk = 16
+// terminate without provenance instead of looping the binder. The
+// budget counts every kept binding-walk and node-graph step, so set
+// fan-out cannot multiply it into an unbounded walk.
+const maxProjectedProvenanceWalk = 48
+
+// projectedColumnSource is one defining projection resolved for a bound
+// expression that a query boundary exported as a plain column reference:
+// srcCtx is the defining scope's BindContext, defining that scope's bound
+// project expression, and colPos the position inside its project list.
+type projectedColumnSource struct {
+	srcCtx   *BindContext
+	defining *Expr
+	colPos   int32
+}
+
+// resolvedProjectedColumnDomain resolves the numeric domain the defining
+// leaves kept on the base (#32336, #32374, PR #32438 review). A derived
+// table or CTE boundary yields exactly one leaf, so this is the recorded
+// behavior for them. A set-operation output yields one leaf per branch,
+// and every branch must resolve the same domain before a consumer may
+// recover it: a branch rendering through a different provenance (an
+// explicit TEXT cast) or losing it entirely terminates with false, so
+// heterogeneous set outputs keep their ordinary unprovenanced binding.
+func resolvedProjectedColumnDomain(leaves []*projectedColumnSource) (types.Type, bool) {
+	if len(leaves) == 0 {
+		return types.Type{}, false
+	}
+	target, matched := ceilFloorTextRenderNumericTarget(leaves[0].defining)
+	if !matched {
+		return types.Type{}, false
+	}
+	for _, leaf := range leaves[1:] {
+		branchTarget, branchMatched := ceilFloorTextRenderNumericTarget(leaf.defining)
+		if !branchMatched || !branchTarget.Eq(target) {
+			return types.Type{}, false
+		}
+	}
+	return target, true
+}
+
+// isSetOperationNode reports whether the plan node assembles its output
+// from two child streams positionally: every consumer of one output
+// column consumes each branch's value of that column.
+func isSetOperationNode(node *plan.Node) bool {
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return true
+	}
+	return false
+}
 
 // resolveProjectedColumnSource walks a bound expression that a query
-// boundary exported as a plain column reference back to the projection that
-// defines it (#32336, #32374, PR #32438 review). It returns the defining
+// boundary exported as a plain column reference back to every defining
+// projection (#32336, #32374, PR #32438 review). It returns the defining
 // scope's BindContext, the defining bound expression and its project
-// position. The descent follows derived-table and CTE bindings (they carry
-// no database name), reading each defining scope's own project list; a real
-// table, an index outside the source project list or any non-column
-// expression terminates the walk with ok=false, so consumers keep the
-// ordinary unprovenanced binding everywhere the provenance is genuinely
-// lost (union branches, recursive members and opaque sources).
+// position for each branch that produced the exported column. The
+// descent follows derived-table and CTE bindings (they carry no database
+// name), reading each defining scope's own project list; once an exported
+// column references the binding tag of a set-operation node, whose output
+// no table binding owns, the descent continues through the plan node
+// graph down to every branch's defining projection. A real table, an
+// index outside a source project list, a set branch that resolves no
+// leaf, or any non-column expression terminates the walk with nil, so
+// consumers keep the ordinary unprovenanced binding everywhere the
+// provenance is genuinely lost (recursive members and opaque sources).
 func resolveProjectedColumnSource(
 	builder *QueryBuilder,
 	ctx *BindContext,
 	expr *plan.Expr,
-) (srcCtx *BindContext, defining *Expr, colPos int32, ok bool) {
-	if builder == nil || ctx == nil {
-		return nil, nil, 0, false
+) []*projectedColumnSource {
+	if builder == nil || ctx == nil || expr == nil {
+		return nil
 	}
-	walkCtx := ctx
-	for range maxProjectedProvenanceWalk {
+	walk := &projectedProvenanceWalk{builder: builder, budget: maxProjectedProvenanceWalk}
+	return walk.leavesOfExpr(ctx, expr)
+}
+
+// projectedProvenanceWalk carries the shared descent state of one
+// resolveProjectedColumnSource: the builder under inspection and a step
+// budget bounding binding walk and node-graph descent together.
+type projectedProvenanceWalk struct {
+	builder *QueryBuilder
+	budget  int
+	seen    map[[2]int32]struct{}
+}
+
+func (w *projectedProvenanceWalk) allowStep() bool {
+	w.budget--
+	return w.budget >= 0
+}
+
+// leavesOfExpr follows passthrough columns through table bindings: the
+// visited column references the derived-table/CTE binding visible in
+// bindCtx, and that binding's defining scope either holds the defining
+// expression in its project list or passes it through one level deeper.
+func (w *projectedProvenanceWalk) leavesOfExpr(bindCtx *BindContext, expr *plan.Expr) []*projectedColumnSource {
+	for w.allowStep() {
 		col := expr.GetCol()
 		if col == nil {
-			return nil, nil, 0, false
+			return nil
 		}
-		binding, bound := walkCtx.bindingByTag[col.RelPos]
-		if !bound || binding == nil || binding.db != "" {
+		binding, bound := bindCtx.bindingByTag[col.RelPos]
+		if bound && binding != nil {
 			// Real tables have a database name; subquery/CTE bindings do not.
-			return nil, nil, 0, false
+			if binding.db != "" {
+				return nil
+			}
+			srcCtx := w.builder.ctxByNode[binding.nodeId]
+			if srcCtx == nil {
+				return nil
+			}
+			if col.ColPos < 0 || int(col.ColPos) >= len(srcCtx.projects) {
+				return nil
+			}
+			defining := srcCtx.projects[col.ColPos]
+			if defining == nil {
+				return nil
+			}
+			if inner := defining.GetCol(); inner != nil {
+				// A pure passthrough column (a nested derived table or a
+				// set-operation export) hides the defining expression one
+				// level deeper.
+				expr = defining
+				bindCtx = srcCtx
+				continue
+			}
+			return []*projectedColumnSource{{srcCtx: srcCtx, defining: defining, colPos: col.ColPos}}
 		}
-		srcCtx = builder.ctxByNode[binding.nodeId]
-		if srcCtx == nil {
-			return nil, nil, 0, false
+		// An aggregated scope exports neither a table binding nor a set
+		// node for its group outputs: the projects order-by rewrites and
+		// every other consumer see a passthrough ColRef to groupTag. That
+		// tag has no binding, so hop to the scope's own defining group
+		// expression instead — which is where the render provenance of
+		// the grouped column still lives (PR #32438 review).
+		if bindCtx.groupTag != 0 && col.RelPos == bindCtx.groupTag &&
+			col.ColPos >= 0 && int(col.ColPos) < len(bindCtx.groups) {
+			defining := bindCtx.groups[col.ColPos]
+			if defining == nil {
+				return nil
+			}
+			if inner := defining.GetCol(); inner != nil {
+				expr = defining
+				continue
+			}
+			return []*projectedColumnSource{{srcCtx: bindCtx, defining: defining, colPos: col.ColPos}}
 		}
-		if col.ColPos < 0 || int(col.ColPos) >= len(srcCtx.projects) {
-			return nil, nil, 0, false
+		// A set-operation export references the set node's own binding
+		// tag, which no table binding in any scope records (union
+		// outputs are not derived tables of any single node). Descend
+		// the plan node graph to the branches instead.
+		nodeID, isNodeTag := w.builder.tag2NodeID[col.RelPos]
+		if !isNodeTag {
+			return nil
 		}
-		defining = srcCtx.projects[col.ColPos]
-		if defining == nil {
-			return nil, nil, 0, false
-		}
-		if inner := defining.GetCol(); inner != nil {
-			// A pure passthrough column (e.g. a nested derived table)
-			// hides the original projection one level deeper.
-			expr = defining
-			walkCtx = srcCtx
-			continue
-		}
-		return srcCtx, defining, col.ColPos, true
+		return w.leavesAtNode(nodeID, col.ColPos)
 	}
-	return nil, nil, 0, false
+	return nil
+}
+
+// leavesAtNode resolves output position colPos of the plan node named by
+// nodeID to its defining leaves. A set-operation node contributes one
+// leaf per child branch; every other node resolves its project entry at
+// that position, following an in-branch passthrough column through the
+// binder walk and leaving the defining expression otherwise.
+func (w *projectedProvenanceWalk) leavesAtNode(nodeID int32, colPos int32) []*projectedColumnSource {
+	if !w.allowStep() {
+		return nil
+	}
+	if nodeID < 0 || int(nodeID) >= len(w.builder.qry.Nodes) {
+		return nil
+	}
+	key := [2]int32{nodeID, colPos}
+	if w.seen == nil {
+		w.seen = make(map[[2]int32]struct{})
+	} else if _, repeated := w.seen[key]; repeated {
+		return nil
+	}
+	w.seen[key] = struct{}{}
+	node := w.builder.qry.Nodes[nodeID]
+	if isSetOperationNode(node) {
+		if len(node.Children) != 2 || colPos < 0 {
+			return nil
+		}
+		left := w.leavesAtNode(node.Children[0], colPos)
+		if left == nil {
+			return nil
+		}
+		right := w.leavesAtNode(node.Children[1], colPos)
+		if right == nil {
+			return nil
+		}
+		return append(left, right...)
+	}
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return nil
+	}
+	defining := node.ProjectList[colPos]
+	if defining == nil {
+		return nil
+	}
+	nodeCtx := w.builder.ctxByNode[nodeID]
+	if nodeCtx == nil {
+		return nil
+	}
+	if defining.GetCol() != nil {
+		// The position passes a plain column through (a nested derived
+		// table or a deeper set operation inside this branch); continue
+		// through this node's own binding scope.
+		return w.leavesOfExpr(nodeCtx, defining)
+	}
+	return []*projectedColumnSource{{srcCtx: nodeCtx, defining: defining, colPos: colPos}}
 }
 
 // isProjectedOmittedCharWidenColumn reports whether a bound CEIL/FLOOR
@@ -3659,23 +3819,32 @@ func resolveProjectedColumnSource(
 // #32336/#32374: the defining scope recorded the AST provenance at the
 // projection position (BindContext.setOmittedCharWidenProject), which is
 // the only place the omitted-CHAR signature survives the query boundary.
+// A set-operation export keeps the widening only when every branch's
+// defining scope recorded it at the same position (PR #32438 review).
 func (b *baseBinder) isProjectedOmittedCharWidenColumn(arg *plan.Expr) bool {
 	if arg.GetCol() == nil {
 		return false
 	}
-	srcCtx, _, colPos, ok := resolveProjectedColumnSource(b.builder, b.ctx, arg)
-	return ok && srcCtx.isOmittedCharWidenProject(colPos)
+	leaves := resolveProjectedColumnSource(b.builder, b.ctx, arg)
+	for _, leaf := range leaves {
+		if !leaf.srcCtx.isOmittedCharWidenProject(leaf.colPos) {
+			return false
+		}
+	}
+	return len(leaves) > 0
 }
 
 // retypeProjectedCeilFloorRenderArgs extends the direct-provenance retype
-// of retypeCeilFloorTextRenderArgs across derived-table/CTE boundaries: the
-// rendered one-argument CEIL/FLOOR results that a projection exported as a
-// plain column reference resolve back to their defining function
-// expression, and numeric consumers in the outer scope retype them into the
-// same base domain (FLOAT64 for the omitted-length CAST/CONVERT-to-CHAR
-// provenance, exact-integer DECIMAL128 for TEXT inputs) that the defining
-// scope's compositions use. Direct function arguments keep taking the
-// shared free-function path, never double-casting.
+// of retypeCeilFloorTextRenderArgs across derived-table/CTE/set-operation
+// boundaries: the rendered one-argument CEIL/FLOOR results that a
+// projection exported as a plain column reference resolve back to their
+// defining function expression — every set branch included, required to
+// agree on the domain — and numeric consumers in the outer scope retype
+// them into the same base domains (FLOAT64 for the omitted-length
+// CAST/CONVERT-to-CHAR provenance, exact-integer DECIMAL128 for TEXT
+// inputs) that the defining scope's own compositions use. Direct function
+// arguments keep taking the shared free-function path, never
+// double-casting.
 func retypeProjectedCeilFloorRenderArgs(b *baseBinder, name string, args []*plan.Expr) error {
 	if b.builder == nil || b.ctx == nil {
 		return nil
@@ -3685,11 +3854,8 @@ func retypeProjectedCeilFloorRenderArgs(b *baseBinder, name string, args []*plan
 			// Direct renders are the free-function path's job above.
 			return types.Type{}, false
 		}
-		_, defining, _, ok := resolveProjectedColumnSource(b.builder, b.ctx, expr)
-		if !ok {
-			return types.Type{}, false
-		}
-		return ceilFloorTextRenderNumericTarget(defining)
+		leaves := resolveProjectedColumnSource(b.builder, b.ctx, expr)
+		return resolvedProjectedColumnDomain(leaves)
 	})
 }
 
@@ -3714,12 +3880,38 @@ func retypeProjectedCeilFloorRenderArgs(b *baseBinder, name string, args []*plan
 // rendered values a derived-table/CTE projection exported as plain column
 // references (PR #32438 review). Plain strings, temporal
 // operands and INTERVAL compositions keep their existing rules unchanged.
+// ceilFloorControlFlowValueIndexes lists the argument positions of a
+// control-flow function whose values flow to its result: the
+// THEN/ELSE arms of CASE/IF stay the only retype candidates while the
+// condition operands must keep their own binding. The index layout
+// mirrors adjustControlFlowStringMetadata so metadata and domain
+// handling agree on which positions are value arms.
+func ceilFloorControlFlowValueIndexes(name string, argCount int) map[int]struct{} {
+	switch name {
+	case "if", "iff":
+		if argCount == 3 {
+			return map[int]struct{}{1: {}, 2: {}}
+		}
+	case "case":
+		arms := make(map[int]struct{}, (argCount+1)/2)
+		for i := 1; i < argCount; i += 2 {
+			arms[i] = struct{}{}
+		}
+		if argCount%2 == 1 {
+			arms[argCount-1] = struct{}{}
+		}
+		return arms
+	}
+	return nil
+}
+
 func retypeCeilFloorTextRenderArgs(
 	ctx context.Context,
 	name string,
 	args []*plan.Expr,
 	resolveCeilFloorDomain func(*Expr) (types.Type, bool),
 ) error {
+	controlFlowArms := ceilFloorControlFlowValueIndexes(name, len(args))
 	// JSON builders embed the base's numeric result as a JSON number: the
 	// base's FLOAT64 (omitted-CHAR compositions) and UINT64 (TEXT inputs)
 	// results entered json_object/json_array values as numbers, while the
@@ -3742,6 +3934,19 @@ func retypeCeilFloorTextRenderArgs(
 			// renders (ROUND(CEIL(CAST('1e40' AS CHAR))) reaches an INT64
 			// range error without this) and keep exact integer rows exact.
 			"round", "truncate", "power", "pow", "abs":
+		// Control-flow value arms composed the base's numeric renders
+		// before the CASE/IF result unification saw them: the base's
+		// CASE WHEN ... THEN CEIL(CAST(... AS CHAR)) arms kept the
+		// FLOAT64/DECIMAL values, and the unifier then derived the
+		// result type the base used (numeric across all-render arms,
+		// VARCHAR for renders mixed with plain strings) instead of
+		// collapsing to the digit render's VARCHAR. Only the value
+		// arms retype; the conditions keep their own operand binding
+		// (PR #32438 review).
+		case "case", "if", "iff":
+			if controlFlowArms == nil {
+				return nil
+			}
 		default:
 			return nil
 		}
@@ -3751,6 +3956,11 @@ func retypeCeilFloorTextRenderArgs(
 			// json_object keys stay strings even when a render sits in a
 			// key position; MySQL requires string keys.
 			continue
+		}
+		if controlFlowArms != nil {
+			if _, isValueArm := controlFlowArms[i]; !isValueArm {
+				continue
+			}
 		}
 		target, matched := resolveCeilFloorDomain(args[i])
 		if !matched {
