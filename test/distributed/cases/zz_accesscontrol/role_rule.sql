@@ -420,6 +420,19 @@ set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 -- @session
 
+-- A quoted numeric column must remain a column when merging a third role.
+alter table db1.t_dup add column `2024` int;
+update db1.t_dup set `2024` = marker * 10;
+alter role test_rule_role_dup_projection_a add rule "select `2024` from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select `2024` from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_expr_projection_a add rule "select `2024` from db1.t_dup where marker = 3" on table db1.t_dup;
+grant test_rule_role_expr_projection_a to test_rule_user_dup_projection;
+-- @session:id=28&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select `2024` from db1.t_dup order by `2024`;
+-- @session
+
 -- cleanup all test resources
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;

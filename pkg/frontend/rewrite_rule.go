@@ -371,8 +371,8 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	mergedClause.Where = mergeRewriteRuleWhere(leftShape.clause.Where, rightShape.clause.Where)
 	merged.Select = &mergedClause
 
-	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
-	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithSingleQuoteString()), true, nil
+	// The merged rule is reparsed by both the next merge and the query planner.
+	return formatRewriteRuleSQL(&merged, nil), true, nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
@@ -508,11 +508,16 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 	}
 }
 
+func formatRewriteRuleSQL(node tree.NodeFormatter, literals *[]tree.StringLiteralPosition) string {
+	return tree.StringWithOpts(node, dialect.MYSQL,
+		tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(literals))
+}
+
 // Fold SQL syntax as before, but keep identifiers distinct from string literals
 // and retain the case of literal values.
 func rewriteRuleProjectionKey(exprs *tree.SelectExprs) string {
 	var literals []tree.StringLiteralPosition
-	sql := tree.StringWithOpts(exprs, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(&literals))
+	sql := formatRewriteRuleSQL(exprs, &literals)
 	if len(literals) == 0 {
 		return normalizeRewriteSQL(sql)
 	}
