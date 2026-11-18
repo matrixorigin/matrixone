@@ -147,16 +147,7 @@ func (s *S3FS) indexObjectCached(filePath string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if d.cache.Contains(diskPath) {
-		return diskPath, true
-	}
-	select {
-	case <-d.load.done:
-		return diskPath, false
-	default:
-	}
-	_, err = os.Stat(diskPath)
-	return diskPath, err == nil
+	return diskPath, d.dirCached(diskPath)
 }
 
 // readIndexObject fills the entries of vector not done from the object's entry in the

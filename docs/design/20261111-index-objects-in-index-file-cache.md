@@ -26,7 +26,8 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
 - **Reading.** Reads of an entries table carry `IndexFileObject`: its table scans,
   identified by the table type, and the search's own scan. A read with it of an object the
   index-file cache holds is served from there, and the decoded data still enters the
-  memory cache. A prefetch with it, through the prefetcher or the IO pipeline, of an
+  memory cache; concurrent reads of an entry share its decode as reads of an object the
+  disk cache holds do. A prefetch with it, through the prefetcher or the IO pipeline, of an
   object the cache holds is not downloaded into the disk cache. Anything else takes the
   normal path.
 - **Eviction.** An object's entry is an index file like any other: the cache's LRU evicts

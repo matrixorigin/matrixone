@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
@@ -824,7 +823,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		selectedBlocks = relData.DataCnt()
 	}
 	if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && relData != nil {
-		defer closeIndexObjects(openIndexObjects(ctx, s.proc.GetFileService(), indexObjectNames(relData)))
+		defer releaseIndexObjects(holdIndexObjects(s.proc.GetFileService(), indexObjectNames(relData)))
 	}
 	readers, err := rel.BuildReaders(
 		ctx,
@@ -1331,33 +1330,24 @@ func indexObjectNames(relData engine.RelData) []string {
 	return objects
 }
 
-// openIndexObjects opens, held, the objects the index-file cache of fs holds, so the scan
-// reads them from there. A read of another downloads it whole into the cache.
-func openIndexObjects(ctx context.Context, fs fileservice.FileService, objects []string) []*indexfile.File {
+// holdIndexObjects holds the objects the index-file cache of fs holds, so the scan reads
+// them from there. A read of another downloads it whole into the cache.
+func holdIndexObjects(fs fileservice.FileService, objects []string) []*fileservice.IndexFileHold {
 	cache, _ := fileservice.IndexObjectCache(fs)
 	if cache == nil || len(objects) == 0 {
 		return nil
 	}
-	files := make([]*indexfile.File, 0, len(objects))
+	holds := make([]*fileservice.IndexFileHold, 0, len(objects))
 	for _, object := range objects {
-		f, err := indexfile.OpenCachedObject(ctx, cache, object)
-		if err != nil {
-			if ctx.Err() != nil {
-				break
-			}
-			continue
-		}
-		if f != nil {
-			files = append(files, f)
+		if hold := cache.HoldCached(fileservice.IndexObjectEntry(object)); hold != nil {
+			holds = append(holds, hold)
 		}
 	}
-	return files
+	return holds
 }
 
-func closeIndexObjects(files []*indexfile.File) {
-	for _, f := range files {
-		if f != nil {
-			_ = f.Close()
-		}
+func releaseIndexObjects(holds []*fileservice.IndexFileHold) {
+	for _, hold := range holds {
+		hold.Release()
 	}
 }

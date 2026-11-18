@@ -370,3 +370,27 @@ func TestIndexObjectSharedDecodeFillEligibility(t *testing.T) {
 	require.True(t, fs.sharedDecodeIndexFillAvailable(vec(IndexFileObject)))
 	require.False(t, fs.sharedDecodeIndexFillAvailable(vec(0)))
 }
+
+// HoldCached holds a cached entry until the hold is released, and holds nothing for an
+// entry the cache does not hold.
+func TestIndexFileCacheHoldCached(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	d := fs.indexFileCache.disk
+	name := IndexObjectEntry("object")
+	diskPath, err := d.pathForDir(name)
+	require.NoError(t, err)
+	holds := func() int {
+		d.held.mu.Lock()
+		defer d.held.mu.Unlock()
+		return d.held.m[diskPath]
+	}
+	require.Nil(t, fs.indexFileCache.HoldCached(name))
+	require.Zero(t, holds())
+
+	cacheIndexObject(t, fs, "object", data)
+	hold := fs.indexFileCache.HoldCached(name)
+	require.NotNil(t, hold)
+	require.Equal(t, 1, holds())
+	hold.Release()
+	require.Zero(t, holds())
+}

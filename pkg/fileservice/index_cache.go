@@ -614,6 +614,35 @@ func (c *IndexFileCache) Hold(name string) (*IndexFileHold, error) {
 	return &IndexFileHold{release: func(used bool) { c.disk.releaseDir(diskPath, used) }}, nil
 }
 
+// HoldCached holds entry name, as Hold does, when the cache holds the entry, and returns
+// nil when it does not.
+func (c *IndexFileCache) HoldCached(name string) *IndexFileHold {
+	hold, err := c.Hold(name)
+	if err != nil {
+		return nil
+	}
+	if diskPath, err := c.disk.pathForDir(name); err != nil || !c.disk.dirCached(diskPath) {
+		hold.ReleaseSuperseded()
+		return nil
+	}
+	return hold
+}
+
+// dirCached reports whether the entry directory at diskPath is cached: indexed, or on
+// disk while the index is loading.
+func (d *DiskCache) dirCached(diskPath string) bool {
+	if d.cache.Contains(diskPath) {
+		return true
+	}
+	select {
+	case <-d.load.done:
+		return false
+	default:
+	}
+	_, err := os.Stat(diskPath)
+	return err == nil
+}
+
 // Delete removes entry name at once, held or not; files already open stay readable. A
 // PutUnlessDeleted of content read before the delete publishes nothing.
 func (c *IndexFileCache) Delete(ctx context.Context, name string) error {

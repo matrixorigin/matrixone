@@ -80,7 +80,7 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, names, indexObjectNames(data), "each object of a persisted block, once")
-	require.Empty(t, openIndexObjects(ctx, services, indexObjectNames(data)), "nothing cached yet")
+	require.Empty(t, holdIndexObjects(services, indexObjectNames(data)), "nothing cached yet")
 
 	readCtx := fileservice.WithFileServicePolicy(ctx, fileservice.IndexFileObject)
 	for _, name := range names {
@@ -90,13 +90,9 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 		vec.Release()
 	}
 
-	files := openIndexObjects(ctx, services, indexObjectNames(data))
-	require.Len(t, files, 2)
-	for _, f := range files {
-		require.NotNil(t, f)
-		require.Equal(t, int64(4096), f.Size())
-	}
-	closeIndexObjects(files)
+	holds := holdIndexObjects(services, indexObjectNames(data))
+	require.Len(t, holds, 2)
+	releaseIndexObjects(holds)
 
 	cache, _ := fileservice.IndexObjectCache(services)
 	require.NotNil(t, cache)
@@ -109,5 +105,5 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 		require.NoError(t, got[0].Close())
 	}
 
-	require.Nil(t, openIndexObjects(ctx, nil, names), "no file service, no index objects")
+	require.Nil(t, holdIndexObjects(nil, names), "no file service, no index objects")
 }
