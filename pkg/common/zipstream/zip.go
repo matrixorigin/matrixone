@@ -72,7 +72,7 @@ func (h *zipLocalHeader) hasDescriptor() bool {
 	return h.flags&zipFlagDescriptor != 0
 }
 
-// loadable reports whether the entry is the kind a load reads: not a directory
+// loadable identifies entries a load reads: neither a directory
 // and not hidden, the rule getTarReader applies to a tar archive.
 func (h *zipLocalHeader) loadable() bool {
 	return !strings.HasSuffix(h.name, "/") && !strings.HasPrefix(path.Base(h.name), ".")
