@@ -329,13 +329,15 @@ func TestBuildReadersUsesSourceScopeContext(t *testing.T) {
 func TestSerialReaderBuildCancellation(t *testing.T) {
 	storageErr := errors.New("reader construction failed")
 	for _, tc := range []struct {
-		name        string
-		cancelQuery bool
-		readErr     error
-		want        error
+		name              string
+		cancelQuery       bool
+		leavePipelineLive bool
+		readErr           error
+		want              error
 	}{
 		{name: "local stop"},
 		{name: "query canceled", cancelQuery: true, want: context.Canceled},
+		{name: "reader reports cancellation while pipeline and query are live", leavePipelineLive: true, readErr: context.Canceled, want: context.Canceled},
 		{name: "storage error during local stop", readErr: storageErr, want: storageErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,7 +356,7 @@ func TestSerialReaderBuildCancellation(t *testing.T) {
 				if tc.cancelQuery {
 					_, cancel := process.GetQueryCtxFromProc(root)
 					cancel()
-				} else {
+				} else if !tc.leavePipelineLive {
 					source.Cancel(nil)
 				}
 				if tc.readErr != nil {

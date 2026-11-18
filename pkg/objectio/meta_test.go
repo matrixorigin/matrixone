@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,6 +164,84 @@ func TestDedupLoadWaiterTimeoutWhileOwnerStillLoading(t *testing.T) {
 	assert.NoError(t, <-ownerDone)
 }
 
+type dedupLoadWaiterContext struct {
+	context.Context
+	admitted chan struct{}
+	once     sync.Once
+}
+
+const dedupLoadWaiterAdmissionTimeout = time.Second
+
+// dedupLoad calls Done only after it finds an existing load call. Observing
+// that call gives these tests a phase barrier without relying on scheduling.
+func (c *dedupLoadWaiterContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.admitted) })
+	return c.Context.Done()
+}
+
+func newDedupLoadWaiterContext() (*dedupLoadWaiterContext, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &dedupLoadWaiterContext{
+		Context:  ctx,
+		admitted: make(chan struct{}),
+	}, cancel
+}
+
+func waitForDedupLoadWaiterAdmission(
+	t *testing.T,
+	waiterCtx *dedupLoadWaiterContext,
+	waiterDone <-chan struct{},
+	ownerDone <-chan struct{},
+	releaseOwner func(),
+	cancelWaiter context.CancelFunc,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-waiterCtx.admitted:
+		return
+	case <-waiterDone:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("dedup load waiter completed before admission")
+	case <-timer.C:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("timed out waiting for dedup load waiter admission")
+	}
+}
+
+func drainDedupLoadAfterAdmissionFailure(
+	t *testing.T,
+	ownerDone <-chan struct{},
+	waiterDone <-chan struct{},
+) {
+	t.Helper()
+	if !waitForDedupLoadCompletion(ownerDone) {
+		t.Errorf("dedup load owner did not exit after admission failure")
+	}
+	if !waitForDedupLoadCompletion(waiterDone) {
+		t.Errorf("dedup load waiter did not exit after admission failure")
+	}
+}
+
+func waitForDedupLoadCompletion(done <-chan struct{}) bool {
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	oldMetaCache := metaCache
 	metaCache = newMetaCache(fscache.ConstCapacity(1024))
@@ -173,34 +252,51 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	var key mataCacheKey
 	key[0] = 2
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	started := make(chan struct{})
-	ownerDone := make(chan error, 1)
+	ownerDone := make(chan struct{})
+	var ownerErr error
 
 	go func() {
-		_, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		defer close(ownerDone)
+		_, ownerErr = dedupLoad(ctx, key, func() ([]byte, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		})
-		ownerDone <- err
 	}()
 	<-started
 
+	waiterCtx, cancelWaiter := newDedupLoadWaiterContext()
+	defer cancelWaiter()
 	var waiterLoadCount atomic.Int32
-	waiterDone := make(chan error, 1)
+	waiterDone := make(chan struct{})
+	var waiterValue []byte
+	var waiterErr error
 	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		waiterValue, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			waiterLoadCount.Add(1)
-			return nil, errors.New("unexpected waiter load")
+			return []byte("ok"), nil
 		})
-		waiterDone <- err
+		close(waiterDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	waitForDedupLoadWaiterAdmission(
+		t,
+		waiterCtx,
+		waiterDone,
+		ownerDone,
+		cancel,
+		cancelWaiter,
+	)
 	cancel()
-	assert.ErrorIs(t, <-ownerDone, context.Canceled)
-	assert.ErrorIs(t, <-waiterDone, context.Canceled)
-	assert.Zero(t, waiterLoadCount.Load())
+	<-ownerDone
+	<-waiterDone
+	assert.ErrorIs(t, ownerErr, context.Canceled)
+	assert.NoError(t, waiterCtx.Err())
+	assert.NoError(t, waiterErr)
+	assert.Equal(t, []byte("ok"), waiterValue)
+	assert.Equal(t, int32(1), waiterLoadCount.Load())
 
 	metaLoadMu.Lock()
 	_, ok := metaLoadCalls[key]

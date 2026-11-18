@@ -693,6 +693,17 @@ func (r *reader) ReadWithFilter(
 	return isEnd, err
 }
 
+var (
+	readerFailure = logutil.Event{
+		Name:    "storage.reader.failure",
+		Message: "LOGREADER-ERROR",
+	}
+	readerCancellation = logutil.Event{
+		Name:    "storage.reader.cancellation",
+		Message: "LOGREADER-ERROR",
+	}
+)
+
 func (r *reader) read(
 	ctx context.Context,
 	cols []string,
@@ -715,11 +726,18 @@ func (r *reader) read(
 		}
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
-				logutil.Error(
-					"LOGREADER-ERROR",
-					zap.String("name", r.name),
-					zap.Error(err),
-				)
+				event := readerFailure
+				if err == context.Canceled || err == context.DeadlineExceeded {
+					// Keep ordinary cancellation bursts from suppressing storage failures.
+					event = readerCancellation
+				}
+				event.ErrorLazy(func() []zap.Field {
+					return []zap.Field{
+						zap.String("name", r.name),
+						zap.Error(err),
+						zap.NamedError("reader_context_error", ctx.Err()),
+					}
+				})
 				return
 			}
 			if isEnd {
