@@ -41,7 +41,7 @@ func (b *blockList) GetBlockInfo(i int) objectio.BlockInfo { return b.blocks[i] 
 // in-memory block skipped. An object the cache does not hold is not waited for: the
 // scan's read of it downloads it whole into the index-file cache, not the disk cache, and
 // the next scan opens it from there.
-func TestOpenIndexObjectsOfScan(t *testing.T) {
+func TestHoldIndexObjectsOfScan(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	diskPath := filepath.Join(dir, "disk-cache")

@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -161,9 +162,15 @@ func TestDiskCacheConcurrentReadsOfKeptFile(t *testing.T) {
 					return
 				default:
 				}
-				if got, ok := readTestEntry(t, ctx, cache, "foo", 16); ok {
-					require.Equal(t, data, got)
+				vec := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 16}}}
+				if err := cache.Read(ctx, vec); err != nil {
+					t.Errorf("read: %v", err)
+					return
 				}
+				if vec.Entries[0].done && !bytes.Equal(vec.Entries[0].Data, data) {
+					t.Errorf("read %q, want %q", vec.Entries[0].Data, data)
+				}
+				vec.Release()
 			}
 		}()
 	}
