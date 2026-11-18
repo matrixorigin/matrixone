@@ -39,8 +39,8 @@ drop database if exists db2;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
-create table db1.t_dup(a int, marker int);
-insert into db1.t_dup values (1,1),(1,2),(2,3);
+create table db1.t_dup(a int, marker int, code varchar(16));
+insert into db1.t_dup values (1,1,'0001'),(1,2,'O''Brien'),(2,3,'1');
 
 -- 0. Rename admission keeps tables without role rules working and closes the
 -- shared cluster-table path conservatively.
@@ -347,8 +347,8 @@ select * from db1.t1 order by a;
 -- 18. Partial projections keep duplicate projected values from distinct visible rows
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
@@ -360,6 +360,19 @@ select count(*) from db1.t_dup;
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
+-- @session
+
+-- Both rules are active through role inheritance. The two matching rows project
+-- to the same value; the row with code '1' must not match '0001'.
+grant test_rule_role_dup_projection_b to test_rule_role_dup_projection_a;
+-- @session:id=17&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a, count(*) from db1.t_dup group by a order by a;
+-- @session
+
+-- Re-saving a rule and rebuilding the merged rule in a new session keeps the same visible rows.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+-- @session:id=18&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a, count(*) from db1.t_dup group by a order by a;
 -- @session
 
 -- 19. Row-wise expression projections also merge without dropping role visibility
