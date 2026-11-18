@@ -317,8 +317,11 @@ func TestEnumValueIndexAssignmentBoundaries(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				defer proc.Free()
 				proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
-				inputs := []string{"a ", "a  ", "A ", "02", "2 ", "+2", "0", "0x2", "000002"}
-				wantCycle := []types.Enum{1, 2, 1, 3, 4, 2, 0, 0, 0}
+				// "a " and "a" are equal after trimming (a legacy definition;
+				// new DDL rejects it), so every spelling of a resolves to 1 on
+				// both the linear (<8 labels / <64 rows) and indexed paths.
+				inputs := []string{"a ", "a  ", "A ", "02", "2 ", "+2", "0", "0x2", "000002", "a"}
+				wantCycle := []types.Enum{1, 1, 1, 3, 4, 2, 0, 0, 0, 1}
 				values := make([]string, rows)
 				want := make([]types.Enum, rows)
 				for i := range rows {

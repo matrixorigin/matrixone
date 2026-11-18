@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -98,6 +99,23 @@ func TestParseEnum(t *testing.T) {
 			require.Equal(t, c.want, got)
 		})
 	}
+}
+
+func TestNormalizeEnumValues(t *testing.T) {
+	values, err := NormalizeEnumValues(context.Background(), []string{"red  ", "  blue", "GREEN", "", "中文 "})
+	require.NoError(t, err)
+	require.Equal(t, []string{"red", "  blue", "GREEN", "", "中文"}, values)
+
+	for _, dup := range [][]string{
+		{"a", "a "}, {"a", "A"}, {" ", ""}, {"", "   "}, {"x ", "X  "},
+	} {
+		_, err = NormalizeEnumValues(context.Background(), dup)
+		require.ErrorContains(t, err, "duplicate enum member", "%q", dup)
+	}
+	// Only ASCII space is trailing padding; NBSP and leading spaces count.
+	values, err = NormalizeEnumValues(context.Background(), []string{"a", "a ", " a", "a\t"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "a ", " a", "a\t"}, values)
 }
 
 func TestParseEnumIndex(t *testing.T) {
@@ -242,7 +260,11 @@ func TestEnumAssignmentParsing(t *testing.T) {
 	}{
 		{"02,x,y,2,z", "02", 1}, {"02,x,y,2,z", "2 ", 4},
 		{"", " ", 1}, {",a", "", 1},
-		{"a ,a", "a ", 1}, {"a ,a", "a", 2}, {"a ,a", "a  ", 2},
+		// Trailing spaces are insignificant on both sides. A legacy
+		// definition with labels equal after trimming (rejected by new DDL)
+		// resolves to the first of them.
+		{"a ,a", "a ", 1}, {"a ,a", "a", 1}, {"a ,a", "a  ", 1},
+		{"a ,b", "a", 1}, {"a ,b", "a  ", 1}, {"a,b", "a ", 1},
 	} {
 		got, truncated, err := ParseEnumAssignment(tc.def, tc.input)
 		require.NoError(t, err)

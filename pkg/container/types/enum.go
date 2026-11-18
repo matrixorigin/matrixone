@@ -151,20 +151,34 @@ func parseEnumNameWithContext(ctx context.Context, elems []string, name string) 
 	if err := validateEnumMemberCountWithContext(ctx, len(elems)); err != nil {
 		return 0, err
 	}
-	// Preserve raw padded labels in existing MO definitions before trying the
-	// MySQL trailing-space spelling. Do not normalize stored domain metadata.
-	for {
-		for i, n := range elems {
-			if strings.EqualFold(n, name) {
-				return Enum(i + 1), nil
-			}
+	// Trailing spaces are insignificant on both sides. New definitions are
+	// trimmed by NormalizeEnumValues, but tables created before that may still
+	// store padded labels, so trim each label here too.
+	name = strings.TrimRight(name, " ")
+	for i, n := range elems {
+		if strings.EqualFold(strings.TrimRight(n, " "), name) {
+			return Enum(i + 1), nil
 		}
-		trimmed := strings.TrimRight(name, " ")
-		if trimmed == name {
-			return 0, nil
-		}
-		name = trimmed
 	}
+	return 0, nil
+}
+
+// NormalizeEnumValues applies MySQL's CREATE-time ENUM member rules: trailing
+// spaces are removed, and members that are then equal case-insensitively are
+// rejected as duplicates.
+func NormalizeEnumValues(ctx context.Context, values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimRight(value, " ")
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "duplicate enum member %q", value)
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result, nil
 }
 
 // ParseEnumValue return item index with special number.

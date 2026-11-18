@@ -1190,31 +1190,29 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 		foldedIndexes: make(map[string]types.Enum, len(values)),
 	}
 	for i, value := range values {
-		foldKey := commonutil.EqualFoldKey(value)
+		// Match types.ParseEnum: trailing spaces are insignificant on both
+		// sides, including padded labels stored by older definitions.
+		label := strings.TrimRight(value, " ")
+		foldKey := commonutil.EqualFoldKey(label)
 		firstIndex, ok := index.foldedIndexes[foldKey]
 		if !ok {
 			firstIndex = types.Enum(i + 1)
 			index.foldedIndexes[foldKey] = firstIndex
 		}
-		index.exactIndexes[value] = firstIndex
+		index.exactIndexes[label] = firstIndex
 	}
 	return index
 }
 
 func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
-	for {
-		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		if enumIndex := index.foldedIndexes[commonutil.EqualFoldKey(value)]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		trimmed := strings.TrimRight(value, " ")
-		if trimmed == value {
-			return types.ParseEnumNumericText(value, len(index.values))
-		}
-		value = trimmed
+	value = strings.TrimRight(value, " ")
+	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+		return enumIndex, false, nil
 	}
+	if enumIndex := index.foldedIndexes[commonutil.EqualFoldKey(value)]; enumIndex != 0 {
+		return enumIndex, false, nil
+	}
+	return types.ParseEnumNumericText(value, len(index.values))
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1

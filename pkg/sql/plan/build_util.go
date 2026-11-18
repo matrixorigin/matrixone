@@ -478,7 +478,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			enumValues, err := types.NormalizeEnumValues(ctx, n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(enumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
 			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
