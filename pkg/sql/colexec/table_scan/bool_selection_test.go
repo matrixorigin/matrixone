@@ -32,6 +32,8 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 	for _, late := range []bool{false, true} {
 		t.Run(fmt.Sprintf("late=%t", late), func(t *testing.T) {
 			proc := testutil.NewProc(t)
+			t.Cleanup(func() { mpool.DeleteMPool(proc.Mp()) })
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
 			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
