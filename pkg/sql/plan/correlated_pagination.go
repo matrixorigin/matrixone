@@ -541,6 +541,8 @@ func (builder *QueryBuilder) flattenEmptyCorrelatedScalar(nodeID int32, scan *pl
 		ProjectList: []*plan.Expr{value},
 		Limit:       makePlan2Uint64ConstExprWithType(0),
 	}, subCtx)
+	builder.zeroScalarRewriteCount++
+	builder.zeroScalarScanIDs = append(builder.zeroScalarScanIDs, scanID)
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_SINGLE,

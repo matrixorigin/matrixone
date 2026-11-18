@@ -387,8 +387,13 @@ func (builder *QueryBuilder) flattenSubquery(
 		// from the reachable plan used for prepared-statement metadata.
 		return 0, nil, moerr.NewNYI(builder.GetContext(), "prepared correlated subquery with LIMIT 0")
 	}
-	if rootLimitIsZero {
+	if rootLimitIsZero && subquery.Typ == plan.SubqueryRef_SCALAR {
 		if scan, ok := builder.emptyCorrelatedScalarScan(subID, subquery, subCtx); ok {
+			if builder.zeroScalarRootCtx == nil ||
+				(ctx != builder.zeroScalarRootCtx && builder.zeroScalarRewriteCandidateDepth == 0) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
+			}
 			id, result := builder.flattenEmptyCorrelatedScalar(nodeID, scan, subCtx, ctx)
 			return id, result, nil
 		}

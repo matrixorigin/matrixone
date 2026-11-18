@@ -23,6 +23,8 @@ select o.a, (select (o.a > 1) is true from inner_rows i where i.d > o.a limit 0)
 from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
 from outer_rows o order by o.a;
+select o.a, (select cast(o.a as signed) as v from inner_rows i order by i.d limit 0) as sorted_zero
+from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
 from outer_rows o order by o.a;
 select o.a, (select cast(concat(o.a, char(120)) as signed) from inner_rows limit 0) as value_zero
@@ -44,7 +46,16 @@ select cast(null as signed) + (select (select c.d from inner_rows r where r.d > 
 -- table dependency before privilege checking.
 create table secret_rows (s int);
 insert into secret_rows values (5);
+select o.a, null + (select o.a from secret_rows s where s.s > o.a limit 0) as authorized_zero
+from outer_rows o order by o.a;
 create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
+create function issue_32869_identity(x int) returns int language sql as '$1';
+select o.a, issue_32869_identity((select o.a from secret_rows s where s.s > o.a limit 0)) as identity_zero
+from outer_rows o order by o.a;
+select o.a, issue_32869_identity(
+  (select (select i.d from secret_rows s where s.s > i.d limit 0)
+   from inner_rows i limit 1)
+) as nested_identity_zero from outer_rows o order by o.a;
 create role issue_32869_role;
 create user issue_32869_reader identified by '111' default role issue_32869_role;
 grant connect on account * to issue_32869_role;
@@ -65,6 +76,24 @@ select issue_32869_keep_second(
   a
 ) from test_issue_32869.outer_rows;
 select cast(null as signed) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0) from test_issue_32869.restricted_wrapper c limit 1) from test_issue_32869.outer_rows;
+-- A set-operation child has its own bind context and must not lose the
+-- secret-table dependency when the SQL UDF discards its argument.
+select issue_32869_keep_second(
+  (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+   from test_issue_32869.inner_rows o union all select 1), a
+) from test_issue_32869.outer_rows;
+-- NULL arithmetic cannot fold away a correlated source without retaining it.
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+select issue_32869_identity((select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0))
+from test_issue_32869.outer_rows o;
+select issue_32869_identity(
+  (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+   from test_issue_32869.inner_rows o limit 1)
+) from test_issue_32869.outer_rows;
+-- Nested rewrites stay fail-closed because their enclosing source may be lost.
+select null + (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+ from test_issue_32869.inner_rows o limit 1) from test_issue_32869.outer_rows;
 select s from test_issue_32869.secret_rows;
 -- @session
 drop user issue_32869_reader;
