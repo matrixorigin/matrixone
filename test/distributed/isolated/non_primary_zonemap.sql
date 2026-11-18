@@ -3,6 +3,7 @@
 drop database if exists non_primary_zonemap;
 create database non_primary_zonemap;
 use non_primary_zonemap;
+-- 仅在独占的新 CN 上运行：此时初始会话值才等于 CN 的初始设置。
 set @saved_zonemap_hints=@@optimizer_hints;
 set optimizer_hints='';
 create table clustered (id int primary key, k int);
