@@ -15,13 +15,52 @@
 package multi_update
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func updateCtxKey(ctx *MultiUpdateCtx) string {
+	if ctx == nil {
+		return ""
+	}
+	tableID := uint64(0)
+	if ctx.TableDef != nil {
+		tableID = ctx.TableDef.TblId
+	}
+	if ctx.ObjRef != nil {
+		return fmt.Sprintf(
+			"%d/%d/%d/%s/%s/%d",
+			ctx.ObjRef.Db,
+			ctx.ObjRef.Schema,
+			ctx.ObjRef.Obj,
+			ctx.ObjRef.SchemaName,
+			ctx.ObjRef.ObjName,
+			tableID,
+		)
+	}
+	if ctx.TableDef != nil {
+		return fmt.Sprintf("%s/%s/%d", ctx.TableDef.DbName, ctx.TableDef.Name, tableID)
+	}
+	return ""
+}
+
+func lookupUpdateCtxInfo(infos map[string]*updateCtxInfo, ctx *MultiUpdateCtx) *updateCtxInfo {
+	if info := infos[updateCtxKey(ctx)]; info != nil {
+		return info
+	}
+	if ctx != nil && ctx.TableDef != nil {
+		return infos[ctx.TableDef.Name]
+	}
+	return nil
+}
 
 var _ vm.Operator = new(MultiUpdate)
 
@@ -106,6 +145,10 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+
+	seenTargetRows map[uint64]*hashmap.StrHashMap
+	seenRowsGrant  int64
+	seenRowsRSC    rscthrottler.RSCThrottler
 }
 
 type MultiUpdateCtx struct {
@@ -119,6 +162,18 @@ type MultiUpdateCtx struct {
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
 	InsertPkColIdx     int
 	IgnoreAffectedRows bool
+	// DedupByTargetRowID makes this context consume only the whole input row
+	// selected for its physical target row. The planner supplies an independent
+	// row_number() partition for every updated target table.
+	DedupByTargetRowID bool
+	TargetUpdateCtxIdx int
+	// AffectedRowsCols contains one active selector for every writable alias
+	// coalesced into this physical target. Physical writes remain deduplicated,
+	// while affected rows count every selector that contributed to the Rowid.
+	AffectedRowsCols []int
+	// TargetTableID stays logical when a partition wrapper replaces TableDef
+	// with a physical partition definition.
+	TargetTableID uint64
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -163,6 +218,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	}
 
 	update.ctr.outputWriter = nil
+	update.freeSeenTargetRows()
 	update.ctr.state = vm.Build
 }
 
@@ -186,9 +242,22 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+	update.freeSeenTargetRows()
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) freeSeenTargetRows() {
+	if update.ctr.seenRowsGrant > 0 {
+		update.ctr.seenRowsRSC.Release(update.ctr.seenRowsGrant)
+		update.ctr.seenRowsGrant = 0
+	}
+	update.ctr.seenRowsRSC = nil
+	for _, seen := range update.ctr.seenTargetRows {
+		seen.Free()
+	}
+	update.ctr.seenTargetRows = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

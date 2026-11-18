@@ -47,7 +47,9 @@ const (
 	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
 	MORPCVersion10     int64 = 10 // bounded Sorted64 membership-filter wire format
 	MORPCVersion11     int64 = 11 // linearizable TN-ordered logtail read barrier
-	MORPCLatestVersion       = MORPCVersion11
+	MORPCVersion12     int64 = 12 // target-aware multi-table UPDATE pipeline fields
+	MORPCVersion13     int64 = 13 // per-target affected rows and repeated-target IGNORE arbitration
+	MORPCLatestVersion       = MORPCVersion13
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

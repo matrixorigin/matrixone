@@ -286,34 +286,44 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 	if reg == nil || reg.Ch2 == nil {
 		return false
 	}
-	if cap(reg.Ch2) == 0 {
-		return true
-	}
-	if ctx != nil && ctx.Err() != nil {
-		return false
-	}
-	select {
-	case <-reg.Done():
-		return false
-	default:
-	}
-	if len(reg.Ch2) < cap(reg.Ch2) {
-		return true
-	}
 	if ctx == nil {
 		ctx = context.TODO()
 	}
+	if ctx.Err() != nil {
+		return false
+	}
+	done := reg.Done()
+	select {
+	case <-done:
+		return false
+	default:
+	}
+	if cap(reg.Ch2) == 0 || len(reg.Ch2) < cap(reg.Ch2) {
+		return true
+	}
+	// Ch2 also has legacy direct readers which do not send a capacity hint.
+	// Keep the existing bounded poll as a fallback for those readers and for
+	// coalesced notifications when several producers wait on the same edge.
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-done:
+			return false
+		default:
+		}
 		if len(reg.Ch2) < cap(reg.Ch2) {
 			return true
 		}
 		select {
 		case <-ctx.Done():
 			return false
-		case <-reg.Done():
+		case <-done:
 			return false
+		case <-reg.capacityNotify:
 		case <-ticker.C:
 		}
 	}
@@ -452,6 +462,9 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 				return nil, nil
 			}
 		}
+
+		// A receive may have released capacity; send a nonblocking wake hint.
+		receiver.srcReg[chosen-1].notifyCapacity()
 
 		// Handle typed terminal events: End, Error, Abort.
 		// Sender protocol guarantee: each sender sends exactly one terminal signal

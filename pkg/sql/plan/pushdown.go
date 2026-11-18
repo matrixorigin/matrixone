@@ -28,6 +28,9 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
+	if builder.checkPlanningCanceled() != nil {
+		return originalNodeID, filters
+	}
 	// Record before pushdownFilters
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
@@ -163,6 +166,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
+		if node.FilterIsBarrier {
+			childID, residual := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			if len(residual) > 0 {
+				childID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: residual}, nil)
+			}
+			node.Children[0] = childID
+			return originalNodeID, filters
+		}
 		// Admission consumes the final row image. Optimize its source without
 		// moving resource checks below joins/projections. IsEnd is reserved for
 		// assertions that discard their output, so it cannot mark this filter.

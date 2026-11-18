@@ -166,6 +166,51 @@ func appendCheckConstraintPlan(
 	colName2Idx map[string]int32,
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookup(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		func(colName string) (int32, bool) {
+			colPos, ok := colName2Idx[tableDef.Name+"."+colName]
+			return colPos, ok
+		},
+		ignoreMode,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookup(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+) (int32, error) {
+	return appendCheckConstraintPlanWithColLookupAndEligibility(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		lookupColPos,
+		ignoreMode,
+		nil,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookupAndEligibility(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+	targetEligible *plan.Expr,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -178,7 +223,7 @@ func appendCheckConstraintPlan(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		colPos, ok := lookupColPos(col.Name)
 		if !ok {
 			return 0, moerr.NewInternalErrorf(
 				builder.GetContext(),
@@ -210,6 +255,24 @@ func appendCheckConstraintPlan(
 		if err != nil {
 			return 0, err
 		}
+		if targetEligible != nil {
+			notEligible, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"not",
+				[]*plan.Expr{DeepCopyExpr(targetEligible)},
+			)
+			if err != nil {
+				return 0, err
+			}
+			passExpr, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{notEligible, passExpr},
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
 		if ignoreMode {
 			filterList = append(filterList, passExpr)
 			continue
@@ -229,10 +292,11 @@ func appendCheckConstraintPlan(
 	}
 
 	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{lastNodeID},
-		FilterList:  filterList,
-		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{lastNodeID},
+		FilterList:      filterList,
+		ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		FilterIsBarrier: ignoreMode,
 	}, bindCtx), nil
 }
 

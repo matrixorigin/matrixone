@@ -58,7 +58,7 @@ func TestImportMemoryUnsupportedImportWritersKeepWholeStatementLegacy(t *testing
 		"table-insert":           &insert.Insert{InsertCtx: &insert.InsertCtx{}},
 		"table-multi-update":     &multi_update.MultiUpdate{Action: multi_update.UpdateWriteTable},
 		"partition-insert":       insert.NewPartitionInsert(&insert.Insert{ToWriteS3: true}, 1),
-		"partition-multi-update": multi_update.NewPartitionMultiUpdate(&multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3}, 1),
+		"partition-multi-update": multi_update.NewPartitionMultiUpdate(&multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3}),
 		"derived-composite-key":  &preinsert.PreInsert{CompPkeyExpr: &plan.Expr{}},
 		"derived-cluster-key":    &preinsert.PreInsert{ClusterByExpr: &plan.Expr{}},
 	}

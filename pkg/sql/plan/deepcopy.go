@@ -108,6 +108,9 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			InsertPkColIdx:        ctx.InsertPkColIdx,
 			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
+			DedupByTargetRowId:    ctx.DedupByTargetRowId,
+			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
+			AffectedRowsCols:      slices.Clone(ctx.AffectedRowsCols),
 		}
 	}
 
@@ -150,14 +153,18 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:           DeepCopyObjectRef(ctx.Ref),
-		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:    ctx.HasAutoCol,
-		ColOffset:     ctx.ColOffset,
-		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:   ctx.IsOldUpdate,
-		IsNewUpdate:   ctx.IsNewUpdate,
+		Ref:                DeepCopyObjectRef(ctx.Ref),
+		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:         ctx.HasAutoCol,
+		ColOffset:          ctx.ColOffset,
+		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:        ctx.IsOldUpdate,
+		IsNewUpdate:        ctx.IsNewUpdate,
+		HasTargetSelector:  ctx.HasTargetSelector,
+		TargetRowNumberCol: ctx.TargetRowNumberCol,
+		TargetActiveCol:    ctx.TargetActiveCol,
+		TargetRowIdCol:     ctx.TargetRowIdCol,
 	}
 
 	return newCtx
@@ -168,10 +175,16 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:  slices.Clone(ctx.Columns),
-		PkColumn: ctx.PkColumn,
-		PkType:   ctx.PkType,
-		UkType:   ctx.UkType,
+		Columns:                 slices.Clone(ctx.Columns),
+		PkColumn:                ctx.PkColumn,
+		PkType:                  ctx.PkType,
+		UkType:                  ctx.UkType,
+		UpdateIgnoreArbitration: ctx.UpdateIgnoreArbitration,
+		UpdateOldKeys:           slices.Clone(ctx.UpdateOldKeys),
+		UpdateNewKeys:           slices.Clone(ctx.UpdateNewKeys),
+		UpdateInitialConflicts:  slices.Clone(ctx.UpdateInitialConflicts),
+		UpdateRowId:             ctx.UpdateRowId,
+		UpdateOutputs:           slices.Clone(ctx.UpdateOutputs),
 	}
 
 	return newCtx
@@ -239,6 +252,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ProjectList:     DeepCopyExprList(node.ProjectList),
 		OnList:          DeepCopyExprList(node.OnList),
 		FilterList:      DeepCopyExprList(node.FilterList),
+		FilterIsBarrier: node.FilterIsBarrier,
 		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
 		GroupBy:         DeepCopyExprList(node.GroupBy),
 		GroupingFlag:    slices.Clone(node.GroupingFlag),

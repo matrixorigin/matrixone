@@ -244,29 +244,62 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if err = checkZeroTemporalInStrictMode(preInsert, preInsert.ctr.buf, proc); err != nil {
+	workBat := preInsert.ctr.buf
+	var selectedRows []int64
+	if preInsert.HasTargetSelector {
+		selectedRows, err = preInsert.targetSelectedRows(proc, bat)
+		if err != nil {
+			return result, err
+		}
+		workBat, err = preInsert.ctr.buf.Clone(proc.Mp(), true)
+		if err != nil {
+			return result, err
+		}
+		defer workBat.Clean(proc.Mp())
+		workBat.Shrink(selectedRows, false)
+		workBat.SetRowCount(len(selectedRows))
+	}
+	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {
 		return result, err
 	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
-	if preInsert.HasAutoCol {
+	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
 		if shouldConvertZeroToNull(preInsert, proc) {
-			convertZeroToNull(preInsert.ctr.buf, preInsert)
+			convertZeroToNull(workBat, preInsert)
 		}
 		start := time.Now()
-		err = genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
+		err = genAutoIncrCol(workBat, proc, preInsert)
 		if err != nil {
 			return result, err
 		}
+		if preInsert.HasTargetSelector {
+			for idx, col := range preInsert.TableDef.Cols {
+				if !col.Typ.AutoIncr {
+					continue
+				}
+				vecIdx := int(preInsert.ColOffset) + idx
+				for selectedIdx, inputIdx := range selectedRows {
+					if err = preInsert.ctr.buf.Vecs[vecIdx].Copy(
+						workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); err != nil {
+						return result, err
+					}
+				}
+			}
+		}
 		analyzer.AddIncrementTime(start)
 	}
-	// check new rows not null
-	tempVecs := preInsert.ctr.buf.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
-	err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
-	if err != nil {
-		return result, err
+	// An unmatched target contributes no row to this UPDATE branch. Its outer
+	// join placeholders must not participate in target-table constraints.
+	if !preInsert.HasTargetSelector || len(selectedRows) > 0 {
+		// check new rows not null
+		tempVecs := workBat.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
+		err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
@@ -275,6 +308,37 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 
 	result.Batch = preInsert.ctr.buf
 	return result, nil
+}
+
+func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) ([]int64, error) {
+	rowNumberPos := int(preInsert.TargetRowNumberCol)
+	activePos := int(preInsert.TargetActiveCol)
+	rowIDPos := int(preInsert.TargetRowIDCol)
+	if rowNumberPos < 0 || rowNumberPos >= len(bat.Vecs) || activePos < 0 || activePos >= len(bat.Vecs) ||
+		rowIDPos < 0 || rowIDPos >= len(bat.Vecs) {
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx,
+			"invalid pre-insert target selector columns: row_number=%d active=%d row_id=%d input=%d",
+			rowNumberPos, activePos, rowIDPos, len(bat.Vecs),
+		)
+	}
+	rowNumberVec := bat.Vecs[rowNumberPos]
+	activeVec := bat.Vecs[activePos]
+	rowIDVec := bat.Vecs[rowIDPos]
+	if rowNumberVec.GetType().Oid != types.T_int64 || activeVec.GetType().Oid != types.T_bool ||
+		rowIDVec.GetType().Oid != types.T_Rowid {
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid pre-insert target selector types")
+	}
+	selected := make([]int64, 0, bat.RowCount())
+	for row := 0; row < bat.RowCount(); row++ {
+		if rowNumberVec.IsNull(uint64(row)) || activeVec.IsNull(uint64(row)) || rowIDVec.IsNull(uint64(row)) ||
+			vector.GetFixedAtNoTypeCheck[int64](rowNumberVec, row) != 1 ||
+			!vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+			continue
+		}
+		selected = append(selected, int64(row))
+	}
+	return selected, nil
 }
 
 func shouldTreatZeroAsAutoIncr(proc *proc) bool {

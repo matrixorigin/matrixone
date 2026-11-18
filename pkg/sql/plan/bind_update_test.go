@@ -143,7 +143,7 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous primary key rejected",
+			name:       "synchronous fulltext primary key remains rejected",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
 			wantReject: true,
@@ -154,10 +154,16 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			updateCols: map[string]tree.Expr{"id": nil},
 		},
 		{
-			name:       "unmigrated master stays legacy",
+			name:       "synchronous master uses modern maintenance",
 			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"body": nil},
-			wantLegacy: true,
+			wantInline: 1,
+		},
+		{
+			name:       "synchronous master primary key uses old-key maintenance",
+			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
+			updateCols: map[string]tree.Expr{"id": nil},
+			wantInline: 1,
 		},
 	}
 
@@ -177,6 +183,65 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			require.Len(t, inline, tt.wantInline)
 		})
 	}
+}
+
+func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	irregular := &IndexDef{IndexName: "ft", IndexTableName: "ft_table"}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"y": nil},
+		},
+	}
+
+	regularNeedsUpdate := [][]bool{{false}, {true}}
+	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, regularNeedsUpdate)
+	require.Equal(t, []bool{true}, regularNeedsUpdate[0])
+	require.Equal(t, []bool{false}, regularNeedsUpdate[1])
+
+	irregularIndexes := [][]*IndexDef{{irregular}, {irregular}}
+	coalesceRepeatedPhysicalTargetIrregularIndexes(dmlCtx, irregularIndexes)
+	require.Equal(t, []*IndexDef{irregular}, irregularIndexes[0])
+	require.Empty(t, irregularIndexes[1])
+}
+
+func TestCoalesceRepeatedPhysicalTargetUniqueChecks(t *testing.T) {
+	uniqueA := &IndexDef{IndexName: "uk_a", IndexTableName: "uk_a_table", Unique: true}
+	uniqueB := &IndexDef{IndexName: "uk_b", IndexTableName: "uk_b_table", Unique: true}
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	indexes := []*IndexDef{uniqueA, uniqueB, regular}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b", "c"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: indexes},
+			{TblId: 100, Indexes: indexes},
+			{TblId: 200, Indexes: indexes},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"x": nil},
+			{"x": nil},
+		},
+	}
+
+	checks := [][]bool{
+		{false, false, false},
+		{true, true, true},
+		{true, false, false},
+	}
+	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, checks)
+
+	// All unique checks for one physical table are evaluated once by its owner.
+	require.Equal(t, []bool{true, true, false}, checks[0])
+	require.Equal(t, []bool{false, false, true}, checks[1])
+	// Another physical table keeps its own independent check.
+	require.Equal(t, []bool{true, false, false}, checks[2])
 }
 
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {

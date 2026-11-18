@@ -49,15 +49,21 @@ func PipelineEdgeMetadataBound(channelCapacity uint64) (int64, bool) {
 		return true
 	}
 	// PipelineEdge includes its durable terminal, mutex, atomics and Once.
-	// A reuse may replace Ch2/Done while the previous empty generation has not
-	// yet been collected. Charge both generations, including separate scanned
-	// channel payload allocations. 256 bounds hchan/alignment on supported Go.
+	// A reuse may replace the channels while the previous empty generation has
+	// not yet been collected. Charge both generations, including separate scanned
+	// signal payloads. 256 bounds one hchan/alignment on supported Go.
 	if !add(1, uint64(reflect.TypeFor[PipelineEdge]().Size()), true) {
 		return 0, false
 	}
 	for range 2 {
-		if !add(1, 256, true) || !add(channelCapacity, uint64(reflect.TypeFor[PipelineSignal]().Size()), true) || !add(1, 256, false) {
+		if !add(1, 256, true) || !add(channelCapacity, uint64(reflect.TypeFor[PipelineSignal]().Size()), true) {
 			return 0, false
+		}
+		// Done, abort and the buffered capacity hint each own a channel header.
+		for range 3 {
+			if !add(1, 256, false) {
+				return 0, false
+			}
 		}
 	}
 	// Overcharge one whole receiver per edge. Its arrays are rounded separately

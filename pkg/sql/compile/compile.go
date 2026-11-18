@@ -5450,6 +5450,32 @@ func supportsRemoteOrderedAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion6
 }
 
+func supportsRemoteTargetAwareUpdate(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion12
+}
+
+func supportsRemoteAffectedRowsSelectors(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion13
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		!plan2.RequiresSingleStageDistinctAgg(node) &&
@@ -5873,6 +5899,10 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 
 func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	if node.PreInsertUkCtx.UpdateIgnoreArbitration && (len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1) {
+		// All keys for one alias share one ordered decision owner.
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		preInsertUkArg := constructPreInsertUk(node)
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
