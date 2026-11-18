@@ -38,6 +38,9 @@ func benchmarkEnumDomainConversions(b *testing.B, framed bool) {
 		for i := range members {
 			members[i] = fmt.Sprintf("value_%d", i)
 		}
+		if framed {
+			members[0] = "value,0"
+		}
 		for _, rows := range []int{1, 64, 1024} {
 			for _, constant := range []bool{true, false} {
 				for _, op := range []string{"display", "label", "numeric"} {

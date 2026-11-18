@@ -27,9 +27,9 @@ Invariants:
 | New repeated member fields throughout plan/catalog/TAE | Viable with wider schema/migration work; duplicating a list and the existing string creates additional authoritative state. |
 | Explicit tag plus counted byte framing in existing payload | Selected: collision-free, byte-preserving, bounded, no unescape copies, unchanged physical ordinals and catalog layout. |
 
-All new declarations use encoding 1. The encoding records the byte representation. Member normalization and collation have their own contracts.
+On 4.2, new declarations use the legacy writer when the member list is exactly representable. A member containing a comma or a singleton empty member requires encoding 1. The encoding records the byte representation.
 
-Reconstructed CREATE statements used by LIKE, CLONE, ALTER COPY, TRUNCATE, partition rebuilds, and Data Branch output carry the authoritative type alongside the SQL text. Validate its members against the parsed declaration and give both column-binding passes the same definition. ALTER COPY takes the pair from the final copy schema, which incorporates the changes explicitly requested by the user. Partition rebuilds render effective ENUM members from the typed catalog before executing copied DDL. An ALTER that restates the same ordered members preserves the existing pair. An assignment between equivalent complete domains may keep the ordinal while taking the target type metadata.
+Reconstructed CREATE statements used by LIKE, CLONE, ALTER COPY, TRUNCATE, partition rebuilds, and Data Branch output carry the authoritative type alongside the SQL text. Validate its members against the parsed declaration and give both column-binding passes the same definition. ALTER COPY takes the pair from the final copy schema, which incorporates the changes explicitly requested by the user. Partition rebuilds render effective ENUM members from the typed catalog before executing copied DDL. An explicit MODIFY or CHANGE uses the declared type to select the encoding. Restating a released singleton empty ENUM uses encoding 1, so assignments and defaults can resolve its empty label. An assignment between equivalent complete domains may keep the ordinal while taking the target type metadata.
 
 The released reader remains necessary for shutdown upgrades and physical restores. Standalone CREATE text is a declaration by the caller. A logical backup can preserve legacy ordinals when it retains the effective ordered members and values. An artifact that already lost label bytes or boundaries requires recovery from an intact source.
 
@@ -78,7 +78,7 @@ Audit all current Enumvalues/EnumValues/EnumVlaues references by role, including
 
 Keep released function IDs and overload 0 unchanged for cast_index_to_value, cast_value_to_index and cast_index_value_to_index. Their two arguments mean encoding 0 permanently. Append overload 1 with (existing domain, existing value, int64 encoding), preserving the value operand at index 1. Do not reorder overloads.
 
-Planner emits two arguments for encoding 0 and three for encoding 1. The constant tag can be read without allocating a parameter wrapper. It is format semantics/released-plan compatibility, not a mixed-version route. The same codec/lookup owners serve both overloads. Metadata needs no new overload because its native type argument already contains the tag.
+Planner emits two arguments for encoding 0 and three for encoding 1. Ordinary declarations keep the two-argument path. It is format semantics/released-plan compatibility, not a mixed-version route. The same codec/lookup owners serve both overloads. Metadata needs no new overload because its native type argument already contains the tag.
 
 A constant payload/tag is decoded at most once per batch when actually used. Reuse batch-owned enumValueIndex and its current row/label thresholds; construct it from decoded labels and use actual label count, not comma count in encoded bytes. No cross-batch/global cache. Dynamic domain/tag inputs retain row-wise null semantics and validate the pair for each required row.
 

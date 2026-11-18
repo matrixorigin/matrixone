@@ -276,6 +276,7 @@ func (s *storage) Create(
 				return err
 			}
 
+			inheritedEnums := tree.InheritedEnumTypes(def)
 			for _, p := range metadata.Partitions {
 				err := s.createPartitionTable(
 					def,
@@ -283,6 +284,7 @@ func (s *storage) Create(
 					metadata,
 					p,
 					txn,
+					inheritedEnums,
 				)
 				if err != nil {
 					return err
@@ -323,6 +325,7 @@ func (s *storage) Redefine(
 			}
 			defer stmt.Free()
 			tmp := uuid.NewString()
+			originalPartitionOption := stmt.PartitionOption
 			stmt.PartitionOption = options
 			table := stmt.Table
 			stmt.Table = *tree.NewTableName(
@@ -336,6 +339,8 @@ func (s *storage) Redefine(
 				tree.WithQuoteIdentifier(),
 				tree.WithSingleQuoteString(),
 			)
+
+			stmt.PartitionOption = originalPartitionOption
 
 			// 1. create a temporary table
 			txn.Use(def.DbName)
@@ -517,6 +522,7 @@ func (s *storage) AddPartitions(
 					metadata,
 					p,
 					txn,
+					stmt.InheritedEnums,
 				)
 				if err != nil {
 					return err
@@ -801,6 +807,7 @@ func (s *storage) createPartitionTable(
 	metadata partition.PartitionMetadata,
 	partition partition.Partition,
 	txn executor.TxnExecutor,
+	inheritedEnums map[string]plan.Type,
 ) error {
 	// create partition table using primary table's schema
 	createPartitionTable := func() error {
@@ -815,7 +822,7 @@ func (s *storage) createPartitionTable(
 				WithDisableLock().
 				WithIgnoreForeignKey().
 				WithIgnorePublish().
-				WithInheritedEnums(tree.InheritedEnumTypes(def)),
+				WithInheritedEnums(inheritedEnums),
 		)
 		if err != nil {
 			return err

@@ -57,11 +57,11 @@ select id,hex(e),e+0 from singleton order by id;
 2  ¦    ¦  1  𝄀
 3  ¦    ¦  1  𝄀
 4  ¦    ¦  0
-create table literal_prefix_collision(id int primary key,e enum('2#3:a','b1:c'));
-insert into literal_prefix_collision values(1,1),(2,2);
+create table legacy_collision(id int primary key,e enum('2#3:a','b1:c'));
+insert into legacy_collision values(1,1),(2,2);
 create table framed_collision(id int primary key,e enum('a,b','c'));
 insert into framed_collision values(1,1),(2,2);
-select id,hex(e),e+0 from literal_prefix_collision order by id;
+select id,hex(e),e+0 from legacy_collision order by id;
 ➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
 1  ¦  3223333A61  ¦  1  𝄀
 2  ¦  62313A63  ¦  2
@@ -69,10 +69,10 @@ select id,hex(e),e+0 from framed_collision order by id;
 ➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
 1  ¦  612C62  ¦  1  𝄀
 2  ¦  63  ¦  2
-select att_relname,substring(hex(atttyp),13,4) as member_encoding,attr_enum from mo_catalog.mo_columns where att_database=database() and att_relname in ('literal_prefix_collision','framed_collision') and attname='e' order by att_relname;
+select att_relname,substring(hex(atttyp),13,4) as member_encoding,attr_enum from mo_catalog.mo_columns where att_database=database() and att_relname in ('legacy_collision','framed_collision') and attname='e' order by att_relname;
 ➤ att_relname[12,-1,0]  ¦  member_encoding[12,-1,0]  ¦  attr_enum[12,-1,0]  𝄀
 framed_collision  ¦  0001  ¦  2#3:a,b1:c  𝄀
-literal_prefix_collision  ¦  0001  ¦  2#5:2#3:a4:b1:c
+legacy_collision  ¦  0000  ¦  2#3:a,b1:c
 create table definition_order(id int primary key,e enum('z,b','a','b,c'));
 insert into definition_order values(1,'b,c'),(2,'z,b'),(3,'a');
 select id,e from definition_order order by e;

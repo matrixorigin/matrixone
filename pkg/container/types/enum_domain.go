@@ -48,10 +48,22 @@ func (t *Type) SetEnumEncoding(encoding uint32) {
 	}
 }
 
-// EncodeEnumMembers writes a new definition using the tagged member format.
+// EncodeEnumMembers retains legacy bytes when they represent the domain exactly.
 func EncodeEnumMembers(members []string) (string, uint32, error) {
 	if len(members) == 0 || len(members) > MaxEnumLen {
 		return "", 0, moerr.NewInvalidInputNoCtxf("invalid ENUM member count %d", len(members))
+	}
+	framed := len(members) == 1 && members[0] == ""
+	legacySize := uint64(len(members) - 1)
+	for _, member := range members {
+		framed = framed || strings.Contains(member, ",")
+		legacySize += uint64(len(member))
+		if legacySize > math.MaxUint32 || legacySize > uint64(^uint(0)>>1) {
+			return "", 0, moerr.NewInvalidInputNoCtx("ENUM member definition is too large")
+		}
+	}
+	if !framed {
+		return strings.Join(members, ","), EnumEncodingLegacy, nil
 	}
 	size := uint64(len(strconv.Itoa(len(members))) + 1)
 	for _, member := range members {

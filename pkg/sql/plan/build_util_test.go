@@ -779,8 +779,8 @@ func TestGetTypeFromAstEnumAndSetMemberBoundary(t *testing.T) {
 		{"enum(',')", "1#1:,", 1},
 		{"enum('a',',b')", "2#1:a2:,b", 1},
 		{"enum('')", "1#0:", 1},
-		{"enum('a','b')", "2#1:a1:b", 1},
-		{"enum('UP','Down word')", "2#2:UP9:Down word", 1},
+		{"enum('a','b')", "a,b", 0},
+		{"enum('UP','Down word')", "UP,Down word", 0},
 		{"set('a','b')", "a,b", 0},
 	} {
 		t.Run(tc.typ, func(t *testing.T) {
