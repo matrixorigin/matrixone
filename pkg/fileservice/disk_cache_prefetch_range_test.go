@@ -792,7 +792,7 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 		mu.Unlock()
 		return io.NopCloser(bytes.NewReader(data[start:end])), nil
 	}
-	var ranges []PrefetchRange
+	ranges := make([]PrefetchRange, 0, 10)
 	for i := range 10 {
 		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
 	}
