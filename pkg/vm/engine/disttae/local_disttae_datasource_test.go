@@ -190,14 +190,23 @@ func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
 	pState := newTestMaterializedSnapshotPartitionState(t, mp, append(rows, testMaterializedSnapshotRow{
 		rowID: types.NewRowid(&block, 100), ts: stamp.Next(), id: 100, payloadNull: true,
 	}))
+	txnOp, closeTxn := client.NewTestTxnOperator(t.Context())
+	defer closeTxn()
+	txnOp.AddWorkspace(&Transaction{cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)})
+	table := &txnTable{db: &txnDatabase{op: txnOp}}
 	for _, tc := range []struct {
-		name  string
-		seq   uint16
-		limit uint64
-	}{{"id", 0, 1 << 20}, {"payload", 1, 1 << 20}, {"budget-denied", 0, 1}} {
+		name       string
+		seq        uint16
+		limit      uint64
+		checkFiles bool
+	}{{"id", 0, 1 << 20, false}, {"id-no-flushed-files", 0, 1 << 20, true}, {"payload", 1, 1 << 20, false}, {"budget-denied", 0, 1, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ls := &LocalDisttaeDataSource{ctx: context.Background(), pState: pState, snapshotTS: stamp,
 				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			if tc.checkFiles {
+				ls.table = table
+				ls.tombstonePolicy &^= engine.Policy_SkipUncommitedS3
+			}
 			defer ls.Close()
 			budget := new(replayReadBudget)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -240,6 +249,116 @@ type replayAdmissionTombstoner struct {
 	offsets []int64
 }
 
+type replayCountingFileService struct {
+	fileservice.FileService
+	reads int
+}
+
+func (f *replayCountingFileService) Read(ctx context.Context, v *fileservice.IOVector) error {
+	f.reads++
+	return f.FileService.Read(ctx, v)
+}
+
+func TestCommittedReplayAdmissionBeforeFlushedTombstoneReads(t *testing.T) {
+	ctx := t.Context()
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+	txnOp, closeTxn := client.NewTestTxnOperator(ctx)
+	defer closeTxn()
+	txn := &Transaction{cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
+	txnOp.AddWorkspace(txn)
+	table := &txnTable{db: &txnDatabase{op: txnOp}}
+	block := testBlockID(7)
+	stamp := types.BuildTS(4, 0)
+	rows := make([]testMaterializedSnapshotRow, 129)
+	typ := types.T_int32.ToType()
+	deletes := readutil.NewCNTombstoneBatch(&typ, objectio.HiddenColumnSelection_None)
+	defer deletes.Clean(proc.Mp())
+	for i := range rows {
+		rowID := types.NewRowid(&block, uint32(i))
+		rows[i] = testMaterializedSnapshotRow{rowID: rowID, ts: stamp, id: int64(i)}
+		if i != 0 {
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[0], rowID, false, proc.Mp()))
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[1], int32(i), false, proc.Mp()))
+		}
+	}
+	deletes.SetRowCount(128)
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, typ, -1)
+	defer func() { require.NoError(t, writer.Close()) }()
+	require.NoError(t, writer.Write(ctx, deletes))
+	stats, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+	txn.StashFlushedTombstones(stats[0])
+
+	type replayResult struct {
+		reads, reserves, rows int
+		err                   error
+	}
+	run := func(t *testing.T, input []testMaterializedSnapshotRow, limit uint64) replayResult {
+		t.Helper()
+		srcMP := mpool.MustNewZero()
+		defer mpool.DeleteMPool(srcMP)
+		state := newTestMaterializedSnapshotPartitionState(t, srcMP, input)
+		counting := &replayCountingFileService{FileService: fs}
+		ls := &LocalDisttaeDataSource{ctx: ctx, fs: counting, table: table, pState: state,
+			snapshotTS: stamp, tombstonePolicy: engine.Policy_SkipAll &^ engine.Policy_SkipUncommitedS3,
+			memPKFilter: &readutil.MemPKFilter{}}
+		defer ls.Close()
+		dstMP := mpool.MustNewZero()
+		defer mpool.DeleteMPool(dstMP)
+		registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+		require.NoError(t, err)
+		budget := new(replayReadBudget)
+		account, err := registry.OpenWithController(limit, budget)
+		require.NoError(t, err)
+		defer func() {
+			require.Zero(t, dstMP.CurrNB())
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		}()
+		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(1)
+		defer out.Clean(dstMP)
+		out.Attrs = []string{"id"}
+		out.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, out.SetAllocationAccount(selection))
+		err = ls.filterInMemCommittedInserts(ctx, []types.Type{types.T_int64.ToType()}, []uint16{0}, dstMP, out)
+		return replayResult{counting.reads, budget.reserves, out.RowCount(), err}
+	}
+	t.Run("deleted-suffix", func(t *testing.T) {
+		control := run(t, rows[:1], 1)
+		got := run(t, rows, 1)
+		require.ErrorIs(t, control.err, mpool.ErrAllocationAccountCapacity)
+		require.ErrorIs(t, got.err, mpool.ErrAllocationAccountCapacity)
+		require.Positive(t, control.reads)
+		require.LessOrEqual(t, got.reads, control.reads, "deleted suffix must not cause further reads before admission")
+	})
+	t.Run("unrelated-file", func(t *testing.T) {
+		input := slices.Clone(rows[:100])
+		otherBlock := testBlockID(8)
+		for i := range input {
+			input[i].rowID = types.NewRowid(&otherBlock, uint32(i))
+		}
+		got := run(t, input, 1<<20)
+		require.NoError(t, got.err)
+		require.Equal(t, len(input), got.rows)
+		require.Zero(t, got.reads)
+		require.LessOrEqual(t, got.reserves, 2)
+	})
+	t.Run("pending-prefix", func(t *testing.T) {
+		input := slices.Clone(rows[:2])
+		otherBlock := testBlockID(6)
+		input[0].rowID = types.NewRowid(&otherBlock, 0)
+		got := run(t, input, 1)
+		require.ErrorIs(t, got.err, mpool.ErrAllocationAccountCapacity)
+		require.Zero(t, got.reads, "admit the preceding row before reading the matching file")
+	})
+}
+
 func (t *replayAdmissionTombstoner) ApplyPersistedTombstones(
 	_ context.Context, _ fileservice.FileService, _ *types.TS, _ *types.Blockid, offsets []int64, _ *objectio.Bitmap,
 ) ([]int64, error) {
@@ -268,7 +387,7 @@ func TestCommittedReplayAdmissionBeforeLaterTombstoneError(t *testing.T) {
 		offsets []int64
 	}{
 		{"ineligible source", 1, 1, mpool.ErrAllocationAccountCapacity, []int64{0}},
-		{"eligible pending prefix", 0, 1, mpool.ErrAllocationAccountCapacity, []int64{0, 1}},
+		{"eligible pending prefix", 0, 1, mpool.ErrAllocationAccountCapacity, []int64{0}},
 		{"eligible prefix fits", 0, 1024, tombstoneErr, []int64{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -539,7 +658,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
+		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask, nil)
 		require.NoError(t, err)
 		require.Zero(t, len(left))
 

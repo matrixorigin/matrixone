@@ -1010,7 +1010,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	n, firstCol := 0, -1
 	var firstSrc *vector.Vector
 	var firstWidth int64
-	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS {
+	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS &&
+		!(ls.category == engine.ShardingRemoteDataSource && ls.extraTombstones != nil) {
 		dst := outBatch.Vecs[0]
 		if width := dst.GetType().TypeSize(); width > 0 &&
 			dst.AllocationAccountSelection() != nil && !dst.IsConst() && !dst.IsDictionary() &&
@@ -1019,22 +1020,24 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			firstWidth = int64(width)
 		}
 	}
-	flushFirst := func(laterErr error) error {
+	var beforeStorage func() error
+	flushFirst := func(scalar bool) error {
 		firstCol = -1
+		beforeStorage = nil
 		if n == 0 {
-			return laterErr
+			return nil
 		}
 		rows := offsets[:n]
 		n = 0
-		if laterErr != nil {
-			// These rows preceded the failure. Preserve their scalar
-			// admission order before returning the later error.
-			if err := appendReplayRowsScalar(outBatch.Vecs[0], firstSrc, rows, mp); err != nil {
-				return err
-			}
-			return laterErr
+		if scalar {
+			return appendReplayRowsScalar(outBatch.Vecs[0], firstSrc, rows, mp)
 		}
 		return appendInitialReplayRows(outBatch.Vecs[0], firstSrc, rows, firstWidth, mp)
+	}
+	if firstCol >= 0 {
+		// File-backed tombstone checks must not run ahead of output
+		// admission. Disable grouping once such a check is necessary.
+		beforeStorage = func() error { return flushFirst(true) }
 	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length()+n < int(objectio.BlockMaxRows) {
@@ -1046,10 +1049,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			b, o := entry.RowID.Decode()
 			scan++
 
-			if sels, err = ls.ApplyTombstones(
-				ls.ctx, b, []int64{int64(o)}, applyPolicy,
+			if sels, err = ls.applyTombstones(
+				ls.ctx, b, []int64{int64(o)}, applyPolicy, beforeStorage,
 			); err != nil {
-				return flushFirst(err)
+				return err
 			}
 
 			if len(sels) == 0 {
@@ -1079,7 +1082,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				false,
 				mp,
 			); err != nil {
-				return flushFirst(err)
+				if flushErr := flushFirst(true); flushErr != nil {
+					return flushErr
+				}
+				return err
 			}
 			if firstCol >= 0 {
 				if firstCol < len(entry.Batch.Vecs) && entry.Batch.Attrs[firstCol] != "" {
@@ -1095,14 +1101,14 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 						offsets[n] = entry.Offset
 						n++
 						if n == len(offsets) {
-							if err := flushFirst(nil); err != nil {
+							if err := flushFirst(false); err != nil {
 								return err
 							}
 						}
 						continue
 					}
 				}
-				if err := flushFirst(nil); err != nil {
+				if err := flushFirst(false); err != nil {
 					return err
 				}
 			}
@@ -1141,7 +1147,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 		}
 		if n > 0 {
-			if err := flushFirst(nil); err != nil {
+			if err := flushFirst(false); err != nil {
 				return err
 			}
 		}
@@ -1220,7 +1226,17 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 	rowsOffset []int64,
 	dynamicPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
+	return ls.applyTombstones(ctx, bid, rowsOffset, dynamicPolicy, nil)
+}
 
+// beforeStorage lets replay finish pending output before a file-backed check.
+func (ls *LocalDisttaeDataSource) applyTombstones(
+	ctx context.Context,
+	bid *objectio.Blockid,
+	rowsOffset []int64,
+	dynamicPolicy engine.TombstoneApplyPolicy,
+	beforeStorage func() error,
+) ([]int64, error) {
 	if len(rowsOffset) == 0 {
 		return nil, nil
 	}
@@ -1253,7 +1269,7 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedS3 == 0 {
-		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
+		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil, beforeStorage)
 		if err != nil {
 			return nil, err
 		}
@@ -1310,7 +1326,7 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		if _, err = ls.applyWorkspaceFlushedS3Deletes(
-			bid, nil, &deletedRows,
+			bid, nil, &deletedRows, nil,
 		); err != nil {
 			deletedRows.Release()
 			return
@@ -1535,6 +1551,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
+	beforeStorage func() error,
 ) (leftRows []int64, err error) {
 
 	leftRows = offsets
@@ -1550,7 +1567,6 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	if len(tombstones) == 0 {
 		return
 	}
-
 	release := func() {}
 	if deletedRows == nil {
 		bm := objectio.GetReusableBitmap()
@@ -1567,6 +1583,13 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 		i := curr
 		curr++
+		// The object-level zone map can reject unrelated flushed files
+		// without I/O, so keep grouping until a file may actually be read.
+		if beforeStorage != nil && tombstones[i].SortKeyZoneMap().RowidPrefixEq(bid[:]) {
+			if err := beforeStorage(); err != nil {
+				return nil, err
+			}
+		}
 		return &tombstones[i], nil
 	}
 
