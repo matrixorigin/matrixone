@@ -20,6 +20,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -457,13 +458,20 @@ type idleReaders struct {
 	readers []*idleReader
 }
 
-// add registers r, attached when a read waits.
-func (w *idleReaders) add(r *idleReader) {
+// add registers r, attached when a read waits, until the returned function removes it.
+func (w *idleReaders) add(r *idleReader) (remove func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.readers = append(w.readers, r)
 	if w.waiting > 0 {
 		r.attach()
+	}
+	return func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if i := slices.Index(w.readers, r); i >= 0 {
+			w.readers = slices.Delete(w.readers, i, i+1)
+		}
 	}
 }
 
@@ -616,7 +624,7 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, open ra
 	}
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
-	download.idle.add(idle)
+	defer download.idle.add(idle)()
 	r, err := idle.open(func() (io.ReadCloser, error) { return open(ctx, start, openEnd) })
 	if err != nil {
 		return &diskCacheSourceError{err: err}

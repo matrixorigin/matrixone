@@ -102,7 +102,7 @@ const (
 	prefetchFlightBytesMax = 256 << 20
 	// flightMemoryPercent is the share, in percent, of the memory available on the node
 	// that the prefetch range runs under way may hold.
-	flightMemoryPercent = 10
+	flightMemoryPercent = 5
 	// flightBudgetRefresh is how often the memory available on the node is measured.
 	flightBudgetRefresh = time.Second
 )
@@ -900,7 +900,7 @@ func (f *memoryPrefetchObject) read(ctx context.Context, open rangeOpener) error
 	f.mu.Unlock()
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
-	f.idle.add(idle)
+	defer f.idle.add(idle)()
 	t0 := time.Now()
 	r, err := idle.open(func() (io.ReadCloser, error) { return open(ctx, f.start, f.end) })
 	if err != nil {

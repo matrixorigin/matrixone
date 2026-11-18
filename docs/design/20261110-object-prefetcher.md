@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v8, 2026-11-17 (v7, 2026-11-17; v6, 2026-11-16; v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v9, 2026-11-18 (v8, 2026-11-17; v7, 2026-11-17; v6, 2026-11-16; v5, 2026-11-14; v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -97,11 +97,18 @@ waits for and whose scans all ended: when it would start, and in the live queue 
 as the last read waiting for it leaves, by its start or by its context ending.
 
 The buffers of MemoryPrefetchObjects, each counted from the start of its prefetch object
-until the last read copying from it releases it, hold at most 10% of the memory available
+until the last read copying from it releases it, hold at most 5% of the memory available
 on the node, measured at most once a second, and at least `disk-prefetch-memory-max`. A
 prefetch object past that bound waits until it fits, or until none is under way.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
 prefetch object ended and no read copies from it.
+
+An asynchronous disk-cache update writes its bytes to a cache file before it returns;
+only the file's publication is asynchronous, so no copy of the bytes waits in memory for
+it. With no publication slot free, the update waits for one. A MemoryPrefetchObject
+caches its range before it ends, so the reads after it find the range cached. A download the disk cache keeps for a cached file holds
+no reader of its source once the fill ends (decision 2026-11-18, v9, after the TN OOM in the
+nightly regression: the source of a write's fill is the written object's bytes).
 
 ### What a scan tells the prefetcher (decision)
 
@@ -302,7 +309,7 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
-| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 10% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
+| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
 | FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |

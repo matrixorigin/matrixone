@@ -858,6 +858,10 @@ func (d *DiskCache) Update(
 		}
 
 		diskPath := d.pathForIOEntry(path.File, entry)
+		if async && len(onWritten) == 0 {
+			d.writeEntryAsync(ctx, vector.FilePath, diskPath, entry)
+			continue
+		}
 		if async {
 			d.scheduleAsyncUpdate(ctx, vector.FilePath, diskPath, entry, onWritten)
 			continue
@@ -909,6 +913,18 @@ func (d *DiskCache) writeEntry(
 		return false, err
 	}
 	return true, nil
+}
+
+// writeEntryAsync writes entry to a file now and leaves its publication to the async
+// workers, so entry's data is not kept until then. It waits for an async slot first.
+func (d *DiskCache) writeEntryAsync(ctx context.Context, filePath, diskPath string, entry IOEntry) {
+	target := entryFillTarget{diskFillTarget: diskFillTarget{d: d, diskPath: diskPath}, filePath: filePath, readDeletes: entry.readDeletes}
+	_, err := d.writeFileTo(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(entry.Data)), nil
+	}, true, nil, notWholeFill, nil, target)
+	if err != nil {
+		_ = d.observeWriteResult(diskPath, err)
+	}
 }
 
 func (d *DiskCache) writeFile(
@@ -1038,6 +1054,19 @@ func (d *DiskCache) writeFileTo(
 	if target.heldBeforeLock(ctx) {
 		return false, nil
 	}
+	// The wait for an async slot holds no connection.
+	asyncSlotOwned := false
+	if asyncFinalize {
+		if !d.reserveAsyncFileFinalize(ctx, diskPath) {
+			return false, nil
+		}
+		asyncSlotOwned = true
+		defer func() {
+			if asyncSlotOwned {
+				d.releaseAsyncFileFinalizeReservation(diskPath)
+			}
+		}()
+	}
 	// A download holds its object-storage connections for long; it reserves them so
 	// range reads keep theirs, before it holds the path, so its wait for a connection
 	// holds nothing else.
@@ -1069,18 +1098,6 @@ func (d *DiskCache) writeFileTo(
 		conns = 0
 	}
 	defer releaseConns()
-	asyncSlotOwned := false
-	if asyncFinalize {
-		if !d.tryReserveAsyncFileFinalize(diskPath) {
-			return false, nil
-		}
-		asyncSlotOwned = true
-		defer func() {
-			if asyncSlotOwned {
-				d.releaseAsyncFileFinalizeReservation(diskPath)
-			}
-		}()
-	}
 
 	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
 	var doneUpdate func() error
@@ -1140,7 +1157,7 @@ func (d *DiskCache) writeFileTo(
 	readCtx, idle := newIdleReader(ctx)
 	defer idle.Close()
 	if download != nil {
-		download.idle.add(idle)
+		defer download.idle.add(idle)()
 	}
 	from, err := idle.open(func() (io.ReadCloser, error) { return openReader(readCtx) })
 	if err != nil {

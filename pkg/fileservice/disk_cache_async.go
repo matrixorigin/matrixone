@@ -33,10 +33,11 @@ import (
 )
 
 const (
-	// diskCacheAsyncQueueSize is the most asynchronous updates pending at once.
-	diskCacheAsyncQueueSize = 1024
-	// diskCacheAsyncWorkers is the number of asynchronous updates written at once.
-	diskCacheAsyncWorkers         = 8
+	// diskCacheAsyncQueueSize is the most asynchronous updates pending at once, each
+	// holding an open file.
+	diskCacheAsyncQueueSize = 512
+	// diskCacheAsyncWorkers is the number of asynchronous updates published at once.
+	diskCacheAsyncWorkers         = 4
 	diskCacheAsyncMaxPendingBytes = int64(64 << 20)
 	diskCacheWriteErrorLogKey     = "disk-cache-write-error"
 	diskCacheWriteRecoveryLogKey  = "disk-cache-write-recovery"
@@ -295,22 +296,40 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	a.submitters.Done()
 }
 
-func (d *DiskCache) tryReserveAsyncFileFinalize(diskPath string) bool {
+// reserveAsyncFileFinalize reserves a slot for the async publication of the file at
+// diskPath, waiting for one to be free. It reports false when the cache is closed, when the
+// file's publication is already pending, or when ctx ends first.
+func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath string) bool {
 	a := &d.async
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.mu.closed {
-		a.dropAsyncUpdateLocked()
-		return false
-	}
-	if _, ok := a.mu.pending[diskPath]; ok {
-		return false
-	}
-	select {
-	case a.slots <- struct{}{}:
-	default:
-		a.dropAsyncUpdateLocked()
-		return false
+	for {
+		if a.mu.closed {
+			a.dropAsyncUpdateLocked()
+			return false
+		}
+		if _, ok := a.mu.pending[diskPath]; ok {
+			return false
+		}
+		if len(a.slots) < cap(a.slots) {
+			a.slots <- struct{}{}
+			break
+		}
+		if a.mu.freed == nil {
+			a.mu.freed = make(chan struct{})
+		}
+		freed := a.mu.freed
+		a.mu.Unlock()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+		case <-a.ctx.Done():
+		}
+		a.mu.Lock()
+		if ctx.Err() != nil {
+			a.dropAsyncUpdateLocked()
+			return false
+		}
 	}
 	if len(a.mu.pending) == 0 {
 		a.mu.idle = make(chan struct{})
@@ -377,6 +396,25 @@ func (d *DiskCache) claimAsyncPublication() bool {
 	return !a.mu.closed
 }
 
+// finalizeQueuedFile publishes a file the async workers finalize. The file of an entry is
+// not published when the entry's object was deleted after the entry was read.
+func (d *DiskCache) finalizeQueuedFile(diskPath string, f *os.File, target fillTarget) error {
+	t, ok := target.(entryFillTarget)
+	if !ok {
+		return d.finalizeFileTo(d.async.ctx, diskPath, f, d.claimAsyncPublication, target)
+	}
+	var err error
+	published, _ := d.publishUnlessDeleted(t.filePath, IOEntry{readDeletes: t.readDeletes}, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+		err = d.finalizeFileTo(d.async.ctx, diskPath, f, claim, target)
+		return err == nil, err
+	})
+	if !published && errors.Is(err, context.Canceled) && d.async.ctx.Err() == nil {
+		// The entry's object was deleted after the entry was read.
+		return nil
+	}
+	return err
+}
+
 // wakeFreedLocked wakes the updates waiting for a slot or pending bytes.
 func (a *diskCacheAsyncState) wakeFreedLocked() {
 	if a.mu.freed != nil {
@@ -417,13 +455,7 @@ func (d *DiskCache) runAsyncUpdates() {
 			if d.async.ctx.Err() == nil {
 				if job.finalize != nil {
 					job.finalize.attempted = true
-					job.finalize.err = d.finalizeFileTo(
-						d.async.ctx,
-						job.diskPath,
-						job.finalize.file,
-						d.claimAsyncPublication,
-						job.finalize.target,
-					)
+					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize.file, job.finalize.target)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
 					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
