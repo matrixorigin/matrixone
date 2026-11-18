@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -215,6 +216,7 @@ type JoinMap struct {
 	sels              GroupSels
 	delRows           *bitmap.Bitmap
 	batches           []*batch.Batch
+	batchRowEnds      []int64
 	memoryRelease     func()
 	memoryReleaseOnce sync.Once
 
@@ -452,6 +454,29 @@ func (jm *JoinMap) GetBatches() []*batch.Batch {
 	return jm.batches
 }
 
+// SetBatchRowEnds transfers the allocation-accounted directory to the map
+// before broadcast. It is immutable after publication.
+func (jm *JoinMap) SetBatchRowEnds(ends []int64) {
+	jm.batchRowEnds = ends
+}
+
+// LocateBatchRow resolves a retained ordinal. With no directory the retained
+// batches have the caller's standard size except for the final batch.
+func (jm *JoinMap) LocateBatchRow(ordinal, standardBatchRows int64) (batchIndex, row int64) {
+	if jm == nil || len(jm.batchRowEnds) == 0 {
+		return ordinal / standardBatchRows, ordinal % standardBatchRows
+	}
+	return jm.locateIrregularBatchRow(ordinal)
+}
+
+func (jm *JoinMap) locateIrregularBatchRow(ordinal int64) (int64, int64) {
+	index := sort.Search(len(jm.batchRowEnds), func(i int) bool { return jm.batchRowEnds[i] > ordinal })
+	if index > 0 {
+		ordinal -= jm.batchRowEnds[index-1]
+	}
+	return int64(index), ordinal
+}
+
 func (jm *JoinMap) SetRowCount(cnt int64) {
 	jm.rowCnt = cnt
 }
@@ -623,6 +648,8 @@ func (jm *JoinMap) FreeMemory() {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
+	mpool.FreeSlice(jm.mpool, jm.batchRowEnds)
+	jm.batchRowEnds = nil
 	jm.valid = false
 }
 

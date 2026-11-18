@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,15 +39,17 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 	mpool.CapLimit = allocationLimit
 	t.Cleanup(func() { mpool.CapLimit = previousLimit })
 
-	const queryBudget = 16 << 20
-	const rowsPerInput = 6
 	for _, tc := range []struct {
 		name                                 string
 		rowCount, payloadColumns, valueBytes int
+		rowsPerInput                         int
+		queryBudget                          uint64
+		budgetFailure                        bool
 	}{
-		{name: "single-column-below-limit", rowCount: 11, payloadColumns: 1, valueBytes: 92 << 10},
-		{name: "multiple-columns-over-limit-in-total", rowCount: 12, payloadColumns: 3, valueBytes: 48 << 10},
-		{name: "single-column-over-limit", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10},
+		{name: "single-column-below-limit", rowCount: 11, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
+		{name: "multiple-columns-over-limit-in-total", rowCount: 12, payloadColumns: 3, valueBytes: 48 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
+		{name: "single-column-over-limit", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
+		{name: "next-physical-batch-rejected-by-query-budget", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 11, queryBudget: 1075 << 10, budgetFailure: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyType, payloadType := types.T_int64.ToType(), types.T_text.ToType()
@@ -61,7 +64,7 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 			mp := proc.Mp()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 
-			ledger := process.MustNewExecutionResourceBudget(queryBudget, queryBudget)
+			ledger := process.MustNewExecutionResourceBudget(tc.queryBudget, tc.queryBudget)
 			generation, err := ledger.OpenGeneration(1)
 			require.NoError(t, err)
 			t.Cleanup(generation.Close)
@@ -71,8 +74,8 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 
 			child := colexec.NewMockOperator()
 			t.Cleanup(func() { child.Free(proc, false, nil) })
-			for start := 0; start < tc.rowCount; start += rowsPerInput {
-				end := min(start+rowsPerInput, tc.rowCount)
+			for start := 0; start < tc.rowCount; start += tc.rowsPerInput {
+				end := min(start+tc.rowsPerInput, tc.rowCount)
 				input := batch.NewWithSize(len(columnTypes))
 				child.WithBatchs([]*batch.Batch{input})
 				for col, typ := range columnTypes {
@@ -95,6 +98,20 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 			t.Cleanup(func() { fixture.arg.Free(proc, buildErr != nil, buildErr) })
 			require.NoError(t, fixture.arg.Prepare(proc))
 			result, buildErr := vm.Exec(fixture.arg, proc)
+			if tc.budgetFailure {
+				require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM), "%v", buildErr)
+				retained := &fixture.arg.ctr.hashmapBuilder.Batches
+				require.Len(t, retained.Buf, 1)
+				require.Equal(t, tc.rowsPerInput, retained.RowCount())
+				require.Zero(t, retained.MemSize)
+				terminal, err := message.ReceiveJoinMapResult(fixture.arg.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+				require.NoError(t, err)
+				require.True(t, terminal.IsBuildError())
+				require.Equal(t, buildErr.Error(), terminal.Err().Error())
+				fixture.arg.Reset(proc, true, buildErr)
+				require.Zero(t, generation.Used())
+				return
+			}
 			require.NoError(t, buildErr)
 			require.Equal(t, vm.ExecStop, result.Status)
 

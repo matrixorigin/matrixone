@@ -79,8 +79,10 @@ type container struct {
 	joinDiagnosticActivation []colexec.ExpressionExecutor
 	joinDiagnosticActivated  bool
 
-	leftBat *batch.Batch
-	resBat  *batch.Batch
+	leftBat         *batch.Batch
+	resBat          *batch.Batch
+	buildOutputRows int
+	probeOutputRows int
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
@@ -548,6 +550,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.buildOutputRows = 0
+	ctr.probeOutputRows = 0
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if ctr.mp != nil {

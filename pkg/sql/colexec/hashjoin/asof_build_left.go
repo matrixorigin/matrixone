@@ -80,6 +80,9 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
+				if !hashJoin.IsShuffle && ctr.asofBuildLeftBestRight != nil {
+					ctr.buildOutputRows = limitProjectedRows(ctr.buildRowsLimit(), hashJoin, ctr.asofBuildLeftBestRight, 1)
+				}
 				ctr.state = Finalize
 				continue
 			}
@@ -425,14 +428,13 @@ func (ctr *container) asofBuildLeftTemporalValue(ordinal int32) (int64, bool) {
 	if ordinal < 0 {
 		return 0, false
 	}
-	leftBatch := int(ordinal) / colexec.DefaultBatchSize
-	leftRow := int(ordinal) % colexec.DefaultBatchSize
-	if leftBatch < 0 || leftBatch >= len(ctr.rightBats) ||
-		leftRow >= ctr.rightBats[leftBatch].RowCount() {
+	leftBatch, leftRow := ctr.locateBuildRow(int64(ordinal))
+	if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
+		leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 		return 0, false
 	}
 	return asofTemporalValue(
-		ctr.rightBats[leftBatch].Vecs[ctr.asofLeftCol], int64(leftRow))
+		ctr.rightBats[leftBatch].Vecs[ctr.asofLeftCol], leftRow)
 }
 
 func (ctr *container) probeAsofBuildLeft(hashJoin *HashJoin, proc *process.Process) error {
@@ -530,10 +532,9 @@ func (ctr *container) updateAsofBuildLeftCandidate(
 	}
 	leftTime, valid := ctr.asofBuildLeftTemporalValue(leftOrdinal)
 	if !valid {
-		leftBatch := int(leftOrdinal) / colexec.DefaultBatchSize
-		leftRow := int(leftOrdinal) % colexec.DefaultBatchSize
-		if leftBatch < 0 || leftBatch >= len(ctr.rightBats) ||
-			leftRow >= ctr.rightBats[leftBatch].RowCount() {
+		leftBatch, leftRow := ctr.locateBuildRow(int64(leftOrdinal))
+		if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
+			leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 			return moerr.NewInternalErrorNoCtx("ASOF logical-left build row is out of range")
 		}
 		return nil
@@ -873,12 +874,12 @@ func (ctr *container) finalizeAsofBuildLeft(
 		return err
 	}
 	outputRows := 0
+	outputLimit := ctr.buildRowsLimit()
 	for ctr.asofBuildLeftFinalRow < ctr.rightRowCnt &&
-		outputRows < colexec.DefaultBatchSize {
+		outputRows < outputLimit {
 		ordinal := ctr.asofBuildLeftFinalRow
 		ctr.asofBuildLeftFinalRow++
-		leftBatch := ordinal / colexec.DefaultBatchSize
-		leftRow := ordinal % colexec.DefaultBatchSize
+		leftBatch, leftRow := ctr.locateBuildRow(ordinal)
 		if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
 			leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 			return moerr.NewInternalErrorNoCtx("ASOF logical-left finalize row is out of range")

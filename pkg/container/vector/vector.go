@@ -4548,6 +4548,26 @@ func (v *Vector) VarlenaAreaIsDisjoint() bool {
 	return v != nil && v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint
 }
 
+// CanCopyWholeVarlenaArea reports whether a full UnionBatch can copy the
+// complete physical area without inspecting individual descriptors.
+func (v *Vector) CanCopyWholeVarlenaArea() bool {
+	return !v.IsDictionary() && v.VarlenaAreaIsDisjoint() && !v.cantFreeArea
+}
+
+// VarlenaPayloadSize returns the external bytes a selected non-NULL value
+// contributes when it is copied to a flat vector.
+func VarlenaPayloadSize(v *Vector, row int) int64 {
+	if v.IsNull(uint64(row)) {
+		return 0
+	}
+	value := GetFixedAtNoTypeCheck[types.Varlena](v, row)
+	if value.IsSmall() {
+		return 0
+	}
+	_, size := value.OffsetLen()
+	return int64(size)
+}
+
 func (v *Vector) GetData() []byte {
 	v.requirePhysical()
 	return v.data
@@ -10256,7 +10276,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 	// whole vector. SetLength and aliasing operations clear areaDisjoint; a
 	// borrowed Window is identified by cantFreeArea and must scan its descriptors
 	// because it retains the parent's complete area.
-	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea &&
+	if offset == 0 && cnt == w.length && w.CanCopyWholeVarlenaArea() &&
 		(admittedAreaBytes < 0 || len(w.area) == admittedAreaBytes) {
 		areaEnd = len(w.area)
 		hasArea = areaEnd > 0
