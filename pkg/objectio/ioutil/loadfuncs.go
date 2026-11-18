@@ -270,6 +270,81 @@ func LoadColumnsDataInto(
 	return
 }
 
+// LoadColumnsDataByUint64Key reads the columns together and copies only rows
+// matching key in the first, sorted uint64 column. Destinations must be empty.
+// The caller owns the destinations, including any partial copies on error.
+func LoadColumnsDataByUint64Key(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	key uint64,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(columns) == 0 || len(columns) != len(destinations) ||
+		len(columns) != len(typs) || typs[0].Oid != types.T_uint64 || m == nil {
+		return 0, moerr.NewInvalidInputNoCtx("invalid sorted uint64 column selection")
+	}
+	for _, dst := range destinations {
+		if dst == nil || dst.Length() != 0 {
+			return 0, moerr.NewInvalidInputNoCtx("sorted uint64 column selection requires empty destinations")
+		}
+	}
+	ioVectors, _, err := readColumnsData(ctx, columns, typs, fs, location, nil, m, policy)
+	if err != nil {
+		return 0, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	var keys vector.Vector
+	if err := objectio.MustVectorToCached(&keys, ioVectors.Entries[0].CachedData); err != nil {
+		return 0, err
+	}
+	defer keys.Free(nil)
+	if keys.GetType().Oid != types.T_uint64 || keys.IsConstNull() || keys.GetNulls().Any() {
+		return 0, moerr.NewInvalidInputNoCtx("sorted uint64 key column is missing or invalid")
+	}
+	values := vector.MustFixedColNoTypeCheck[uint64](&keys)
+	start := vector.OrderedFindFirstIndexInSortedSlice(key, values)
+	if start < 0 {
+		return 0, ctx.Err()
+	}
+	end := start + 1
+	if keys.IsConst() {
+		end = keys.Length()
+	} else {
+		for end < len(values) && values[end] == key {
+			end++
+		}
+	}
+
+	sels := make([]int64, end-start)
+	for i := range sels {
+		sels[i] = int64(start + i)
+	}
+	for i, dst := range destinations {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if err := objectio.CopyCachedVectorRows(dst, ioVectors.Entries[i].CachedData, sels, m); err != nil {
+			return 0, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return len(sels), nil
+}
+
 // LoadColumnDataBySearch executes a fixed supported varlen search while the
 // cache entry is pinned. The cache-backed Vector remains private to ObjectIO.
 func LoadColumnDataBySearch(

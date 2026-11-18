@@ -752,7 +752,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get foreign key table infos
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -1005,7 +1005,7 @@ func deleteCurFkTables(
 	}
 
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -2479,6 +2479,7 @@ func getTableInfoMap(
 	dbName string,
 	tblName string,
 	tblKeys []string,
+	inventory map[restoreObjectName]*tableInfo,
 ) (tblInfoMap map[string]*tableInfo, err error) {
 
 	tblInfoMap = make(map[string]*tableInfo)
@@ -2504,6 +2505,12 @@ func getTableInfoMap(
 			continue
 		}
 
+		if inventory != nil {
+			if info, ok := inventory[restoreObjectName{d, t}]; ok {
+				tblInfoMap[key] = info
+			}
+			continue
+		}
 		if tblInfoMap[key], err = getTableInfo(ctx, sid, bh, snapshot, d, t); err != nil {
 			return
 		}
