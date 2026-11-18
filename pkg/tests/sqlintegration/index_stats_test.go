@@ -204,7 +204,7 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(ordinaryJSON), &ordinary))
 		require.Equal(t, float64(1), ordinary["entry_count"])
 		require.Equal(t, float64(1), ordinary["cardinality"])
-		err = conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ordinary') as s").Scan(&ordinaryJSON)
+		err = conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ordinary','{}') as s").Scan(&ordinaryJSON)
 		require.ErrorContains(t, err, "does not support deep analysis")
 		rows, err = conn.QueryContext(ctx, "select * from mo_index_stats('index_stats_test','plain_vectors','missing') AS s")
 		if rows != nil {
@@ -223,12 +223,12 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		}
 		require.Error(t, err, "diagnostics must require SELECT on the primary table")
 		var denied string
-		err = reader.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&denied)
+		err = reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf','{}') as s where row_type='index'").Scan(&denied)
 		require.Error(t, err, "deep analysis must require source SELECT too")
 		exec("grant select on table index_stats_test.plain_vectors to public")
 		var summary string
 		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') AS s where row_type='index'").Scan(&summary))
-		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&summary))
+		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf','{}') as s where row_type='index'").Scan(&summary))
 		exec("create temporary table plain_vectors(id bigint primary key, embedding vecf64(1))")
 		var unavailable string
 		err = conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&unavailable)
@@ -307,7 +307,7 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.Equal(t, "async", metrics["maintenance_mode"])
 		require.Equal(t, float64(2), metrics["vector_count"], "report consumed index vectors")
 		var deepJSON string
-		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_async','vectors','ivf') as s where row_type='index'").Scan(&deepJSON))
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'").Scan(&deepJSON))
 		var deep map[string]any
 		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
 		require.Equal(t, "index_not_caught_up", deep["analysis"].(map[string]any)["status"])
@@ -327,7 +327,7 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.NoError(t, executor.Resume())
 		paused = false
 		wait(3)
-		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_analyze('index_stats_async','vectors','ivf') as s where row_type='index'").Scan(&deepJSON))
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'").Scan(&deepJSON))
 		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
 		require.NotContains(t, deep["analysis"], "status", "same-view durable progress permits coverage analysis")
 		require.Contains(t, deep["analysis"], "recall")
@@ -351,12 +351,12 @@ func testIndexHealthSQL(t *testing.T, ctx context.Context, conn *sql.Conn, exec 
 	exec("create index ivf using ivfflat on health_vectors(v) lists=2 op_type 'vector_l2_ops' kmeans_train_percent=100")
 	read := func(deep bool) map[string]any {
 		t.Helper()
-		name, args := "mo_index_stats", ""
+		args := ""
 		if deep {
-			name, args = "mo_index_analyze", `, '{"sample_count":256,"retrain":true}'`
+			args = `, '{"sample_count":256,"retrain":true}'`
 		}
 		var raw string
-		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from "+name+"('index_stats_test','health_vectors','ivf'"+args+") as s where row_type='index'").Scan(&raw))
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','health_vectors','ivf'"+args+") as s where row_type='index'").Scan(&raw))
 		var m map[string]any
 		require.NoError(t, json.Unmarshal([]byte(raw), &m))
 		return m
@@ -422,8 +422,9 @@ func testIndexHealthSQL(t *testing.T, ctx context.Context, conn *sql.Conn, exec 
 	require.NotContains(t, legacy, "drift")
 	var invalid string
 	for _, q := range []string{
-		"select metrics from mo_index_analyze('index_stats_test','health_vectors','ivf','{\"sample_count\":0}') as s",
-		"select metrics from mo_index_stats('index_stats_test','health_vectors','ivf','{}') as s",
+		"select metrics from mo_index_stats('index_stats_test','health_vectors','ivf','{\"sample_count\":0}') as s",
+		"select metrics from mo_index_stats('index_stats_test','health_vectors','ivf','', '{}') as s",
+		"select metrics from mo_index_analyze('index_stats_test','health_vectors','ivf') as s",
 	} {
 		require.Error(t, conn.QueryRowContext(ctx, q).Scan(&invalid))
 	}

@@ -927,7 +927,7 @@ func isPublicationSequenceFunction(name string) bool {
 // argument-resolved sources.
 func isPublicationIncompatibleTableFunction(name string) bool {
 	switch name {
-	case "table_changes", "mo_index_stats", "mo_index_analyze":
+	case "table_changes", "mo_index_stats":
 		// These binders resolve (database, table) string literals through the
 		// executing account and reject subscription sources.
 		return true
