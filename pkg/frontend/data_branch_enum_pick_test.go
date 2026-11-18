@@ -16,9 +16,11 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,10 +28,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type pickEnumPlanCompiler struct {
+	*sqlplan.MockCompilerContext
+}
+
+func (c *pickEnumPlanCompiler) Resolve(dbName, tableName string, _ *sqlplan.Snapshot, borrow *sqlplan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrow.Reset()
+	if !strings.EqualFold(tableName, "lookup_t") {
+		return c.MockCompilerContext.Resolve(dbName, tableName, nil, borrow)
+	}
+	if dbName == "" {
+		dbName = c.DefaultDatabase()
+	}
+	return &plan.ObjectRef{Obj: 9901, ObjName: tableName, SchemaName: dbName}, &plan.TableDef{
+		TblId: 9901, Name: tableName, DbName: dbName, TableType: catalog.SystemOrdinaryRel,
+		Name2ColIndex: map[string]int32{"e": 0, "id": 1},
+		Cols: []*plan.ColDef{
+			{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: ",x", EnumCollation: types.EnumCollationUTF8Bin}},
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}, nil
+}
 
 func TestPickEnumLiteralRespectsDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -93,7 +118,7 @@ func TestPickEnumRejectsAmbiguousDisplaySubquery(t *testing.T) {
 				Func: &plan.ObjectRef{Obj: int64(function.CAST_INDEX_TO_VALUE) << 32},
 				Args: []*plan.Expr{{}, {Typ: plan.Type{Id: int32(types.T_enum)}}},
 			}}}
-			query := &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{display}}}}
+			query := &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{display}}}}
 			err := validatePickEnumSubquery(query, tbl)
 			if tc.wantError {
 				require.ErrorContains(t, err, "cannot distinguish ordinal 0")
@@ -109,13 +134,125 @@ func TestPickEnumRejectsAmbiguousDisplaySubquery(t *testing.T) {
 				Func: &plan.ObjectRef{Obj: int64(function.CAST) << 32}, Args: []*plan.Expr{display},
 			}}}
 			require.NoError(t, validatePickEnumSubquery(query, tbl))
-			query.Steps = []int32{0}
 			query.Nodes[0].ProjectList[0] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_enum)}}
 			err = validatePickEnumSubquery(query, tbl)
 			if tc.wantError {
 				require.ErrorContains(t, err, "ENUM domain is unavailable")
 			} else {
 				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestPickEnumValidatesOnlyReturnedKeyLineage(t *testing.T) {
+	typ := types.T_enum.ToType()
+	typ.Charset = uint8(types.EnumCollationUTF8Bin)
+	var tbl tableStuff
+	tbl.def.colTypes = []types.Type{typ}
+	tbl.def.enumValues = []string{"", "x"}
+	tbl.def.pkColIdxes = []int{0}
+
+	display := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: int64(function.CAST_INDEX_TO_VALUE) << 32},
+		Args: []*plan.Expr{{}, {Typ: plan.Type{Id: int32(types.T_enum)}}},
+	}}}
+	numeric := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint16)}}
+	col := func(tag, pos int32, typ plan.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+
+	t.Run("derived bare enum output follows its source slot", func(t *testing.T) {
+		query := &plan.Query{
+			Steps: []int32{0, 1},
+			Nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{display}},
+				{NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: []*plan.Expr{col(0, 0, plan.Type{Id: int32(types.T_varchar)})}},
+			},
+		}
+		err := validatePickEnumSubquery(query, tbl)
+		require.ErrorContains(t, err, "cannot distinguish ordinal 0")
+	})
+
+	t.Run("CTE sink scan follows only its output column", func(t *testing.T) {
+		query := &plan.Query{
+			Steps: []int32{0, 1, 2},
+			Nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{numeric, display}},
+				{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}, ProjectList: []*plan.Expr{col(0, 1, plan.Type{Id: int32(types.T_varchar)})}},
+				{NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{col(0, 0, plan.Type{Id: int32(types.T_varchar)})}},
+			},
+		}
+		err := validatePickEnumSubquery(query, tbl)
+		require.ErrorContains(t, err, "cannot distinguish ordinal 0")
+	})
+
+	t.Run("unrelated label filter does not taint numeric key", func(t *testing.T) {
+		query := &plan.Query{
+			Steps: []int32{0, 1},
+			Nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{display}},
+				{NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: []*plan.Expr{numeric}, FilterList: []*plan.Expr{display}},
+			},
+		}
+		require.NoError(t, validatePickEnumSubquery(query, tbl))
+	})
+}
+
+func TestPickEnumValidatesOptimizerOutputLineage(t *testing.T) {
+	typ := types.T_enum.ToType()
+	typ.Charset = uint8(types.EnumCollationUTF8Bin)
+	single := tableStuff{}
+	single.def.colTypes = []types.Type{typ}
+	single.def.enumValues = []string{",x"}
+	single.def.pkColIdxes = []int{0}
+	single.def.pkColIdx = 0
+
+	composite := tableStuff{}
+	composite.def.colTypes = []types.Type{typ, types.T_int32.ToType()}
+	composite.def.enumValues = []string{",x", ""}
+	composite.def.pkColIdxes = []int{0, 1}
+	composite.def.pkColIdx = 0
+	compositeEnum := tableStuff{}
+	compositeEnum.def.colTypes = []types.Type{typ, typ}
+	compositeEnum.def.enumValues = []string{",x", ",x"}
+	compositeEnum.def.pkColIdxes = []int{0, 1}
+	compositeEnum.def.pkColIdx = 0
+
+	compiler := &pickEnumPlanCompiler{MockCompilerContext: sqlplan.NewMockCompilerContext(true, testutil.NewProcess(t))}
+	for _, tc := range []struct {
+		name, query string
+		tbl         tableStuff
+		wantError   bool
+	}{
+		{"derived bare ENUM output", "select e from (select e from lookup_t) q", single, true},
+		{"CTE bare ENUM output", "with q as (select e from lookup_t) select e from q", single, true},
+		{"UNION left ENUM output", "select e from lookup_t union all select 'x'", single, true},
+		{"UNION right ENUM output", "select 'x' from lookup_t union all select e from lookup_t", single, true},
+		{"aggregate ENUM display output", "select max(e) from lookup_t", single, true},
+		{"numeric output with pushed ENUM predicate", "select id from lookup_t where e='x'", single, false},
+		{"numeric key with unrelated label filter", "select k from (select cast(e as unsigned) k, e as label from lookup_t) q where length(label)=0", single, false},
+		{"composite key with numeric ENUM slot", "select cast(e as unsigned), id from lookup_t", composite, false},
+		{"composite key with ambiguous ENUM slot", "select cast(e as unsigned), e from lookup_t", compositeEnum, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orderedSQL := "select * from (" + tc.query + ") as __mo_pick_sub order by 1"
+			if len(tc.tbl.def.pkColIdxes) > 1 {
+				orderedSQL = "select * from (" + tc.query + ") as __mo_pick_sub order by 1, 2"
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, orderedSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := sqlplan.NewBaseOptimizer(compiler).Optimize(stmt, false, nil)
+			require.NoError(t, err, orderedSQL)
+			for _, node := range query.Nodes {
+				require.Empty(t, node.BindingTags, "the test must exercise optimizer-local column positions")
+			}
+			err = validatePickEnumSubquery(query, tc.tbl)
+			if tc.wantError {
+				require.Error(t, err, orderedSQL)
+			} else {
+				require.NoError(t, err, orderedSQL)
 			}
 		})
 	}

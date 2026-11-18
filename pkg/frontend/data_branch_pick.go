@@ -815,46 +815,191 @@ func validatePickEnumSubquery(query *pbplan.Query, tbl tableStuff) error {
 	if query == nil {
 		return nil
 	}
-	emptyCanIdentifyKey := false
-	for _, idx := range tbl.def.pkColIdxes {
-		if idx < 0 || idx >= len(tbl.def.colTypes) || tbl.def.colTypes[idx].Oid != types.T_enum {
+	step := int(query.MainOutputStep())
+	if step < 0 || step >= len(query.Steps) {
+		return nil
+	}
+	rootID := query.Steps[step]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
+		return nil
+	}
+	output := query.Nodes[rootID].ProjectList
+	pkColIdxes := tbl.def.pkColIdxes
+	if len(pkColIdxes) == 0 && tbl.def.pkColIdx >= 0 {
+		pkColIdxes = []int{tbl.def.pkColIdx}
+	}
+	for outputPos, idx := range pkColIdxes {
+		if outputPos >= len(output) || idx < 0 || idx >= len(tbl.def.colTypes) || tbl.def.colTypes[idx].Oid != types.T_enum {
 			continue
 		}
 		ordinal, truncated, err := types.ParseEnumCollatedAssignment(pickEnumDefinition(tbl, idx), "", tbl.def.colTypes[idx].GetEnumCollation())
 		if err != nil {
 			return err
 		}
-		emptyCanIdentifyKey = emptyCanIdentifyKey || (!truncated && ordinal != 0)
-	}
-	if !emptyCanIdentifyKey {
-		return nil
-	}
-	step := int(query.MainOutputStep())
-	if step >= 0 && step < len(query.Steps) {
-		node := int(query.Steps[step])
-		if node >= 0 && node < len(query.Nodes) && query.Nodes[node] != nil {
-			for _, expr := range query.Nodes[node].ProjectList {
-				if expr != nil && types.T(expr.Typ.Id) == types.T_enum {
-					return moerr.NewInvalidInputNoCtx("KEYS subquery ENUM domain is unavailable; CAST the original key AS UNSIGNED or CHAR before projecting it")
-				}
-			}
-		}
-	}
-	for _, node := range query.Nodes {
-		if node == nil {
+		if truncated || ordinal == 0 || !pickEnumOutputHasAmbiguousDisplay(query, rootID, outputPos) {
 			continue
 		}
-		for _, expr := range node.ProjectList {
-			if expr == nil {
-				continue
-			}
-			fn := expr.GetF()
-			if fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 && fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
-				return moerr.NewInvalidInputNoCtx("KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it")
-			}
+		if output[outputPos] != nil && types.T(output[outputPos].Typ.Id) == types.T_enum {
+			return moerr.NewInvalidInputNoCtx("KEYS subquery ENUM domain is unavailable; CAST the original key AS UNSIGNED or CHAR before projecting it")
 		}
+		return moerr.NewInvalidInputNoCtx("KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it")
 	}
 	return nil
+}
+
+type pickEnumOutputSlot struct {
+	nodeID int32
+	colPos int
+}
+
+func pickEnumOutputHasAmbiguousDisplay(query *pbplan.Query, nodeID int32, colPos int) bool {
+	return pickEnumOutputSlotHasAmbiguousDisplay(query, nodeID, colPos, make(map[pickEnumOutputSlot]bool))
+}
+
+func pickEnumOutputSlotHasAmbiguousDisplay(
+	query *pbplan.Query,
+	nodeID int32,
+	colPos int,
+	visited map[pickEnumOutputSlot]bool,
+) bool {
+	slot := pickEnumOutputSlot{nodeID: nodeID, colPos: colPos}
+	if visited[slot] || query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return false
+	}
+	visited[slot] = true
+	node := query.Nodes[nodeID]
+	switch node.NodeType {
+	case pbplan.Node_UNION, pbplan.Node_UNION_ALL:
+		// Set-operation output slots are aligned across both row-producing arms.
+		for _, childID := range node.Children {
+			if pickEnumOutputSlotHasAmbiguousDisplay(query, childID, colPos, visited) {
+				return true
+			}
+		}
+		return false
+	case pbplan.Node_INTERSECT, pbplan.Node_INTERSECT_ALL, pbplan.Node_MINUS, pbplan.Node_MINUS_ALL:
+		// These operators return the left row image. The right side decides
+		// membership but cannot change the returned ENUM representation.
+		return len(node.Children) != 0 && pickEnumOutputSlotHasAmbiguousDisplay(query, node.Children[0], colPos, visited)
+	case pbplan.Node_SINK_SCAN:
+		if colPos < 0 || colPos >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+			return false
+		}
+		expr := node.ProjectList[colPos]
+		if types.T(expr.Typ.Id) == types.T_enum {
+			return true
+		}
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast &&
+			int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 &&
+			fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
+			return true
+		}
+		col := expr.GetCol()
+		if col == nil || col.RelPos != 0 || col.ColPos < 0 {
+			return false
+		}
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(query.Steps) &&
+				pickEnumOutputSlotHasAmbiguousDisplay(query, query.Steps[sourceStep], int(col.ColPos), visited) {
+				return true
+			}
+		}
+		return false
+	case pbplan.Node_RECURSIVE_SCAN, pbplan.Node_RECURSIVE_CTE:
+		// Recursive operators publish columns in the declared CTE order. Their
+		// recursive seed/member layouts are aligned by output ordinal, unlike a
+		// pruned materialized SINK_SCAN reader.
+		if colPos >= 0 && colPos < len(node.ProjectList) {
+			expr := node.ProjectList[colPos]
+			if expr == nil {
+				return false
+			}
+			if types.T(expr.Typ.Id) == types.T_enum {
+				return true
+			}
+			if fn := expr.GetF(); fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast &&
+				int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 &&
+				fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
+				return true
+			}
+		}
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(query.Steps) &&
+				pickEnumOutputSlotHasAmbiguousDisplay(query, query.Steps[sourceStep], colPos, visited) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(node.ProjectList) == 0 &&
+		(node.NodeType == pbplan.Node_TABLE_SCAN || node.NodeType == pbplan.Node_INDEX_SEARCH_SCAN || node.NodeType == pbplan.Node_MATERIAL_SCAN) &&
+		node.TableDef != nil && colPos >= 0 && colPos < len(node.TableDef.Cols) &&
+		node.TableDef.Cols[colPos] != nil && types.T(node.TableDef.Cols[colPos].Typ.Id) == types.T_enum {
+		return true
+	}
+	if colPos < 0 || colPos >= len(node.ProjectList) {
+		return false
+	}
+	return pickEnumExprHasAmbiguousDisplay(query, nodeID, node.ProjectList[colPos], visited)
+}
+
+func pickEnumExprHasAmbiguousDisplay(
+	query *pbplan.Query,
+	nodeID int32,
+	expr *pbplan.Expr,
+	visited map[pickEnumOutputSlot]bool,
+) bool {
+	if query == nil || expr == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return false
+	}
+	if types.T(expr.Typ.Id) == types.T_enum {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if fn.SyntaxExplicitCast {
+			return false
+		}
+		if int32(fn.Func.Obj>>32) == function.CAST_INDEX_TO_VALUE && len(fn.Args) == 2 &&
+			fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id) == types.T_enum {
+			return true
+		}
+		// Text functions preserve the source label as user-visible data. Follow
+		// only their value arguments so predicates and join keys cannot taint an
+		// unrelated numeric key output.
+		if !types.T(expr.Typ.Id).IsMySQLString() {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if pickEnumExprHasAmbiguousDisplay(query, nodeID, arg, visited) {
+				return true
+			}
+		}
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node.NodeType == pbplan.Node_AGG {
+		switch col.RelPos {
+		case -2:
+			aggPos := int(col.ColPos) - len(node.GroupBy)
+			if aggPos >= 0 && aggPos < len(node.AggList) {
+				return pickEnumExprHasAmbiguousDisplay(query, nodeID, node.AggList[aggPos], visited)
+			}
+			return false
+		case -1:
+			if col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+				return pickEnumExprHasAmbiguousDisplay(query, nodeID, node.GroupBy[col.ColPos], visited)
+			}
+			return false
+		}
+	}
+	if col.RelPos < 0 || int(col.RelPos) >= len(node.Children) || col.ColPos < 0 {
+		return false
+	}
+	return pickEnumOutputSlotHasAmbiguousDisplay(query, node.Children[col.RelPos], int(col.ColPos), visited)
 }
 
 // materializeSubqueryUnified handles KEYS (SELECT ...):

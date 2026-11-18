@@ -114,6 +114,26 @@ data branch pick empty_src into empty_dst keys(select cast(e as char) from empty
 select e+0,v from empty_dst order by e+0;
 data branch pick empty_src into empty_dst keys(select cast(e as unsigned) from empty_lookup);
 select e+0,v from empty_dst order by e+0;
+-- A pushed ENUM filter cannot taint a separately projected numeric key.
+create table empty_scan_lookup(id int,e enum('') collate utf8mb4_bin);
+insert ignore into empty_scan_lookup values(1,'bad');
+data branch create table empty_scan_dst from pick_empty;
+data branch pick empty_src into empty_scan_dst keys(select id from empty_scan_lookup where e='');
+select e+0,v from empty_scan_dst order by e+0;
+-- A pruned ENUM display must not taint the numeric key returned from a
+-- derived table or CTE. This wrapper matches the ORDER BY plan used by PICK.
+data branch pick empty_src into empty_dst keys(
+  select k from (select cast(e as unsigned) k,e as label from empty_lookup) q where length(label)=0
+);
+select e+0,v from empty_dst order by e+0;
+data branch pick empty_src into empty_dst keys(
+  with q as (select cast(e as unsigned) k,e as label from empty_lookup) select k from q where length(label)=0
+);
+select e+0,v from empty_dst order by e+0;
+data branch pick empty_src into empty_dst keys(
+  with q as (select e from empty_lookup) select e from q
+);
+select e+0,v from empty_dst order by e+0;
 
 -- Unicode zero-weight labels can also match the displayed error value.
 create table uca_empty(e enum('́','x') collate utf8mb4_unicode_ci primary key,v int);

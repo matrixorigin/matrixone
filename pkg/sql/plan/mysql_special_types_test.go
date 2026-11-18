@@ -81,6 +81,141 @@ func TestFuncCastForEnumTypeRetainsExistingAssignmentDomain(t *testing.T) {
 	require.Equal(t, moEnumCastValueToIndexFun, got.GetF().Func.ObjName)
 }
 
+func TestFuncCastForEnumTypeRemapsRuntimeIdentity(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	dynamicIdentity := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), dynamicIdentity,
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	identityCase := got.GetF()
+	require.NotNil(t, identityCase)
+	require.Equal(t, "case", identityCase.Func.ObjName)
+	require.Len(t, identityCase.Args, 3)
+	require.Equal(t, "=", identityCase.Args[0].GetF().Func.ObjName)
+	require.Equal(t, dynamicIdentity, identityCase.Args[0].GetF().Args[0])
+	require.Equal(t, uint32(target.EnumCollation), uint32(identityCase.Args[0].GetF().Args[1].GetLit().GetI64Val()))
+	require.Equal(t, target, identityCase.Args[1].Typ, "the matching identity must retain the raw physical ordinal")
+	require.Equal(t, converted.GetF(), identityCase.Args[1].GetF(), "the raw branch must retain the original helper")
+	remap := identityCase.Args[2].GetF()
+	require.NotNil(t, remap)
+	require.Equal(t, "case", remap.Func.ObjName, "ordinal zero must remain distinct while remapping")
+	require.Len(t, remap.Args, 3)
+	convertedTarget := remap.Args[2].GetF()
+	require.NotNil(t, convertedTarget)
+	require.Equal(t, moEnumCastValueToIndexFun, convertedTarget.Func.ObjName)
+	require.Equal(t, target.Enumvalues, convertedTarget.Args[0].GetLit().GetSval())
+	display := convertedTarget.Args[1].GetF()
+	require.NotNil(t, display)
+	require.Equal(t, moEnumCastIndexToValueFun, display.Func.ObjName)
+	require.Equal(t, target.Enumvalues, display.Args[1].Typ.Enumvalues)
+	require.Equal(t, converted.GetF(), display.Args[1].GetF())
+}
+
+func TestFuncCastForEnumTypeRemapsRuntimeIdentityAcrossReorderedDomain(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	dynamicIdentity := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType("A,a"), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), dynamicIdentity,
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	zeroCase := got.GetF()
+	require.NotNil(t, zeroCase)
+	require.Equal(t, "case", zeroCase.Func.ObjName)
+	require.NotEqual(t, dynamicIdentity, zeroCase.Args[0].GetF().Args[0],
+		"matching the identity is insufficient when the member ordering differs")
+	remap := zeroCase.Args[2].GetF()
+	require.NotNil(t, remap)
+	require.Equal(t, moEnumCastValueToIndexFun, remap.Func.ObjName)
+	require.Equal(t, target.Enumvalues, remap.Args[0].GetLit().GetSval())
+	require.Equal(t, moEnumCastIndexToValueFun, remap.Args[1].GetF().Func.ObjName)
+}
+
+func TestFuncCastForEnumTypeRejectsVolatileRemapInputs(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	random, err := BindFuncExprImplByPlanExpr(ctx, "rand", nil)
+	require.NoError(t, err)
+	condition, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{random, makePlan2Int64ConstExprWithType(0)})
+	require.NoError(t, err)
+	identity, err := BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		condition, makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), identity,
+	})
+	require.NoError(t, err)
+	_, err = funcCastForEnumType(ctx, converted, target)
+	require.ErrorContains(t, err, "volatile conversion input")
+}
+
+func TestFuncCastForEnumTypeDefersInvalidIdentityWhenEncodingCanBeNull(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	encoding := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		encoding, makePlan2Int64ConstExprWithType(999),
+	})
+	require.NoError(t, err)
+	got, err := funcCastForEnumType(ctx, converted, target)
+	require.NoError(t, err, "the runtime helper returns SQL NULL when encoding metadata is NULL")
+	require.Equal(t, target, got.Typ)
+}
+
+func TestFuncCastForEnumTypeRejectsRuntimeSourceMemberList(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "", EnumCollation: types.EnumCollationUTF8Bin}
+	domain := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		domain,
+		makePlan2StringConstExprWithType("b"),
+		makePlan2Int64ConstExprWithType(0),
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	_, err = funcCastForEnumType(ctx, converted, target)
+	require.ErrorContains(t, err, "runtime source member list")
+}
+
+func TestFuncCastForEnumTypeKeepsNullSourceMemberListHelper(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b", EnumCollation: types.EnumCollationUTF8Bin}
+	nullDomain := makePlan2NullConstExprWithType()
+	nullDomain.Typ = plan.Type{Id: int32(types.T_varchar), Width: 16}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		nullDomain,
+		makePlan2StringConstExprWithType("a"),
+		makePlan2Int64ConstExprWithType(0),
+		makePlan2Int64ConstExprWithType(999),
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(ctx, converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	fn := got.GetF()
+	require.NotNil(t, fn, "retain runtime metadata validation for the NULL result")
+	require.Equal(t, moEnumCastValueToIndexFun, fn.Func.ObjName)
+	require.True(t, fn.Args[0].GetLit().Isnull)
+	require.Equal(t, int64(999), fn.Args[3].GetLit().GetI64Val())
+}
+
 func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}

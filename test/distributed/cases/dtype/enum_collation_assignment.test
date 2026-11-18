@@ -32,6 +32,59 @@ update assignment set e='a' where id=1;
 select hex(cast(e as char)),e+0 from assignment;
 update assignment set e='Z' where id=1;
 select hex(cast(e as char)),e+0 from assignment;
+
+-- Runtime ENUM identity metadata must agree with the target before ordinals
+-- can be transferred directly. The source and target can share identity but
+-- still have different member orderings.
+create table runtime_identity_bin(e enum('a','A') collate utf8mb4_bin);
+prepare runtime_identity_bin_insert from 'insert into runtime_identity_bin values(cast_value_to_index(''a,A'',?,0,?))';
+set @runtime_enum_value='A',@runtime_enum_identity=2;
+execute runtime_identity_bin_insert using @runtime_enum_value,@runtime_enum_identity;
+deallocate prepare runtime_identity_bin_insert;
+select hex(cast(e as char)),e+0 from runtime_identity_bin;
+create table runtime_identity_legacy(e enum('a','A') collate __mo_enum_legacy_main_v1);
+prepare runtime_identity_legacy_insert from 'insert into runtime_identity_legacy values(cast_value_to_index(''a,A'',?,0,?))';
+execute runtime_identity_legacy_insert using @runtime_enum_value,@runtime_enum_identity;
+deallocate prepare runtime_identity_legacy_insert;
+select hex(cast(e as char)),e+0 from runtime_identity_legacy;
+create table runtime_identity_reordered(e enum('a','A') collate utf8mb4_bin);
+prepare runtime_identity_reordered_insert from 'insert into runtime_identity_reordered values(cast_value_to_index(''A,a'',?,0,?))';
+execute runtime_identity_reordered_insert using @runtime_enum_value,@runtime_enum_identity;
+deallocate prepare runtime_identity_reordered_insert;
+select hex(cast(e as char)),e+0 from runtime_identity_reordered;
+create table runtime_identity_zero(e enum('','a') collate utf8mb4_bin);
+set @saved_mode=@@sql_mode;
+set sql_mode='';
+prepare runtime_identity_zero_insert from 'insert into runtime_identity_zero values(cast_value_to_index(''a'',?,0,?))';
+set @runtime_enum_value='invalid';
+execute runtime_identity_zero_insert using @runtime_enum_value,@runtime_enum_identity;
+set @runtime_enum_value=null;
+execute runtime_identity_zero_insert using @runtime_enum_value,@runtime_enum_identity;
+deallocate prepare runtime_identity_zero_insert;
+set sql_mode=@saved_mode;
+select e+0,e is null from runtime_identity_zero order by e is null;
+-- A NULL encoding is a runtime short-circuit even when the literal identity
+-- is unsupported; binding must leave that decision to the helper.
+create table runtime_identity_null_encoding(e enum('a','A') collate utf8mb4_bin);
+prepare runtime_identity_null_encoding_insert from 'insert into runtime_identity_null_encoding values(cast_value_to_index(''a,A'',''A'',?,999))';
+set @runtime_enum_encoding=null;
+execute runtime_identity_null_encoding_insert using @runtime_enum_encoding;
+deallocate prepare runtime_identity_null_encoding_insert;
+select e is null from runtime_identity_null_encoding;
+-- A literal NULL source domain still leaves independent metadata validation
+-- to the original runtime helper.
+create table runtime_null_domain(e enum('a','A') collate utf8mb4_bin);
+insert into runtime_null_domain values(cast_value_to_index(NULL,'A',0,2));
+select e is null from runtime_null_domain;
+insert into runtime_null_domain values(cast_value_to_index(NULL,'A',0,999));
+-- A runtime source member list cannot be used to decode an ENUM ordinal
+-- without carrying that list through the assignment planner.
+create table runtime_domain_dynamic(e enum('','b') collate utf8mb4_bin);
+prepare runtime_domain_dynamic_insert from 'insert into runtime_domain_dynamic values(cast_value_to_index(?,''b'',0,0))';
+set @runtime_enum_domain='b,a';
+execute runtime_domain_dynamic_insert using @runtime_enum_domain;
+deallocate prepare runtime_domain_dynamic_insert;
+select e+0,hex(cast(e as char)) from runtime_domain_dynamic;
 create table ci(e enum('a','b') collate utf8mb4_general_ci);
 insert into ci values ('A'),('á');
 select hex(cast(e as char)),e+0 from ci;

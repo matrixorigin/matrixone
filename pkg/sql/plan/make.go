@@ -1118,33 +1118,82 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok && isEnumPlanType(&raw.Typ) {
 		expr = raw
 	}
+	dynamicEnumIdentity := false
+	dynamicEnumDomainMatchesTarget := false
+	var dynamicEnumIdentityExpr *Expr
+	var rawDynamicEnumExpr *Expr
 	// Assignment conversion functions carry their domain in their first
 	// argument; their generic return type does not retain that metadata. Recover
 	// it before deciding whether a second conversion is actually needed.
 	if fn := expr.GetF(); isEnumPlanType(&expr.Typ) && fn != nil && fn.Func != nil && len(fn.Args) >= 2 && fn.Args[0] != nil {
 		name := fn.Func.ObjName
-		if (name == moEnumCastValueToIndexFun || name == moEnumCastIndexValueToIndexFun) && fn.Args[0].GetLit() != nil {
-			if domain, ok := fn.Args[0].GetLit().Value.(*plan.Literal_Sval); ok {
+		if name == moEnumCastValueToIndexFun || name == moEnumCastIndexValueToIndexFun {
+			lit := fn.Args[0].GetLit()
+			if lit != nil && lit.Isnull {
+				// Keep the helper in the plan so its independent encoding and
+				// collation arguments are still validated at runtime. The helper
+				// returns NULL for a NULL source domain, so no ordinal remap is
+				// needed; only its result type follows the assignment target.
 				expr = DeepCopyExpr(expr)
-				expr.Typ.Enumvalues = domain.Sval
-				expr.Typ.EnumCollation = types.EnumCollationLegacy
-				if name == moEnumCastValueToIndexFun && len(fn.Args) == 4 && fn.Args[3] != nil && fn.Args[3].GetLit() != nil {
-					identity := fn.Args[3].GetLit().GetI64Val()
+				expr.Typ = targetType
+				return expr, nil
+			}
+			if lit == nil {
+				return nil, moerr.NewNotSupported(ctx,
+					"ENUM assignment with a runtime source member list cannot be safely remapped")
+			}
+			domain, ok := lit.Value.(*plan.Literal_Sval)
+			if !ok {
+				return nil, moerr.NewNotSupported(ctx,
+					"ENUM assignment with a non-string source member list cannot be safely remapped")
+			}
+			expr = DeepCopyExpr(expr)
+			expr.Typ.Enumvalues = domain.Sval
+			expr.Typ.EnumCollation = types.EnumCollationLegacy
+			if name == moEnumCastValueToIndexFun && len(fn.Args) == 4 && fn.Args[3] != nil {
+				if identityExpr := fn.Args[3].GetLit(); identityExpr != nil {
+					identity := identityExpr.GetI64Val()
 					if identity >= 0 && identity <= int64(^uint32(0)) {
-						expr.Typ.EnumCollation = uint32(identity)
+						if types.ValidateEnumCollation(uint32(identity)) == nil {
+							expr.Typ.EnumCollation = uint32(identity)
+						}
 					}
-				} else if name == moEnumCastIndexValueToIndexFun && domain.Sval == targetType.Enumvalues {
-					// Numeric assignment already selected this target's ordinal.
-					expr.Typ.EnumCollation = targetType.EnumCollation
+				} else {
+					// The helper evaluates this identity at runtime. Its result
+					// ordinal cannot be transferred to the destination domain
+					// until it is decoded and assigned using the target identity.
+					dynamicEnumIdentity = true
+					dynamicEnumDomainMatchesTarget = domain.Sval == targetType.Enumvalues
+					dynamicEnumIdentityExpr = DeepCopyExpr(fn.Args[3])
 				}
+			} else if name == moEnumCastIndexValueToIndexFun && domain.Sval == targetType.Enumvalues {
+				// Numeric assignment already selected this target's ordinal.
+				expr.Typ.EnumCollation = targetType.EnumCollation
 			}
 		}
 	}
 	var sourceEnum *Expr
 	if isEnumPlanType(&expr.Typ) {
-		if expr.Typ.Enumvalues == targetType.Enumvalues && expr.Typ.EnumCollation == targetType.EnumCollation {
+		needsRemap := dynamicEnumIdentity || expr.Typ.Enumvalues != targetType.Enumvalues ||
+			expr.Typ.EnumCollation != targetType.EnumCollation
+		if needsRemap {
+			if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+				(fn.Func.ObjName == moEnumCastValueToIndexFun || fn.Func.ObjName == moEnumCastIndexValueToIndexFun) {
+				for _, input := range fn.Args[1:] {
+					if containsVolatileFunction(input) {
+						return nil, moerr.NewNotSupportedNoCtx(
+							"ENUM assignment with volatile conversion input cannot be safely remapped")
+					}
+				}
+			}
+		}
+		if !dynamicEnumIdentity && expr.Typ.Enumvalues == targetType.Enumvalues && expr.Typ.EnumCollation == targetType.EnumCollation {
 			expr.Typ = targetType
 			return expr, nil
+		}
+		if dynamicEnumIdentity && dynamicEnumDomainMatchesTarget {
+			rawDynamicEnumExpr = DeepCopyExpr(expr)
+			rawDynamicEnumExpr.Typ = targetType
 		}
 		// Preserve the source ordinal separately: its display cannot distinguish
 		// the error member (0) from a declared empty member.
@@ -1223,6 +1272,25 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, moerr.NewInternalErrorNoCtx("unexpected ENUM remapping CASE")
 		}
 		caseFn.Args[1], caseFn.Args[2] = &targetZero, converted
+		expr.Typ = targetType
+	}
+	if dynamicEnumIdentityExpr != nil && dynamicEnumDomainMatchesTarget {
+		matchesTargetIdentity, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{
+			DeepCopyExpr(dynamicEnumIdentityExpr), makePlan2Int64ConstExprWithType(int64(targetType.EnumCollation)),
+		})
+		if err != nil {
+			return nil, err
+		}
+		remapped := expr
+		expr, err = BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{matchesTargetIdentity, rawDynamicEnumExpr, remapped})
+		if err != nil {
+			return nil, err
+		}
+		caseFn := expr.GetF()
+		if caseFn == nil || len(caseFn.Args) != 3 {
+			return nil, moerr.NewInternalErrorNoCtx("unexpected runtime ENUM identity CASE")
+		}
+		caseFn.Args[1], caseFn.Args[2] = rawDynamicEnumExpr, remapped
 		expr.Typ = targetType
 	}
 	return expr, nil

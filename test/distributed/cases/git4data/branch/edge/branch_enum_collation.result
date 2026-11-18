@@ -174,15 +174,48 @@ select e+0,v from empty_dst order by e+0;
 0  ¦  20  𝄀
 1  ¦  10
 data branch pick empty_src into empty_dst keys(select cast(e as char) from empty_lookup);
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
 select e+0,v from empty_dst order by e+0;
 ➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
 0  ¦  20  𝄀
-1  ¦  11
+1  ¦  10
 data branch pick empty_src into empty_dst keys(select cast(e as unsigned) from empty_lookup);
 select e+0,v from empty_dst order by e+0;
 ➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
 0  ¦  22  𝄀
+1  ¦  10
+create table empty_scan_lookup(id int,e enum('') collate utf8mb4_bin);
+insert ignore into empty_scan_lookup values(1,'bad');
+data branch create table empty_scan_dst from pick_empty;
+data branch pick empty_src into empty_scan_dst keys(select id from empty_scan_lookup where e='');
+select e+0,v from empty_scan_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  20  𝄀
 1  ¦  11
+data branch pick empty_src into empty_dst keys(
+select k from (select cast(e as unsigned) k,e as label from empty_lookup) q where length(label)=0
+);
+conflict: empty_src INSERT and empty_dst INSERT on pk(0) with different values
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  10
+data branch pick empty_src into empty_dst keys(
+with q as (select cast(e as unsigned) k,e as label from empty_lookup) select k from q where length(label)=0
+);
+conflict: empty_src INSERT and empty_dst INSERT on pk(0) with different values
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  10
+data branch pick empty_src into empty_dst keys(
+with q as (select e from empty_lookup) select e from q
+);
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  10
 create table uca_empty(e enum('́','x') collate utf8mb4_unicode_ci primary key,v int);
 insert into uca_empty values(1,10),(2,30);
 insert ignore into uca_empty values('bad',20);
