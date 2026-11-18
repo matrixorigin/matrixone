@@ -723,7 +723,7 @@ func TestPartitionStateRangeReleasesSpillOnCancellation(t *testing.T) {
 }
 
 func TestAObjectHandleSkipsEmptyPrefetchTargets(t *testing.T) {
-	handle := &AObjectHandle{objects: []*objectio.ObjectEntry{nil, &objectio.ObjectEntry{}}}
+	handle := &AObjectHandle{objects: []*objectio.ObjectEntry{nil, {}}}
 	obj, block, ok, err := handle.nextPrefetchTarget(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, obj)
@@ -1068,6 +1068,59 @@ func TestNewChangesHandlerPreservesAllVersionsPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handle.preserveAllVersions)
 	require.NoError(t, handle.Close())
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestChangeHandlerPreservesHistoryThroughNext(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, _ := newPartitionStateRangeRows(t, mp, 2, true)
+	end := types.BuildTS(2, 2)
+	rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](src.Vecs[0], 1)
+	state.rows.Set(&RowEntry{
+		BlockID: rowID.CloneBlockID(), RowID: rowID, Time: end,
+		ID: 3, Deleted: true, Batch: src, Offset: 1,
+	})
+
+	collectPKOne := func(ctx context.Context) (inserts, deletes int) {
+		handle, err := NewChangesHandlerWithPartitionStateRange(
+			ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, handle.Close()) }()
+		for {
+			data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+			require.NoError(t, nextErr)
+			if data == nil && tombstone == nil {
+				break
+			}
+			if data != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]) {
+					if pk == 1 {
+						inserts++
+					}
+				}
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](tombstone.Vecs[0]) {
+					if pk == 1 {
+						deletes++
+					}
+				}
+				tombstone.Clean(mp)
+			}
+		}
+		return
+	}
+
+	inserts, deletes := collectPKOne(context.Background())
+	require.Zero(t, inserts)
+	require.Zero(t, deletes)
+	inserts, deletes = collectPKOne(engine.WithCollectChangesPreserveAllVersions(context.Background()))
+	require.Equal(t, 1, inserts)
+	require.Equal(t, 1, deletes)
+	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
