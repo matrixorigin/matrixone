@@ -50,6 +50,131 @@ func TestDedupJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(113), uint8(dedupJoinAllocationSiteResultGrouping))
 }
 
+func TestDedupJoinAuxiliaryArbitration(t *testing.T) {
+	for _, mode := range []dedupKeyContractMode{
+		{name: "resident"},
+		{name: "spill", shuffle: true, spillThreshold: hashmap.UnitLimit + 1, wantInitialSpill: true},
+		{name: "re-spill", shuffle: true, spillThreshold: 2, wantInitialSpill: true, wantReSpill: true},
+	} {
+		for _, reservationFirst := range []bool{false, true} {
+			t.Run(mode.name+"/reservationFirst="+strconv.FormatBool(reservationFirst), func(t *testing.T) {
+				proc, ctrl := newCaptureTestProc(t)
+				defer ctrl.Finish()
+				proc.Base.Lim.Size = 8 << 20
+				proc.Base.Lim.SpillSize = 64 << 20
+				session := &dedupJoinWarningSession{}
+				proc.Session = session
+				proc.SetStmtProfile(&process.StmtProfile{})
+				proc.GetStmtProfile().SetStatementRuntimeProfile("Update", "DML", true)
+				var join *DedupJoin
+				var build *hashbuild.HashBuild
+				buildBat, probeBat := batch.NewWithSize(4), batch.NewWithSize(1)
+				defer func() {
+					if join != nil {
+						join.Free(proc, false, nil)
+					}
+					if build != nil {
+						build.Free(proc, false, nil)
+					}
+					buildBat.Clean(proc.Mp())
+					probeBat.Clean(proc.Mp())
+					budget, err := proc.GetExecutionResourceBudget()
+					var used, disk, descriptors uint64
+					if err == nil {
+						used, disk, descriptors = budget.Used(), budget.SpillDiskUsed(), budget.SpillFDUsed()
+					}
+					proc.Free()
+					require.NoError(t, err)
+					require.Zero(t, used)
+					require.Zero(t, disk)
+					require.Zero(t, descriptors)
+					require.Zero(t, proc.Mp().CurrNB())
+				}()
+				intType, boolType := types.T_int32.ToType(), types.T_bool.ToType()
+				rightTypes := []types.Type{intType, intType, boolType, intType}
+				for i, typ := range rightTypes {
+					buildBat.Vecs[i] = vector.NewVec(typ)
+				}
+				probeBat.Vecs[0] = vector.NewVec(intType)
+				appendBuild := func(key, previous, id int32, auxiliary, release bool) {
+					require.NoError(t, vector.AppendFixed(buildBat.Vecs[0], key, false, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(buildBat.Vecs[1], previous, auxiliary && !release, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(buildBat.Vecs[2], release, false, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(buildBat.Vecs[3], id, auxiliary, proc.Mp()))
+				}
+				// These unchanged, rejected rows retain reservations and exercise
+				// snapshot diagnostic suppression in every materialized partition.
+				for i := 0; i < hashmap.UnitLimit; i++ {
+					key := int32(1000 + i)
+					appendBuild(key, 0, 0, true, false)
+					require.NoError(t, vector.AppendFixed(probeBat.Vecs[0], key, false, proc.Mp()))
+				}
+				if reservationFirst {
+					appendBuild(30, 0, 0, true, false)
+				}
+				appendBuild(30, 20, 2, false, false) // B cannot steal A's accepted 30.
+				if !reservationFirst {
+					appendBuild(30, 0, 0, true, false)
+				}
+				appendBuild(20, 0, 0, true, false)
+				appendBuild(10, 10, 0, true, true)   // S=10 was released when A accepted 30.
+				appendBuild(10, 30, 1, false, false) // A may reclaim the now-unowned 10.
+				buildBat.SetRowCount(buildBat.Vecs[0].Length())
+				for _, key := range []int32{10, 20} {
+					require.NoError(t, vector.AppendFixed(probeBat.Vecs[0], key, false, proc.Mp()))
+				}
+				probeBat.SetRowCount(probeBat.Vecs[0].Length())
+				if mode.wantReSpill {
+					requireDedupTargetBucketReSpills(t, buildBat.Vecs[0], buildBat.RowCount()-1, mode.spillThreshold)
+				}
+				conditions := [][]*plan.Expr{{newExpr(0, intType)}, {newExpr(0, intType)}}
+				const mapTag = 328270
+				join = &DedupJoin{LeftTypes: []types.Type{intType}, RightTypes: rightTypes, Conditions: conditions,
+					Result:            []colexec.ResultPos{colexec.NewResultPos(1, 3), colexec.NewResultPos(1, 0)},
+					OnDuplicateAction: plan.Node_IGNORE, DelColIdx: 1, DedupDeleteMarkerColIdx: 2, AuxiliaryRowIdColIdx: 4,
+					DedupColName: "uk", DedupColTypes: []plan.Type{conditions[0][0].Typ},
+					IsShuffle: mode.shuffle, SpillThreshold: mode.spillThreshold, JoinMapTag: mapTag}
+				build = &hashbuild.HashBuild{NeedHashMap: true, NeedBatches: true, NeedAllocateSels: true, Conditions: conditions[1],
+					IsDedup: true, OnDuplicateAction: plan.Node_IGNORE, DelColIdx: 1, DedupDeleteMarkerColIdx: 2, AuxiliaryRowIdColIdx: 4,
+					DedupColName: join.DedupColName, DedupColTypes: join.DedupColTypes,
+					IsShuffle: mode.shuffle, SpillThreshold: mode.spillThreshold, JoinMapTag: mapTag, JoinMapRefCnt: 1}
+				if mode.shuffle {
+					build.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: mapTag + 1}
+				}
+				join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+				build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+				installTestAllocation(t, join, build)
+				spillMetric := metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")
+				reSpillMetric := metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2")
+				spillBefore, reSpillBefore := promtestutil.ToFloat64(spillMetric), promtestutil.ToFloat64(reSpillMetric)
+				require.NoError(t, build.Prepare(proc))
+				require.NoError(t, join.Prepare(proc))
+				_, err := vm.Exec(build, proc)
+				require.NoError(t, err)
+				var actual [][]int32
+				for {
+					result, err := vm.Exec(join, proc)
+					require.NoError(t, err)
+					if result.Batch != nil {
+						for row := 0; row < result.Batch.RowCount(); row++ {
+							if !result.Batch.Vecs[0].IsNull(uint64(row)) {
+								actual = append(actual, []int32{vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[0], row), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[1], row)})
+							}
+						}
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(t, [][]int32{{1, 10}}, actual)
+				require.Equal(t, uint64(1), session.total)
+				require.Equal(t, mode.wantInitialSpill, promtestutil.ToFloat64(spillMetric) > spillBefore)
+				require.Equal(t, mode.wantReSpill, promtestutil.ToFloat64(reSpillMetric) > reSpillBefore)
+			})
+		}
+	}
+}
+
 type dedupKeyContractRow struct {
 	keyBits      uint64
 	captured     int32
