@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -64,17 +64,17 @@ jobs:
     with:
       environment: ${{ fromJSON('{"mty-node-tools-probe":"mty","mnl2-node-tools-probe":"mnl2","jed-node-tools-probe":"jed","ruh-node-tools-probe":"ruh"}')[inputs.coverage_comparison] }}
   node-cache-consumer:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && contains(fromJSON('["mty-node-consumer-2","mnl2-node-consumer-2","jed-node-consumer-2","ruh-node-consumer-2"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && contains(fromJSON('["mty-node-consumer-2","mnl2-node-consumer-2","jed-node-consumer-2","ruh-node-consumer-2","mty-node-consumer-3","mnl2-node-consumer-3","jed-node-consumer-3","ruh-node-consumer-3"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
-      group: ${{ format('cs-pvc-comparison-{0}', fromJSON('{"mty-node-consumer-2":"mty","mnl2-node-consumer-2":"mnl2","jed-node-consumer-2":"jed","ruh-node-consumer-2":"ruh"}')[inputs.coverage_comparison]) }}
+      group: ${{ format('cs-pvc-comparison-{0}', fromJSON('{"mty-node-consumer-2":"mty","mnl2-node-consumer-2":"mnl2","jed-node-consumer-2":"jed","ruh-node-consumer-2":"ruh","mty-node-consumer-3":"mty","mnl2-node-consumer-3":"mnl2","jed-node-consumer-3":"jed","ruh-node-consumer-3":"ruh"}')[inputs.coverage_comparison]) }}
       cancel-in-progress: false
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-local-tools-acceptance.yaml@214048bff40f4aa676ea4c0e0ca8dd0951e0241b
+    uses: matrixorigin/CI/.github/workflows/node-cache-local-tools-acceptance.yaml@1377b8bffb62fd6e895f57f2838f11d25723acc8
     with:
-      node_cache_environment: ${{ fromJSON('{"mty-node-consumer-2":"mty","mnl2-node-consumer-2":"mnl2","jed-node-consumer-2":"jed","ruh-node-consumer-2":"ruh"}')[inputs.coverage_comparison] }}
-      group_count: 2
+      node_cache_environment: ${{ fromJSON('{"mty-node-consumer-2":"mty","mnl2-node-consumer-2":"mnl2","jed-node-consumer-2":"jed","ruh-node-consumer-2":"ruh","mty-node-consumer-3":"mty","mnl2-node-consumer-3":"mnl2","jed-node-consumer-3":"jed","ruh-node-consumer-3":"ruh"}')[inputs.coverage_comparison] }}
+      group_count: ${{ endsWith(inputs.coverage_comparison, '-3') && 3 || 2 }}
       source_sha: ${{ inputs.matrixone_sha }}
       node_compile_cache: true
       node_cache_candidate: false
