@@ -3404,6 +3404,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	for _, node := range builder.zeroScalarPrivilegeScans {
+		node.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, node)
+		builder.ctxByNode = append(builder.ctxByNode, nil)
+	}
 	return builder.qry, nil
 }
 

@@ -645,6 +645,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	var nodeID int32
 	var err error
+	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -659,6 +660,11 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration {
+		if err := b.builder.retainZeroScalarAuthorizationSources(nodeID); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.builder != nil {
