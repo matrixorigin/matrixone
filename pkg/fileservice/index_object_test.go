@@ -329,3 +329,30 @@ func TestIndexObjectFillWritesInIndexFileCache(t *testing.T) {
 		}))
 	}
 }
+
+// A read of an index object keeps the entry's file open for the reads after it; a delete
+// of the object closes it.
+func TestIndexObjectReadKeepsFileOpen(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data)
+	d := fs.indexFileCache.disk
+	diskPath, err := d.pathForDir(IndexObjectEntry("object"))
+	require.NoError(t, err)
+	kept := func() *openCacheFile {
+		d.updatingPaths.L.Lock()
+		defer d.updatingPaths.L.Unlock()
+		return d.updatingPaths.openFiles.m[diskPath]
+	}
+
+	require.Equal(t, data[1000:1010], readIndexObjectRange(t, fs, IndexFileObject, 1000, 10))
+	first := kept()
+	require.NotNil(t, first)
+	require.Zero(t, first.refs)
+	require.Equal(t, data[5000:5010], readIndexObjectRange(t, fs, IndexFileObject, 5000, 10))
+	require.Same(t, first, kept(), "the next read reads the kept file")
+
+	require.NoError(t, fs.Delete(context.Background(), "object"))
+	require.Nil(t, kept())
+	_, err = first.file.Stat()
+	require.ErrorIs(t, err, os.ErrClosed)
+}

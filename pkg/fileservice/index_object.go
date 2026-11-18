@@ -170,15 +170,14 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	if err != nil {
 		return nil
 	}
-	files, err := s.indexFileCache.Open(ctx, IndexObjectEntry(p.File), IndexObjectFile)
+	file, done, err := s.indexFileCache.openEntryFile(ctx, IndexObjectEntry(p.File), IndexObjectFile)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil
 		}
 		return err
 	}
-	file := files[0]
-	defer file.Close()
+	defer done()
 	s.touchIndexObject(diskPath)
 	var read int64
 	for i := range vector.Entries {

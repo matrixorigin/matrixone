@@ -1486,14 +1486,10 @@ func (d *DiskCache) openReadFile(ctx context.Context, path string, generation ui
 	LogEvent(ctx, str_disk_cache_file_open_end)
 	// A file is kept, or noted missing, only while the path has not changed since the read
 	// started.
-	current := func() bool {
-		g, ok := d.updatingPaths.readGenerations[path]
-		return ok && g.id == generation && d.updatingPaths.m[path] == nil
-	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			d.updatingPaths.L.Lock()
-			if current() {
+			if d.pathReadCurrentLocked(path, generation) {
 				d.updatingPaths.openFiles.noteMissingLocked(path)
 			}
 			d.updatingPaths.L.Unlock()
@@ -1502,7 +1498,7 @@ func (d *DiskCache) openReadFile(ctx context.Context, path string, generation ui
 	}
 	var closeFile *os.File
 	d.updatingPaths.L.Lock()
-	if current() {
+	if d.pathReadCurrentLocked(path, generation) {
 		kept, closeFile = d.updatingPaths.openFiles.keepLocked(path, file)
 	}
 	d.updatingPaths.L.Unlock()
@@ -1510,6 +1506,13 @@ func (d *DiskCache) openReadFile(ctx context.Context, path string, generation ui
 		_ = closeFile.Close()
 	}
 	return openedDiskCacheFile{file: file, generation: generation, kept: kept}, true
+}
+
+// pathReadCurrentLocked reports whether path has not changed since a read whose read
+// generation of it is generation started.
+func (d *DiskCache) pathReadCurrentLocked(path string, generation uint64) bool {
+	g, ok := d.updatingPaths.readGenerations[path]
+	return ok && g.id == generation && d.updatingPaths.m[path] == nil
 }
 
 // closeReadFile ends a read's use of its opened file.

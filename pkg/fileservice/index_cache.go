@@ -524,6 +524,56 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 	return c.disk.openDir(ctx, name, diskPath, files)
 }
 
+// openEntryFile opens file of entry name for a read, through the file kept open for the
+// entry if any, and keeps a file it opens for later reads; done ends the read's use of it.
+// The file is kept by entry, so reads of an entry through it read the same file of it.
+func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file string) (f *os.File, done func(), err error) {
+	diskPath, err := c.disk.pathForDir(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkCacheDirFileName(file); err != nil {
+		return nil, nil, err
+	}
+	d := c.disk
+	var deadline time.Time
+	generation, ok := d.startPathReadWithin(ctx, diskPath, &deadline, shortIOWaitDuration)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, moerr.NewFileNotFoundNoCtx(name)
+	}
+	d.updatingPaths.L.Lock()
+	kept := d.updatingPaths.openFiles.takeLocked(diskPath)
+	d.updatingPaths.L.Unlock()
+	opened := openedDiskCacheFile{generation: generation, kept: kept}
+	if kept != nil {
+		d.cache.Get(ctx, diskPath)
+		opened.file = kept.file
+	} else {
+		files, err := d.openDir(ctx, name, diskPath, []string{file})
+		if err != nil {
+			d.finishPathRead(diskPath, generation)
+			return nil, nil, err
+		}
+		opened.file = files[0]
+		var closeFile *os.File
+		d.updatingPaths.L.Lock()
+		if d.pathReadCurrentLocked(diskPath, generation) {
+			opened.kept, closeFile = d.updatingPaths.openFiles.keepLocked(diskPath, files[0])
+		}
+		d.updatingPaths.L.Unlock()
+		if closeFile != nil {
+			_ = closeFile.Close()
+		}
+	}
+	return opened.file, func() {
+		d.closeReadFile(opened)
+		d.finishPathRead(diskPath, generation)
+	}, nil
+}
+
 // IndexFileHold keeps a cache entry on disk until it is released. Only the first release
 // takes effect; a nil hold holds nothing.
 type IndexFileHold struct {
