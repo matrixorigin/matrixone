@@ -136,6 +136,42 @@ null  𝄀
 null
 create table secret_rows (s int);
 insert into secret_rows values (5);
+create view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+➤ a[4,32,0]  ¦  v[-5,22,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+alter view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+➤ a[4,32,0]  ¦  v[-5,22,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a from outer_rows o
+window unused_w as (order by null + (select o.a from inner_rows i where i.d > o.a limit 0));
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+11  𝄀
+null
+create table issue_32869_dml (a int);
+insert into issue_32869_dml select null + (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o;
+select count(*) as rows_inserted, count(a) as nonnull from issue_32869_dml;
+➤ rows_inserted[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
+update issue_32869_dml d set a = null + (select d.a from inner_rows i where i.d > d.a limit 0);
+select count(*) as rows_updated, count(a) as nonnull from issue_32869_dml;
+➤ rows_updated[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
+create table issue_32869_ctas as select cast(null + (select o.a from inner_rows i where i.d > o.a limit 0) as signed) as a from outer_rows o;
+select count(*) as rows_copied, count(a) as nonnull from issue_32869_ctas;
+➤ rows_copied[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
 select null + (select o.a from secret_rows s where s.s > o.a limit 0)
 from outer_rows o;
 ➤ null + (select o.a from secret_rows as s where s.s > o.a limit 0)[0,2147483647,0]  𝄀
@@ -174,6 +210,38 @@ create user issue_32869_reader identified by '111' default role issue_32869_role
 grant connect on account * to issue_32869_role;
 grant select on table test_issue_32869.outer_rows to issue_32869_role;
 grant select on table test_issue_32869.inner_rows to issue_32869_role;
+grant insert on table test_issue_32869.issue_32869_dml to issue_32869_role;
+grant issue_32869_role to dump;
+set save_query_result = on;
+/* save_result */ select s as a from secret_rows;
+➤ a[4,32,0]  𝄀
+5
+set @issue_32869_saved = last_query_id();
+select (select (select q.a from inner_rows i where i.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1) as live_saved;
+➤ live_saved[4,32,0]  𝄀
+null
+set role issue_32869_role;
+select * from result_scan(@issue_32869_saved) q;
+internal error: do not have privilege to execute the statement
+select null + (select (select q.a from test_issue_32869.inner_rows i where i.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1) as folded_saved;
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select * from meta_scan(@issue_32869_saved) q;
+internal error: do not have privilege to execute the statement
+select null + (select (select q.account_id from test_issue_32869.inner_rows i where i.d > q.account_id limit 0)
+from meta_scan(@issue_32869_saved) q limit 1) as folded_meta;
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by (select null + (select q.a from test_issue_32869.inner_rows r where r.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1));
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by null + (select i.d from test_issue_32869.inner_rows r where r.d > i.d limit 0),
+(select q.a from result_scan(@issue_32869_saved) q limit 1));
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+set role moadmin;
+set save_query_result = off;
 use test_issue_32869;
 select a from outer_rows order by a;
 ➤ a[4,32,0]  𝄀
@@ -181,6 +249,13 @@ null  𝄀
 1  𝄀
 1  𝄀
 11
+insert into test_issue_32869.issue_32869_dml
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+internal error: do not have privilege to execute the statement
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0));
+internal error: do not have privilege to execute the statement
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;
 internal error: do not have privilege to execute the statement

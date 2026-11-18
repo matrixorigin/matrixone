@@ -477,11 +477,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	}
 	rootZeroDependent := builder.scalarRootZeroNeedsDependent(subquery)
 	if rootZeroDependent {
-		if builder.zeroScalarRootCtx == nil {
+		switch builder.zeroScalarPolicy {
+		case zeroScalarExecutable, zeroScalarValidateOnly:
+			// Validation needs the full query shape for schema and semantic checks.
+			dependent = true
+		case zeroScalarRetainOnly:
+			// This owner preserves authorization metadata without changing the
+			// executable plan. Signal that the source closure must survive an
+			// outer expression fold, then let the existing scalar path bind it.
+			builder.zeroScalarRetentionGeneration++
+			rootZeroDependent = false
+		default:
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
 		}
-		dependent = true
 	}
 	if dependent {
 		if rootZeroDependent {

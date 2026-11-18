@@ -116,7 +116,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 
 func appendWindowValidationPrivilegeCarriers(oldNodes []*plan.Node, nodes *[]*plan.Node) {
 	for _, node := range oldNodes {
-		if !isWindowValidationPrivilegeCarrier(node) {
+		if !IsValidationPrivilegeCarrier(node) {
 			continue
 		}
 		if id := node.NodeId; id >= 0 && int(id) < len(*nodes) && (*nodes)[id] == node {

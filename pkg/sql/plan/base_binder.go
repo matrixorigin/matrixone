@@ -1215,6 +1215,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
+	if zeroLimitScalarHasControlFunction(astExpr.Select) {
+		return nil, moerr.NewNYI(b.GetContext(), "control function in a LIMIT 0 subquery")
+	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := b.builder.udfResolutionCount
@@ -1243,6 +1246,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var err error
 	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
 	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
+	zeroScalarValidationSpecial := b.builder.zeroScalarValidationSpecialGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -1260,11 +1264,18 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
 		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
+		if b.builder.zeroScalarValidationSpecialGeneration != zeroScalarValidationSpecial {
+			return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
 		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
 		if err != nil {
 			return nil, err
 		}
-		if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+		if b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+				return nil, err
+			}
+		} else if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
 			return nil, err
 		}
 	}
@@ -4648,7 +4659,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 		if len(missing) == 0 {
 			return
 		}
-		if !builtinResult || b.builder == nil || b.builder.zeroScalarRootCtx == nil {
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled {
 			boundExpr = nil
 			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
 			return
@@ -4656,6 +4667,15 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, missing)
 		if err == nil && len(sources) == 0 {
 			err = moerr.NewInternalError(b.GetContext(), "missing folded zero-limit scalar source")
+		}
+		if err == nil && b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			// The validation owner collects ordinary bound sources itself.
+			// Special frontend checks require the original executable node.
+			err = b.builder.validateZeroScalarSpecialSources(sources)
+			if err == nil {
+				b.builder.zeroScalarRetentionGeneration++
+				return
+			}
 		}
 		if err == nil {
 			err = b.builder.retainZeroScalarAuthorizationSources(sources)
@@ -5367,6 +5387,15 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
+func (builder *QueryBuilder) validateZeroScalarSpecialSources(sources map[int32]struct{}) error {
+	for id := range sources {
+		if zeroScalarNodeLiveRequirements(builder.qry.Nodes[id]) != 0 {
+			return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+	}
+	return nil
+}
+
 func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.Udf, error) {
 	compiler := b.builder.compCtx
 	if restricted, ok := compiler.(interface{ IndexMaintenanceRestricted() bool }); ok && restricted.IndexMaintenanceRestricted() {
@@ -5797,6 +5826,9 @@ func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
 	if node == nil {
 		return false
 	}
+	if node.NotCacheable || zeroScalarSavedResultRequirements(node) != 0 {
+		return true
+	}
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		return true
@@ -5810,6 +5842,42 @@ func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
 	default:
 		return false
 	}
+}
+
+// Saved results and control functions have frontend checks that require the
+// original node and its bound expressions, rather than a table carrier.
+func zeroScalarNodeLiveRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	required := zeroScalarSavedResultRequirements(node)
+	if NodeHasMoCtrl(node) {
+		required |= zeroScalarLiveControl
+	}
+	return required
+}
+
+func zeroScalarSavedResultRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	tableDef := node.GetTableDef()
+	if node.NodeType == plan.Node_EXTERNAL_SCAN && tableDef != nil && tableDef.GetTableType() == "query_result" ||
+		node.NodeType == plan.Node_FUNCTION_SCAN && tableDef != nil && tableDef.GetTblFunc() != nil && tableDef.GetTblFunc().GetName() == "meta_scan" {
+		return zeroScalarLiveSavedResult
+	}
+	return 0
+}
+
+func isMoCtrlFunctionExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	return fn.GetFunc().GetObjName() == "mo_ctl" || fn.GetFunc().GetObjName() == "fault_inject"
 }
 
 // collectUDFArgumentAuthorizationSources follows bound subquery and dependent-
@@ -5826,8 +5894,13 @@ func collectUDFArgumentAuthorizationSources(
 	}
 
 	pending := append([]int32(nil), roots...)
+	var visitNodeExpressions bool
+	var nodeHasControlCall bool
 	visitExpr := func(expr *plan.Expr) error {
 		return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			if visitNodeExpressions && isMoCtrlFunctionExpr(e) {
+				nodeHasControlCall = true
+			}
 			for _, observe := range observers {
 				observe(e)
 			}
@@ -5877,8 +5950,15 @@ func collectUDFArgumentAuthorizationSources(
 			}
 			pending = append(pending, builder.qry.Steps[step])
 		}
-		if err := plan.VisitExpressionsInOwner(node, visitExpr); err != nil {
+		nodeHasControlCall = false
+		visitNodeExpressions = true
+		err := plan.VisitExpressionsInOwner(node, visitExpr)
+		visitNodeExpressions = false
+		if err != nil {
 			return nil, err
+		}
+		if nodeHasControlCall {
+			sources[id] = struct{}{}
 		}
 	}
 	return sources, nil
@@ -5977,16 +6057,16 @@ func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int3
 	if builder == nil || builder.qry == nil || source < 0 || int(source) >= len(builder.qry.Nodes) {
 		return false
 	}
-	expected := windowValidationPrivilegeCarrier(builder.qry.Nodes[source])
+	expected := validationPrivilegeCarrier(builder.qry.Nodes[source])
 	if expected == nil {
 		return false
 	}
-	key := windowValidationPrivilegeCarrierKey(expected)
-	if _, ok := builder.windowValidationSeen[key]; ok {
+	key := validationPrivilegeCarrierKey(expected)
+	if _, ok := builder.validationPrivilegeCarrierKeys[key]; ok {
 		return true
 	}
-	for _, carrier := range builder.windowValidationScans {
-		if carrier != nil && windowValidationPrivilegeCarrierKey(carrier) == key {
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier != nil && validationPrivilegeCarrierKey(carrier) == key {
 			return true
 		}
 	}

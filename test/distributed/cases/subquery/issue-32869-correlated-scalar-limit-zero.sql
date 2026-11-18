@@ -69,6 +69,22 @@ select null + (select null + (select c.d from inner_rows r where r.d > c.d limit
 -- table dependency before privilege checking.
 create table secret_rows (s int);
 insert into secret_rows values (5);
+-- View inference and named-window validation must retain folded sources.
+create view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+alter view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+select o.a from outer_rows o
+window unused_w as (order by null + (select o.a from inner_rows i where i.d > o.a limit 0));
+create table issue_32869_dml (a int);
+insert into issue_32869_dml select null + (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o;
+select count(*) as rows_inserted, count(a) as nonnull from issue_32869_dml;
+update issue_32869_dml d set a = null + (select d.a from inner_rows i where i.d > d.a limit 0);
+select count(*) as rows_updated, count(a) as nonnull from issue_32869_dml;
+create table issue_32869_ctas as select cast(null + (select o.a from inner_rows i where i.d > o.a limit 0) as signed) as a from outer_rows o;
+select count(*) as rows_copied, count(a) as nonnull from issue_32869_ctas;
 -- NULL arithmetic must not fold away the eligible scalar's table source.
 select null + (select o.a from secret_rows s where s.s > o.a limit 0)
 from outer_rows o;
@@ -88,9 +104,37 @@ create user issue_32869_reader identified by '111' default role issue_32869_role
 grant connect on account * to issue_32869_role;
 grant select on table test_issue_32869.outer_rows to issue_32869_role;
 grant select on table test_issue_32869.inner_rows to issue_32869_role;
+grant insert on table test_issue_32869.issue_32869_dml to issue_32869_role;
+-- Saved-result authorization must survive an enclosing fold.
+grant issue_32869_role to dump;
+set save_query_result = on;
+/* save_result */ select s as a from secret_rows;
+set @issue_32869_saved = last_query_id();
+select (select (select q.a from inner_rows i where i.d > q.a limit 0)
+        from result_scan(@issue_32869_saved) q limit 1) as live_saved;
+set role issue_32869_role;
+select * from result_scan(@issue_32869_saved) q;
+select null + (select (select q.a from test_issue_32869.inner_rows i where i.d > q.a limit 0)
+               from result_scan(@issue_32869_saved) q limit 1) as folded_saved;
+select * from meta_scan(@issue_32869_saved) q;
+select null + (select (select q.account_id from test_issue_32869.inner_rows i where i.d > q.account_id limit 0)
+               from meta_scan(@issue_32869_saved) q limit 1) as folded_meta;
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by (select null + (select q.a from test_issue_32869.inner_rows r where r.d > q.a limit 0)
+                               from result_scan(@issue_32869_saved) q limit 1));
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by null + (select i.d from test_issue_32869.inner_rows r where r.d > i.d limit 0),
+                    (select q.a from result_scan(@issue_32869_saved) q limit 1));
+set role moadmin;
+set save_query_result = off;
 -- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
 use test_issue_32869;
 select a from outer_rows order by a;
+insert into test_issue_32869.issue_32869_dml
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0));
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)

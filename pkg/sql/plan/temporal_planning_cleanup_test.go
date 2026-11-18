@@ -75,7 +75,7 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 			}
 			run := func() error {
 				_, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(planpb.Query_SELECT, compiler, root, false, false,
-					validate, func(ctx *BindContext) { builder = ctx.builder }, false, "", true, input)
+					validate, func(ctx *BindContext) { builder = ctx.builder }, false, "", zeroScalarExecutable, input)
 				return err
 			}
 			if outcome == "panic" {

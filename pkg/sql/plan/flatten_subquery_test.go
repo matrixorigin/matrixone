@@ -3281,7 +3281,7 @@ func TestZeroScalarDiscardedWrapperRetainsAuthorizationSource(t *testing.T) {
 	require.False(t, queryHasReachableTable(query, "customer"))
 	found := false
 	for _, node := range query.Nodes {
-		if isWindowValidationPrivilegeCarrier(node) && node.GetObjRef().GetObjName() == "customer" {
+		if IsValidationPrivilegeCarrier(node) && node.GetObjRef().GetObjName() == "customer" {
 			found = true
 		}
 	}
@@ -3291,14 +3291,14 @@ func TestZeroScalarDiscardedWrapperRetainsAuthorizationSource(t *testing.T) {
 func TestValidationCarrierPreservesCatalogIdentity(t *testing.T) {
 	def := &plan.TableDef{Name: "t", TblId: 4, Version: 5, DbId: 6, DbName: "db", TableType: "ordinary"}
 	node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "db", ObjName: "t"}, TableDef: def}
-	carrier := windowValidationPrivilegeCarrier(node)
+	carrier := validationPrivilegeCarrier(node)
 	require.NotNil(t, carrier)
 	require.Equal(t, def, carrier.TableDef)
 	require.NotSame(t, def, carrier.TableDef)
 
 	node.NodeType = plan.Node_FUNCTION_SCAN
 	node.TableDef = &plan.TableDef{TblFunc: &plan.TableFunction{Name: "table_changes"}}
-	carrier = windowValidationPrivilegeCarrier(node)
+	carrier = validationPrivilegeCarrier(node)
 	require.NotNil(t, carrier)
 	require.Equal(t, plan.Node_FUNCTION_SCAN, carrier.NodeType)
 	require.Equal(t, "table_changes", carrier.GetTableDef().GetTblFunc().GetName())
