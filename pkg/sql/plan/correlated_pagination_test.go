@@ -459,6 +459,11 @@ func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
 		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
 		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
 		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
+		{"comparison projection", `select n.n_nationkey, (select n.n_nationkey > 1 from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unary minus projection", `select n.n_nationkey, (select -n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unary plus projection", `select n.n_nationkey, (select +n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"ifnull projection", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"ifnull with hidden order key", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
@@ -514,6 +519,13 @@ func TestZeroLimitScalarSourceSafety(t *testing.T) {
 		{name: "compound null predicate", sql: "select a from t2 where (d > a) and (a is not null) limit 0", safe: true},
 		{name: "disjunction predicate", sql: "select a from t2 where d > 1 or a is null limit 0", safe: true},
 		{name: "safe order key", sql: "select a from t2 order by d limit 0", safe: true},
+		{name: "literal offset", sql: "select a from t2 limit 0 offset 4", safe: true},
+		{name: "negated string predicate", sql: "select a from t2 where not (d = 'x') limit 0", safe: true},
+		{name: "unsafe predicate function", sql: "select a from t2 where random_bytes(4) = 'x' limit 0"},
+		{name: "derived source", sql: "select a from (select a from t2) q limit 0"},
+		{name: "multiple projections", sql: "select a, d from t2 limit 0"},
+		{name: "grouping", sql: "select a from t2 group by a limit 0"},
+		{name: "unsafe nested function argument", sql: "select coalesce(random_bytes(4), a) from t2 limit 0"},
 		{name: "unsafe order key", sql: "select a from t2 order by random_bytes(4) limit 0"},
 		{name: "aggregate projection", sql: "select sum(a) from t2 limit 0"},
 		{name: "predicate parameter retained", sql: "select a from t2 where d > ? limit 0", safe: true},
@@ -609,4 +621,40 @@ func TestUDFResolutionInvalidatesSubqueryArgumentSource(t *testing.T) {
 	ctx.zeroScalarRewriteInPlan = true
 	require.True(t, markSubquerySourcesUnsafe(builder, []*plan.Expr{arg}))
 	require.False(t, ctx.zeroScalarRootSourceSafe)
+}
+
+func TestZeroScalarDiscardedWrapperRetainsAuthorizationSource(t *testing.T) {
+	result, err := runOneStmt(NewMockOptimizer(true), t, `select n.n_nationkey, null + (select (select c.c_custkey from tpch.region r where r.r_regionkey > c.c_custkey limit 0) from tpch.customer c limit 1) from tpch.nation n`)
+	require.NoError(t, err)
+	q := result.GetQuery()
+	found := false
+	for _, node := range q.Nodes {
+		if node.ExtraOptions == zeroScalarPrivilegeCarrier && node.GetObjRef().GetObjName() == "customer" {
+			found = true
+			require.Empty(t, node.Children)
+			require.Empty(t, node.SourceStep)
+		}
+	}
+	require.True(t, found, "discarded wrapper must retain its authorization source")
+}
+
+func TestZeroScalarAuthorizationSourcesFollowStepsAndViews(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+		{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{ObjName: "source"}, TableDef: &plan.TableDef{Name: "source", TblId: 4, Version: 5, DbId: 6, DbName: "db"}, OriginViews: []string{"v"}},
+		{NodeType: plan.Node_VALUE_SCAN, DirectView: "constant_view"},
+	}
+	builder.qry.Steps = []int32{1}
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(2))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0))
+	require.Len(t, builder.zeroScalarPrivilegeScans, 2)
+	require.Equal(t, "source", builder.zeroScalarPrivilegeScans[0].GetObjRef().GetObjName())
+	require.Equal(t, []string{"v"}, builder.zeroScalarPrivilegeScans[0].OriginViews)
+	require.Equal(t, builder.qry.Nodes[1].TableDef, builder.zeroScalarPrivilegeScans[0].TableDef)
+	require.Equal(t, "constant_view", builder.zeroScalarPrivilegeScans[1].DirectView)
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(3))
+	builder.qry.Nodes[0].SourceStep = []int32{1}
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(0))
 }

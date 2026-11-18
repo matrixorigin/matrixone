@@ -318,8 +318,10 @@ func (builder *QueryBuilder) emptyCorrelatedScalarScan(root int32, subquery *pla
 				return nil, false
 			}
 		}
-		for _, expr := range node.ProjectList {
-			if node.NodeId == topRoot {
+		for index, expr := range node.ProjectList {
+			visibleProjection := node.NodeType == plan.Node_PROJECT && index == 0 &&
+				len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag
+			if node.NodeId == topRoot || visibleProjection {
 				if !emptyCorrelatedScalarResultSafe(expr) {
 					return nil, false
 				}
@@ -397,6 +399,16 @@ func emptyCorrelatedScalarResultSafe(expr *plan.Expr) bool {
 			expectedName = "concat"
 		case function.CHAR:
 			expectedName = "char"
+		case function.UNARY_PLUS:
+			expectedName = "unary_plus"
+			if len(item.F.Args) != 1 {
+				return false
+			}
+		case function.UNARY_MINUS:
+			expectedName = "unary_minus"
+			if len(item.F.Args) != 1 {
+				return false
+			}
 		case function.PLUS:
 			expectedName = "+"
 		case function.MINUS:
@@ -416,8 +428,21 @@ func emptyCorrelatedScalarResultSafe(expr *plan.Expr) bool {
 			if len(item.F.Args) != 2 {
 				return false
 			}
+		case function.CASE:
+			// IFNULL is lowered by the binder to CASE WHEN ISNULL(x) THEN y ELSE x.
+			expectedName = "case"
+			if len(item.F.Args) != 3 {
+				return false
+			}
+		case function.ISNULL:
+			expectedName = "isnull"
+			if len(item.F.Args) != 1 {
+				return false
+			}
 		default:
-			return false
+			// Boolean operators are already proven by the stricter shared
+			// expression check, which also rejects disappearing parameters.
+			return emptyCorrelatedScalarExpressionSafe(expr)
 		}
 		if !strings.EqualFold(item.F.Func.ObjName, expectedName) || len(item.F.Args) == 0 {
 			return false
