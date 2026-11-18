@@ -360,10 +360,10 @@ alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup whe
 set enable_remap_hint = 1;
 set secondary role all;
 set sql_mode = '';
-begin;
 select count(*) from db1.t_dup;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 select count(*) from db1.t_dup;
+commit;
 rollback;
 set secondary role none;
 select count(*) from db1.t_dup;

@@ -274,8 +274,8 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 	return rewritten, nil
 }
 
-// A broken rule must not prevent rolling back, dropping secondary roles, or
-// restoring a usable mode. None of these control statements reads protected rows.
+// A broken rule must not prevent ending a transaction, dropping secondary roles,
+// or restoring a usable mode. None of these statements reads protected rows.
 func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
@@ -283,7 +283,7 @@ func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool 
 	}
 	defer stmt.Free()
 	switch s := stmt.(type) {
-	case *tree.RollbackTransaction:
+	case *tree.CommitTransaction, *tree.RollbackTransaction:
 		return true
 	case *tree.SetRole:
 		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone

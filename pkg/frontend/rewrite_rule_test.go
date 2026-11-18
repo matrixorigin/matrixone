@@ -1492,12 +1492,12 @@ func TestRewritePolicyAllowsRoleRuleRecovery(t *testing.T) {
 	}}
 	_, err := policy.rewrite(ctx, query, "")
 	require.NoError(t, err)
-	for _, sql := range []string{query, "create table db.new_table (id int)", "set secondary role all", "commit", "rollback; " + query, "set sql_mode = (select c from db.t)", "set sql_mode = '', @x = (select c from db.t)", "set @sql_mode = ''", "set global sql_mode = ''"} {
+	for _, sql := range []string{query, "create table db.new_table (id int)", "set secondary role all", "commit; " + query, "rollback; " + query, "set sql_mode = (select c from db.t)", "set sql_mode = '', @x = (select c from db.t)", "set @sql_mode = ''", "set global sql_mode = ''"} {
 		got, err := policy.rewrite(ctx, sql, brokenMode)
 		require.ErrorContains(t, err, "failed to parse rewrite rule", sql)
 		require.Equal(t, sql, got)
 	}
-	for _, sql := range []string{"set sql_mode = ''", "set session sql_mode = default", "rollback", "set secondary role none"} {
+	for _, sql := range []string{"set sql_mode = ''", "set session sql_mode = default", "commit", "rollback", "set secondary role none"} {
 		got, err := policy.rewrite(ctx, sql, brokenMode)
 		require.NoError(t, err)
 		require.Equal(t, sql, got)
