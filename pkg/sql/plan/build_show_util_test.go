@@ -1006,9 +1006,11 @@ func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
 			p, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			original := p.GetDdl().GetCreateTable().GetTableDef()
-			for _, name := range []string{"enum_flag", "set_flag"} {
-				require.Equal(t, `UP,Down,O'Brien,Back\slash,Back\'quote`, FindColumn(original.Cols, name).Typ.Enumvalues)
-			}
+			enumType := FindColumn(original.Cols, "enum_flag").Typ
+			members, err := types.DecodeEnumMembers(enumType.Enumvalues, enumType.EnumEncoding)
+			require.NoError(t, err)
+			require.Equal(t, types.EnumMembers{"UP", "Down", "O'Brien", `Back\slash`, `Back\'quote`}, members)
+			require.Equal(t, `UP,Down,O'Brien,Back\slash,Back\'quote`, FindColumn(original.Cols, "set_flag").Typ.Enumvalues)
 			for _, compilerCtx := range []CompilerContext{ctx, nil} {
 				replayMode := tc.mode
 				if compilerCtx == nil {

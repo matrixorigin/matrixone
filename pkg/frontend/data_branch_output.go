@@ -790,7 +790,7 @@ func materializeDiffOutputAsTable(
 		cancel()
 		return err
 	}
-	if err = execDataBranchOutputSQL(ctx, bh, createSQL); err != nil {
+	if err = output.create(ctx, bh, createSQL); err != nil {
 		cancel()
 		return err
 	}
@@ -905,6 +905,27 @@ func materializeDiffOutputAsTable(
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddRow([]any{output.qualifiedName()})
 	return trySaveQueryResult(ctx, ses, mrs)
+}
+
+func (output *diffOutputTable) create(ctx context.Context, bh BackgroundExec, sql string) error {
+	if len(output.enumDomains) == 0 {
+		return execDataBranchOutputSQL(ctx, bh, sql)
+	}
+	stmt, err := mysql.ParseOne(ctx, sql, 1)
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+	create := stmt.(*tree.CreateTable)
+	create.InheritedEnums = make(map[string]plan2.Type, len(output.enumDomains))
+	for position, domain := range output.enumDomains {
+		create.InheritedEnums[strings.ToLower(output.columnNames[position])] = domain
+	}
+	if err := bh.ExecStmt(ctx, create); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
 }
 
 func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string) error {

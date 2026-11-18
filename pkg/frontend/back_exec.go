@@ -349,6 +349,10 @@ func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) er
 	if statement == nil {
 		return moerr.NewInvalidInput(ctx, "statement is nil")
 	}
+	if _, ok := statement.(*tree.CreateTable); ok {
+		sql := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
+		return back.exec(ctx, sql, "", false, statement)
+	}
 	return back.exec(ctx, tree.String(statement, dialect.MYSQL), "", false, statement)
 }
 

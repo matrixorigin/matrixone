@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -262,8 +263,12 @@ func TestGroupedEnumNumericExecution(t *testing.T) {
 		members []string
 	}{{"legacy", []string{"2", "red"}}, {"framed", []string{"a,b", "red"}}} {
 		t.Run(domain.name, func(t *testing.T) {
-			payload, encoding, err := types.EncodeEnumMembers(domain.members)
-			require.NoError(t, err)
+			payload, encoding := strings.Join(domain.members, ","), types.EnumEncodingLegacy
+			if domain.name == "framed" {
+				var err error
+				payload, encoding, err = types.EncodeEnumMembers(domain.members)
+				require.NoError(t, err)
+			}
 			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding}
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
@@ -324,4 +329,30 @@ func TestGroupedNumericSubqueryKeepsHiddenProjection(t *testing.T) {
 	require.Same(t, hidden, builder.qry.Nodes[0].ProjectList[1])
 	require.Same(t, hidden, subCtx.results[1])
 	require.Same(t, display, originalResults[0])
+}
+
+func TestReleasedEnumDefaultReplay(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_enum), Enumvalues: "2#3:a,b1:c"}
+	const releasedFunctionID = 306
+	expr := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "cast_value_to_index", Obj: planfunction.EncodeOverloadID(releasedFunctionID, 0)},
+		Args: []*planpb.Expr{makePlan2StringConstExprWithType(typ.Enumvalues), makePlan2StringConstExprWithType("b1:c")},
+	}}}
+	data, err := expr.Marshal()
+	require.NoError(t, err)
+	var stored planpb.Expr
+	require.NoError(t, stored.Unmarshal(data))
+	col := &planpb.ColDef{Name: "e", Typ: typ, Default: &planpb.Default{Expr: &stored}}
+	loaded, err := getDefaultExpr(t.Context(), col)
+	require.NoError(t, err)
+	require.NotSame(t, &stored, loaded)
+	require.Equal(t, expr, loaded)
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	exec, err := colexec.NewExpressionExecutor(proc, loaded)
+	require.NoError(t, err)
+	defer exec.Free()
+	out, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.Enum(2), vector.MustFixedColWithTypeCheck[types.Enum](out)[0])
 }

@@ -1004,7 +1004,7 @@ var (
 // always retain the legacy interpretation, even for framing-looking payloads.
 type enumDomainParameter struct {
 	payload  vector.FunctionParameterWrapper[types.Varlena]
-	encoding vector.FunctionParameterWrapper[int64]
+	encoding *vector.Vector
 	constant bool
 	members  types.EnumMembers
 	null     bool
@@ -1016,8 +1016,8 @@ func (p *enumDomainParameter) init(ivecs []*vector.Vector, length int) error {
 		constant: ivecs[0].IsConst(),
 	}
 	if len(ivecs) == 3 {
-		p.encoding = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-		p.constant = p.constant && ivecs[2].IsConst()
+		p.encoding = ivecs[2]
+		p.constant = p.constant && p.encoding.IsConst()
 	}
 	if p.constant && length > 0 {
 		var err error
@@ -1034,11 +1034,14 @@ func (p *enumDomainParameter) decode(row uint64) (types.EnumMembers, bool, error
 	}
 	var encoding int64
 	if p.encoding != nil {
-		var null bool
-		encoding, null = p.encoding.GetValue(row)
-		if null {
+		if p.encoding.IsConst() {
+			if p.encoding.IsConstNull() {
+				return nil, true, nil
+			}
+		} else if p.encoding.GetNulls().Contains(row) {
 			return nil, true, nil
 		}
+		encoding = vector.GetFixedAtNoTypeCheck[int64](p.encoding, int(row))
 		if encoding < 0 || encoding > int64(types.EnumEncodingFramed) {
 			return nil, false, moerr.NewInvalidInputNoCtxf("unsupported ENUM member encoding %d", encoding)
 		}

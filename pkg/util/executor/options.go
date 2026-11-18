@@ -492,6 +492,15 @@ func (opts StatementOption) WithKeepAutoIncrement(keep uint64) StatementOption {
 	return opts
 }
 
+func (opts StatementOption) InheritedEnums() map[string]plan.Type {
+	return opts.inheritedEnums
+}
+
+func (opts StatementOption) WithInheritedEnums(domains map[string]plan.Type) StatementOption {
+	opts.inheritedEnums = domains
+	return opts
+}
+
 func (opts StatementOption) KeepLogicalId() uint64 {
 	return opts.keepLogicalId
 }

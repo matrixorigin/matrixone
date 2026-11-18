@@ -31,11 +31,11 @@ func TestEnumMemberEncoding(t *testing.T) {
 	}{
 		{[]string{"a,b", "c"}, "2#3:a,b1:c", 1},
 		{[]string{""}, "1#0:", 1},
-		{[]string{"a", "", "c"}, "a,,c", 0},
-		{[]string{"2#3:a", "b1:c"}, "2#3:a,b1:c", 0},
-		{[]string{"red", "green"}, "red,green", 0},
+		{[]string{"a", "", "c"}, "3#1:a0:1:c", 1},
+		{[]string{"2#3:a", "b1:c"}, "2#5:2#3:a4:b1:c", 1},
+		{[]string{"red", "green"}, "2#3:red5:green", 1},
 		{[]string{" :#,", "q'\\\x00\r\n", "雪,\xff"}, "", 1},
-		{[]string{strings.Repeat("x", 65536)}, "", 0},
+		{[]string{strings.Repeat("x", 65536)}, "", 1},
 	}
 	for _, tc := range cases {
 		payload, encoding, err := EncodeEnumMembers(tc.members)

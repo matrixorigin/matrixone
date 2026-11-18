@@ -423,9 +423,10 @@ func TestCreateLikePreservesEnumAndDefaultInSessionMode(t *testing.T) {
 	require.NoError(t, err)
 	mock.ctxt.tables[source.Name] = source
 	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
-	before := proto.Clone(source)
 	const wantDomain = "line\nbreak,cr\rend,nul\x00byte,q'uote,plain"
-	require.Equal(t, wantDomain, FindColumn(source.Cols, "e").Typ.Enumvalues)
+	legacy := &FindColumn(source.Cols, "e").Typ
+	legacy.Enumvalues, legacy.EnumEncoding = wantDomain, 0
+	before := proto.Clone(source)
 
 	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
 		t.Run(mode, func(t *testing.T) {
@@ -436,7 +437,7 @@ func TestCreateLikePreservesEnumAndDefaultInSessionMode(t *testing.T) {
 			built, err := BuildPlan(&mock.ctxt, stmt, false)
 			require.NoError(t, err)
 			clone := built.GetDdl().GetCreateTable().TableDef
-			require.Equal(t, wantDomain, FindColumn(clone.Cols, "e").Typ.Enumvalues)
+			require.Equal(t, *legacy, FindColumn(clone.Cols, "e").Typ)
 			require.True(t, proto.Equal(FindColumn(source.Cols, "v").Default.Expr, FindColumn(clone.Cols, "v").Default.Expr))
 			require.True(t, proto.Equal(before, source), "CREATE LIKE must not mutate the source")
 		})

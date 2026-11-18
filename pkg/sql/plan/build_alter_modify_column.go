@@ -42,6 +42,11 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 
+	if oCol.Typ.Id == int32(types.T_enum) && nTy.Id == int32(types.T_enum) &&
+		types.EnumMembersEqual(oCol.Typ.Enumvalues, oCol.Typ.EnumEncoding, nTy.Enumvalues, nTy.EnumEncoding) {
+		nTy.Enumvalues, nTy.EnumEncoding = oCol.Typ.Enumvalues, oCol.Typ.EnumEncoding
+	}
+
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err
 	}

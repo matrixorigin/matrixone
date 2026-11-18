@@ -1196,7 +1196,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
 	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	createTmpOpts := executor.StatementOption{}
+	createTmpOpts := executor.StatementOption{}.WithInheritedEnums(tree.InheritedEnumTypes(qry.GetCopyTableDef()))
 
 	if oldLogicalId != 0 {
 		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
