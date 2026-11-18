@@ -17,7 +17,9 @@ package logtail
 import (
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -104,5 +106,99 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 			}
 			return true
 		})
+	return
+}
+
+// ForEachDirtyTable visits table identities in the reader's inclusive range.
+// A compacted block can contribute extra candidates at either boundary. It
+// charges the shared work budget before visiting each block, row, and identity.
+func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRecord) error) (err error) {
+	consume := func() bool {
+		err = charge()
+		return err == nil
+	}
+	visitRecord := func(record model.TableRecord) bool {
+		if !consume() {
+			return false
+		}
+		err = visit(record)
+		return err == nil
+	}
+
+	if !consume() {
+		return err
+	}
+	snapshot := r.table.Snapshot()
+	pivot := &txnBlock{bornTS: r.from}
+	snapshot.Descend(pivot, func(blk BlockT) bool {
+		if consume() {
+			pivot.bornTS = blk.bornTS
+		}
+		return false
+	})
+	snapshot.Ascend(pivot, func(blk BlockT) bool {
+		if err != nil || !consume() || blk.bornTS.GT(&r.to) {
+			return false
+		}
+		summary := blk.summary.Load()
+		blk.RLock()
+		rows := blk.rows[:len(blk.rows)]
+		blk.RUnlock()
+		if summary != nil {
+			if len(rows) == 0 {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an empty compacted block")
+				return false
+			}
+			for record := range summary.tids {
+				if !visitRecord(record) {
+					return false
+				}
+			}
+			if !consume() {
+				return false
+			}
+			last := rows[len(rows)-1].GetPrepareTS()
+			return last.LE(&r.to)
+		}
+		for _, row := range rows {
+			if !consume() {
+				return false
+			}
+			ts := row.GetPrepareTS()
+			if ts.IsEmpty() {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an empty transaction timestamp")
+				return false
+			}
+			if ts.GT(&r.to) {
+				return false
+			}
+			if ts.LT(&r.from) {
+				continue
+			}
+			switch row.GetTxnState(false) {
+			case txnif.TxnStateCommitted:
+			case txnif.TxnStateRollbacked:
+				continue
+			default:
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an in-flight transaction")
+				return false
+			}
+			memo := row.GetMemo()
+			if memo == nil || memo.Tree == nil {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history changed during compaction")
+				return false
+			}
+			for _, record := range memo.Tables {
+				if record == nil {
+					err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an invalid table")
+					return false
+				}
+				if !visitRecord(*record) {
+					return false
+				}
+			}
+		}
+		return true
+	})
 	return
 }

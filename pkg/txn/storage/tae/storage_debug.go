@@ -142,6 +142,15 @@ func (s *taeStorage) Debug(ctx context.Context,
 			return nil, err
 		}
 		return resp.Read()
+	case uint32(api.OpCode_OpGetScopedChangedTables):
+		if len(data) == 0 {
+			return nil, moerr.NewInvalidInput(ctx, "missing scoped changed-table payload")
+		}
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetScopedChangedTables)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Read()
 	case uint32(api.OpCode_OpFaultInject):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFaultInject)
 		if err != nil {

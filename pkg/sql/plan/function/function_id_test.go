@@ -929,7 +929,8 @@ var predefinedFunids = map[int]int{
 	TEMPORAL_DATETIME_BOUND:  634,
 	TEMPORAL_TIMESTAMP_BOUND: 635,
 	MO_IS_PHYSICAL_INDEX:     633,
-	FUNCTION_END_NUMBER:      636,
+	MO_ASSERT_SNAPSHOT_AFTER: 636,
+	FUNCTION_END_NUMBER:      637,
 }
 
 func Test_funids(t *testing.T) {

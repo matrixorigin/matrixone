@@ -1652,10 +1652,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		tag := node.BindingTags[0]
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
+		// The watch operator materializes its fixed protocol row before the
+		// surrounding SQL applies a filter or an output projection.
+		fixedWatchSchema := node.NodeType == plan.Node_FUNCTION_SCAN &&
+			node.TableDef.GetTblFunc().GetName() == moChangedTablesName
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
+			if !fixedWatchSchema && colRefCnt[globalRef] == 0 {
 				continue
 			}
 
@@ -14391,6 +14395,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return
 		}
 		nodeID, err = builder.buildTableFunction(tbl, ctx, tableInput)
+		if err == nil && tbl.Id() == moChangedTablesName {
+			err = builder.addBinding(nodeID, tree.AliasClause{Alias: moChangedTablesName}, ctx, sqlDatabase)
+		}
 		return
 
 	case *tree.ParenTableExpr:
@@ -14402,7 +14409,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, string(tbl.As.Alias))]
-		if derivedSelect != nil && len(targets) > 0 {
+		if tf, ok := tbl.Expr.(*tree.TableFunction); ok && tf.Id() == moChangedTablesName {
+			// Build the scan directly so only the explicit alias is bound.
+			nodeID, err = builder.buildTableFunction(tf, ctx, tableInput)
+		} else if derivedSelect != nil && len(targets) > 0 {
 			subCtx := NewBindContext(builder, ctx)
 			subCtx.numericProjectionTypes = targets
 			savedIsForUpdate := builder.isForUpdate
@@ -14892,7 +14902,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		scope.context = leftCtx
 	}
 
-	if _, ok := tbl.Right.(*tree.TableFunction); ok {
+	if tf, ok := tbl.Right.(*tree.TableFunction); ok && tf.Id() != moChangedTablesName {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
 	rightChildID, _, err := builder.buildTable(tbl.Right, rightCtx, &tableFunctionInput{
@@ -15152,6 +15162,9 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	if err != nil {
 		return 0, err
 	}
+	if builder.qry.Nodes[rightChildID].GetTableDef().GetTblFunc().GetName() == moChangedTablesName {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_changed_tables must run as an independent table function")
+	}
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
@@ -15254,6 +15267,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
 		case "current_account":
 			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case moChangedTablesName:
+			nodeId, err = builder.buildMoChangedTables(ctx, exprs)
 		case "change_watermark":
 			nodeId, err = builder.buildChangeWatermark(tbl, ctx, exprs, nil)
 		case "table_changes":

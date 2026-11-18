@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
@@ -158,4 +159,47 @@ func TestDebugPing(t *testing.T) {
 	require.Equal(t, shard.LogShardID, resp.LogShardID)
 	require.Equal(t, shard.ReplicaID, resp.ReplicaID)
 	require.Equal(t, shard.Address, resp.ServiceAddress)
+}
+
+type scopedChangedTablesDebugHandler struct {
+	rpchandle.Handler
+	calls int
+}
+
+func (h *scopedChangedTablesDebugHandler) HandleGetScopedChangedTables(
+	_ context.Context,
+	_ txn.TxnMeta,
+	req *cmd_util.GetScopedChangedTablesReq,
+	resp *cmd_util.GetScopedChangedTablesResp,
+) (func(), error) {
+	h.calls++
+	*resp = cmd_util.GetScopedChangedTablesResp{From: req.From, To: req.To, Complete: true, Tables: req.Tables}
+	return nil, nil
+}
+
+func TestDebugScopedChangedTables(t *testing.T) {
+	ctx := t.Context()
+	handler := &scopedChangedTablesDebugHandler{}
+	storage := &taeStorage{taeHandler: handler}
+	op := uint32(api.OpCode_OpGetScopedChangedTables)
+	for _, malformed := range [][]byte{nil, {0xff}} {
+		payload, err := storage.Debug(ctx, txn.TxnMeta{}, op, malformed)
+		require.Error(t, err)
+		require.Empty(t, payload)
+	}
+	require.Zero(t, handler.calls)
+
+	req := &cmd_util.GetScopedChangedTablesReq{
+		From:   timestamp.Timestamp{PhysicalTime: 4, LogicalTime: 9},
+		To:     timestamp.Timestamp{PhysicalTime: 4, LogicalTime: 10},
+		Tables: []cmd_util.ScopedChangedTable{{AccountID: 1, DatabaseID: 2, TableID: 3}},
+	}
+	payload, err := req.MarshalBinary()
+	require.NoError(t, err)
+	result, err := storage.Debug(ctx, txn.TxnMeta{}, op, payload)
+	require.NoError(t, err)
+	var resp cmd_util.GetScopedChangedTablesResp
+	require.NoError(t, resp.UnmarshalBinary(result))
+	require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, req, &resp))
+	require.Equal(t, 1, handler.calls)
 }

@@ -161,6 +161,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
 		tblArg.ctr.state, err = currentAccountPrepare(proc, tblArg)
+	case MoChangedTablesName:
+		tblArg.ctr.state, err = moChangedTablesPrepare(proc, tblArg)
 	case "change_watermark":
 		tblArg.ctr.state, err = changeWatermarkPrepare(proc, tblArg)
 	case "table_changes":

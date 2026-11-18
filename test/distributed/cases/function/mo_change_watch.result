@@ -1,0 +1,22 @@
+select mo_assert_snapshot_after('1-0');
+invalid input: mo_assert_snapshot_after requires an explicit transaction started with BEGIN
+prepare watch_check from 'select mo_assert_snapshot_after(?) as verified';
+set @watch_old = '1-0';
+start transaction read only;
+execute watch_check using @watch_old;
+verified
+1
+commit;
+start transaction read only;
+select mo_assert_snapshot_after(watermark) from change_watermark() w;
+transaction snapshot must be after the requested watermark (retry with a new transaction)
+rollback;
+start transaction read only;
+select mo_assert_snapshot_after('1-01');
+invalid input: mo_assert_snapshot_after requires a canonical physical-logical HLC watermark
+rollback;
+deallocate prepare watch_check;
+select * from mo_changed_tables(NULL, NULL);
+invalid input: mo_changed_tables observer name must be non-empty
+select * from mo_changed_tables(NULL, 'watch_bvt_observer');
+not supported: changed-table watch is disabled or not provisioned

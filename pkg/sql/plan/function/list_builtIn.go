@@ -17275,6 +17275,21 @@ var supportedOthersBuiltIns = []FuncNew{
 		}},
 	},
 
+	{
+		functionId: MO_ASSERT_SNAPSHOT_AFTER,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_text},
+			volatile:   true,
+			retType: func([]types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload { return moAssertSnapshotAfter },
+		}},
+	},
+
 	// function `_check_constraint_assert`
 	{
 		functionId: CHECK_CONSTRAINT_ASSERT,

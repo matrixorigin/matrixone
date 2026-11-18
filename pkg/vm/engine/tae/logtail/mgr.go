@@ -83,11 +83,12 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 // - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
-	table      *TxnTable
-	rt         *dbutils.Runtime
-	truncateMu sync.RWMutex
-	truncated  types.TS
-	nowClock   func() types.TS // nowClock is from TxnManager
+	table               *TxnTable
+	rt                  *dbutils.Runtime
+	truncateMu          sync.RWMutex
+	truncated           types.TS
+	replayCheckpointEnd types.TS
+	nowClock            func() types.TS // nowClock is from TxnManager
 
 	maxCommittedLSN atomic.Uint64
 
@@ -487,6 +488,26 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 		to:    to,
 		table: mgr.table,
 	}
+}
+
+// SetReplayCheckpointEnd records the prefix which WAL replay can skip.
+func (mgr *Manager) SetReplayCheckpointEnd(ts types.TS) {
+	mgr.truncateMu.Lock()
+	defer mgr.truncateMu.Unlock()
+	if ts.GT(&mgr.replayCheckpointEnd) {
+		mgr.replayCheckpointEnd = ts
+	}
+}
+
+// GetDirtyHistoryFloor is the inclusive prefix the in-memory logtail alone
+// does not prove complete. GC advances its frontier before removing blocks.
+func (mgr *Manager) GetDirtyHistoryFloor() types.TS {
+	mgr.truncateMu.RLock()
+	defer mgr.truncateMu.RUnlock()
+	if mgr.replayCheckpointEnd.GT(&mgr.truncated) {
+		return mgr.replayCheckpointEnd
+	}
+	return mgr.truncated
 }
 
 func (mgr *Manager) GetTruncateTS() types.TS {
