@@ -7814,7 +7814,11 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	// instead of letting the sort compare the rendered VARCHAR bytes
 	// (#32336, #32374, PR #32438 review): base grouped queries ordered
 	// numerically because their group inputs were numeric end to end.
-	if col.RelPos == ctx.groupTag {
+	// Only a scope that actually built groups can carry group-tagged
+	// ORDER BY keys: an untagged scope (unit harness, manual binds)
+	// leaves groupTag at its zero value, which would otherwise swallow
+	// project-tagged keys and skip the ENUM/SET display rewrite below.
+	if len(ctx.groups) > 0 && col.RelPos == ctx.groupTag {
 		if int(col.ColPos) >= len(ctx.groups) {
 			return expr, nil
 		}
