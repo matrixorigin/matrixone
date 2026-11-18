@@ -389,6 +389,18 @@ set sql_mode = '';
 select a from db1.t_dup order by a;
 -- @session
 
+-- A mode that cannot parse an active rule is rejected before the session changes.
+insert into db1.t_dup values (5,6,'docs''notes');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+-- @session:id=28&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select @@sql_mode = '' as retained_mode;
+select a from db1.t_dup order by a;
+set sql_mode = '';
+select a from db1.t_dup order by a;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

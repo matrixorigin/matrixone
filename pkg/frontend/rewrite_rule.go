@@ -997,6 +997,24 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 	return out, nil
 }
 
+// Validate before publishing SET sql_mode. Otherwise the next policy refresh
+// could fail before the user can execute a SET to restore the previous mode.
+func validateRoleRulesForSQLMode(ctx context.Context, ses *Session, mode string) error {
+	// SQL SET has already admitted the mandatory policy for this request.
+	ses.ruleCacheMu.RLock()
+	active := len(ses.ruleCache) != 0
+	ses.ruleCacheMu.RUnlock()
+	if !active {
+		return nil
+	}
+	rules, err := loadRuleCache(ctx, ses, mode)
+	if err != nil {
+		return err
+	}
+	// Include unmerged rules and fallback winners in the validation.
+	return validateDiscardedRewriteRules(ctx, rules, nil, parserLowerCaseTableNames(ses), mode)
+}
+
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
 // associated with the current user's active roles and returns them as a map.
 func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[string]string, retErr error) {

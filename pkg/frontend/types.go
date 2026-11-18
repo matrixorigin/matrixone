@@ -2002,6 +2002,15 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return getErr
 		}
 		oldPlanDependency = oldValue
+		if name == "sql_mode" {
+			oldMode, _ := oldValue.(string)
+			newMode, _ := val.(string)
+			if mysql.ParseSQLModeFlags(oldMode) != mysql.ParseSQLModeFlags(newMode) {
+				if err = validateRoleRulesForSQLMode(ctx, ses, newMode); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	// Both defaults affect the physical vector plan. Compare normalized values

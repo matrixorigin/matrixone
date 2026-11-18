@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -180,8 +181,12 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 		return persistedViewMetadata{}, false
 	}
 	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
+	opts := []tree.FmtCtxOption{tree.WithViewDefinition()}
+	if mysql.ParseSQLModeFlags(parserSQLMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		opts = append(opts, tree.WithNoBackslashEscape())
+	}
 	return persistedViewMetadata{definition: tree.StringWithOpts(
-		selectStmt, dialect.MYSQL, tree.WithViewDefinition()), checkOption: checkOption}, true
+		selectStmt, dialect.MYSQL, opts...), checkOption: checkOption}, true
 }
 
 func checkOptionOrNone(checkOption string) string {

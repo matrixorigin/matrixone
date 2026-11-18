@@ -83,6 +83,20 @@ union all
 select 'replay' as source, public_a, public_b from explicit_union_replay_v
 order by source, public_a, public_b;
 
+-- Replay ENUM labels in the same mode used to create the original view.
+set @saved_view_sql_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+create view enum_original_v as select cast(1 as enum('a\b','c')) as label;
+set @enum_replay = (select concat('create view enum_replay_v as ', view_definition)
+from information_schema.views
+where table_schema = 'information_schema_views_metadata' and table_name = 'enum_original_v');
+prepare enum_replay_stmt from @enum_replay;
+execute enum_replay_stmt;
+deallocate prepare enum_replay_stmt;
+select hex(cast(label as char)) from enum_original_v;
+select hex(cast(label as char)) from enum_replay_v;
+set sql_mode = @saved_view_sql_mode;
+
 drop database information_schema_views_metadata;
 
 -- The stored VIEWS definition must remain executable when a system database is cloned.

@@ -449,15 +449,20 @@ func genViewTableDef(
 	if inferred.requiredProtocol > 0 {
 		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
+	parserMode := parserSQLModeFromContext(ctx)
+	definitionOpts := []tree.FmtCtxOption{tree.WithViewDefinition()}
+	if mysql.ParseSQLModeFlags(*parserMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		definitionOpts = append(definitionOpts, tree.WithNoBackslashEscape())
+	}
 	viewData, err := json.Marshal(ViewData{
 		Stmt: viewSql,
 		// Definition must be generated from the same star-expanded SELECT that is
 		// persisted in Stmt. Formatting the original AST would let metadata replay
 		// a later schema's columns even though the View itself remains frozen.
-		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, definitionOpts...),
 		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
-		SQLMode:                 parserSQLModeFromContext(ctx),
+		SQLMode:                 parserMode,
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
 		Dependencies:            inferred.dependencies,

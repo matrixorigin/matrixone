@@ -2157,6 +2157,22 @@ func TestMergeRewriteRulesSessionModeAndHint(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesRejectsInvalidUTF8InStringTokens(t *testing.T) {
+	for _, tc := range []struct{ name, rule string }{
+		{"match", "select a from db1.t1 where match(body) against ('\xff' in boolean mode)"},
+		{"enum", "select a from db1.t1 where cast(1 as enum('\xff','b')) is not null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			original, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.rule, 1)
+			require.NoError(t, err)
+			defer original.Free()
+			_, err = mergeRewriteRules(ctx, tc.rule, "select a from db1.t1 where a = 1")
+			require.ErrorContains(t, err, "cannot be represented as UTF-8")
+		})
+	}
+}
+
 func TestMergeRewriteRulesGetFormat(t *testing.T) {
 	const base = "select a from db1.t1 where "
 	const filter = "get_format(DATE, locale_col) = 'x'"

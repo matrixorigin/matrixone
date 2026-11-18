@@ -269,7 +269,10 @@ func (s *StrVal) String() string {
 
 func FormatString(str string) string {
 	var buffer strings.Builder
-	for i, ch := range str {
+	// SQL escapes address ASCII bytes. Iterating over runes here would
+	// silently replace invalid UTF-8 before a serializer can reject it.
+	for i := range len(str) {
+		ch := str[i]
 		if ch == '\n' {
 			buffer.WriteString("\\n")
 		} else if ch == '\x00' {
@@ -291,8 +294,7 @@ func FormatString(str string) string {
 		} else if ch == '\t' {
 			buffer.WriteString("\\t")
 		} else {
-			// buffer.WriteByte(byte(ch))
-			buffer.WriteRune(ch)
+			buffer.WriteByte(ch)
 		}
 	}
 	res := buffer.String()
