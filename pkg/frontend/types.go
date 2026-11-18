@@ -629,6 +629,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	currentRoleContext *process.CurrentRoleContext
 	readSnapshot       timestamp.Timestamp
 }
 

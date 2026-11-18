@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -177,15 +178,20 @@ func txnOffsetOfCompile(proc *process.Process) int {
 }
 
 func (c *Compile) Release() {
+	c.releaseToPool(nil)
+}
+
+func (c *Compile) releaseToPool(pool reuse.Pool[Compile, *Compile]) {
 	if c == nil {
 		return
 	}
+	c.closeCurrentRolesExecutionCache()
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
 	}
-	doCompileRelease(c)
+	doCompileRelease(c, pool)
 }
 
 func (c *Compile) TypeName() string {
@@ -216,6 +222,7 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	c.closeCurrentRolesExecutionCache()
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -757,6 +764,10 @@ func (c *Compile) runOnce() (err error) {
 
 			// cancel this query if the first error occurs.
 			if e != nil && resultToThrowOut.err == nil {
+				// Unblock a shared catalog loader before waiting for other roots.
+				if c.currentRolesCache != nil {
+					c.currentRolesCache.Close()
+				}
 
 				// cancel all scope tree.
 				for j := range c.scopes {

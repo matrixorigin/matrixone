@@ -3411,6 +3411,7 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	proc.Base.SessionInfo.CurrentRoleContext = process.CurrentRoleContext{}
 	// SessionInfo is reused across statements.  Role changes update the
 	// session's TenantInfo, so refresh the trusted names at the same boundary
 	// as the other statement-scoped fields before planning or execution.
@@ -3421,6 +3422,11 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 			// from being sampled across a concurrent role transition.
 			tenant.mu.Lock()
 			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			mode := uint32(1)
+			if tenant.useAllSecondaryRole {
+				mode = 2
+			}
+			proc.Base.SessionInfo.CurrentRoleContext = process.CurrentRoleContext{Mode: mode, AccountID: tenant.TenantID, UserID: tenant.UserID, PrimaryRoleID: tenant.DefaultRoleID, AccountName: tenant.Tenant, UserName: tenant.User}
 			tenant.mu.Unlock()
 			proc.Base.SessionInfo.Account = account
 			proc.Base.SessionInfo.Role = role
@@ -4886,6 +4892,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		statsInfo.ParseStage.ParseStartTime = beginInstant
 		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
+		// Authorization can run background SQL before executeStmtWithResponse.
+		// Refresh here for every statement, including multi-statement requests.
+		refreshStatementScopedSessionInfo(ses, proc)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -4952,6 +4961,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		proc.Base.SessionInfo.CNLabels = maps.Clone(ses.getCNLabels())
 		proc.Base.SessionInfo.QuerySchedulingIntent = querySchedulingIntentForStatement(ses, schedulingSQL)
 
+		refreshStatementScopedSessionInfo(ses, proc)
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {

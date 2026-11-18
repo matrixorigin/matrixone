@@ -773,6 +773,12 @@ func initExecuteStmtParamWithResolverInSession(
 	if preparedDDLNeedsCatalogRefresh(prepareStmt.PrepareStmt) {
 		change = true
 	}
+	// SHOW rewrites embed subscription publication metadata into their SQL,
+	// without recording it as a schema dependency. Rebuild at execution so
+	// allowlist and published-table changes are checked in the current txn.
+	if preparedShowNeedsCatalogRefresh(prepareStmt.PrepareStmt) {
+		change = true
+	}
 
 	// FK-sensitive plans also depend on the current foreign_key_checks session
 	// value, which does not invalidate prepared statements. Rebuild them for
@@ -1036,6 +1042,17 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	case *tree.CreateDatabase:
 		return ddl.SubscriptionOption != nil
 	case *tree.CreatePitr, *tree.DropDatabase, *tree.CloneTable:
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedShowNeedsCatalogRefresh(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowCreateView,
+		*tree.ShowTables, *tree.ShowColumns, *tree.ShowTableStatus, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
 		return true
 	default:
 		return false

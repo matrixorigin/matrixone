@@ -506,6 +506,18 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 	}
 }
 
+func TestPreparedShowNeedsCatalogRefresh(t *testing.T) {
+	for _, stmt := range []tree.Statement{
+		&tree.ShowCreateDatabase{}, &tree.ShowCreateTable{}, &tree.ShowCreateView{},
+		&tree.ShowTables{}, &tree.ShowColumns{}, &tree.ShowTableStatus{}, &tree.ShowIndex{},
+		&tree.ShowTableNumber{}, &tree.ShowColumnNumber{}, &tree.ShowTableValues{},
+	} {
+		require.True(t, preparedShowNeedsCatalogRefresh(stmt), "%T", stmt)
+	}
+	require.False(t, preparedShowNeedsCatalogRefresh(&tree.ShowDatabases{}))
+	require.False(t, preparedShowNeedsCatalogRefresh(&tree.Select{}))
+}
+
 func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(7), prepareSchemaAccountID(7, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}))
 	require.Equal(t, uint32(11), prepareSchemaAccountID(7, &plan.ObjectRef{

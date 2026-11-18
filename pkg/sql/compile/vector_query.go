@@ -128,7 +128,8 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 	var results [3]scopeRunResult
 	done := [3]chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	finish := func(i int, branchErr error) {
-		s.cancelMergeSiblingsOnError(branchErr)
+		terminal, _ := normalizeScopeRunError(branchErr, s.PreScopes[i].Proc.Ctx, scopeRunQueryContext(s.PreScopes[i].Proc))
+		s.cancelMergeSiblingsOnError(terminal)
 		results[i] = newScopeRunResult(branchErr, s.PreScopes[i])
 		close(done[i])
 	}

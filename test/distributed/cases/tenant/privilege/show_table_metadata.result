@@ -1,0 +1,44 @@
+drop account if exists show_meta_acc;
+create account show_meta_acc admin_name 'admin' identified by '111';
+create database show_meta_db;
+create table show_meta_db.allowed (id int);
+create table show_meta_db.denied (id int);
+create role show_meta_role;
+create user show_meta_user identified by '111' default role show_meta_role;
+grant connect on account * to show_meta_role;
+grant select on table show_meta_db.allowed to show_meta_role;
+select * from show_meta_db.allowed;
+➤ id[4,32,0]
+show tables from show_meta_db;
+➤ Tables_in_show_meta_db[12,-1,0]  𝄀
+allowed
+show columns from show_meta_db.allowed;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table show_meta_db.allowed;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+allowed  ¦  CREATE TABLE `allowed` (
+  `id` int DEFAULT NULL
+)
+show create table show_meta_db.denied;
+internal error: do not have privilege to execute the statement
+prepare meta_tables from 'show tables from show_meta_db';
+execute meta_tables;
+➤ Tables_in_show_meta_db[12,-1,0]  𝄀
+allowed
+revoke select on table show_meta_db.allowed from show_meta_role;
+show columns from show_meta_db.allowed;
+internal error: do not have privilege to execute the statement
+show create table show_meta_db.allowed;
+internal error: do not have privilege to execute the statement
+execute meta_tables;
+internal error: do not have privilege to execute the statement
+grant select on table show_meta_db.allowed to show_meta_role;
+show columns from show_meta_db.allowed;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+execute meta_tables;
+➤ Tables_in_show_meta_db[12,-1,0]  𝄀
+allowed
+deallocate prepare meta_tables;
+drop account show_meta_acc;

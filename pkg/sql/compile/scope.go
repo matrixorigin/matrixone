@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -571,7 +572,9 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
-				s.cancelMergeSiblingsOnError(err)
+				if terminal, _ := normalizeScopeRunError(err, scope.Proc.Ctx, scopeRunQueryContext(scope.Proc)); terminal != nil {
+					s.cancelMergeSiblingsOnError(terminal)
+				}
 				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
 			})
 
@@ -673,8 +676,14 @@ func collectMergeRunResults(
 // pipeline, its sibling goroutines, and remote receiver registration. It must
 // run before MergeRun waits for those siblings to exit.
 func (s *Scope) cancelMergeSiblingsOnError(err error) error {
-	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
-		s.Proc.Cancel(err)
+	if err != nil && s != nil && s.Proc != nil {
+		terminal, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		if terminal != nil {
+			table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx)
+		}
+		if s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
 	}
 	return err
 }
