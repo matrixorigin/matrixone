@@ -545,7 +545,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, err
 	}
 
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx, nil)
+	dbName, err := databaseIsValid(stmt.TargetDatabase(), ctx, nil)
 	if err != nil {
 		return nil, err
 	}

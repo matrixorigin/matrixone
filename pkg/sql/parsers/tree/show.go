@@ -109,6 +109,14 @@ type ShowColumns struct {
 	Where   *Where
 }
 
+// TargetDatabase implements the precedence of the trailing FROM or IN clause.
+func (node *ShowColumns) TargetDatabase() string {
+	if node.DBName != "" || node.Table == nil {
+		return node.DBName
+	}
+	return node.Table.GetDBName()
+}
+
 func (node *ShowColumns) Format(ctx *FmtCtx) {
 	ctx.WriteString("show")
 	if node.Ext {

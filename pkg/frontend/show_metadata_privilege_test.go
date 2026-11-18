@@ -37,7 +37,7 @@ func TestShowMetadataTarget(t *testing.T) {
 		base                 bool
 	}{
 		{"show tables from target", "target", "", false},
-		{"show columns from target.t from ignored", "target", "t", false},
+		{"show columns from ignored.t from target", "target", "t", false},
 		{"show columns from t from target", "target", "t", false},
 		{"show create table target.t", "target", "t", true},
 		{"show columns from t", "", "t", false},

@@ -613,7 +613,7 @@ func rebuildPreparePlan(
 	}
 	// Prepared SHOW statements can reuse their AST while changing roles or
 	// grants. Recompute admission on every rebuild, before planning that AST.
-	if show, ok := innerStmt.(*tree.ShowTables); ok {
+	if show, ok := authorizationStatement(innerStmt).(*tree.ShowTables); ok {
 		show.Admission = tree.ShowTablesUnadmitted
 	}
 	originPrepareStmt := &tree.PrepareStmt{
@@ -857,7 +857,8 @@ func initExecuteStmtParamWithResolverInSession(
 
 		executionIntent := querySchedulingIntentForStatementWithSQLMode(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
-		if !executionSes.IsBackgroundSession() {
+		_, showTables := authorizationStatement(prepareStmt.PrepareStmt).(*tree.ShowTables)
+		if !executionSes.IsBackgroundSession() && !showTables {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
@@ -1054,7 +1055,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 }
 
 func preparedShowNeedsCatalogRefresh(stmt tree.Statement) bool {
-	switch stmt.(type) {
+	switch authorizationStatement(stmt).(type) {
 	case *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowCreateView,
 		*tree.ShowTables, *tree.ShowColumns, *tree.ShowTableStatus, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:

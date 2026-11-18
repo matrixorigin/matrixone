@@ -37,11 +37,7 @@ func showMetadataTarget(stmt tree.Statement) (database, table string, baseTableO
 		if st.Table == nil {
 			return st.DBName, "", false, false
 		}
-		database = st.Table.GetDBName()
-		if database == "" {
-			database = st.DBName
-		}
-		return database, st.Table.GetTableName(), false, st.Table.GetTableName() != ""
+		return st.TargetDatabase(), st.Table.GetTableName(), false, st.Table.GetTableName() != ""
 	case *tree.ShowCreateTable:
 		if st.Name == nil {
 			return "", "", true, false
@@ -49,6 +45,27 @@ func showMetadataTarget(stmt tree.Statement) (database, table string, baseTableO
 		return st.Name.GetDBName(), st.Name.GetTableName(), true, st.AtTsExpr == nil && st.Name.GetTableName() != ""
 	}
 	return "", "", false, false
+}
+
+// Bind the default on the AST so planning and both privilege checks use the
+// same target, even when a prepared statement outlives a subsequent USE.
+func bindShowMetadataDatabase(stmt tree.Statement, defaultDatabase func() string) {
+	switch st := stmt.(type) {
+	case *tree.ShowTables:
+		if st.DBName == "" {
+			st.DBName = defaultDatabase()
+		}
+	case *tree.ShowColumns:
+		if st.TargetDatabase() == "" {
+			st.DBName = defaultDatabase()
+		}
+	case *tree.ShowCreateTable:
+		if st.Name != nil && st.Name.GetDBName() == "" {
+			if db := defaultDatabase(); db != "" {
+				st.Name = tree.NewUnresolvedObjectName(db, st.Name.GetTableName())
+			}
+		}
+	}
 }
 
 func showMetadataVisibilitySQL(stmt tree.Statement, currentDatabase string, protocolVersion int64) (string, string) {
@@ -105,6 +122,10 @@ func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.State
 	}
 	var options BackgroundExecOption
 	options.forcePessimisticRC = true
+	options.readSnapshot, err = authorizationReadSnapshot(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
 	if proc := ses.GetProc(); proc != nil && proc.Base != nil {
 		options.currentRoleContext = &proc.Base.SessionInfo.CurrentRoleContext
 	}
@@ -141,6 +162,56 @@ func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.State
 		allowed, err = hasRows(showSubscriptionBaseTableSQL(database, table))
 	}
 	return allowed, stats, err
+}
+
+// Use the statement's authorization view for object-filtered listings. A
+// snapshot transaction owns these catalog reads and never advances the user's
+// transaction snapshot. The caller's execution scope releases it after the
+// compiled query finishes or on any planning/execution error.
+func (execCtx *ExecCtx) useShowTablesAuthorizationView(ctx context.Context, ses *Session) error {
+	if execCtx.showMetadataRead != nil {
+		return nil
+	}
+	snapshot, err := authorizationReadSnapshot(ctx, ses)
+	if err != nil {
+		return err
+	}
+	if snapshot.IsEmpty() {
+		return moerr.NewInternalError(ctx, "authorization snapshot unavailable for SHOW TABLES")
+	}
+	proc := execCtx.proc
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(ctx, "transaction unavailable for SHOW TABLES")
+	}
+	if proc.GetTxnOperator().SnapshotTS().Equal(snapshot) {
+		return nil
+	}
+
+	bh := ses.InitBackExec(nil, "", backSesOutputCallback, &BackgroundExecOption{readSnapshot: snapshot}).(*backExec)
+	defer func() {
+		if execCtx.showMetadataRead != bh {
+			bh.Close()
+		}
+	}()
+	readCtx := ExecCtx{
+		reqCtx: ctx,
+		ses:    bh.backSes,
+		txnOpt: FeTxnOption{byBegin: true, autoCommit: true},
+	}
+	if err := bh.backSes.GetTxnHandler().Create(&readCtx); err != nil {
+		return err
+	}
+	execCtx.showMetadataRead = bh
+	proc.Base.TxnOperator = bh.GetTxnOperator()
+	return nil
+}
+
+func (execCtx *ExecCtx) closeShowTablesAuthorizationView(ses *Session) {
+	if bh := execCtx.showMetadataRead; bh != nil {
+		execCtx.showMetadataRead = nil
+		execCtx.proc.Base.TxnOperator = ses.GetTxnHandler().GetTxn()
+		bh.Close()
+	}
 }
 
 // showMetadataPredicateSafe restricts the new fallback to row-local operators.

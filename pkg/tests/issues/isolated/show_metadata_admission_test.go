@@ -23,14 +23,30 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
 func TestShowMetadataAdmissionIsolation(t *testing.T) {
+	for _, isolation := range []txn.TxnIsolation{txn.TxnIsolation_RC, txn.TxnIsolation_SI} {
+		t.Run(isolation.String(), func(t *testing.T) {
+			testShowMetadataAdmissionIsolation(t, isolation)
+		})
+	}
+}
+
+func testShowMetadataAdmissionIsolation(t *testing.T, isolation txn.TxnIsolation) {
+	t.Helper()
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
 		if s.ServiceType() == metadata.ServiceType_CN {
-			s.Adjust(func(cfg *embed.ServiceConfig) { cfg.CN.Frontend.SkipCheckUser = false })
+			s.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.SkipCheckUser = false
+				if isolation == txn.TxnIsolation_SI {
+					cfg.CN.Txn.Mode = txn.TxnMode_Optimistic.String()
+				}
+				cfg.CN.Txn.Isolation = isolation.String()
+			})
 		}
 	}))
 	if c != nil {
@@ -54,7 +70,9 @@ func TestShowMetadataAdmissionIsolation(t *testing.T) {
 		_, err = admin.ExecContext(ctx, q)
 		require.NoError(t, err, q)
 	}
-	reader := open("reader#r")
+	reader, err := open("reader#r").Conn(ctx)
+	require.NoError(t, err)
+	defer reader.Close()
 	names := func(query string) []string {
 		rows, err := reader.QueryContext(ctx, query)
 		require.NoError(t, err, query)
@@ -84,4 +102,43 @@ func TestShowMetadataAdmissionIsolation(t *testing.T) {
 	_, err = admin.ExecContext(ctx, "revoke show tables on database d from r")
 	require.NoError(t, err)
 	require.Equal(t, []string{"allowed"}, names("execute s"))
+
+	exec := func(db interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	}, queries ...string) {
+		t.Helper()
+		for _, query := range queries {
+			_, err := db.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+	}
+	exec(admin, "create database other", "create table other.allowed (other_column int)")
+	exec(reader, "show columns from other.allowed from d",
+		"use d",
+		"prepare c from 'show columns from allowed'",
+		"prepare ddl from 'show create table allowed'")
+	binaryDDL, err := reader.PrepareContext(ctx, "show create table allowed")
+	require.NoError(t, err)
+	defer binaryDDL.Close()
+	// USE requires a grant in the new database in this fixture. SHOW on
+	// that database's different table does not authorize table 'allowed'.
+	exec(admin, "create table other.anchor (id int)", "grant select on table other.anchor to r")
+	exec(reader, "use other", "execute c", "execute ddl")
+	_, err = binaryDDL.ExecContext(ctx)
+	require.NoError(t, err)
+
+	exec(admin, "grant select on table d.denied to r")
+	exec(reader, "begin")
+	require.Equal(t, []string{"allowed", "denied"}, names("show tables from d"))
+	exec(admin, "revoke select on table d.denied from r", "insert into d.allowed values (1)")
+	require.Equal(t, []string{"allowed"}, names("show tables from d"))
+	require.Equal(t, []string{"allowed"}, names("execute s"))
+	var rows int
+	require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from d.allowed").Scan(&rows))
+	if isolation == txn.TxnIsolation_SI {
+		require.Zero(t, rows, "SHOW TABLES must preserve the existing SI data snapshot")
+	} else {
+		require.Equal(t, 1, rows)
+	}
+	exec(reader, "rollback")
 }

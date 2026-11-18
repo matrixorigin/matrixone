@@ -906,6 +906,7 @@ type ExecCtx struct {
 	// Authorization uses a statement view independently of an old user SI transaction.
 	authorizationMu       sync.Mutex
 	authorizationSnapshot timestamp.Timestamp
+	showMetadataRead      *backExec
 	protectedPolicyLoaded bool
 	protectedPolicyRaw    string
 	sequenceAuthorization sync.Once

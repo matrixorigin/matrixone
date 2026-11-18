@@ -2012,8 +2012,9 @@ func createPrepareStmtInSession(
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
+	_, showTables := authorizationStatement(saveStmt).(*tree.ShowTables)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan &&
+		isQueryPlan && !showTables &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2990,13 +2991,10 @@ func buildPlanWithPrepareMode(
 	// before planning, so neither a stale decision nor a legacy plan is reused.
 	target := authorizationStatement(stmt)
 	if prepared, ok := target.(*tree.PrepareStmt); ok {
-		target = prepared.Stmt
+		target = authorizationStatement(prepared.Stmt)
 	}
+	bindShowMetadataDatabase(target, ctx.DefaultDatabase)
 	if show, ok := target.(*tree.ShowTables); ok && show.Admission == tree.ShowTablesUnadmitted && ses != nil && !ses.IsBackgroundSession() {
-		if show.DBName == "" {
-			show.DBName = ctx.DefaultDatabase()
-		}
-
 		owner, err := preparedStatementOwner(reqCtx, ses)
 		if err != nil {
 			return nil, err
@@ -3007,6 +3005,14 @@ func buildPlanWithPrepareMode(
 		// Trusted/bypass sessions return before ordinary privilege evaluation.
 		if show.Admission == tree.ShowTablesUnadmitted {
 			show.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
+	if show, ok := target.(*tree.ShowTables); ok && show.Admission == tree.ShowTablesObjectAdmitted {
+		if owner, ok := ses.(*Session); ok {
+			compiler := owner.GetTxnCompileCtx()
+			if err := compiler.execCtx.useShowTablesAuthorizationView(reqCtx, owner); err != nil {
+				return nil, err
+			}
 		}
 	}
 	var ret *plan2.Plan
@@ -3651,7 +3657,11 @@ func incStatementErrorsCounter(tenant string, tenantId uint32, stmt tree.Stateme
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) (statistic.StatsArray, error) {
-	return authenticateStatementRequirement(reqCtx, ses, authorizationStatement(stmt), nil)
+	stmt = authorizationStatement(stmt)
+	if ctx := ses.GetTxnCompileCtx(); ctx != nil {
+		bindShowMetadataDatabase(stmt, ctx.DefaultDatabase)
+	}
+	return authenticateStatementRequirement(reqCtx, ses, stmt, nil)
 }
 
 func authenticateStatementRequirement(reqCtx context.Context, ses *Session, stmt tree.Statement, priv *privilege) (statistic.StatsArray, error) {
@@ -3791,6 +3801,9 @@ func authenticatePreparedStatement(reqCtx context.Context, ses *Session, stmt tr
 	}
 	saved := prepared.authorizationRequirements(ses, stmt, p)
 	stmt = authorizationStatement(stmt)
+	if prepared != nil {
+		bindShowMetadataDatabase(stmt, func() string { return prepared.defaultDatabase })
+	}
 	var admission *privilege
 	if saved != nil {
 		admission = saved.admission
@@ -4435,6 +4448,7 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
+	defer execCtx.closeShowTablesAuthorizationView(ses)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	var cmpBegin time.Time
