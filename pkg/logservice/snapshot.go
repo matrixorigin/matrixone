@@ -113,6 +113,9 @@ type snapshotRecord struct {
 	// publish a final directory, even after StopReplica returns.
 	activeExports      int
 	lateExportPossible bool
+	// A confirmed failed export left an abandoned directory that could not
+	// be removed. Retry cleanup before the next export at the same index.
+	failedExportCleanup bool
 }
 
 var errSnapshotExportPending = moerr.NewInternalErrorNoCtx("exported snapshot may still be written")
@@ -362,6 +365,7 @@ func (sm *snapshotManager) initLocked(shardID uint64, replicaID uint64) error {
 		snapshots.uncertainExport = current.uncertainExport
 		snapshots.activeExports = current.activeExports
 		snapshots.lateExportPossible = current.lateExportPossible
+		snapshots.failedExportCleanup = current.failedExportCleanup
 		current.release()
 	}
 	sm.snapshots[nid] = snapshots
@@ -439,6 +443,33 @@ func (sm *snapshotManager) MarkExportUncertain(shardID, replicaID uint64) {
 	ss.uncertainExport = true
 }
 
+func (sm *snapshotManager) MarkFailedExportCleanup(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		ss = newNodeSnapshot(sm.cfg.FS, nid)
+		sm.snapshots[nid] = ss
+	}
+	ss.failedExportCleanup = true
+}
+
+func (sm *snapshotManager) NeedsFailedExportCleanup(shardID, replicaID uint64) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	return ss != nil && ss.failedExportCleanup
+}
+
+func (sm *snapshotManager) ClearFailedExportCleanup(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]; ss != nil {
+		ss.failedExportCleanup = false
+	}
+}
+
 // BeginExport is called while store.mu protects the local retirement marker.
 func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) {
 	sm.mu.Lock()
@@ -497,6 +528,7 @@ func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, 
 	next.uncertainExport = true
 	next.activeExports = ss.activeExports
 	next.lateExportPossible = ss.lateExportPossible
+	next.failedExportCleanup = ss.failedExportCleanup
 	sm.snapshots[nid] = next
 	ss.release()
 	if last := next.last(); last != nil {

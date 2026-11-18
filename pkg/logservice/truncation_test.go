@@ -51,6 +51,27 @@ type failExportRenameOnceFS struct {
 	failed atomic.Bool
 }
 
+type failExportFlagCleanupFS struct {
+	vfs.FS
+	failed       atomic.Bool
+	blockCleanup atomic.Bool
+}
+
+func (fs *failExportFlagCleanupFS) Remove(path string) error {
+	if strings.HasSuffix(path, "dragonboat.snapshot.message") &&
+		fs.failed.CompareAndSwap(false, true) {
+		return os.ErrPermission
+	}
+	return fs.FS.Remove(path)
+}
+
+func (fs *failExportFlagCleanupFS) RemoveAll(path string) error {
+	if fs.blockCleanup.Load() && strings.Contains(path, "/snapshot-") {
+		return os.ErrPermission
+	}
+	return fs.FS.RemoveAll(path)
+}
+
 type transientSnapshotReadFS struct {
 	vfs.FS
 	failList string
@@ -107,7 +128,7 @@ func TestImportCandidateRetainsExportOnTransientReadError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs.failList, fs.failOpen = tc.list, tc.open
-			valid, err := candidate.importCandidateValid(dir)
+			valid, err := candidate.importCandidateValid(ctx, dir)
 			require.False(t, valid)
 			require.ErrorIs(t, err, os.ErrPermission)
 			require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
@@ -116,9 +137,15 @@ func TestImportCandidateRetainsExportOnTransientReadError(t *testing.T) {
 		})
 	}
 	fs.failList, fs.failOpen = "", ""
-	valid, err := candidate.importCandidateValid(dir)
+	valid, err := candidate.importCandidateValid(ctx, dir)
 	require.NoError(t, err)
 	require.True(t, valid)
+	canceled, cancelValidation := context.WithCancel(ctx)
+	cancelValidation()
+	valid, err = candidate.importCandidateValid(canceled, dir)
+	require.False(t, valid)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
 }
 
 func (fs *failExportRenameOnceFS) Rename(oldname, newname string) error {
@@ -159,6 +186,49 @@ func TestExportSnapshotRetriesFailedCommit(t *testing.T) {
 	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
 	require.Zero(t, l.shardSnapshotInfo.getSnapshotIndex(shardID))
 	require.NoError(t, l.exportSnapshot(ctx, shardID, replicaID))
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+}
+
+func TestFailedExportCleanupRetriesBeforeSameIndexExport(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &failExportFlagCleanupFS{FS: cfg.FS}
+	fs.blockCleanup.Store(true)
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	for range 10 {
+		_, err = l.append(ctx, shardID, getTestUserEntry())
+		require.NoError(t, err)
+	}
+	require.NoError(t, l.truncateLog(ctx, shardID, 4, 100))
+
+	err = l.exportSnapshot(ctx, shardID, replicaID)
+	var exportErr *dragonboat.SnapshotExportError
+	require.ErrorAs(t, err, &exportErr)
+	require.True(t, fs.failed.Load())
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.True(t, l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID))
+	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+
+	// The failed cleanup must remain pending, and the tick must not admit
+	// another export while the abandoned directory still blocks its index.
+	require.ErrorIs(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID), os.ErrPermission)
+	require.True(t, l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID))
+	fs.blockCleanup.Store(false)
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.False(t, l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID))
 	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
 }
 
@@ -953,6 +1023,21 @@ func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
 			require.NoError(t, f.Close())
 			require.GreaterOrEqual(t, len(data), 8)
 			clear(data[:8])
+			f, err = fs.Create(file)
+			require.NoError(t, err)
+			_, err = f.Write(data)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		}},
+		{"damaged payload block", func(t *testing.T, fs vfs.FS, dir string, index uint64) {
+			file := fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))
+			f, err := fs.Open(file)
+			require.NoError(t, err)
+			data, err := io.ReadAll(f)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			require.Greater(t, len(data), 1024+4+16)
+			data[1024] ^= 1
 			f, err = fs.Create(file)
 			require.NoError(t, err)
 			_, err = f.Write(data)

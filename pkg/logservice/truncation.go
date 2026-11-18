@@ -15,13 +15,18 @@
 package logservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
+	"io"
 	"os"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/dragonboat/v4/tools"
+	"github.com/lni/vfs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -278,6 +283,7 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 			// filesystem reported an error. This permits a quiescent shard to
 			// retry at the same index on the next tick.
 			if cleanupErr := l.reconcileFailedExport(shardID, replicaID); cleanupErr != nil {
+				l.snapshotMgr.MarkFailedExportCleanup(shardID, replicaID)
 				return errors.Join(err, cleanupErr)
 			}
 		}
@@ -345,7 +351,7 @@ func (l *store) importSnapshot(
 
 // importCandidateValid distinguishes a damaged export from a transient read
 // error. Only a proven bad image may be removed to try an older candidate.
-func (l *store) importCandidateValid(dir string) (bool, error) {
+func (l *store) importCandidateValid(ctx context.Context, dir string) (bool, error) {
 	file, err := tools.GetSnapshotFilepath(dir, l.cfg.FS)
 	if errors.Is(err, tools.ErrIncompleteSnapshot) || errors.Is(err, tools.ErrPathNotExist) {
 		return false, nil
@@ -374,7 +380,78 @@ func (l *store) importCandidateValid(dir string) (bool, error) {
 	if errors.Is(err, tools.ErrIncompleteSnapshot) {
 		return false, nil
 	}
-	return complete, err
+	if err != nil || !complete {
+		return complete, err
+	}
+	return validSnapshotPayloadBlocks(ctx, file, info.Size(), l.cfg.FS)
+}
+
+// Dragonboat V2 writes a 1024-byte header, CRC32IEEE after each 2 MiB payload
+// block, and a 16-byte trailer. IsCompleteSnapshotImage checks the header and
+// the stored CRC words against metadata, but does not hash the block contents.
+// Do that before importing an export, because import can compact its WAL.
+func validSnapshotPayloadBlocks(ctx context.Context, path string, size int64, fs vfs.FS) (valid bool, err error) {
+	const headerSize, blockSize, checksumSize, trailerSize = int64(1024), int64(2 << 20), int64(4), int64(16)
+	if size <= headerSize+trailerSize+checksumSize {
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	f, err := fs.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			valid, err = false, errors.Join(err, closeErr)
+		}
+	}()
+	var trailer [trailerSize]byte
+	if _, err := f.ReadAt(trailer[:], size-trailerSize); err != nil {
+		return false, err
+	}
+	if binary.LittleEndian.Uint64(trailer[:8]) != uint64(size-headerSize-trailerSize) ||
+		!bytes.Equal(trailer[8:], []byte{0x3F, 0x5B, 0xCB, 0xF1, 0xFA, 0xBA, 0x81, 0x9F}) {
+		return false, nil
+	}
+	var buffer [64 << 10]byte
+	h := crc32.NewIEEE()
+	for offset := headerSize; offset < size-trailerSize; {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		blockLength := min(blockSize+checksumSize, size-trailerSize-offset)
+		if blockLength <= checksumSize {
+			return false, nil
+		}
+		h.Reset()
+		payloadLength := blockLength - checksumSize
+		for read := int64(0); read < payloadLength; {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			want := min(int64(len(buffer)), payloadLength-read)
+			n, err := f.ReadAt(buffer[:want], offset+read)
+			if err != nil {
+				return false, err
+			}
+			if int64(n) != want {
+				return false, io.ErrUnexpectedEOF
+			}
+			_, _ = h.Write(buffer[:n])
+			read += int64(n)
+		}
+		var stored [checksumSize]byte
+		if _, err := f.ReadAt(stored[:], offset+payloadLength); err != nil {
+			return false, err
+		}
+		if binary.BigEndian.Uint32(stored[:]) != h.Sum32() {
+			return false, nil
+		}
+		offset += blockLength
+	}
+	return true, nil
 }
 
 // shouldProcess checks whether we should do the truncation for the shard.
@@ -553,6 +630,12 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 			zap.Uint64("shard ID", shardID))
 		return nil
 	}
+	if l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID) {
+		if err := l.reconcileFailedExport(shardID, replicaID); err != nil {
+			return err
+		}
+		l.snapshotMgr.ClearFailedExportCleanup(shardID, replicaID)
+	}
 	// A timed-out export can finish after its request has returned. Refresh
 	// the affected replica before import and quota decisions so completed
 	// final directories do not remain invisible to the in-memory manager.
@@ -567,12 +650,13 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		l.shardSnapshotInfo.forwardSnapshot(shardID, newest)
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
-	defer cancel()
-
-	lsnInSM, err := l.getTruncatedLsn(ctx, shardID)
+	readCtx, cancelRead := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
+	lsnInSM, err := l.getTruncatedLsn(readCtx, shardID)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
+		err = moerr.AttachCause(readCtx, err)
+	}
+	cancelRead()
+	if err != nil {
 		if !errors.Is(err, dragonboat.ErrTimeout) && !errors.Is(err, dragonboat.ErrInvalidDeadline) {
 			l.runtime.Logger().Error("get truncated lsn in state machine failed",
 				zap.Uint64("shard ID", shardID), zap.Error(err))
@@ -600,7 +684,7 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		if dir == "" {
 			break
 		}
-		valid, err := l.importCandidateValid(dir)
+		valid, err := l.importCandidateValid(ctx, dir)
 		if err != nil {
 			return err
 		}
@@ -619,10 +703,13 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 				zap.Uint64("index", lsn), zap.String("dir", dir))
 			continue
 		}
-		if !l.shouldDoImport(ctx, shardID, lsnInSM, lsn, dir) {
+		importCtx, cancelImport := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
+		if !l.shouldDoImport(importCtx, shardID, lsnInSM, lsn, dir) {
+			cancelImport()
 			break
 		}
-		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {
+		if err := l.importSnapshot(importCtx, shardID, replicaID, lsn, dir); err != nil {
+			cancelImport()
 			l.runtime.Logger().Error("do truncate log failed",
 				zap.Uint64("shard ID", shardID),
 				zap.Uint64("replica ID", replicaID),
@@ -631,6 +718,7 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 				zap.Error(err))
 			return err
 		}
+		cancelImport()
 		return nil
 	}
 
@@ -647,8 +735,10 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 	// The quota-full / no-import stall is therefore handled exclusively
 	// by the timeout-path DropNewest escape valve above. See #24315.
 
-	if l.shouldDoExport(ctx, shardID, replicaID) {
-		if err := l.exportSnapshot(ctx, shardID, replicaID); err != nil {
+	exportCtx, cancelExport := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
+	defer cancelExport()
+	if l.shouldDoExport(exportCtx, shardID, replicaID) {
+		if err := l.exportSnapshot(exportCtx, shardID, replicaID); err != nil {
 			l.runtime.Logger().Error("export snapshot failed",
 				zap.Uint64("shard ID", shardID),
 				zap.Uint64("replica ID", replicaID),
