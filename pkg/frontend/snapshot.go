@@ -917,7 +917,7 @@ func shouldInvalidateTimestampSnapshotBindings(
 // account is activated before internal SQL reads that account's catalog.
 // Without this, logtail entries for the target account's catalog tables
 // would be delayed and invisible to background SQL sessions.
-func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
+func activateAccountCatalogIfNeeded(ctx context.Context, ses FeSession, accountID uint32) error {
 	if accountID == 0 {
 		return nil // sys account is always activated
 	}
@@ -1250,7 +1250,7 @@ func preflightRestoreSnapshotEntry(
 		if err != nil {
 			return err
 		}
-		if err = preflightRestoreAccountMetadata(ctx, bh, snapshot.ts, sourceAccount, targetAccount, targetExists); err != nil {
+		if err = preflightRestoreAccountMetadata(ctx, ses, bh, snapshot.ts, sourceAccount, targetAccount, targetExists); err != nil {
 			return err
 		}
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
@@ -3560,7 +3560,7 @@ func restoreToCluster(ctx context.Context,
 	for _, account := range pastExistsAccount {
 		accountID := uint32(account.accountId)
 		targetID, exists := currentIDs[account.accountName]
-		if err = preflightRestoreAccountMetadata(ctx, bh, snapshotTs, accountID, targetID, exists); err != nil {
+		if err = preflightRestoreAccountMetadata(ctx, ses, bh, snapshotTs, accountID, targetID, exists); err != nil {
 			return err
 		}
 		if err = preflightLogicalRestoreAccountFromTS(

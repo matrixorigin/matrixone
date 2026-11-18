@@ -2090,8 +2090,18 @@ func TestCheckSubscriptionValidCommonRejectsUnauthorizedForeignSource(t *testing
 
 	t.Run("the statement path rejects instead of resolving a publisher decoy", func(t *testing.T) {
 		bh := newUnauthorizedBh(t)
+		original := ses.txnHandler.storage
+		t.Cleanup(func() { ses.txnHandler.storage = original })
+		activated := false
+		ses.txnHandler.storage = &featureLimitCatalogEngine{activate: func(_ context.Context, id uint32) error {
+			require.Equal(t, uint32(2), id)
+			require.NotContains(t, bh.executedSQLs, fmt.Sprintf(getDbAccountIdAndTypByIdFormat, uint64(7), testPublicationScopeDatabase))
+			activated = true
+			return nil
+		}}
 
 		_, err := checkSubscriptionValidCommon(ctx, ses, "s_hij", "acc2", "pub1", bh)
+		require.True(t, activated)
 		require.Error(t, err)
 		require.ErrorContains(t, err,
 			"a foreign source may be published by the sys account, or to the owner account alone")

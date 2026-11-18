@@ -56,7 +56,17 @@ func preflightHistoricalCDCAccountRestore(ctx context.Context, bh BackgroundExec
 	return nil
 }
 
-func preflightRestoreAccountMetadata(ctx context.Context, bh BackgroundExec, ts int64, sourceAccount, targetAccount uint32, targetExists bool) error {
+func preflightRestoreAccountMetadata(ctx context.Context, ses *Session, bh BackgroundExec, ts int64, sourceAccount, targetAccount uint32, targetExists bool) error {
+	// Both the historical inventory and current target checks read tenant catalogs.
+	// This is before target creation, so only an existing target can be activated.
+	if err := activateAccountCatalogIfNeeded(ctx, ses, sourceAccount); err != nil {
+		return err
+	}
+	if targetExists && sourceAccount != targetAccount {
+		if err := activateAccountCatalogIfNeeded(ctx, ses, targetAccount); err != nil {
+			return err
+		}
+	}
 	if err := preflightHistoricalCDCAccountRestore(ctx, bh, ts, sourceAccount); err != nil {
 		return err
 	}

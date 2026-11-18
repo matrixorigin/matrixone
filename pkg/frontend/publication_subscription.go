@@ -3119,6 +3119,12 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		Tables:      pubInfo.TablesStr,
 	}
 	if pubInfo.DbId != 0 {
+		// On a lazy CN the subscriber is active, but the publisher may not be.
+		// Prepare its catalog before looking up the persisted physical database
+		// identity. Activation is not proof that the publisher owns that database.
+		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(accId)); err != nil {
+			return nil, err
+		}
 		// The subscription must resolve its published objects in the account
 		// that physically owns the published database - the same identity
 		// CREATE, ALTER and subscription admission validate. It coincides

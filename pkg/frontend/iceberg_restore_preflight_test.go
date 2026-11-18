@@ -23,6 +23,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRestoreCatalogActivationBeforePreflight(t *testing.T) {
+	ses := &Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}}
+	bh := &backgroundExecTest{}
+	bh.init()
+	var accounts []uint32
+	stop := moerr.NewInternalErrorNoCtx("target activation failed")
+	ses.txnHandler.storage = &featureLimitCatalogEngine{activate: func(_ context.Context, account uint32) error {
+		require.Empty(t, bh.executedSQLs)
+		accounts = append(accounts, account)
+		if account == 43 {
+			return stop
+		}
+		return nil
+	}}
+	err := preflightRestoreAccountMetadata(t.Context(), ses, bh, 123, 42, 43, true)
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, []uint32{42, 43}, accounts)
+	require.Empty(t, bh.executedSQLs)
+}
+
 func TestIcebergAccountRestorePreflight(t *testing.T) {
 	const list = "select relname from mo_catalog.mo_tables {MO_TS = 123} where account_id = 42 and reldatabase = 'mo_catalog' and relname in ('mo_iceberg_catalogs','mo_iceberg_principal_map','mo_iceberg_residency_policy','mo_iceberg_tables','mo_iceberg_refs','mo_iceberg_publish_jobs','mo_iceberg_orphan_files','mo_iceberg_maintenance_jobs')"
 	tables := []string{"mo_iceberg_catalogs", "mo_iceberg_principal_map", "mo_iceberg_residency_policy", "mo_iceberg_tables", "mo_iceberg_refs", "mo_iceberg_publish_jobs", "mo_iceberg_orphan_files", "mo_iceberg_maintenance_jobs"}
