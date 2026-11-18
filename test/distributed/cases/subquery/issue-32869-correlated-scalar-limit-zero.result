@@ -65,6 +65,30 @@ null  ¦  null  𝄀
 1  ¦  null  𝄀
 1  ¦  null  𝄀
 11  ¦  null
+with unused as (select 1) select o.a,
+(select o.a from inner_rows i where i.d > o.a limit 0) as cte_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  cte_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+with inner_rows as (select 0 as d) select o.a,
+(select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as qualified_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  qualified_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+with unused as (select 1) select o.a,
+(select o.a from inner_rows i where i.d > o.a limit 1) as cte_positive
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  cte_positive[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+11  ¦  11
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
 from outer_rows o order by o.a;
 ➤ a[4,32,0]  ¦  positive_limit[4,32,0]  𝄀
@@ -81,11 +105,29 @@ null  𝄀
 null  𝄀
 null  𝄀
 null
+set @@max_dop = 1;
+select cast(null as signed) + (select (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+➤ cast(null as signed) + (select (select c.d from inner_rows as r where r.d > c.d limit 0) from restricted_wrapper as c limit 1)[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+set @@max_dop = 0;
+select null + (select null + (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+➤ null + (select null + (select c.d from inner_rows as r where r.d > c.d limit 0) from restricted_wrapper as c limit 1)[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
 create table secret_rows (s int);
 insert into secret_rows values (5);
-select o.a, null + (select o.a from secret_rows s where s.s > o.a limit 0) as authorized_zero
-from outer_rows o order by o.a;
-function with a correlated scalar LIMIT 0 argument may discard its table dependency is not yet implemented
+select null + (select o.a from secret_rows s where s.s > o.a limit 0) as authorized_zero
+from outer_rows o;
+➤ authorized_zero[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
 create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
 create function issue_32869_identity(x int) returns int language sql as '$1';
 select o.a, issue_32869_identity((select o.a from secret_rows s where s.s > o.a limit 0)) as identity_zero
@@ -125,6 +167,10 @@ null  𝄀
 1  𝄀
 1  𝄀
 11
+select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+from test_issue_32869.restricted_wrapper c limit 1)
+from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
 select issue_32869_keep_second(
 (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
 from test_issue_32869.inner_rows o limit 1),
@@ -155,7 +201,7 @@ from test_issue_32869.inner_rows o union all select 1), a
 SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument is not yet implemented
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;
-function with a correlated scalar LIMIT 0 argument may discard its table dependency is not yet implemented
+internal error: do not have privilege to execute the statement
 select issue_32869_identity((select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0))
 from test_issue_32869.outer_rows o;
 internal error: do not have privilege to execute the statement

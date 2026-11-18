@@ -549,6 +549,18 @@ func TestLegacyCompositeStatsProjection(t *testing.T) {
 	}
 }
 
+func TestStatsExcludeAuthorizationCarrier(t *testing.T) {
+	ctx, _ := installBackExecStatsInfo(context.Background(), time.Unix(0, 0), 7)
+	h := &marshalPlanHandler{isInternalSubStmt: true, query: &plan.Query{Nodes: []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{Name: "t"}, AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 123, InputRows: 9, InputSize: 77}},
+		{NodeType: plan.Node_TABLE_SCAN, ExtraOptions: "mo:zero-scalar-privilege-carrier", AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 456, InputRows: 10, InputSize: 99}},
+	}}}
+	stats, details := h.Stats(ctx, nil)
+	require.Equal(t, float64(130), stats.GetTimeConsumed())
+	require.Equal(t, int64(9), details.RowsRead)
+	require.Equal(t, int64(77), details.BytesScan)
+}
+
 func TestTopLevelStatsDoesNotRunLegacyResourceProjection(t *testing.T) {
 	ctx, _ := installBackExecStatsInfo(context.Background(), time.Unix(0, 0), 7)
 	h := &marshalPlanHandler{query: &plan.Query{Nodes: []*plan.Node{{

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -622,7 +623,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
-	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := uint64(0)
 	udfExpansionDepth := uint32(0)
 	if b.builder != nil {
@@ -646,6 +647,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var nodeID int32
 	var err error
 	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
+	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -661,7 +663,8 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
-	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration {
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
 		if err := b.builder.retainZeroScalarAuthorizationSources(nodeID); err != nil {
 			return nil, err
 		}
@@ -671,6 +674,10 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	if b.builder != nil {
 		subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
 			b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+		if subCtx.zeroScalarRootSourceSafe {
+			// SQL UDFs can reuse bound arguments after the original binding.
+			b.builder.hasZeroScalarSourceCandidate = true
+		}
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -2610,16 +2617,33 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	repeatedLeft, repeatedRight bool,
 ) (boundExpr *plan.Expr, bindErr error) {
 	zeroScalarRewriteGeneration := uint64(0)
+	zeroScalarRetentionGeneration := uint64(0)
 	if b.builder != nil {
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
+		zeroScalarRetentionGeneration = b.builder.zeroScalarRetentionGeneration
 	}
 	var requiredZeroScalarRoots map[int32]struct{}
+	builtinResult := false
 	defer func() {
-		if bindErr == nil && len(requiredZeroScalarRoots) > 0 &&
-			!exprRetainsZeroScalarRoots(boundExpr, requiredZeroScalarRoots) {
+		if bindErr != nil || len(requiredZeroScalarRoots) == 0 {
+			return
+		}
+		missing := missingZeroScalarRoots(boundExpr, requiredZeroScalarRoots)
+		if len(missing) == 0 {
+			return
+		}
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarRootCtx == nil || b.builder.isPrepareStatement {
 			boundExpr = nil
 			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+			return
 		}
+		for _, root := range missing {
+			if err := b.builder.retainZeroScalarAuthorizationSources(root); err != nil {
+				boundExpr, bindErr = nil, err
+				return
+			}
+		}
+		b.builder.zeroScalarRetentionGeneration++
 	}()
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
@@ -2845,6 +2869,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			builtinResult = true
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -2858,6 +2883,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			builtinResult = true
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -2878,7 +2904,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	if err != nil {
 		return nil, err
 	}
-	if b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration && !isIdentitySQLUDF(udf, len(args)) {
+	if (b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetentionGeneration) && !isIdentitySQLUDF(udf, len(args)) {
 		// This branch cannot reliably prove which sources survive SQL UDF
 		// expansion across independent set-operation bind contexts, so keep
 		// every such call fail-closed rather than risk dropping an auth source.
@@ -2980,7 +3007,7 @@ func bindContextWithinZeroScalarArgument(ctx, argumentRoot *BindContext) bool {
 }
 
 func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
-	if builder == nil || len(args) == 0 {
+	if builder == nil || !builder.hasZeroScalarSourceCandidate || len(args) == 0 {
 		return nil
 	}
 	var roots map[int32]struct{}
@@ -3006,9 +3033,9 @@ func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32
 	return roots
 }
 
-func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bool {
+func missingZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) []int32 {
 	if len(required) == 0 {
-		return true
+		return nil
 	}
 	retained := make(map[int32]struct{}, len(required))
 	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
@@ -3019,7 +3046,14 @@ func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bo
 		}
 		return nil
 	})
-	return len(retained) == len(required)
+	var missing []int32
+	for root := range required {
+		if _, ok := retained[root]; !ok {
+			missing = append(missing, root)
+		}
+	}
+	slices.Sort(missing)
+	return missing
 }
 
 func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {

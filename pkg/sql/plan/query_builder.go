@@ -3404,8 +3404,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
-	if len(builder.zeroScalarScanIDs) != 0 {
-		seen := make(map[int32]struct{})
+	var seen map[int32]struct{}
+	if len(builder.zeroScalarScanIDs) != 0 || len(builder.zeroScalarRequiredLiveSources) != 0 || len(builder.zeroScalarPrivilegeScans) != 0 {
+		seen = make(map[int32]struct{})
 		pending := append([]int32(nil), builder.qry.Steps...)
 		for len(pending) > 0 {
 			id := pending[len(pending)-1]
@@ -3430,8 +3431,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				return nil, moerr.NewInternalError(builder.GetContext(), "correlated scalar LIMIT 0 source is not a table scan")
 			}
 		}
+		for id := range builder.zeroScalarRequiredLiveSources {
+			if _, ok := seen[id]; !ok {
+				return nil, moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+			}
+		}
 	}
 	for _, node := range builder.zeroScalarPrivilegeScans {
+		if _, ok := seen[node.NodeId]; ok && zeroScalarSourceCoversCarrier(builder.qry.Nodes[node.NodeId], node) {
+			continue
+		}
 		node.NodeId = int32(len(builder.qry.Nodes))
 		builder.qry.Nodes = append(builder.qry.Nodes, node)
 		builder.ctxByNode = append(builder.ctxByNode, nil)
