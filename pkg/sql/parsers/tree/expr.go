@@ -311,7 +311,13 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.PrintExpr(node, node.Left, true)
 		ctx.WriteByte(' ')
 	}
-	ctx.WriteString(node.Op.ToString())
+	if ctx.rewriteRuleSQL && node.Op == REG_MATCH {
+		ctx.WriteString("regexp")
+	} else if ctx.rewriteRuleSQL && node.Op == NOT_REG_MATCH {
+		ctx.WriteString("not regexp")
+	} else {
+		ctx.WriteString(node.Op.ToString())
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {
@@ -1021,7 +1027,23 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 		return
 	}
 
-	switch strings.ToLower(node.FuncName.Origin()) {
+	name := strings.ToLower(node.FuncName.Origin())
+	if ctx.rewriteRuleSQL && len(node.Exprs) == 2 {
+		switch name {
+		case "position":
+			node.Exprs[0].Format(ctx)
+			ctx.WriteString(" in ")
+			node.Exprs[1].Format(ctx)
+			return
+		case "extract":
+			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
+			ctx.WriteString(" from ")
+			node.Exprs[1].Format(ctx)
+			return
+		}
+	}
+
+	switch name {
 	case "convert":
 		// CONVERT(expr, type) parses as a CastExpr. Here the second argument
 		// is a charset name, for which the grammar also accepts a string.

@@ -962,6 +962,10 @@ func TestMergeRewriteRulesPreservesKeywordArguments(t *testing.T) {
 		"trim('leading' from code) = '0001'",
 		"timestampadd(DAY, 1, dt) = '2026-11-18'",
 		"get_format(DATE, 'ISO') = '%Y-%m-%d'",
+		"position('A' in code) > 0",
+		"extract(day from dt) = 1",
+		"code regexp '^A'",
+		"code not regexp '^B'",
 		"convert(code using binary) = '0001'",
 		"convert(concat(code, 'x') using utf8mb4) = '0001x'",
 	} {
