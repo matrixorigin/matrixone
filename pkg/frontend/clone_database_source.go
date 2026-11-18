@@ -86,23 +86,41 @@ func collectCloneDatabaseSource(
 		}
 	}
 
-	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")
+	source.srcResolveDBName = srcDBName
+	source.snapshot = snapshot
+	source.opAccountId = opAccountId
+	source.toAccountId = toAccountId
+	err = source.collectTables(ctx, ses.GetService(), bh)
+	return source, err
+}
+
+func (source *cloneDatabaseSource) collectTables(ctx context.Context, sid string, bh BackgroundExec) error {
+	srcDBName, snapshot := source.srcResolveDBName, source.snapshot
+	srcTblInfos, err := getTableInfos(ctx, sid, bh, snapshot, srcDBName, "")
 	if err != nil {
-		return source, err
+		return err
 	}
 	fkDeps, err := getFkDeps(ctx, bh, snapshot, srcDBName, "")
 	if err != nil {
-		return source, err
+		return err
 	}
 	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, srcTblInfos)
 	if err != nil {
-		return source, err
+		return err
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
+	// Reuse the same definitions used to derive FK order in this collection.
+	var inventory map[restoreObjectName]*tableInfo
+	if len(sortedFkTbls) != 0 {
+		inventory = make(map[restoreObjectName]*tableInfo, len(srcTblInfos))
+		for _, info := range srcTblInfos {
+			inventory[restoreObjectName{info.dbName, info.tblName}] = info
+		}
+	}
+	fkTableMap, err := getTableInfoMap(ctx, sid, bh, snapshot, srcDBName, "", sortedFkTbls, inventory)
 	if err != nil {
-		return source, err
+		return err
 	}
 
 	for _, srcTbl := range srcTblInfos {
@@ -111,15 +129,11 @@ func collectCloneDatabaseSource(
 		}
 	}
 
-	source.srcResolveDBName = srcDBName
 	source.srcTblInfos = srcTblInfos
 	source.sortedFkTbls = sortedFkTbls
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
-	source.snapshot = snapshot
-	source.opAccountId = opAccountId
-	source.toAccountId = toAccountId
-	return source, nil
+	return nil
 }
 
 func cloneFkTableOrder(fkDeps map[string][]string) (sortedTbls []string, hasCycle bool) {
