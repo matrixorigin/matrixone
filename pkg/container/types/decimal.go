@@ -2239,24 +2239,68 @@ func ParseDecimal64WithContext(ctx context.Context, x string, width, scale int32
 	return
 }
 
+// ParseDecimal64FromByte decodes the raw byte payload of an IsBin hex or bit
+// literal into a DECIMAL64 at the declared (width, scale). The payload spells
+// one unsigned big-endian integer N, so the stored decimal value is N and the
+// coefficient is N*10^scale: the destination scale is applied exactly once and
+// a high-bit payload is never reinterpreted as a two's-complement negative
+// value (#31816). Both target bounds are enforced, mirroring
+// ParseDecimal64WithContext: the coefficient must fit the int64 carrier and
+// must stay below 10^width. Leading zero bytes are skipped, so payloads longer
+// than 8 bytes decode whenever the value fits (all-zero payloads of any
+// length decode to 0); only a significant tail longer than 8 bytes is
+// rejected, before any per-byte arithmetic. width receives the same clamp as
+// the text parse (width > 18 becomes 18, negative becomes 0) and a negative
+// scale is treated as 0, so no input combination panics.
 func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err error) {
 	if x == "" {
 		return 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
 	}
-	y = 0
-	err = nil
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul64(256)
-		if err != nil {
-			return
-		}
-		y, err = y.Add64(Decimal64(x[i]))
-		if err != nil {
-			return
+	i, n := 0, len(x)
+	for i < n && x[i] == 0 {
+		i++
+	}
+	if n-i > 8 {
+		return 0, decimal64FromByteRangeError(width, scale)
+	}
+	var u uint64
+	for ; i < n; i++ {
+		u = u<<8 | uint64(x[i])
+	}
+	if u>>63 != 0 {
+		// The payload is unsigned: N >= 2^63 exceeds the int64 carrier's
+		// positive range and must be rejected, never wrapped negative.
+		return 0, decimal64FromByteRangeError(width, scale)
+	}
+	if u == 0 {
+		return 0, nil
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	if scale > 18 {
+		return 0, decimal64FromByteRangeError(width, scale)
+	}
+	y = Decimal64(u)
+	if scale > 0 {
+		if y, err = y.scaleWithContext(defaultParseContext, scale); err != nil {
+			return 0, decimal64FromByteRangeError(width, scale)
 		}
 	}
-	return
+	if width > 18 {
+		width = 18
+	} else if width < 0 {
+		width = 0
+	}
+	if !y.Less(Decimal64(Pow10[width])) {
+		return 0, decimal64FromByteRangeError(width, scale)
+	}
+	return y, nil
+}
+
+func decimal64FromByteRangeError(width, scale int32) error {
+	return moerr.NewInvalidInputNoCtxf(
+		"binary literal beyond the range, can't be converted to Decimal64(%d,%d).", width, scale)
 }
 
 func Parse128(x string) (y Decimal128, scale int32, err error) {
@@ -2744,43 +2788,151 @@ func ParseDecimal256WithContext(ctx context.Context, x string, width, scale int3
 	return
 }
 
+// ParseDecimal128FromByte decodes the raw byte payload of an IsBin hex or bit
+// literal into a DECIMAL128 at the declared (width, scale). The payload spells
+// one unsigned big-endian integer N, so the stored decimal value is N and the
+// coefficient is N*10^scale: the destination scale is applied exactly once and
+// a high-bit payload is never reinterpreted as a two's-complement negative
+// value (#31816). Both target bounds are enforced, mirroring
+// ParseDecimal128WithContext: the coefficient must fit the signed 128-bit
+// carrier and must stay below 10^width. Leading zero bytes are skipped, so
+// payloads longer than 16 bytes decode whenever the value fits (all-zero
+// payloads of any length decode to 0); only a significant tail longer than 16
+// bytes is rejected, before any per-byte arithmetic. width receives the same
+// clamp as the text parse (width > 38 becomes 38, negative becomes 0) and a
+// negative scale is treated as 0, so no input combination panics.
 func ParseDecimal128FromByte(x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
 	}
-	y = Decimal128{0, 0}
-	err = nil
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul128(Decimal128{256, 0})
-		if err != nil {
-			return
+	i, n := 0, len(x)
+	for i < n && x[i] == 0 {
+		i++
+	}
+	if n-i > 16 {
+		return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
+	}
+	var lo, hi uint64
+	for ; i < n; i++ {
+		lo, hi = lo<<8|uint64(x[i]), hi<<8|lo>>56
+	}
+	if hi>>63 != 0 {
+		// The payload is unsigned: N >= 2^127 exceeds the carrier's positive
+		// range and must be rejected, never wrapped negative.
+		return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
+	}
+	if lo == 0 && hi == 0 {
+		return Decimal128{0, 0}, nil
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	if scale > 38 {
+		return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
+	}
+	y = Decimal128{lo, hi}
+	if scale > 0 {
+		if y, err = y.scaleWithContext(defaultParseContext, scale); err != nil {
+			return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
 		}
-		y, err = y.Add128(Decimal128{uint64(x[i]), 0})
-		if err != nil {
-			return
+		if y.Sign() {
+			return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
 		}
 	}
-	return
+	if width > 38 {
+		width = 38
+	} else if width < 0 {
+		width = 0
+	}
+	var z Decimal128
+	if width <= 19 {
+		z = Decimal128{Pow10[width], 0}
+	} else {
+		z, _ = Decimal128{Pow10[19], 0}.mul128WithContext(defaultParseContext, Decimal128{Pow10[width-19], 0})
+	}
+	if !y.Less(z) {
+		return Decimal128{0, 0}, decimal128FromByteRangeError(width, scale)
+	}
+	return y, nil
 }
 
+func decimal128FromByteRangeError(width, scale int32) error {
+	return moerr.NewInvalidInputNoCtxf(
+		"binary literal beyond the range, can't be converted to Decimal128(%d,%d).", width, scale)
+}
+
+// ParseDecimal256FromByte decodes the raw byte payload of an IsBin hex or bit
+// literal into a DECIMAL256 at the declared (width, scale). The payload spells
+// one unsigned big-endian integer N, so the stored decimal value is N and the
+// coefficient is N*10^scale: the destination scale is applied exactly once and
+// a high-bit payload is never reinterpreted as a two's-complement negative
+// value (#31816). Both target bounds are enforced, mirroring
+// ParseDecimal256WithContext: the coefficient must fit the signed 256-bit
+// carrier and must stay below 10^width. Leading zero bytes are skipped, so
+// payloads longer than 32 bytes decode whenever the value fits (all-zero
+// payloads of any length decode to 0); only a significant tail longer than 32
+// bytes is rejected, before any per-byte arithmetic. width receives the same
+// clamp as the text parse (width > 76 becomes 76, negative becomes 0) and a
+// negative scale is treated as 0, so no input combination panics.
 func ParseDecimal256FromByte(x string, width, scale int32) (y Decimal256, err error) {
 	if x == "" {
 		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
 	}
-	y = Decimal256{}
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul256(Decimal256{256, 0, 0, 0})
-		if err != nil {
-			return
+	i, n := 0, len(x)
+	for i < n && x[i] == 0 {
+		i++
+	}
+	if n-i > 32 {
+		return Decimal256{}, decimal256FromByteRangeError(width, scale)
+	}
+	var d Decimal256
+	for ; i < n; i++ {
+		c1 := d.B0_63 >> 56
+		c2 := d.B64_127 >> 56
+		c3 := d.B128_191 >> 56
+		d.B0_63 = d.B0_63<<8 | uint64(x[i])
+		d.B64_127 = d.B64_127<<8 | c1
+		d.B128_191 = d.B128_191<<8 | c2
+		d.B192_255 = d.B192_255<<8 | c3
+	}
+	if d.B192_255>>63 != 0 {
+		// The payload is unsigned: N >= 2^255 exceeds the carrier's positive
+		// range and must be rejected, never wrapped negative.
+		return Decimal256{}, decimal256FromByteRangeError(width, scale)
+	}
+	if d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0 {
+		return Decimal256{}, nil
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	if scale > 76 {
+		return Decimal256{}, decimal256FromByteRangeError(width, scale)
+	}
+	y = d
+	if scale > 0 {
+		if y, err = y.scaleWithContext(defaultParseContext, scale); err != nil {
+			return Decimal256{}, decimal256FromByteRangeError(width, scale)
 		}
-		y, err = y.Add256(Decimal256{uint64(x[i]), 0, 0, 0})
-		if err != nil {
-			return
+		if y.Sign() {
+			return Decimal256{}, decimal256FromByteRangeError(width, scale)
 		}
 	}
-	return
+	if width > 76 {
+		width = 76
+	} else if width < 0 {
+		width = 0
+	}
+	z, err := decimal256Pow10WithContext(defaultParseContext, width)
+	if err != nil || !y.Less(z) {
+		return Decimal256{}, decimal256FromByteRangeError(width, scale)
+	}
+	return y, nil
+}
+
+func decimal256FromByteRangeError(width, scale int32) error {
+	return moerr.NewInvalidInputNoCtxf(
+		"binary literal beyond the range, can't be converted to Decimal256(%d,%d).", width, scale)
 }
 
 func (x Decimal64) Format(scale int32) string {

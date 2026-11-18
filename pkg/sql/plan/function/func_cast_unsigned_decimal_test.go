@@ -517,10 +517,13 @@ func TestUnsignedDecimalAdmissionJSONSignedZeroMalformedAndNegative(t *testing.T
 
 // TestUnsignedDecimalAdmissionBinarySource pins the IsBin family: payload
 // bytes decode through the exact entry the outer assignment cast dispatches
-// (ParseDecimal64FromByte + column scale), classification follows the decoded
-// sign, and admitted rows re-render to canonical text that re-parses to the
-// identical value the direct cast stores. The executor reset clears IsBin, so
-// only the rendered text can carry the conversion contract forward.
+// (ParseDecimal64FromByte + column scale) as one unsigned big-endian integer
+// scaled once by the target column scale (#31816), and admitted rows re-render
+// to canonical text that re-parses to the identical value the direct cast
+// stores. Binary payloads are never negatives, so the clip/reject policy is
+// exercised here only by the genuinely negative non-IsBin text neighborhood
+// control. The executor reset clears IsBin, so only the rendered text can
+// carry the conversion contract forward.
 func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 	typ := types.New(types.T_decimal64, 10, 2)
 	binT := types.T_varbinary.ToType()
@@ -547,38 +550,57 @@ func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 		require.Equal(t, direct, reparseProof0(reparsed))
 	}
 
-	p150 := []byte{0x00, 0x00, 0x00, 0x96}                         // 150 -> 1.50
-	pZero := []byte{0x00}                                          // 0
-	pDigits := []byte("123")                                       // raw bytes, not text digits
-	pNineZeros := make([]byte, 9)                                  // zero-filled payloads decode to 0 exactly like the direct cast
-	pMinus1Bytes := []byte("-1")                                   // the reviewer's payload: 0x2D31
-	pNeg := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xCD} // two's-complement negative
+	p150 := []byte{0x00, 0x00, 0x00, 0x96}                             // N=150 -> 150.00 at column scale 2
+	pZero := []byte{0x00}                                              // 0
+	pDigits := []byte("123")                                           // raw bytes, not text digits
+	pNineZeros := make([]byte, 9)                                      // zero-filled payloads decode to 0 exactly like the direct cast
+	pMinus1Bytes := []byte("-1")                                       // the reviewer's payload: 0x2D31 = 11569, unsigned
+	pHighBit := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xCD} // unsigned 2^64-307: out of DECIMAL64(10,2) range
 
-	// Lenient pass-through and clip.
+	// Lenient pass-through: every payload spells one unsigned big-endian
+	// integer inside the declared DECIMAL(10,2) domain (#31816), so the batch
+	// admits each value unchanged and no clip warning is owed.
 	proc, session := unsignedDecimalAdmissionProc(t, "ONLY_FULL_GROUP_BY")
-	from := newBinVec(proc, p150, pZero, pDigits, pNineZeros, pMinus1Bytes, pNeg)
-	result, err := runUnsignedDecimalAdmission(proc, from, typ, binT, 6, unsignedDecimalAdmissionMode, "b")
+	from := newBinVec(proc, p150, pZero, pDigits, pNineZeros, pMinus1Bytes)
+	result, err := runUnsignedDecimalAdmission(proc, from, typ, binT, 5, unsignedDecimalAdmissionMode, "b")
 	require.NoError(t, err)
+	vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
+	for row, want := range []string{"150.00", "0.00", "3224115.00", "0.00", "11569.00"} {
+		require.Equal(t, want, vec.GetStringAt(row), "canonical text of row %d", row)
+	}
+	require.Empty(t, session.warnings, "in-range unsigned payloads earn no clip warnings")
 	reparseProof(t, result, p150, 0)
 	reparseProof(t, result, pZero, 1)
 	reparseProof(t, result, pDigits, 2)
 	reparseProof(t, result, pNineZeros, 3)
 	reparseProof(t, result, pMinus1Bytes, 4)
-	vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-	require.Equal(t, "0", vec.GetStringAt(5), "the decoded negative clips to additive identity")
-	require.Len(t, session.warnings, 1)
-	requireAdmissionWarning(t, session.warnings[0], "b", 6)
 
-	// Strict reject of the same decoded negative names the column and row.
+	// Strict pass of the same valid shape: no 1264 reject, no warnings.
 	proc, session = unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
-	from = newBinVec(proc, pNeg)
-	_, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
-	requireOutOfRangeForColumn(t, err, "b", 1)
+	from = newBinVec(proc, p150)
+	result, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionStrict, "b")
+	require.NoError(t, err)
+	require.Equal(t, "150.00",
+		vector.MustFunctionResult[types.Varlena](result).GetResultVector().GetStringAt(0))
 	require.Empty(t, session.warnings)
 
+	// A high-bit payload is an unsigned integer out of DECIMAL64(10,2)
+	// range, never a two's-complement negative: the decoder's own rejection
+	// propagates under both policies, never a clip and never a 1264-family
+	// column error. The row is split from the valid batch above (#31816).
+	for _, sqlMode := range []string{"STRICT_TRANS_TABLES", "ONLY_FULL_GROUP_BY"} {
+		proc, session = unsignedDecimalAdmissionProc(t, sqlMode)
+		from = newBinVec(proc, pHighBit)
+		_, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
+		require.Error(t, err, "high-bit payload is out of range, not a negative to clip")
+		require.False(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRangeValueForColumn),
+			"decode failures are the cast's diagnostics, never a misclassified 1264")
+	}
+
 	// Decode failures propagate exactly like the cast's own failure: the
-	// empty payload is the only byte shape the FromByte decoders reject, so
-	// it must surface here exactly as the direct cast surfaces it.
+	// empty payload keeps its dedicated first-branch rejection, now shared
+	// with the out-of-range payloads, so it must surface here exactly as
+	// the direct cast surfaces it.
 	from = newBinVec(proc, []byte{})
 	_, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
 	require.Error(t, err, "the empty payload must fail just like the direct cast decode")
@@ -932,7 +954,7 @@ func TestUnsignedDecimalAdmissionSelectListSkipsRows(t *testing.T) {
 		require.NoError(t, err)
 		vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
 		require.True(t, vec.GetNulls().Contains(0))
-		require.Equal(t, "1.50", vec.GetStringAt(1), "150 renders 1.50 at scale 2")
+		require.Equal(t, "150.00", vec.GetStringAt(1), "150 renders 150.00 at scale 2")
 		require.Empty(t, session.warnings)
 	})
 
@@ -955,7 +977,15 @@ func TestUnsignedDecimalAdmissionSelectListSkipsRows(t *testing.T) {
 // including the decoder's own failure surfacing unchanged.
 func TestUnsignedDecimalAdmissionBinaryDecimal128And256(t *testing.T) {
 	binT := types.T_varbinary.ToType()
-	p150 := []byte{0x00, 0x00, 0x00, 0x96} // 150 -> 1.50 at scale 2
+	p150 := []byte{0x00, 0x00, 0x00, 0x96}                             // N=150 -> 150.00 at scale 2
+	pHighBit := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xCD} // unsigned 2^64-307
+	allFill := func(n int, fill byte) []byte {
+		p := make([]byte, n)
+		for i := range p {
+			p[i] = fill
+		}
+		return p
+	}
 
 	newBinVec := func(proc *process.Process, payloads ...[]byte) *vector.Vector {
 		strs := make([]string, len(payloads))
@@ -975,7 +1005,17 @@ func TestUnsignedDecimalAdmissionBinaryDecimal128And256(t *testing.T) {
 		unsignedDecimalAdmissionStrict, "b")
 	require.NoError(t, err)
 	vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-	require.Equal(t, "1.50", vec.GetStringAt(0))
+	require.Equal(t, "150.00", vec.GetStringAt(0))
+
+	// The 8-byte high-bit payload DECIMAL64(10,2) rejects is the unsigned
+	// integer 18446744073709551309 on the wider carrier (#31816).
+	typ128Wide := types.New(types.T_decimal128, 38, 2)
+	from = newBinVec(proc, pHighBit)
+	result, err = runUnsignedDecimalAdmission(proc, from, typ128Wide, binT, 1,
+		unsignedDecimalAdmissionStrict, "b")
+	require.NoError(t, err)
+	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
+	require.Equal(t, "18446744073709551309.00", vec.GetStringAt(0))
 
 	from = newBinVec(proc, []byte{})
 	_, err = runUnsignedDecimalAdmission(proc, from, typ128, binT, 1,
@@ -989,7 +1029,31 @@ func TestUnsignedDecimalAdmissionBinaryDecimal128And256(t *testing.T) {
 		unsignedDecimalAdmissionStrict, "b")
 	require.NoError(t, err)
 	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-	require.Equal(t, "1.50", vec.GetStringAt(0))
+	require.Equal(t, "150.00", vec.GetStringAt(0))
+
+	// On DECIMAL256's 76-digit domain the same high-bit payload and a full
+	// 16-byte payload stay unsigned integers, while 32 full bytes exceed the
+	// 256-bit carrier itself: no two's-complement negative exists for the
+	// binary route (#31816).
+	typ256Wide := types.New(types.T_decimal256, 76, 2)
+	from = newBinVec(proc, pHighBit)
+	result, err = runUnsignedDecimalAdmission(proc, from, typ256Wide, binT, 1,
+		unsignedDecimalAdmissionStrict, "b")
+	require.NoError(t, err)
+	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
+	require.Equal(t, "18446744073709551309.00", vec.GetStringAt(0))
+
+	from = newBinVec(proc, allFill(16, 0xFF))
+	result, err = runUnsignedDecimalAdmission(proc, from, typ256Wide, binT, 1,
+		unsignedDecimalAdmissionStrict, "b")
+	require.NoError(t, err)
+	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
+	require.Equal(t, "340282366920938463463374607431768211455.00", vec.GetStringAt(0))
+
+	from = newBinVec(proc, allFill(32, 0xFF))
+	_, err = runUnsignedDecimalAdmission(proc, from, typ256Wide, binT, 1,
+		unsignedDecimalAdmissionStrict, "b")
+	require.Error(t, err, "a 32-byte full payload exceeds the 256-bit carrier; it is never a negative")
 
 	from = newBinVec(proc, []byte{})
 	_, err = runUnsignedDecimalAdmission(proc, from, typ256, binT, 1,
