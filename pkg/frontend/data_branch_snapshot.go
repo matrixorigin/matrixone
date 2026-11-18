@@ -462,9 +462,7 @@ func getBranchParentAccountName(
 // mo_branch_metadata row so both inserts commit or roll back together
 // (§5.2).
 //
-// It is a no-op for clone receipts whose ids were never populated (e.g.
-// restore-time clones that bypassed the branch-metadata hook). This mirrors
-// updateBranchMetaTable's short-circuit behaviour.
+// It is a no-op for clone receipts whose ids were never populated.
 func createBranchProtectSnapshot(
 	ctx context.Context,
 	ses *Session,
@@ -479,41 +477,51 @@ func createBranchProtectSnapshot(
 	if err != nil {
 		return err
 	}
+	_ = ses
+	return insertBranchProtectSnapshot(ctx, bh, receipt.dstTableID, &snapshotRecord{
+		ts:           receipt.snapshotTS,
+		level:        dataBranchLevel_Table,
+		accountName:  parentAccountName,
+		databaseName: receipt.srcDb,
+		tableName:    receipt.srcTbl,
+		objId:        receipt.srcTableID,
+	})
+}
 
+func insertBranchProtectSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	childTableID uint64,
+	record *snapshotRecord,
+) error {
 	newUUID, err := uuid.NewV7()
 	if err != nil {
 		return err
 	}
 
-	sname := branchSnapshotName(receipt.dstTableID)
 	// Branch protect snapshots are written with kind='branch' directly so
 	// they are never visible as kind='user' — not even transiently. The
 	// existing insertIntoMoSnapshots format does not carry the kind column
 	// (it relies on the 'user' default), so this path uses its own insert.
-	//
-	// String values are quoted via quoteSQLStringLiteral to escape any
-	// embedded quotes. Although these identifiers have passed through the
-	// MO parser, they may contain apostrophes when backtick-quoted (e.g.,
-	// `table'name` is a legal identifier that contains a literal apostrophe).
+	// Quoting also preserves legal identifiers containing apostrophes.
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
 			`values (%s, %s, %d, %s, %s, %s, %s, %d, %s)`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
 		quoteSQLStringLiteral(newUUID.String()),
-		quoteSQLStringLiteral(sname),
-		receipt.snapshotTS,
-		quoteSQLStringLiteral(dataBranchLevel_Table),
-		quoteSQLStringLiteral(parentAccountName),
-		quoteSQLStringLiteral(receipt.srcDb),
-		quoteSQLStringLiteral(receipt.srcTbl),
-		receipt.srcTableID,
+		quoteSQLStringLiteral(branchSnapshotName(childTableID)),
+		record.ts,
+		quoteSQLStringLiteral(record.level),
+		quoteSQLStringLiteral(record.accountName),
+		quoteSQLStringLiteral(record.databaseName),
+		quoteSQLStringLiteral(record.tableName),
+		record.objId,
 		quoteSQLStringLiteral(branchSnapshotKind),
 	)
 
 	// Execute as sys so the row can be written into the parent's account
-	// regardless of the caller tenant. Runs under the same BackgroundExec
-	// txn wrap, so it commits atomically with the surrounding CLONE +
-	// mo_branch_metadata insert (§5.2).
+	// regardless of the caller tenant. The caller's BackgroundExec transaction
+	// commits or rolls back this row with the matching lineage and clone.
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(sysCtx, insertSQL); err != nil {
@@ -522,11 +530,10 @@ func createBranchProtectSnapshot(
 
 	logutil.Info(
 		"DataBranch-ProtectSnapshot-Create",
-		zap.Uint64("child_tid", receipt.dstTableID),
-		zap.Uint64("parent_tid", receipt.srcTableID),
-		zap.String("parent_account", parentAccountName),
-		zap.Int64("clone_ts", receipt.snapshotTS),
+		zap.Uint64("child_tid", childTableID),
+		zap.Uint64("parent_tid", record.objId),
+		zap.String("parent_account", record.accountName),
+		zap.Int64("clone_ts", record.ts),
 	)
-	_ = ses
 	return nil
 }
