@@ -23,7 +23,7 @@ FROM mo_index_stats('ivf_demo', 'vectors', 'idx_embedding') AS s
 WHERE row_type = 'index';
 ```
 
-三个参数须为非空字符串字面量，调用者须有源表 SELECT 权限。目前仅支持本地非临时、非分区的普通表。主键名为 `PRIMARY`；其他索引未显式命名时，通过 `SHOW INDEX` 的 `Key_name` 获取生成名称：
+前三个参数须为非空字符串字面量，调用者须有源表 SELECT 权限。目前仅支持本地非临时、非分区的普通表。主键名为 `PRIMARY`；其他索引未显式命名时，通过 `SHOW INDEX` 的 `Key_name` 获取生成名称：
 
 ```sql
 SHOW INDEX FROM key_stats_demo.records;
@@ -261,15 +261,23 @@ IVF 新增 `growth_ratio`、`training_sample_ratio`、`drift`。增长率使用�
 ```sql
 -- 显式深度检查：会扫描源表计算真实近邻，并推导桶覆盖曲线
 SELECT JSON_PRETTY(metrics)
-FROM mo_index_analyze('ivf_demo', 'vectors', 'idx_embedding') AS s
+FROM mo_index_stats('ivf_demo', 'vectors', 'idx_embedding', '{}') AS s
 WHERE row_type = 'index';
 
 -- 可选抽样重训，只比较，不修改索引
 SELECT JSON_PRETTY(metrics)
-FROM mo_index_analyze('ivf_demo', 'vectors', 'idx_embedding',
+FROM mo_index_stats('ivf_demo', 'vectors', 'idx_embedding',
                      '{"sample_count":100,"recall_target":0.95,"retrain":true}') AS s
 WHERE row_type = 'index';
 ```
+
+第四个参数是 JSON 字符串，提供它就显式开启 IVF 深度检查；`{}` 使用默认值，无须再加 `analyze` 开关。省略第四个参数时只运行常规统计。参数不支持的索引类型、未知字段或非法值会报错。
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `sample_count` | `100` | 最多抽取多少个查询向量计算精确近邻，范围 `1..256`；数量越大计算越多。它不是表的扫描行数，也不是训练样本数。 |
+| `recall_target` | `0.95` | 期望的近邻桶覆盖率，用于推荐 `probe_limit` 和判断是否建议重建；范围 `(0,1]`，不是修改线上查询的召回率设置。 |
+| `retrain` | `false` | 是否额外用样本训练同桶数的中心，比较重训收益；不会重建或修改索引。 |
 
 深度检查排除查询自身，以精确 top-10 的近邻桶排名推导不同 nprobe 的覆盖率；它不包括量化排序误差，不能称为真实 ANN 查询回放。异步索引必须在同一数据视图证明追平，否则返回不可用原因。可选重训输出同桶数的抽样 SSE 比，只表示样本上的几何改善。
 

@@ -7,20 +7,29 @@ choices before implementation; recommendations are diagnostic heuristics.
 
 ## Contract
 
-`mo_index_stats(database, table, index)` keeps three literal arguments and its four
-columns. IVF summary metrics gain growth, training-sample adequacy, sampled
-new/old drift and `suggestions`. Fulltext2 summaries gain tail and dead-base
-measurements and suggestions. Key indexes and classic fulltext keep their scope.
-No query performs maintenance or persists its result.
+`mo_index_stats(database, table, index [, options])` is the single entry and keeps
+its four output columns. Three arguments run the normal statistics: IVF summary
+metrics gain growth, training-sample adequacy, sampled new/old drift and
+`suggestions`; fulltext2 summaries gain tail and dead-base measurements and
+suggestions. Key indexes and classic fulltext keep their scope. No query performs
+maintenance or persists its result.
 
-`mo_index_analyze(database, table, index [, options])` is the explicit IVF deep
-check. It has the same columns and privilege/source checks. `options` is a JSON
-literal with `sample_count` (default 100, range 1..256), `recall_target` (default
-0.95, range (0,1]) and `retrain` (default false). Unknown options are errors.
-It adds exact-neighbor bucket-coverage curves and optional sampled retraining.
-The independent entry preserves the normal entry and makes full-source work
-explicit; an implicit full scan or fourth argument on the normal entry was
-rejected. Unsupported metrics return an explanatory analysis status.
+API decision updated 2026-11-18: the user chose the optional fourth argument,
+removing the separate deep-analysis function. Supplying `options` explicitly
+requests the IVF deep check; `{}` selects its defaults. There is no additional
+`analyze` switch. The option is a JSON string literal; unknown options, empty
+strings, non-object JSON and unsupported index types are errors.
+
+| Option | Default / range | Effect |
+| --- | --- | --- |
+| `sample_count` | 100; 1..256 | Maximum sampled query vectors for exact top-10 bucket-coverage measurements; larger values increase CPU cost. It is not a table-row limit or training-sample setting. |
+| `recall_target` | 0.95; (0,1] | Desired neighbor bucket coverage; determines the recommended probe count and coverage-based REINDEX suggestion. It does not configure production search recall. |
+| `retrain` | false | Also retrain sampled k-means with the same K and compare SSE. This is a diagnostic comparison, not index rebuilding. |
+
+Privilege/source checks and output shape are shared between both call forms.
+The fourth argument makes source scans explicit; three arguments do not perform
+the exact-neighbor check or sampled retraining. Unsupported measurements within
+a supported IVF check return an explanatory analysis status.
 
 Summary fields added by this extension:
 
