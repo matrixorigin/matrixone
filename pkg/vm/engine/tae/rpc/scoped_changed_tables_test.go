@@ -379,3 +379,62 @@ func TestScopedChangedTablesIncludesWALAtGlobalCheckpointEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, &probe, &resp))
 }
+
+func TestScopedChangedTablesExcludesStandaloneFlushAndKeepsDML(t *testing.T) {
+	ctx := t.Context()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	t.Cleanup(func() { require.NoError(t, h.HandleClose(context.Background())) })
+	registerScopedChangedTablesPublisher(t, h.Handle)
+
+	schema := catalog.MockSchema(2, 0)
+	schema.Name = "watch_maintenance"
+	data := catalog.MockBatch(schema, 2)
+	defer data.Close()
+	create := startScopedChangedTablesTxn(t, h.Handle)
+	database, err := testutil.CreateDatabase2(ctx, create, "watch_maintenance")
+	require.NoError(t, err)
+	relation, err := testutil.CreateRelation2(ctx, create, database, schema)
+	require.NoError(t, err)
+	scope := cmd_util.ScopedChangedTable{DatabaseID: database.GetID(), TableID: relation.ID()}
+	require.NoError(t, relation.Append(ctx, data))
+	require.NoError(t, create.Commit(ctx))
+
+	before := create.GetCommitTS()
+	require.NoError(t, h.db.ForceFlush(ctx, before))
+	after, err := h.db.LogtailMgr.ReadBarrier(ctx)
+	require.NoError(t, err)
+	require.True(t, after.Greater(before.ToTimestamp()))
+	afterFlush := types.TimestampToTS(after)
+	require.True(t, h.db.LogtailMgr.GetReader(nextChangeTimestamp(before), afterFlush).IsDirtyOnTable(scope.DatabaseID, scope.TableID),
+		"the actual flush must touch the table in the legacy dirty history")
+
+	check := func(from, to types.TS, expected []cmd_util.ScopedChangedTable) {
+		t.Helper()
+		req := cmd_util.GetScopedChangedTablesReq{From: from.ToTimestamp(), To: to.ToTimestamp(), Tables: []cmd_util.ScopedChangedTable{scope}}
+		var resp cmd_util.GetScopedChangedTablesResp
+		_, err := h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &req, &resp)
+		require.NoError(t, err)
+		require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, &req, &resp))
+		require.Equal(t, expected, resp.Tables)
+	}
+	check(before, afterFlush, nil)
+
+	filter := handle.NewEQFilter(data.Vecs[schema.GetPrimaryKey().Idx].Get(0))
+	update := startScopedChangedTablesTxn(t, h.Handle)
+	database, err = update.GetDatabase("watch_maintenance")
+	require.NoError(t, err)
+	relation, err = database.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, relation.UpdateByFilter(ctx, filter, 1, data.Vecs[1].Get(1), false))
+	require.NoError(t, update.Commit(ctx))
+	check(afterFlush, update.GetCommitTS(), []cmd_util.ScopedChangedTable{scope})
+
+	remove := startScopedChangedTablesTxn(t, h.Handle)
+	database, err = remove.GetDatabase("watch_maintenance")
+	require.NoError(t, err)
+	relation, err = database.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, relation.DeleteByFilter(ctx, filter))
+	require.NoError(t, remove.Commit(ctx))
+	check(update.GetCommitTS(), remove.GetCommitTS(), []cmd_util.ScopedChangedTable{scope})
+}

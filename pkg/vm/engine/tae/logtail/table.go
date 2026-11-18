@@ -17,6 +17,7 @@ package logtail
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -50,9 +51,16 @@ func (txn *smallTxn) GetLSN() uint64 {
 	return txn.lsn
 }
 
+// dirtyRowOffsets uses one-based positions of the first and last committed
+// non-maintenance touch in a compacted block. Zero means there is no such row.
+type dirtyRowOffsets struct {
+	first, last uint32
+}
+
 type summary struct {
 	hasCatalogChanges bool
-	tids              map[model.TableRecord]struct{}
+	offsetsOverflow   bool
+	tids              map[model.TableRecord]dirtyRowOffsets
 }
 
 type txnRow struct {
@@ -131,20 +139,34 @@ func (blk *txnBlock) TryCompact() (all bool, changed bool) {
 
 	// compact the blk and make a summary for dirty tables
 	sum := &summary{
-		tids: make(map[model.TableRecord]struct{}),
+		offsetsOverflow: uint64(len(blk.rows)) > math.MaxUint32,
+		tids:            make(map[model.TableRecord]dirtyRowOffsets),
 	}
-	for _, row := range blk.rows {
+	for i, row := range blk.rows {
 		txn := row.source.Load()
 		memo := txn.GetMemo()
 		if !sum.hasCatalogChanges && memo.HasCatalogChanges() {
 			sum.hasCatalogChanges = true
 		}
+		state := txn.GetTxnState(false)
+		qualifies := !sum.offsetsOverflow && state == txnif.TxnStateCommitted && !memo.IsFlushOrMerge
 		for _, record := range memo.Tables {
-			sum.tids[*record] = struct{}{}
+			offsets, exists := sum.tids[*record]
+			if qualifies {
+				offset := uint32(i + 1)
+				if offsets.first == 0 {
+					offsets.first = offset
+				}
+				offsets.last = offset
+			} else if exists {
+				continue
+			}
+			// Legacy readers use the full set of keys, including maintenance.
+			sum.tids[*record] = offsets
 		}
 		packed := &smallTxn{
 			prepareTS: txn.GetPrepareTS(),
-			state:     txn.GetTxnState(false),
+			state:     state,
 			lsn:       txn.GetLSN(),
 		}
 		row.packed.Store(packed)

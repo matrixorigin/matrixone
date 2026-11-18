@@ -125,3 +125,64 @@ func TestScopedDirtyReaderSkipsDisjointCompactedBlocks(t *testing.T) {
 	require.Contains(t, read(20, 29), uint64(2), "the lower endpoint is inclusive")
 	require.ElementsMatch(t, []uint64{3, 4}, read(21, 40), "skipping the predecessor still visits the next block")
 }
+
+func TestScopedDirtyReaderFiltersMaintenanceAndRollback(t *testing.T) {
+	table := NewTxnTable(6, func() types.TS { return types.TS{} })
+	flush := scopedDirtyTxn(20, txnif.TxnStateCommitted, 2)
+	flush.Memo.IsFlushOrMerge = true
+	flush.Memo.AddTable(1, 1)
+	rolledBack := scopedDirtyTxn(30, txnif.TxnStateRollbacked, 3)
+	rolledBack.Memo.AddTable(1, 1)
+	merge := scopedDirtyTxn(60, txnif.TxnStateCommitted, 1)
+	merge.Memo.IsFlushOrMerge = true
+	for _, txn := range []*txnbase.Txn{
+		scopedDirtyTxn(10, txnif.TxnStateCommitted, 1),
+		flush,
+		rolledBack,
+		scopedDirtyTxn(40, txnif.TxnStateCommitted, 4),
+		scopedDirtyTxn(50, txnif.TxnStateCommitted, 1),
+		merge,
+	} {
+		require.NoError(t, table.AddTxn(txn))
+	}
+
+	read := func(from, to int64) []uint64 {
+		t.Helper()
+		reader := Reader{table: table, from: types.BuildTS(from, 0), to: types.BuildTS(to, 0)}
+		ids := make(map[uint64]struct{})
+		require.NoError(t, reader.ForEachDirtyTable(func() error { return nil }, func(record model.TableRecord) error {
+			ids[record.ID] = struct{}{}
+			return nil
+		}))
+		var result []uint64
+		for id := range ids {
+			result = append(result, id)
+		}
+		return result
+	}
+
+	assertCommon := func() {
+		t.Helper()
+		require.ElementsMatch(t, []uint64{1, 4}, read(10, 60))
+		require.Equal(t, []uint64{1}, read(10, 20))
+		require.ElementsMatch(t, []uint64{1, 4}, read(31, 60))
+		require.Empty(t, read(60, 60), "a final maintenance touch must not extend the qualifying interval")
+
+		// Shared checkpoint and flush consumers retain the original dirty set.
+		legacy := Reader{table: table, from: types.BuildTS(10, 0), to: types.BuildTS(60, 0)}
+		tree, _ := legacy.GetDirty()
+		for _, id := range []uint64{1, 2, 3, 4} {
+			require.True(t, tree.HasTable(id))
+		}
+	}
+	assertCommon()
+	require.Empty(t, read(20, 30), "uncompacted rows give exact committed membership")
+
+	table.Scan(func(block *txnBlock) bool {
+		all, changed := block.TryCompact()
+		require.True(t, all && changed)
+		return true
+	})
+	assertCommon()
+	require.Equal(t, []uint64{1}, read(20, 30), "a sparse qualifying interval can conservatively straddle the entire requested window")
+}

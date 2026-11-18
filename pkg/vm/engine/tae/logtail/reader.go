@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"runtime"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -110,8 +111,9 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 }
 
 // ForEachDirtyTable visits table identities in the reader's inclusive range.
-// A compacted block can contribute extra candidates at either boundary. It
-// charges the shared work budget before visiting each block, row, and identity.
+// A compacted block can contribute extra candidates when a window lies
+// between a table's first and last qualifying rows. The shared work budget
+// applies to every block, row, and identity visited.
 func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRecord) error) (err error) {
 	consume := func() bool {
 		err = charge()
@@ -123,6 +125,16 @@ func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRe
 		}
 		err = visit(record)
 		return err == nil
+	}
+
+	bound := func(rows []*txnRow, cut types.TS, afterEqual bool) int {
+		return sort.Search(len(rows), func(i int) bool {
+			if err != nil || !consume() {
+				return true
+			}
+			ts := rows[i].GetPrepareTS()
+			return ts.GT(&cut) || (!afterEqual && ts.EQ(&cut))
+		})
 	}
 
 	if !consume() {
@@ -167,9 +179,32 @@ func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRe
 			if last.LT(&r.from) {
 				return true
 			}
-			for record := range summary.tids {
-				if !visitRecord(record) {
-					return false
+			if summary.offsetsOverflow {
+				err = moerr.NewInvalidInputNoCtx("scoped changed-table compacted block exceeds supported row positions")
+				return false
+			}
+			lower, upper := 0, len(rows)
+			if first.LT(&r.from) {
+				lower = bound(rows, r.from, false)
+			}
+			if err == nil && last.GT(&r.to) {
+				upper = bound(rows, r.to, true)
+			}
+			if err != nil {
+				return false
+			}
+			if lower < upper {
+				// Convert the half-open search result to inclusive one-based positions.
+				from, to := uint32(lower+1), uint32(upper)
+				for record, offsets := range summary.tids {
+					if !consume() {
+						return false
+					}
+					if offsets.first != 0 && offsets.last >= from && offsets.first <= to {
+						if err = visit(record); err != nil {
+							return false
+						}
+					}
 				}
 			}
 			return last.LE(&r.to)
@@ -201,6 +236,11 @@ func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRe
 			if memo == nil || memo.Tree == nil {
 				err = moerr.NewInternalErrorNoCtx("scoped changed-table history changed during compaction")
 				return false
+			}
+			// Dedicated flush and merge transactions rewrite existing data.
+			// Their flag is not persisted in WAL, so replay remains conservative.
+			if memo.IsFlushOrMerge {
+				continue
 			}
 			for _, record := range memo.Tables {
 				if record == nil {
