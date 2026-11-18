@@ -40,6 +40,12 @@ type FmtCtx struct {
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
 	paramExprOffset               bool
+	stringLiteralPositions        *[]StringLiteralPosition
+}
+
+// StringLiteralPosition is the byte range of a formatted string literal.
+type StringLiteralPosition struct {
+	Start, End int
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -69,6 +75,11 @@ func WithSingleQuoteString() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.singleQuoteString = true
 	})
+}
+
+// WithStringLiteralPositions records the ranges emitted by WithSingleQuoteString.
+func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
+	return func(ctx *FmtCtx) { ctx.stringLiteralPositions = positions }
 }
 
 func WithQuoteIdentifier() FmtCtxOption {
@@ -191,14 +202,23 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		}
 	}
 	if ctx.singleQuoteString {
+		var literal string
 		switch t {
 		case P_char:
-			return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+			literal = "'" + strings.ReplaceAll(v, "'", "''") + "'"
 		case P_ScoreBinary:
-			return ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
+			literal = "_binary '" + strings.ReplaceAll(v, "'", "''") + "'"
 		case P_ScoreBinaryHexnum:
 			return ctx.WriteString("_binary " + v)
+		default:
+			return ctx.WriteString(v)
 		}
+		start := ctx.Len()
+		n, err := ctx.WriteString(literal)
+		if ctx.stringLiteralPositions != nil {
+			*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{start, ctx.Len()})
+		}
+		return n, err
 	}
 	return ctx.WriteString(v)
 }

@@ -1446,6 +1446,29 @@ func TestMergeRewriteRulesPreservesIdentifiersAndBinaryLiterals(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct{ left, right, mode string }{
+		{"'`label`'", "label", ""},
+		{"'East'", "'east'", ""},
+		{"concat(label, 'East')", "concat(label, 'east')", "NO_BACKSLASH_ESCAPES"},
+		{"_binary 'East'", "_binary 'east'", ""},
+		{"_binary 'East'", "'East'", ""},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " as x from db.t where id = 1"
+			right := "select " + tc.right + " as x from db.t where id = 2"
+			got, err := mergeRewriteRules(ctx, left, right, tc.mode)
+			require.NoError(t, err)
+			require.Equal(t, right, got)
+		})
+	}
+	got, err := mergeRewriteRules(ctx, "select concat(LABEL, 'East') as x from db.t where id = 1",
+		"select concat(label, 'East') as x from db.t where id = 2", "")
+	require.NoError(t, err)
+	require.Contains(t, got, "where (`id` = 1) or (`id` = 2)")
+}
+
 func TestRewritePolicyAllowsStandaloneSQLModeRecovery(t *testing.T) {
 	const brokenMode = "NO_BACKSLASH_ESCAPES"
 	const query = "select * from db.t"
@@ -1456,7 +1479,7 @@ func TestRewritePolicyAllowsStandaloneSQLModeRecovery(t *testing.T) {
 	}}
 	_, err := policy.rewrite(ctx, query, "")
 	require.NoError(t, err)
-	for _, sql := range []string{query, "set sql_mode = (select c from db.t)", "set sql_mode = '', @x = (select c from db.t)", "set @sql_mode = ''", "set global sql_mode = ''"} {
+	for _, sql := range []string{query, "create table db.new_table (id int)", "set sql_mode = (select c from db.t)", "set sql_mode = '', @x = (select c from db.t)", "set @sql_mode = ''", "set global sql_mode = ''"} {
 		got, err := policy.rewrite(ctx, sql, brokenMode)
 		require.ErrorContains(t, err, "failed to parse rewrite rule", sql)
 		require.Equal(t, sql, got)

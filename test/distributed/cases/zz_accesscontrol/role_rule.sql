@@ -378,6 +378,15 @@ set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
 -- @session
 
+-- A column and a literal that spells its quoted name are different projections.
+alter role test_rule_role_dup_projection_a add rule "select '`marker`' as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select marker as x from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=22&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select x from db1.t_dup order by x;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

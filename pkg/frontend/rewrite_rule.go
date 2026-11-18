@@ -282,6 +282,7 @@ func isStandaloneSQLModeAssignment(ctx context.Context, sql, sqlMode string) boo
 	if err != nil {
 		return false
 	}
+	defer stmt.Free()
 	set, ok := stmt.(*tree.SetVar)
 	if !ok || len(set.Assignments) != 1 {
 		return false
@@ -921,11 +922,15 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 	merged.Select = &mergedClause
 
 	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
+	return tree.StringWithOpts(&merged, dialect.MYSQL, rewriteRuleFormatOptions(sqlMode)...), true, nil
+}
+
+func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
 		opts = append(opts, tree.WithNoBackslashEscape())
 	}
-	return tree.StringWithOpts(&merged, dialect.MYSQL, opts...), true, nil
+	return opts
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
@@ -933,25 +938,25 @@ func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*r
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
 	return shape, ok, nil
 }
 
-func rewriteRuleMergeShapeForStatement(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s)
+		return rewriteRuleMergeShapeForSelect(s, sqlMode)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return rewriteRuleMergeShapeForStatement(s.Select)
+		return rewriteRuleMergeShapeForStatement(s.Select, sqlMode)
 	default:
 		return nil, false
 	}
 }
 
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
 		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
@@ -970,7 +975,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: normalizeRewriteSQL(tree.StringWithOpts(&clause.Exprs, dialect.MYSQL, tree.WithQuoteIdentifier())),
+		selectList: rewriteRuleProjectionKey(&clause.Exprs, sqlMode),
 		table:      table,
 	}, true
 }
@@ -1059,6 +1064,28 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 			),
 		}
 	}
+}
+
+// Preserve literal spelling and type delimiters while folding the surrounding
+// SQL as before. In particular, the column `x` is not the string '`x`'.
+func rewriteRuleProjectionKey(exprs *tree.SelectExprs, sqlMode string) string {
+	var literals []tree.StringLiteralPosition
+	opts := append(rewriteRuleFormatOptions(sqlMode), tree.WithStringLiteralPositions(&literals))
+	sql := tree.StringWithOpts(exprs, dialect.MYSQL, opts...)
+	if len(literals) == 0 {
+		return normalizeRewriteSQL(sql)
+	}
+
+	var key strings.Builder
+	key.Grow(len(sql))
+	start := 0
+	for _, literal := range literals {
+		key.WriteString(strings.ToLower(sql[start:literal.Start]))
+		key.WriteString(sql[literal.Start:literal.End])
+		start = literal.End
+	}
+	key.WriteString(strings.ToLower(sql[start:]))
+	return strings.TrimSpace(key.String())
 }
 
 func normalizeRewriteSQL(sql string) string {
