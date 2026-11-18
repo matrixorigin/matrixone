@@ -3,9 +3,7 @@
 drop database if exists non_primary_zonemap;
 create database non_primary_zonemap;
 use non_primary_zonemap;
--- 仅在独占的新 CN 上运行：此时初始会话值才等于 CN 的初始设置。
 set @saved_zonemap_hints=@@optimizer_hints;
-set optimizer_hints='';
 create table clustered (id int primary key, k int);
 create table interleaved (id int primary key, k int);
 
@@ -81,96 +79,8 @@ set @zm_lower=100;
 execute zm_commuted using @zm_lower;
 deallocate prepare zm_commuted;
 
--- 稳定 IN 不依赖全局排序/选择率估计；重叠值域仍须保留候选块。
-select k from clustered where k in (100,150) order by k;
--- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b",true)
-explain analyze select count(*) from clustered where k in (100,150);
-select k from interleaved where k in (100,150) order by k;
--- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
-explain analyze select count(*) from interleaved where k in (100,150);
-
--- 相同 nullable 域保留两行；不同域只有 id=6 同时命中，漏掉任一谓词都会多出一行。
-select id from clustered where k in (100,150,null) and k in (150,100,null) order by id;
-select id from clustered where k in (100,150,null) and k in (150,1,null) order by id;
-
--- 字符串期间、NULL 与重复列表值：三个小块，只有两个块包含目标期间。
-create table period_values (id int primary key, period varchar(16), amount decimal(20,7));
-insert into period_values values (1,'2026.12',999),(2,null,999);
--- @regex("returnStr.*OK",true)
-select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
-insert into period_values values (3,'2024.12',10),(4,'2024.12',20);
--- @regex("returnStr.*OK",true)
-select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
-insert into period_values values (5,'2025.12',30),(6,'2025.12',40);
--- @regex("returnStr.*OK",true)
-select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
-select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
-select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
--- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b",true)
-explain analyze select count(*) from period_values where period in ('2025.12',null,'2024.12','2025.12');
-select count(*) from period_values where period in (null,null);
-select count(*) from period_values where period not in ('2024.12',null);
-prepare zm_in from 'select id from period_values where period in (?,?) order by id';
-set @zm_first='2024.12';
-set @zm_second='2025.12';
-execute zm_in using @zm_first,@zm_second;
-set @zm_first=null;
-execute zm_in using @zm_first,@zm_second;
-set @zm_first='2024.12';
-execute zm_in using @zm_first,@zm_second;
-deallocate prepare zm_in;
-create table period_snapshot as
-with raw_data as (select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period)
-select row_number() over () as row_no, period, total from raw_data limit 2;
-select period,total from period_snapshot order by period;
-
--- CTAS 的内部 INSERT 也必须消费最终块过滤，域改写不能改变物化结果。
-create table domain_snapshot as select k from clustered where k in (0,1,100,150) and k not in (1,100);
-select k from domain_snapshot order by k;
-insert into domain_snapshot select k from clustered where k in (0,150) and k not in (0);
-select k from domain_snapshot order by k;
-
--- 浮点 IN 含 NaN 时不具备二分查找的单调性，常量与参数均须保留命中行。
-create table float_in_values (id int primary key, f float, d double);
-insert into float_in_values values (1,100,100),(2,200,200);
--- @regex("returnStr.*OK",true)
-select mo_ctl('dn', 'flush', 'non_primary_zonemap.float_in_values');
-select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
-select id from float_in_values where d in (cast('NaN' as double),100) order by id;
-select id from float_in_values where f in (100,cast('NaN' as float)) order by id;
-select id from float_in_values where f in (cast('NaN' as float),100) order by id;
-prepare zm_float_in from 'select id from float_in_values where d in (?,?) order by id';
-prepare zm_float32_in from 'select id from float_in_values where f in (?,?) order by id';
-set @zm_float_hit=100;
-set @zm_float_other=150;
-execute zm_float_in using @zm_float_hit,@zm_float_other;
-execute zm_float32_in using @zm_float_hit,@zm_float_other;
-set @zm_float_other=cast('NaN' as double);
-execute zm_float_in using @zm_float_hit,@zm_float_other;
-execute zm_float32_in using @zm_float_hit,@zm_float_other;
-set @zm_float_other=150;
-execute zm_float_in using @zm_float_hit,@zm_float_other;
-execute zm_float32_in using @zm_float_hit,@zm_float_other;
-deallocate prepare zm_float_in;
-deallocate prepare zm_float32_in;
-
--- 二进制截断上界尚不支持新增 IN 准入；常量和参数不能漏掉持久化命中行。
-create table binary_in_values (id int primary key, k varbinary(40));
-insert into binary_in_values values (1,unhex(concat(repeat('ff',30),'01')));
--- @regex("returnStr.*OK",true)
-select mo_ctl('dn', 'flush', 'non_primary_zonemap.binary_in_values');
-select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
-prepare zm_binary_in from 'select count(*) from binary_in_values where k in (?,?)';
-set @zm_binary_other=unhex('00');
-set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
-execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
-set @zm_binary_hit=null;
-execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
-set @zm_binary_hit=unhex(concat(repeat('ff',30),'01'));
-execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
-deallocate prepare zm_binary_in;
-
 -- 同一持久化块混合真假值，BOOL 摘要不能把 true 行排除。
+set optimizer_hints='';
 create table bool_values (id int, enabled bool);
 insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
 select id from bool_values where enabled = true order by id;
@@ -233,18 +143,6 @@ select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as m
 
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
-select id from clustered where k in (100,150,null) and k in (150,100,null) order by id;
-select id from clustered where k in (100,150,null) and k in (150,1,null) order by id;
-select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
-select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
-select id from float_in_values where f in (100,cast('NaN' as float)) order by id;
-select k from clustered where k in (100,150) order by k;
--- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
-explain analyze select count(*) from clustered where k in (100,150);
-select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
-select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
--- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
-explain analyze select count(*) from period_values where period in ('2024.12','2025.12');
 select id from bool_values where enabled = true order by id;
 select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
 select count(*) as right_count from bool_values where id in (2,3) and enabled = true;

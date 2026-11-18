@@ -1,0 +1,140 @@
+drop database if exists non_primary_in_rows;
+create database non_primary_in_rows;
+use non_primary_in_rows;
+create table src (id int primary key, k int, period varchar(16), amount int);
+insert into src values (1,1,'2026.12',999),(2,0,'2024.12',10),(3,null,null,999),(5,100,'2024.12',20),(6,150,'2025.12',40);
+select mo_ctl('dn','flush','non_primary_in_rows.src');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_in_rows.src)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from src where k in (100,150,null) and k in (150,100,null) order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select id from src where k in (100,150,null) and k in (150,1,null) order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from src where period in ('2025.12',null,'2024.12','2025.12') order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5  𝄀
+6
+select count(*) from src where period in (null,null);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from src where period not in ('2024.12',null);
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare p from 'select id from src where period in (?,?) order by id';
+set @a='2024.12';
+set @b='2025.12';
+execute p using @a,@b;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5  𝄀
+6
+set @a=null;
+execute p using @a,@b;
+➤ id[4,32,0]  𝄀
+6
+set @a='2024.12';
+execute p using @a,@b;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5  𝄀
+6
+deallocate prepare p;
+create table totals as with raw_data as (select period,sum(amount) as total from src where period in ('2024.12','2025.12') group by period) select period,total from raw_data;
+select period,total from totals order by period;
+➤ period[12,-1,0]  ¦  total[-5,64,0]  𝄀
+2024.12  ¦  30  𝄀
+2025.12  ¦  40
+create table diff as select k from src where k in (0,1,100,150) and k not in (1,100);
+select k from diff order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+150
+insert into diff select k from src where k in (0,150) and k not in (0);
+select k from diff order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+150  𝄀
+150
+create table bounds (id int primary key, f float, d double, b varbinary(40));
+insert into bounds values (1,100,100,unhex(concat(repeat('ff',30),'01'))),(2,200,200,null);
+select mo_ctl('dn','flush','non_primary_in_rows.bounds');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_in_rows.bounds)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from bounds where f in (100,cast('NaN' as float)) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bounds where f in (cast('NaN' as float),100) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bounds where d in (100,cast('NaN' as double)) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bounds where d in (cast('NaN' as double),100) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bounds where b in (unhex('00'),unhex(concat(repeat('ff',30),'01'))) order by id;
+➤ id[4,32,0]  𝄀
+1
+prepare pf from 'select id from bounds where f in (?,?) order by id';
+prepare pd from 'select id from bounds where d in (?,?) order by id';
+set @hit=100;
+set @other=150;
+execute pf using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+execute pd using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+set @other=cast('NaN' as double);
+execute pf using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+execute pd using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+set @other=150;
+execute pf using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+execute pd using @hit,@other;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare pf;
+deallocate prepare pd;
+prepare pb from 'select id from bounds where b in (?,?) order by id';
+set @miss=unhex('00');
+set @key=unhex(concat(repeat('ff',30),'01'));
+execute pb using @miss,@key;
+➤ id[4,32,0]  𝄀
+1
+set @key=null;
+execute pb using @miss,@key;
+➤ id[4,32,0]
+set @key=unhex(concat(repeat('ff',30),'01'));
+execute pb using @miss,@key;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare pb;
+drop database non_primary_in_rows;
