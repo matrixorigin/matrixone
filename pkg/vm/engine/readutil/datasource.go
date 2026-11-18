@@ -77,6 +77,23 @@ func UsableOrderZoneMap(zm objectio.ZoneMap, typ plan.Type, desc bool) bool {
 	return true
 }
 
+// OrderHeadNullsLead reports the effective NULL placement of a leading order
+// spec: whether NULL keys may lead the requested head. It resolves exactly
+// like the Order comparator (pkg/sql/colexec/order): the NULLS FIRST bit is
+// consulted first — it also wins when both NULLS bits are present — then the
+// NULLS LAST bit, and otherwise a DESC order trails NULLs while an ASC order
+// leads with them. Readers and the cutoff summary must reach the same verdict
+// from the same flag, so the shared definition lives here.
+func OrderHeadNullsLead(flag plan.OrderBySpec_OrderByFlag) bool {
+	if flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+		return true
+	}
+	if flag&plan.OrderBySpec_NULLS_LAST != 0 {
+		return false
+	}
+	return flag&plan.OrderBySpec_DESC == 0
+}
+
 func (rs *RemoteDataSource) String() string {
 	return "RemoteDataSource"
 }
