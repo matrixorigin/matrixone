@@ -23,12 +23,65 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDiscardSharedClusterOnlyAcceptsCompletedWithdrawalTimeout(t *testing.T) {
+	remote := &cnservice.ViewMetadataWithdrawalError{Err: context.DeadlineExceeded}
+	local := errors.New("local teardown failed")
+	for _, tc := range []struct {
+		name     string
+		err      error
+		complete bool
+		wantOK   bool
+	}{
+		{"completed withdrawal timeout", remote, true, true},
+		{"nested withdrawal timeouts", errors.Join(remote, errors.Join(remote)), true, true},
+		{"plain local deadline", context.DeadlineExceeded, true, false},
+		{"other withdrawal error", &cnservice.ViewMetadataWithdrawalError{Err: local}, true, false},
+		{"mixed withdrawal and local error", errors.Join(remote, local), true, false},
+		{"incomplete teardown", remote, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: tc.err}, complete: tc.complete}
+			op := &operator{state: started}
+			op.reset.svc = svc
+			value := &cluster{state: started, services: []*operator{op}}
+			state := SharedTestCluster{cluster: value}
+			err := state.closeIfActiveWithDiscard(true, true)
+			if tc.wantOK {
+				require.NoError(t, err)
+				require.Nil(t, state.cluster)
+				require.True(t, value.CloseComplete())
+			} else {
+				require.Error(t, err)
+				require.ErrorIs(t, err, tc.err)
+				if !tc.complete {
+					require.Same(t, value, state.cluster)
+				}
+			}
+		})
+	}
+	t.Run("pending callback cleanup", func(t *testing.T) {
+		svc := &completedCloseService{complete: true}
+		op := &operator{state: started}
+		op.reset.svc = svc
+		value := &cluster{state: started, services: []*operator{op}}
+		state := SharedTestCluster{
+			cluster:              value,
+			sealed:               true,
+			cleanupRegistrations: map[sharedCleanupRegistration]struct{}{{}: {}},
+		}
+		require.ErrorContains(t, state.closeIfActiveWithDiscard(true, true), "callback cleanup is still pending")
+		require.Same(t, value, state.cluster)
+		require.Zero(t, svc.closeCount.Load())
+	})
+}
 
 func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
 	err := waitBasicClusterTaskServices(context.Background(), &cluster{}, 1)
