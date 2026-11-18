@@ -16,6 +16,8 @@ show tables from show_meta_db;
 show columns from show_meta_db.allowed;
 show create table show_meta_db.allowed;
 show create table show_meta_db.denied;
+show tables from show_meta_db where exists (select 1 from show_meta_db.denied);
+show columns from show_meta_db.allowed where exists (select 1 from show_meta_db.denied);
 prepare meta_tables from 'show tables from show_meta_db';
 execute meta_tables;
 -- @session

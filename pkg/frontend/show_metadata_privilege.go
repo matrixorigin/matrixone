@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -85,6 +86,9 @@ func showSubscriptionBaseTableSQL(database, table string) string {
 
 func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.Statement) (allowed bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
+	if !showMetadataPredicateSafe(stmt) {
+		return false, stats, moerr.NewNotSupported(ctx, "object-authorized SHOW requires a row-local predicate")
+	}
 	protocol := currentProtocolVersion(ses.GetProc())
 	if ses.GetProc() == nil || ses.GetProc().Base == nil {
 		protocol = defines.MORPCVersion11
@@ -137,4 +141,65 @@ func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.State
 		allowed, err = hasRows(showSubscriptionBaseTableSQL(database, table))
 	}
 	return allowed, stats, err
+}
+
+// showMetadataPredicateSafe restricts the new fallback to row-local operators.
+// Unknown forms (including subqueries and function calls) fail closed; the
+// existing database-authorized path retains its expression support.
+func showMetadataPredicateSafe(stmt tree.Statement) bool {
+	var where *tree.Where
+	var like *tree.ComparisonExpr
+	switch st := stmt.(type) {
+	case *tree.ShowTables:
+		where, like = st.Where, st.Like
+	case *tree.ShowColumns:
+		where, like = st.Where, st.Like
+	default:
+		return true
+	}
+	if where != nil && !showMetadataRowLocalExpr(where.Expr) {
+		return false
+	}
+	return like == nil || showMetadataRowLocalExpr(like)
+}
+
+func showMetadataRowLocalExpr(expr tree.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case *tree.NumVal, *tree.UnresolvedName:
+		return true
+	case *tree.ComparisonExpr:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right) && showMetadataRowLocalExpr(e.Escape)
+	case *tree.BinaryExpr:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+	case *tree.AndExpr:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+	case *tree.OrExpr:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+	case *tree.XorExpr:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+	case *tree.NotExpr:
+		return showMetadataRowLocalExpr(e.Expr)
+	case *tree.ParenExpr:
+		return showMetadataRowLocalExpr(e.Expr)
+	case *tree.UnaryExpr:
+		return showMetadataRowLocalExpr(e.Expr)
+	case *tree.IsNullExpr:
+		return showMetadataRowLocalExpr(e.Expr)
+	case *tree.IsNotNullExpr:
+		return showMetadataRowLocalExpr(e.Expr)
+	case *tree.RangeCond:
+		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.From) && showMetadataRowLocalExpr(e.To)
+	case *tree.Tuple:
+		for _, item := range e.Exprs {
+			if !showMetadataRowLocalExpr(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

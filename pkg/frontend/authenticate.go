@@ -8673,6 +8673,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		return false, stats, err
 	}
 	stats.Add(&delta)
+	if st, yes := stmt.(*tree.ShowTables); yes {
+		st.Admission = tree.ShowTablesUnadmitted
+		if ok {
+			st.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
 	if ok {
 		setDDLOwnerRole(ses, stmt, roleID)
 	}
@@ -8687,6 +8693,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
 		if _, _, _, supported := showMetadataTarget(stmt); supported {
 			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			if st, yes := stmt.(*tree.ShowTables); yes && allowed && err == nil {
+				st.Admission = tree.ShowTablesObjectAdmitted
+			}
 			stats.Add(&delta)
 			return allowed, stats, err
 		}

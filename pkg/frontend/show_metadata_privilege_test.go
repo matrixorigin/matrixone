@@ -216,3 +216,37 @@ func TestShowSubscriptionBaseTableSQLQuotesExactTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestShowMetadataPredicateIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		sql     string
+		allowed bool
+	}{
+		{"show tables from db where Tables_in_db = 't'", true},
+		{"show columns from db.t where Field like 'a%' and Type is not null", true},
+		{"show columns from db.t where Field in ('a','b')", true},
+		{"show tables from db where exists (select 1 from secret.t)", false},
+		{"show columns from db.t where Field = (select v from secret.t limit 1)", false},
+		{"show tables from db where 1 in (select v from secret.t)", false},
+		{"show columns from db.t where ifnull((select v from secret.t), 'a') = Field", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.allowed, showMetadataPredicateSafe(stmt))
+			if !tc.allowed {
+				ctrl := gomock.NewController(t)
+				ses := newSes(ctrl)
+				t.Cleanup(ses.Close)
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				stub := gostub.StubFunc(&NewBackgroundExec, bh)
+				defer stub.Reset()
+				allowed, _, err := authenticateShowMetadata(t.Context(), ses, stmt)
+				require.False(t, allowed)
+				require.ErrorContains(t, err, "row-local predicate")
+			}
+
+		})
+	}
+}

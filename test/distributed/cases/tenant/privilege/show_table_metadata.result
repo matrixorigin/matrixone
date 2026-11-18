@@ -22,6 +22,10 @@ allowed  ¦  CREATE TABLE `allowed` (
 )
 show create table show_meta_db.denied;
 internal error: do not have privilege to execute the statement
+show tables from show_meta_db where exists (select 1 from show_meta_db.denied);
+not supported: object-authorized SHOW requires a row-local predicate
+show columns from show_meta_db.allowed where exists (select 1 from show_meta_db.denied);
+not supported: object-authorized SHOW requires a row-local predicate
 prepare meta_tables from 'show tables from show_meta_db';
 execute meta_tables;
 ➤ Tables_in_show_meta_db[12,-1,0]  𝄀

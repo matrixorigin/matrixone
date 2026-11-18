@@ -349,7 +349,18 @@ func (node *ShowSequences) GetStatementType() string { return "Show Sequences" }
 func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
 
 // SHOW TABLES statement.
+// ShowTablesAdmission records frontend authorization for this statement only.
+// It is deliberately absent from SQL formatting and the wire protocol.
+type ShowTablesAdmission uint8
+
+const (
+	ShowTablesUnadmitted ShowTablesAdmission = iota
+	ShowTablesDatabaseAdmitted
+	ShowTablesObjectAdmitted
+)
+
 type ShowTables struct {
+	Admission ShowTablesAdmission
 	showImpl
 	Ext      bool
 	Open     bool

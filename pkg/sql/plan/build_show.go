@@ -281,6 +281,13 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 }
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
+	// Object-only admission must never fall back to an unfiltered legacy plan.
+	if stmt.Admission == tree.ShowTablesObjectAdmitted {
+		if err := requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, err
+		}
+	}
+
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
@@ -337,8 +344,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	accountClause := fmt.Sprintf("tbl.account_id = %v or (tbl.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	from := fmt.Sprintf("%s.mo_tables %s tbl", MO_CATALOG_DB_NAME, snapshotSpec)
 	visibility := ""
-	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
-		requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
+	if stmt.Admission != tree.ShowTablesDatabaseAdmitted && stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
+		(stmt.Admission == tree.ShowTablesObjectAdmitted || requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil) {
 		visibility = sysview.MetadataVisibilityCTE(defines.MORPCVersion12, dbName)
 		from += " LEFT JOIN (SELECT account_id, rel_id FROM __mo_visible_tables) visible ON visible.account_id = tbl.account_id AND visible.rel_id = tbl.rel_id"
 		accountClause = "(" + accountClause + ") AND (visible.rel_id IS NOT NULL OR (tbl.account_id = 0 AND (" + mustShowTable + clusterTable + ")))"

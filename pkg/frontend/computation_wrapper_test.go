@@ -1195,3 +1195,22 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
 }
+
+func TestRebuildPreparedShowRefreshesAdmission(t *testing.T) {
+	ses, prepared, _, execCtx := newPreparedExecuteEnv(t, 107)
+	prepared.PrepareStmt.Free()
+	prepared.PrepareStmt = tree.NewShowTables(false, false, "db", nil, nil)
+	prepared.Sql = "show tables from db"
+	defer prepared.Close()
+	show := prepared.PrepareStmt.(*tree.ShowTables)
+	show.Admission = tree.ShowTablesDatabaseAdmitted
+	for range 2 {
+		_, err := rebuildPreparePlan(execCtx, ses, prepared, func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			inner := stmt.(*tree.PrepareStmt).Stmt.(*tree.ShowTables)
+			require.Equal(t, tree.ShowTablesUnadmitted, inner.Admission)
+			inner.Admission = tree.ShowTablesObjectAdmitted
+			return &plan2.Plan{}, nil
+		})
+		require.NoError(t, err)
+	}
+}

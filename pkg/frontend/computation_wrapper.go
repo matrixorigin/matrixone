@@ -611,6 +611,11 @@ func rebuildPreparePlan(
 	if owned {
 		defer innerStmt.Free()
 	}
+	// Prepared SHOW statements can reuse their AST while changing roles or
+	// grants. Recompute admission on every rebuild, before planning that AST.
+	if show, ok := innerStmt.(*tree.ShowTables); ok {
+		show.Admission = tree.ShowTablesUnadmitted
+	}
 	originPrepareStmt := &tree.PrepareStmt{
 		Name: tree.Identifier(prepareStmt.Name),
 		Stmt: innerStmt,

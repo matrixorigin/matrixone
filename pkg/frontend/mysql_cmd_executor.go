@@ -2986,6 +2986,29 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
+	// Prepared SHOW rebuilding refreshes admission. Admit that exact statement
+	// before planning, so neither a stale decision nor a legacy plan is reused.
+	target := authorizationStatement(stmt)
+	if prepared, ok := target.(*tree.PrepareStmt); ok {
+		target = prepared.Stmt
+	}
+	if show, ok := target.(*tree.ShowTables); ok && show.Admission == tree.ShowTablesUnadmitted && ses != nil && !ses.IsBackgroundSession() {
+		if show.DBName == "" {
+			show.DBName = ctx.DefaultDatabase()
+		}
+
+		owner, err := preparedStatementOwner(reqCtx, ses)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := authenticateUserCanExecuteStatement(reqCtx, owner, show); err != nil {
+			return nil, err
+		}
+		// Trusted/bypass sessions return before ordinary privilege evaluation.
+		if show.Admission == tree.ShowTablesUnadmitted {
+			show.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
 	var ret *plan2.Plan
 	var err error
 
