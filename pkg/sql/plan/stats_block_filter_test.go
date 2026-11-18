@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -24,11 +25,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +40,58 @@ type zoneMapStatsTestCompilerContext struct {
 	*MockCompilerContext
 	stats *statsinfo.StatsInfo
 	err   error
+	proc  *process.Process
+}
+
+// 规划期间多次GetProcess复用同一owner，不调用会新建服务/池的通用mock方法。
+func newZoneMapStatsTestCompilerContext(t testing.TB, mock *MockCompilerContext, stats *statsinfo.StatsInfo) *zoneMapStatsTestCompilerContext {
+	t.Helper()
+	mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.AllocatedBytes())
+	})
+	ctx, cancel := context.WithCancel(defines.AttachAccountId(mock.GetContext(), catalog.System_Account))
+	t.Cleanup(cancel)
+	proc := process.NewTopProcess(ctx, mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(proc.Free)
+	return &zoneMapStatsTestCompilerContext{MockCompilerContext: mock, stats: stats, proc: proc}
+}
+
+func (ctx *zoneMapStatsTestCompilerContext) GetProcess() *process.Process { return ctx.proc }
+
+func TestPlannerBlockFilterFixtureOwnership(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	for _, key := range []string{moruntime.AutoIncrementService, moruntime.InternalSQLExecutor} {
+		before, existed := rt.GetGlobalVariables(key)
+		var proc *process.Process
+		var name string
+		t.Run(key, func(t *testing.T) {
+			name = t.Name()
+			ctx := newZoneMapStatsTestCompilerContext(t, &MockCompilerContext{ctx: context.Background()}, nil)
+			proc = ctx.GetProcess()
+			for range 3 {
+				require.Same(t, proc, ctx.GetProcess(), "每次规划不能再创建匿名process")
+			}
+			current, exists := rt.GetGlobalVariables(key)
+			require.Equal(t, existed, exists)
+			if before == nil {
+				require.Nil(t, current)
+			} else {
+				require.Same(t, before, current, "fixture不能替换runtime服务")
+			}
+			require.Nil(t, proc.GetFileService())
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(name))
+			buf, err := proc.Mp().Alloc(128, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { proc.Mp().Free(buf) })
+			require.Positive(t, proc.Mp().AllocatedBytes())
+		})
+		require.ErrorIs(t, proc.Ctx.Err(), context.Canceled)
+		require.Zero(t, proc.Mp().AllocatedBytes())
+		require.Equal(t, "[]", mpool.ReportMemUsage(name), "拥有的池必须注销")
+	}
 }
 
 func (ctx *zoneMapStatsTestCompilerContext) Stats(*ObjectRef, *Snapshot) (*statsinfo.StatsInfo, error) {
@@ -126,7 +182,7 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 			if tc.missing {
 				stats = nil
 			}
-			compCtx := &zoneMapStatsTestCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: ctx}, stats: stats}
+			compCtx := newZoneMapStatsTestCompilerContext(t, &MockCompilerContext{ctx: ctx}, stats)
 			if tc.statsErr {
 				compCtx.err = errors.New("statistics unavailable")
 			}
@@ -189,10 +245,10 @@ func TestPlanNonPrimaryInBlockFilters(t *testing.T) {
 					}
 				}
 			}
-			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock, stats: &statsinfo.StatsInfo{
+			ctx := newZoneMapStatsTestCompilerContext(t, mock, &statsinfo.StatsInfo{
 				TableCnt: 60000, BlockNumber: 9,
 				ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"n_name": {Overlap: 1}, "n_regionkey": {Overlap: 1}},
-			}}
+			})
 			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -265,9 +321,8 @@ func TestFloatInKeepsExistingZoneMapAdmission(t *testing.T) {
 						if missing {
 							stats = nil
 						}
-						builder := NewQueryBuilder(planpb.Query_SELECT, &zoneMapStatsTestCompilerContext{
-							MockCompilerContext: &MockCompilerContext{ctx: ctx}, stats: stats,
-						}, false, false)
+						builder := NewQueryBuilder(planpb.Query_SELECT,
+							newZoneMapStatsTestCompilerContext(t, &MockCompilerContext{ctx: ctx}, stats), false, false)
 						filter := DeepCopyExpr(tc.expr)
 						node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42},
 							TableDef: &planpb.TableDef{TblId: 42, Name: "ordinary",
@@ -300,9 +355,8 @@ func TestSimpleInAdmissionBounds(t *testing.T) {
 			if missing {
 				stats = nil
 			}
-			builder := NewQueryBuilder(planpb.Query_SELECT, &zoneMapStatsTestCompilerContext{
-				MockCompilerContext: &MockCompilerContext{ctx: ctx}, stats: stats,
-			}, false, false)
+			builder := NewQueryBuilder(planpb.Query_SELECT,
+				newZoneMapStatsTestCompilerContext(t, &MockCompilerContext{ctx: ctx}, stats), false, false)
 			node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42},
 				TableDef: &planpb.TableDef{TblId: 42, Name: "ordinary",
 					Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
@@ -427,10 +481,29 @@ func TestFinalStringInLogicalIdentity(t *testing.T) {
 	}
 }
 
+// 复用真实规划回归，不能只验证fixture直接GetProcess一次的清理。
+func TestPlannerBlockFilterRegressionReleasesPools(t *testing.T) {
+	poolCount := func() int {
+		var entries []map[string]json.RawMessage
+		// 零native分配时旧诊断接口输出空global值；它不是池注册项。
+		report := strings.Replace(mpool.ReportMemUsage(""), `{"global":}`, `{"global":null}`, 1)
+		require.NoError(t, json.Unmarshal([]byte(report), &entries))
+		return len(entries) - 1 // ReportMemUsage额外包含一条global统计。
+	}
+	before := poolCount()
+	counts := []int{before}
+	for i := range 3 {
+		t.Run(strconv.Itoa(i), TestPlanLargeNullableInKeepsExistingAdmission)
+		counts = append(counts, poolCount())
+	}
+	t.Logf("三轮真实规划前后的池注册数：%v", counts)
+	require.Equal(t, []int{before, before, before, before}, counts)
+}
+
 func TestPlanLargeNullableInKeepsExistingAdmission(t *testing.T) {
 	mock := NewMockCompilerContext(false)
 	mock.tables["nation"].TblId = 42001
-	ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock}
+	ctx := newZoneMapStatsTestCompilerContext(t, mock, nil)
 	values := make([]string, 64)
 	for i := range values {
 		values[i] = strconv.Itoa(i)
@@ -466,7 +539,7 @@ func TestFinalInDomainBlockFiltersAreUnique(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockCompilerContext(false)
 			mock.tables["nation"].TblId = 42001
-			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock}
+			ctx := newZoneMapStatsTestCompilerContext(t, mock, nil)
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select n_nationkey from nation where "+tc.predicate, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -501,12 +574,12 @@ func TestFinalInDomainBlockFiltersAreUnique(t *testing.T) {
 }
 
 func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := context.Background()
 	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 0)
 	bound := MakePlan2Int64ConstExprWithType(1)
 	null := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
 	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
-		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 		require.NoError(t, err)
 		return expr
 	}
@@ -544,6 +617,7 @@ func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
 		{"volatile remains", []*planpb.Expr{bind(">", col, bind("rand")), bind(">", col, bind("rand"))}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := newZoneMapStatsTestCompilerContext(t, NewMockCompilerContext(false), nil)
 			filters := DeepCopyExprList(tc.filters)
 			var first *planpb.Expr
 			if len(filters) > 0 {
@@ -577,7 +651,8 @@ func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 	filter, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{col, MakePlan2StringConstExprWithType("new")})
 	require.NoError(t, err)
 	for _, disabled := range []bool{false, true} {
-		builder := NewQueryBuilder(planpb.Query_SELECT, &zoneMapStatsTestCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: ctx}}, false, false)
+		builder := NewQueryBuilder(planpb.Query_SELECT,
+			newZoneMapStatsTestCompilerContext(t, &MockCompilerContext{ctx: ctx}, nil), false, false)
 		builder.optimizerHints = &OptimizerHints{}
 		if disabled {
 			builder.optimizerHints.blockFilter = 2
