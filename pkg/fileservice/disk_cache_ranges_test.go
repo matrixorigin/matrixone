@@ -18,8 +18,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -189,4 +192,75 @@ func TestDiskCacheReadAcrossCachedRanges(t *testing.T) {
 
 	cache.cache.Delete(ctx, cache.pathForIOEntry("123obj", IOEntry{Offset: 200, Size: 100}))
 	require.False(t, readEntry(t, cache, 150, 100).done, "a range left the cache")
+}
+
+// covering and containing on the sorted snapshots return what a scan of every range of
+// the object returns, as ranges are added and removed.
+func TestCachedRangesMatchFullScan(t *testing.T) {
+	scanCovering := func(ranges []cachedRange, offset, size int64) ([]cachedRange, bool) {
+		var out []cachedRange
+		for pos, end := offset, offset+size; pos < end; {
+			var best cachedRange
+			ok := false
+			for _, r := range ranges {
+				if r.offset <= pos && pos < r.offset+r.size && (!ok || r.offset+r.size > best.offset+best.size) {
+					best, ok = r, true
+				}
+			}
+			if !ok {
+				return nil, false
+			}
+			out = append(out, best)
+			pos = best.offset + best.size
+		}
+		return out, true
+	}
+	ends := func(rs []cachedRange) []int64 {
+		out := make([]int64, 0, len(rs))
+		for _, r := range rs {
+			out = append(out, r.offset+r.size)
+		}
+		return out
+	}
+	rnd := rand.New(rand.NewSource(1))
+	for round := 0; round < 50; round++ {
+		var c cachedRanges
+		var all []cachedRange
+		for i := 0; i < 1+rnd.Intn(40); i++ {
+			r := cachedRange{diskPath: strconv.Itoa(i), offset: int64(rnd.Intn(1000)), size: int64(1 + rnd.Intn(200))}
+			all = append(all, r)
+			c.mu.Lock()
+			if c.objectOf == nil {
+				c.objectOf = make(map[string]string)
+			}
+			c.objectOf[r.diskPath] = "k"
+			var rs []cachedRange
+			if s := c.snapshot("k"); s != nil {
+				rs = slices.Clone(s.ranges)
+			}
+			c.byObject.Store("k", newRangeSnapshot(append(rs, r)))
+			c.mu.Unlock()
+		}
+		check := func() {
+			for q := 0; q < 200; q++ {
+				offset, size := int64(rnd.Intn(1200)), int64(1+rnd.Intn(300))
+				got, ok := c.covering("k", offset, size)
+				want, wantOK := scanCovering(all, offset, size)
+				require.Equal(t, wantOK, ok)
+				// Ties between ranges reaching as far may pick either; the ends are the same.
+				require.Equal(t, ends(want), ends(got))
+				gotC, okC := c.containing("k", offset, size, nil)
+				wantC, wantOKC := smallestContaining(all, offset, size, nil)
+				require.Equal(t, wantOKC, okC)
+				require.Equal(t, wantC.size, gotC.size)
+			}
+		}
+		check()
+		for len(all) > 0 && rnd.Intn(3) > 0 {
+			i := rnd.Intn(len(all))
+			c.remove(all[i].diskPath)
+			all = slices.Delete(all, i, i+1)
+			check()
+		}
+	}
 }

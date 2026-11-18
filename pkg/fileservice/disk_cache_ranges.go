@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -32,11 +33,44 @@ type cachedRange struct {
 }
 
 // cachedRanges indexes the cached range files by object, so a read can find a cached
-// range that contains its own.
+// range that contains its own. Reads take no lock: each object's ranges are a snapshot
+// that add and remove replace.
 type cachedRanges struct {
-	mu       sync.Mutex
-	byObject map[string][]cachedRange
-	objectOf map[string]string // diskPath -> object key
+	mu       sync.Mutex        // held by add and remove
+	byObject sync.Map          // object key -> *rangeSnapshot
+	objectOf map[string]string // diskPath -> object key, under mu
+}
+
+// rangeSnapshot is the cached ranges of an object, sorted by offset. reach[i] is the index
+// of the range among the first i+1 that reaches furthest.
+type rangeSnapshot struct {
+	ranges []cachedRange
+	reach  []int
+}
+
+func newRangeSnapshot(ranges []cachedRange) *rangeSnapshot {
+	slices.SortFunc(ranges, func(a, b cachedRange) int { return cmp.Compare(a.offset, b.offset) })
+	reach := make([]int, len(ranges))
+	for i := range ranges {
+		reach[i] = i
+		if i > 0 && ranges[reach[i-1]].offset+ranges[reach[i-1]].size >= ranges[i].offset+ranges[i].size {
+			reach[i] = reach[i-1]
+		}
+	}
+	return &rangeSnapshot{ranges: ranges, reach: reach}
+}
+
+func (c *cachedRanges) snapshot(key string) *rangeSnapshot {
+	if v, ok := c.byObject.Load(key); ok {
+		return v.(*rangeSnapshot)
+	}
+	return nil
+}
+
+// startingBy returns the number of ranges that start at or before pos.
+func (s *rangeSnapshot) startingBy(pos int64) int {
+	n, _ := slices.BinarySearchFunc(s.ranges, pos+1, func(r cachedRange, t int64) int { return cmp.Compare(r.offset, t) })
+	return n
 }
 
 // rangeObjectKey returns the key of the range files of filePath: their disk path without
@@ -96,12 +130,16 @@ func (c *cachedRanges) add(root, diskPath string) {
 	if _, ok := c.objectOf[diskPath]; ok {
 		return
 	}
-	if c.byObject == nil {
-		c.byObject = make(map[string][]cachedRange)
+	if c.objectOf == nil {
 		c.objectOf = make(map[string]string)
 	}
 	c.objectOf[diskPath] = key
-	c.byObject[key] = append(c.byObject[key], cachedRange{diskPath: diskPath, offset: offset, size: size})
+	var ranges []cachedRange
+	if old := c.snapshot(key); old != nil {
+		ranges = slices.Clone(old.ranges)
+	}
+	ranges = append(ranges, cachedRange{diskPath: diskPath, offset: offset, size: size})
+	c.byObject.Store(key, newRangeSnapshot(ranges))
 }
 
 // remove forgets the range file at diskPath.
@@ -113,38 +151,36 @@ func (c *cachedRanges) remove(diskPath string) {
 		return
 	}
 	delete(c.objectOf, diskPath)
-	ranges := c.byObject[key]
-	for i := range ranges {
-		if ranges[i].diskPath == diskPath {
-			ranges[i] = ranges[len(ranges)-1]
-			ranges = ranges[:len(ranges)-1]
-			break
-		}
+	old := c.snapshot(key)
+	if old == nil {
+		return
 	}
+	ranges := slices.DeleteFunc(slices.Clone(old.ranges), func(r cachedRange) bool { return r.diskPath == diskPath })
 	if len(ranges) == 0 {
-		delete(c.byObject, key)
-	} else {
-		c.byObject[key] = ranges
+		c.byObject.Delete(key)
+		return
 	}
+	c.byObject.Store(key, newRangeSnapshot(ranges))
 }
 
 // covering returns cached ranges of the object with key that together hold size bytes
 // at offset, in order, each starting where the one before it ends or earlier, or false
-// if the cached ranges leave a gap.
+// if the cached ranges leave a gap. Each range is the one that reaches furthest of those
+// holding the byte where it starts.
 func (c *cachedRanges) covering(key string, offset, size int64) ([]cachedRange, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	s := c.snapshot(key)
+	if s == nil {
+		return nil, false
+	}
 	var out []cachedRange
 	end := offset + size
 	for pos := offset; pos < end; {
-		var best cachedRange
-		ok := false
-		for _, r := range c.byObject[key] {
-			if r.offset <= pos && pos < r.offset+r.size && (!ok || r.offset+r.size > best.offset+best.size) {
-				best, ok = r, true
-			}
+		n := s.startingBy(pos)
+		if n == 0 {
+			return nil, false
 		}
-		if !ok {
+		best := s.ranges[s.reach[n-1]]
+		if best.offset+best.size <= pos {
 			return nil, false
 		}
 		out = append(out, best)
@@ -156,16 +192,19 @@ func (c *cachedRanges) covering(key string, offset, size int64) ([]cachedRange, 
 // containing returns the smallest cached range of the object with key that contains
 // size bytes at offset, passing over the range files in tried.
 func (c *cachedRanges) containing(key string, offset, size int64, tried []string) (cachedRange, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return smallestContaining(c.byObject[key], offset, size, tried)
+	s := c.snapshot(key)
+	if s == nil {
+		return cachedRange{}, false
+	}
+	return smallestContaining(s.ranges[:s.startingBy(offset)], offset, size, tried)
 }
 
 // of returns a copy of the cached ranges of the object with key.
 func (c *cachedRanges) of(key string) []cachedRange {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slices.Clone(c.byObject[key])
+	if s := c.snapshot(key); s != nil {
+		return slices.Clone(s.ranges)
+	}
+	return nil
 }
 
 // smallestContaining returns the smallest of ranges that contains size bytes at offset,

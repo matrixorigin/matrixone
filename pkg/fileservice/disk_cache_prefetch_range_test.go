@@ -137,9 +137,10 @@ func TestS3FSPrefetchRangeCachesOnlyTheRange(t *testing.T) {
 	fs.diskCache.ranges.mu.Lock()
 	defer fs.diskCache.ranges.mu.Unlock()
 	var ranges []cachedRange
-	for _, rs := range fs.diskCache.ranges.byObject {
-		ranges = append(ranges, rs...)
-	}
+	fs.diskCache.ranges.byObject.Range(func(_, v any) bool {
+		ranges = append(ranges, v.(*rangeSnapshot).ranges...)
+		return true
+	})
 	require.Len(t, ranges, 1)
 	require.Equal(t, int64(4096), ranges[0].offset)
 	require.Equal(t, int64(4096), ranges[0].size)
