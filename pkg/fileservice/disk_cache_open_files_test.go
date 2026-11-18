@@ -201,3 +201,35 @@ func TestDiskCacheMissingPathForgottenOnWrite(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte("abc"), got)
 }
+
+// disk-open-files-max bounds the files kept open by the disk cache and by the index-file
+// cache; unset, it is DefaultDiskOpenFilesMax.
+func TestDiskOpenFilesMaxConfig(t *testing.T) {
+	config := indexCacheConfig(t, 64<<20, 64<<20)
+	require.Equal(t, DefaultDiskOpenFilesMax, config.diskOpenFilesMax())
+	limit := 3
+	config.DiskOpenFilesMax = &limit
+	caches := newTestFileServiceCaches(t, config)
+	require.Equal(t, 3, caches.disk.updatingPaths.openFiles.limit)
+	require.Equal(t, 3, caches.index.disk.updatingPaths.openFiles.limit)
+}
+
+// disk-open-files-max 0 keeps no file open and notes no path missing: every read opens the
+// files it reads.
+func TestDiskOpenFilesMaxZeroDisablesPool(t *testing.T) {
+	config := indexCacheConfig(t, 64<<20, 64<<20)
+	zero := 0
+	config.DiskOpenFilesMax = &zero
+	cache := newTestFileServiceCaches(t, config).disk
+	ctx := context.Background()
+	_, ok := readTestEntry(t, ctx, cache, "foo", 3)
+	require.False(t, ok)
+	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 3, Data: []byte("abc")}}}, false))
+	got, ok := readTestEntry(t, ctx, cache, "foo", 3)
+	require.True(t, ok)
+	require.Equal(t, []byte("abc"), got)
+	cache.updatingPaths.L.Lock()
+	defer cache.updatingPaths.L.Unlock()
+	require.Empty(t, cache.updatingPaths.openFiles.m)
+	require.Empty(t, cache.updatingPaths.openFiles.missing)
+}

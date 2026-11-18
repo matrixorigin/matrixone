@@ -191,6 +191,9 @@ type diskCacheOptions struct {
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject; 0 is
 	// DefaultDiskPrefetchMemoryMax.
 	memoryPrefetchMax int64
+	// openFilesMax is the most cache files kept open for later reads; 0 is
+	// DefaultDiskOpenFilesMax, and less keeps none.
+	openFilesMax int
 }
 
 func newDiskCache(
@@ -290,6 +293,7 @@ func newDiskCache(
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
 	ret.updatingPaths.readGenerations = make(map[string]diskCachePathReadGeneration)
+	ret.updatingPaths.openFiles.limit = opts.openFilesMax
 	ret.initAsyncUpdates()
 	ret.initWriteFailureState()
 	loadCtx, loadCancel := context.WithCancel(ctx)

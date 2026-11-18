@@ -65,9 +65,12 @@ type CacheConfig struct {
 	// MemoryPrefetchObject; a larger one downloads to a file, as a FilePrefetchObject.
 	// Default DefaultDiskPrefetchMemoryMax, at least minDiskPrefetchMemoryMax.
 	DiskPrefetchMemoryMax *toml.ByteSize `toml:"disk-prefetch-memory-max"`
-	RemoteCacheEnabled    bool           `toml:"remote-cache-enabled"`
-	RPC                   morpc.Config   `toml:"rpc"`
-	CheckOverlaps         bool           `toml:"check-overlaps"`
+	// DiskOpenFilesMax is the most cache files the disk cache, and apart the index-file
+	// cache, keep open for later reads; 0 keeps none. Default DefaultDiskOpenFilesMax.
+	DiskOpenFilesMax   *int         `toml:"disk-open-files-max"`
+	RemoteCacheEnabled bool         `toml:"remote-cache-enabled"`
+	RPC                morpc.Config `toml:"rpc"`
+	CheckOverlaps      bool         `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -172,6 +175,7 @@ func newFileServiceCaches(
 			rebuildPolicy:  rebuildPolicy,
 			idleTTL:        idleTTL,
 			checkOnStartup: config.IndexFileCheckOnStartup,
+			openFilesMax:   config.diskOpenFilesMax(),
 		}, name+"-index-file", config.MetricScope)
 		if err != nil {
 			return caches, err
@@ -198,6 +202,7 @@ func newFileServiceCaches(
 				prefetchRange:        prefetchRangeConfig{on: true},
 				objectSplit:          config.diskObjectSplit(),
 				memoryPrefetchMax:    config.diskPrefetchMemoryMax(),
+				openFilesMax:         config.diskOpenFilesMax(),
 			},
 		)
 		if err != nil {
@@ -259,6 +264,20 @@ const (
 	// minDiskPrefetchMemoryMax is the least DiskPrefetchMemoryMax.
 	minDiskPrefetchMemoryMax = 8 << 20
 )
+
+// DefaultDiskOpenFilesMax is the default DiskOpenFilesMax.
+const DefaultDiskOpenFilesMax = 512
+
+// diskOpenFilesMax returns the openFilesMax option of DiskOpenFilesMax: -1 keeps none.
+func (c *CacheConfig) diskOpenFilesMax() int {
+	if c.DiskOpenFilesMax == nil {
+		return DefaultDiskOpenFilesMax
+	}
+	if *c.DiskOpenFilesMax <= 0 {
+		return -1
+	}
+	return *c.DiskOpenFilesMax
+}
 
 func (c *CacheConfig) diskPrefetchMemoryMax() int64 {
 	if c.DiskPrefetchMemoryMax != nil && *c.DiskPrefetchMemoryMax > 0 {

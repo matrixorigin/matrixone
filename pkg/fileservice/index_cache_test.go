@@ -487,7 +487,7 @@ func TestIndexFileCacheReleaseSuperseded(t *testing.T) {
 		requireEntryDir(t, c, "b", superseded)
 	}
 
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -619,7 +619,7 @@ func ageEntry(t *testing.T, c *IndexFileCache, name string, age time.Duration) {
 // used first, until enough is freed to reach the target, whatever the idle TTL.
 func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 	ctx := context.Background()
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, 0)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, 0, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -686,7 +686,7 @@ func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
+	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -734,7 +734,7 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 // watches free space.
 func TestIndexFileCacheGCLoop(t *testing.T) {
 	ctx := context.Background()
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	_, err = c.Put(ctx, "e", indexCacheEntry([]byte("e")))

@@ -124,7 +124,7 @@ func NewIndexFileCache(
 	name string,
 	rebuildPolicy Policy,
 ) (*IndexFileCache, error) {
-	return newIndexFileCache(ctx, path, capacity, name, "", rebuildPolicy, 0)
+	return newIndexFileCache(ctx, path, capacity, name, "", rebuildPolicy, 0, 0)
 }
 
 func newIndexFileCache(
@@ -135,9 +135,10 @@ func newIndexFileCache(
 	metricScope string,
 	rebuildPolicy Policy,
 	idleTTL time.Duration,
+	openFilesMax int,
 ) (*IndexFileCache, error) {
 	disk, err := newDiskCache(ctx, path, capacity, nil, true, nil, name, metricScope,
-		diskCacheOptions{dirEntries: true})
+		diskCacheOptions{dirEntries: true, openFilesMax: openFilesMax})
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +159,7 @@ type indexFileCacheSettings struct {
 	rebuildPolicy  Policy
 	idleTTL        time.Duration
 	checkOnStartup bool
+	openFilesMax   int
 }
 
 type sharedIndexFileCache struct {
@@ -207,7 +209,7 @@ func acquireIndexFileCache(
 		return e.cache, nil
 	}
 	c, err := newIndexFileCache(ctx, settings.path, fscache.ConstCapacity(settings.capacity),
-		name, metricScope, settings.rebuildPolicy, settings.idleTTL)
+		name, metricScope, settings.rebuildPolicy, settings.idleTTL, settings.openFilesMax)
 	if err != nil {
 		return nil, err
 	}

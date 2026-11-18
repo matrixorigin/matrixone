@@ -19,12 +19,8 @@ import (
 	"os"
 )
 
-const (
-	// diskCacheOpenFilesMax is the most cache files kept open for later reads.
-	diskCacheOpenFilesMax = 1024
-	// diskCacheMissingPathsMax is the most paths noted missing; past it they are forgotten.
-	diskCacheMissingPathsMax = 1 << 16
-)
+// diskCacheMissingPathsMax is the most paths noted missing; past it they are forgotten.
+const diskCacheMissingPathsMax = 1 << 16
 
 // openCacheFile is a cache file kept open for the reads of its path.
 type openCacheFile struct {
@@ -45,7 +41,8 @@ type openFilePool struct {
 	// missing are the paths a read found no file at, until they change.
 	missing map[string]struct{}
 	takes   uint64
-	// limit, when set, is the most files kept instead of diskCacheOpenFilesMax.
+	// limit, when set, is the most files kept instead of DefaultDiskOpenFilesMax; less than
+	// 0 keeps none and notes no path missing.
 	limit int
 }
 
@@ -61,13 +58,13 @@ func (o *openFilePool) takeLocked(path string) *openCacheFile {
 	return f
 }
 
-// keepLocked keeps file open for path, held for the read that opened it. With the most
-// files kept and all held, it keeps nothing and returns nil.
+// keepLocked keeps file open for path, held for the read that opened it. With no file to
+// keep, or the most files kept and all held, it keeps nothing and returns nil.
 func (o *openFilePool) keepLocked(path string, file *os.File) (kept *openCacheFile, closeFile *os.File) {
-	if o.m[path] != nil {
+	if o.limit < 0 || o.m[path] != nil {
 		return nil, nil
 	}
-	if len(o.m) >= cmp.Or(o.limit, diskCacheOpenFilesMax) {
+	if len(o.m) >= cmp.Or(o.limit, DefaultDiskOpenFilesMax) {
 		var lru string
 		var oldest *openCacheFile
 		for p, f := range o.m {
@@ -108,6 +105,9 @@ func (o *openFilePool) missingLocked(path string) bool {
 
 // noteMissingLocked notes that path has no file.
 func (o *openFilePool) noteMissingLocked(path string) {
+	if o.limit < 0 {
+		return
+	}
 	if o.missing == nil || len(o.missing) >= diskCacheMissingPathsMax {
 		o.missing = make(map[string]struct{})
 	}
