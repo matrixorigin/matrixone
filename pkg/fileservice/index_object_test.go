@@ -356,3 +356,17 @@ func TestIndexObjectReadKeepsFileOpen(t *testing.T) {
 	_, err = first.file.Stat()
 	require.ErrorIs(t, err, os.ErrClosed)
 }
+
+// An IndexFileObject read of an object the index-file cache holds coordinates its shared
+// decode as a read of an object the disk cache holds does; a read without the policy, or
+// of an object not held, does not.
+func TestIndexObjectSharedDecodeFillEligibility(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	vec := func(policy Policy) *IOVector {
+		return &IOVector{FilePath: "object", Policy: policy, Entries: []IOEntry{{Offset: 0, Size: 10}}}
+	}
+	require.False(t, fs.sharedDecodeIndexFillAvailable(vec(IndexFileObject)))
+	cacheIndexObject(t, fs, "object", data)
+	require.True(t, fs.sharedDecodeIndexFillAvailable(vec(IndexFileObject)))
+	require.False(t, fs.sharedDecodeIndexFillAvailable(vec(0)))
+}

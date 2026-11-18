@@ -473,6 +473,16 @@ func sharedDecodeDiskFillAvailable(d *DiskCache, path string, vector *IOVector) 
 	return len(vector.Entries) == 1 && d.cache.Contains(d.pathForIOEntry(path, vector.Entries[0]))
 }
 
+// sharedDecodeIndexFillAvailable reports whether the index-file cache holds the object of
+// an index-object read, which then fills the memory cache as a read of the disk cache does.
+func (s *S3FS) sharedDecodeIndexFillAvailable(vector *IOVector) bool {
+	if !vector.Policy.Any(IndexFileObject) || !s.cachesIndexObjects() {
+		return false
+	}
+	_, ok := s.indexObjectCached(vector.FilePath)
+	return ok
+}
+
 // prepareSharedDecode is called only after a memory-cache miss. The wrapper
 // shares conversion, not I/O or cache-update outcomes. Its finalizer runs after
 // the enclosing read's deferred cache updates and transfers the ticket to the
@@ -527,7 +537,7 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 	var fill *decodedFillTicket
 	fillAttempted := false
 	if coordinateFill && !vector.Policy.Any(SkipDiskCacheReads) &&
-		sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) {
+		(sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) || s.sharedDecodeIndexFillAvailable(vector)) {
 		mayStart := sharedDecodeFillMayStart(s.memCache, entry.CachedDataSize)
 		if vector.Policy.Any(MemoryCacheNoEvict) && s.memCache.cannotReserveWithoutEviction(entry.CachedDataSize) {
 			mayStart = false
