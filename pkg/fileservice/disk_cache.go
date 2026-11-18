@@ -51,6 +51,8 @@ type DiskCache struct {
 		m                  map[string]*diskCachePathUpdate
 		readGenerations    map[string]diskCachePathReadGeneration
 		nextReadGeneration uint64
+		// openFiles are the cache files kept open for later reads.
+		openFiles openFilePool
 	}
 
 	cache        *lrucache.Cache[string, struct{}]
@@ -144,6 +146,8 @@ type diskCachePathReadGeneration struct {
 type openedDiskCacheFile struct {
 	file       *os.File
 	generation uint64
+	// kept is the file kept open for later reads, when the read holds one.
+	kept *openCacheFile
 }
 
 func NewDiskCache(
@@ -572,7 +576,7 @@ func (d *DiskCache) Read(
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
 		for diskPath, opened := range openedFiles {
-			_ = opened.file.Close()
+			d.closeReadFile(opened)
 			d.finishPathRead(diskPath, opened.generation)
 		}
 		LogEvent(ctx, str_close_disk_files_end)
@@ -590,16 +594,10 @@ func (d *DiskCache) Read(
 		if !ok {
 			return openedDiskCacheFile{}, false, false
 		}
-		LogEvent(ctx, str_disk_cache_file_open_begin)
-		diskFile, err := os.Open(diskPath)
-		LogEvent(ctx, str_disk_cache_file_open_end)
-		if err != nil {
+		opened, ok = d.openReadFile(ctx, diskPath, generation)
+		if !ok {
 			d.finishPathRead(diskPath, generation)
 			return openedDiskCacheFile{}, false, false
-		}
-		opened = openedDiskCacheFile{
-			file:       diskFile,
-			generation: generation,
 		}
 		openedFiles[diskPath] = opened
 		return opened, true, true
@@ -641,21 +639,10 @@ func (d *DiskCache) Read(
 		diskPath := d.pathForIOEntry(path.File, *entry)
 		if f, newlyOpened, ok := openPath(diskPath); ok {
 			if newlyOpened {
-				opened = f
-				openedOK = true
 				numOpenIOEntry++
-			} else {
-				LogEvent(ctx, str_disk_cache_file_seek_begin)
-				// An IOEntry cache file contains only this range, so its content
-				// always starts at file offset zero. entry.Offset is only valid for
-				// a full-object cache file.
-				_, err = f.file.Seek(0, io.SeekStart)
-				LogEvent(ctx, str_disk_cache_file_seek_end)
-				if err == nil {
-					opened = f
-					openedOK = true
-				}
 			}
+			opened = f
+			openedOK = true
 		}
 
 		var downloading bool
@@ -678,13 +665,8 @@ func (d *DiskCache) Read(
 					if newlyOpened {
 						numOpenFull++
 					}
-					LogEvent(ctx, str_disk_cache_file_seek_begin)
-					_, err = f.file.Seek(entry.Offset, io.SeekStart)
-					LogEvent(ctx, str_disk_cache_file_seek_end)
-					if err == nil {
-						opened = f
-						openedOK = true
-					}
+					opened = f
+					openedOK = true
 				}
 			}
 		}
@@ -709,10 +691,8 @@ func (d *DiskCache) Read(
 			if newlyOpened {
 				numOpenIOEntry++
 			}
-			if _, err = f.file.Seek(entry.Offset-r.offset, io.SeekStart); err == nil {
-				diskPath, opened, openedOK = r.diskPath, f, true
-				rangeOffset = entry.Offset - r.offset
-			}
+			diskPath, opened, openedOK = r.diskPath, f, true
+			rangeOffset = entry.Offset - r.offset
 		}
 
 		// try cached ranges that hold the entry together
@@ -782,7 +762,8 @@ func (d *DiskCache) Read(
 			readOffset = entry.Offset
 			d.preloads.read(diskPath, entry.Size)
 		}
-		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
+		// Reads of a file kept open share it, so each reads at its own offset.
+		if err := entry.readFrom(ctx, io.NewSectionReader(file, readOffset, readSize), d.cacheDataAllocator); err != nil {
 			return err
 		}
 		fadviseDontNeed(file, readOffset, readSize)
@@ -1481,6 +1462,68 @@ func (d *DiskCache) finishPathRead(
 
 func (d *DiskCache) invalidatePathReadsLocked(path string) {
 	delete(d.updatingPaths.readGenerations, path)
+	if f := d.updatingPaths.openFiles.dropLocked(path); f != nil {
+		_ = f.Close()
+	}
+}
+
+// openReadFile opens the cache file at path for a read whose read generation of the path
+// is generation: the file kept open for the path, or a new one, kept open for later reads.
+// A path noted missing is not opened again until it changes.
+func (d *DiskCache) openReadFile(ctx context.Context, path string, generation uint64) (openedDiskCacheFile, bool) {
+	d.updatingPaths.L.Lock()
+	kept := d.updatingPaths.openFiles.takeLocked(path)
+	missing := kept == nil && d.updatingPaths.openFiles.missingLocked(path)
+	d.updatingPaths.L.Unlock()
+	if kept != nil {
+		return openedDiskCacheFile{file: kept.file, generation: generation, kept: kept}, true
+	}
+	if missing {
+		return openedDiskCacheFile{}, false
+	}
+	LogEvent(ctx, str_disk_cache_file_open_begin)
+	file, err := os.Open(path)
+	LogEvent(ctx, str_disk_cache_file_open_end)
+	// A file is kept, or noted missing, only while the path has not changed since the read
+	// started.
+	current := func() bool {
+		g, ok := d.updatingPaths.readGenerations[path]
+		return ok && g.id == generation && d.updatingPaths.m[path] == nil
+	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			d.updatingPaths.L.Lock()
+			if current() {
+				d.updatingPaths.openFiles.noteMissingLocked(path)
+			}
+			d.updatingPaths.L.Unlock()
+		}
+		return openedDiskCacheFile{}, false
+	}
+	var closeFile *os.File
+	d.updatingPaths.L.Lock()
+	if current() {
+		kept, closeFile = d.updatingPaths.openFiles.keepLocked(path, file)
+	}
+	d.updatingPaths.L.Unlock()
+	if closeFile != nil {
+		_ = closeFile.Close()
+	}
+	return openedDiskCacheFile{file: file, generation: generation, kept: kept}, true
+}
+
+// closeReadFile ends a read's use of its opened file.
+func (d *DiskCache) closeReadFile(opened openedDiskCacheFile) {
+	if opened.kept == nil {
+		_ = opened.file.Close()
+		return
+	}
+	d.updatingPaths.L.Lock()
+	f := d.updatingPaths.openFiles.releaseLocked(opened.kept)
+	d.updatingPaths.L.Unlock()
+	if f != nil {
+		_ = f.Close()
+	}
 }
 
 func (d *DiskCache) tryStartReadReindex(
@@ -1874,6 +1917,12 @@ func (d *DiskCache) Close(ctx context.Context) {
 	d.load.cancel()
 	d.closePrefetches(ctx)
 	d.closeAsyncUpdates(ctx)
+	d.updatingPaths.L.Lock()
+	files := d.updatingPaths.openFiles.dropAllLocked()
+	d.updatingPaths.L.Unlock()
+	for _, f := range files {
+		_ = f.Close()
+	}
 	select {
 	case <-d.load.done:
 	case <-ctx.Done():
