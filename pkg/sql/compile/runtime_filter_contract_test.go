@@ -261,14 +261,27 @@ func TestReaderDeduplicatesOnlyStaticFilters(t *testing.T) {
 	}
 }
 
-func blockFilterStringInsert(t testing.TB, c *Compile, predicate string) *plan.Node {
+func blockFilterTestScan(t testing.TB, c *Compile, predicate string, ordinary bool) *plan.Node {
 	ctx := &blockFilterInsertContext{CompilerContext: plan2.NewMockCompilerContext(true), proc: c.proc}
-	stmt, err := mysql.ParseOne(c.proc.Ctx, "insert into nation2 select * from nation where "+predicate, 1)
+	sql := "select * from nation where " + predicate
+	if !ordinary {
+		sql = "insert into nation2 " + sql
+	}
+	stmt, err := mysql.ParseOne(c.proc.Ctx, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	pn, err := plan2.BuildPlan(ctx, stmt, false)
+	var qry *plan.Query
+	if ordinary {
+		qry, err = plan2.NewBaseOptimizer(ctx).Optimize(stmt, false)
+	} else {
+		var pn *plan.Plan
+		pn, err = plan2.BuildPlan(ctx, stmt, false)
+		if err == nil {
+			qry = pn.GetQuery()
+		}
+	}
 	require.NoError(t, err)
-	for _, node := range pn.GetQuery().Nodes {
+	for _, node := range qry.Nodes {
 		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Name == "nation" {
 			return node
 		}
@@ -280,7 +293,7 @@ func blockFilterStringInsert(t testing.TB, c *Compile, predicate string) *plan.N
 func TestReaderStringInLogicalIdentity(t *testing.T) {
 	c := newBlockFilterCompile(t)
 	a, b := strings.Repeat("a", 30), strings.Repeat("b", 30)
-	node := blockFilterStringInsert(t, c, "n_name in ('"+a+"','"+b+"') and n_name in ('"+b+"','"+a+"')")
+	node := blockFilterTestScan(t, c, "n_name in ('"+a+"','"+b+"') and n_name in ('"+b+"','"+a+"')", false)
 	filters := plan2.DeepCopyExprList(node.BlockFilterList)
 	require.Len(t, filters, 4, "真实 BuildPlan 保留两种顺序各自的 List/Vec")
 	for _, f := range filters {
@@ -306,11 +319,78 @@ func TestReaderStringInLogicalIdentity(t *testing.T) {
 	}
 }
 
+func TestReaderNullableInLogicalDomains(t *testing.T) {
+	for _, ordinary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, predicate string
+			want            int
+		}{
+			{"numeric permutation", "n_regionkey in (1,2,null) and n_regionkey in (2,1,null)", 1},
+			{"string multiplicity", "n_name in ('a','b',null) and n_name in ('b','a','a',null,null)", 1},
+			{"distinct numeric domains", "n_regionkey in (1,2,null) and n_regionkey in (2,3,null)", 2},
+		} {
+			mode := "internal insert/"
+			if ordinary {
+				mode = "ordinary/"
+			}
+			t.Run(mode+tc.name, func(t *testing.T) {
+				c := newBlockFilterCompile(t)
+				node := blockFilterTestScan(t, c, tc.predicate, ordinary)
+				filters := plan2.DeepCopyExprList(node.BlockFilterList)
+				for _, f := range filters {
+					_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
+					require.NoError(t, err)
+				}
+				before := plan2.DeepCopyExprList(filters)
+				s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+				for range 2 {
+					block, err := s.handleRuntimeFilters(c, nil)
+					require.NoError(t, err)
+					require.Len(t, block, tc.want, "只执行一次相同逻辑域，保留不同域")
+					require.Same(t, filters[0], block[0])
+					require.Equal(t, before, s.DataSource.BlockFilterList, "不能改变缓存、NULL对齐或原始payload")
+					for _, f := range block {
+						v := decodeBlockFilterVector(t, c.proc, f)
+						require.True(t, v.GetNulls().Any(), "NULL存在性不能从执行向量中删除")
+					}
+				}
+			})
+		}
+	}
+}
+
+// 普通optimizer已经完成折叠；测量Scope不能再次解码/散列不可能重复的静态过滤。
+func BenchmarkReaderDistinctStaticFilters(b *testing.B) {
+	for _, tc := range []struct{ name, predicate string }{
+		{"numeric plus comparison", "n_regionkey in (1,2) and n_nationkey > 0"},
+		{"different string columns", "n_name in ('a','b') and n_comment in ('a','b')"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			c := newBlockFilterCompile(b)
+			node := blockFilterTestScan(b, c, tc.predicate, true)
+			filters := plan2.DeepCopyExprList(node.BlockFilterList)
+			require.Len(b, filters, 2)
+			for _, f := range filters {
+				_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
+				require.NoError(b, err)
+			}
+			s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+			b.ReportAllocs()
+			for b.Loop() {
+				block, err := s.handleRuntimeFilters(c, nil)
+				if err != nil || len(block) != 2 || block[0] != filters[0] || block[1] != filters[1] {
+					b.Fatalf("distinct static filters changed: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestFoldedStringInPayloadBudget(t *testing.T) {
 	c := newBlockFilterCompile(t)
 	a, b := "'"+strings.Repeat("a", 30)+"'", "'"+strings.Repeat("b", 30)+"'"
 	// 用跨越4KiB的最小量级，100001项仅在显式benchmark中出现。
-	node := blockFilterStringInsert(t, c, "n_name in ("+strings.Repeat(a+",", 137)+b+")")
+	node := blockFilterTestScan(t, c, "n_name in ("+strings.Repeat(a+",", 137)+b+")", false)
 	require.Len(t, node.FilterList, 1)
 	vec := node.FilterList[0].GetF().Args[1].GetVec()
 	require.NotNil(t, vec)

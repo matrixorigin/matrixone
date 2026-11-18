@@ -427,6 +427,77 @@ func TestSmallInPhysicalPayloadBudget(t *testing.T) {
 	}
 }
 
+func TestFinalFixedInLogicalIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.AllocatedBytes())
+	})
+	for _, tc := range []struct {
+		typ  types.T
+		a, b any
+	}{
+		{types.T_bool, false, true},
+		{types.T_int8, int8(1), int8(2)}, {types.T_int16, int16(1), int16(2)},
+		{types.T_int32, int32(1), int32(2)}, {types.T_int64, int64(1), int64(2)},
+		{types.T_uint8, uint8(1), uint8(2)}, {types.T_uint16, uint16(1), uint16(2)},
+		{types.T_uint32, uint32(1), uint32(2)}, {types.T_uint64, uint64(1), uint64(2)},
+		{types.T_decimal64, types.Decimal64(1), types.Decimal64(2)},
+		{types.T_decimal128, types.Decimal128{B0_63: 1}, types.Decimal128{B0_63: 2}},
+		{types.T_decimal256, types.Decimal256{B0_63: 1}, types.Decimal256{B0_63: 2}},
+		{types.T_date, types.Date(1), types.Date(2)}, {types.T_time, types.Time(1), types.Time(2)},
+		{types.T_datetime, types.Datetime(1), types.Datetime(2)},
+		{types.T_timestamp, types.Timestamp(1), types.Timestamp(2)}, {types.T_year, types.MoYear(2001), types.MoYear(2002)},
+	} {
+		t.Run(tc.typ.String(), func(t *testing.T) {
+			makeVec := func(values ...any) *planpb.Expr {
+				v := vector.NewVec(tc.typ.ToType())
+				defer v.Free(mp)
+				for i, value := range values {
+					require.NoError(t, vector.AppendAny(v, value, value == nil, mp))
+					if value == nil {
+						// NULL槽位底层数据不属于逻辑集合，且不一定为零。
+						for j := range v.GetRawBytesAt(i) {
+							v.GetRawBytesAt(i)[j] = byte(i + 7)
+						}
+					}
+				}
+				data, err := v.MarshalBinary()
+				require.NoError(t, err)
+				return &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(v.Length()), Data: data}}}
+			}
+			for _, pair := range []struct {
+				left, right *planpb.Expr
+				equal       bool
+			}{
+				{makeVec(tc.a, tc.b, nil), makeVec(nil, tc.b, tc.a, tc.a, nil), true},
+				{makeVec(tc.a, tc.a), makeVec(tc.a), true},
+				{makeVec(nil), makeVec(nil, nil), true},
+				{makeVec(tc.a, tc.b, nil), makeVec(tc.a, nil), false},
+				{makeVec(tc.a, tc.b, nil), makeVec(tc.a, tc.b), false},
+				{makeVec(), makeVec(nil), false},
+			} {
+				left, right := DeepCopyExpr(pair.left), DeepCopyExpr(pair.right)
+				require.Equal(t, pair.equal, exprStructuralEqual(finalBlockFilterIdentity(left), finalBlockFilterIdentity(right)))
+				require.Equal(t, pair.left, left)
+				require.Equal(t, pair.right, right)
+			}
+		})
+	}
+	unsupported := vector.NewVec(types.T_float64.ToType())
+	defer unsupported.Free(mp)
+	require.NoError(t, vector.AppendFixed(unsupported, 1.0, false, mp))
+	payload, err := unsupported.MarshalBinary()
+	require.NoError(t, err)
+	for _, v := range []*planpb.LiteralVec{
+		nil, {Len: -1}, {Len: 65}, {Len: 1, Data: make([]byte, 4097)}, {Len: 1, Data: []byte{0}},
+		{Len: 1, Data: payload}, {Len: 2, Data: payload},
+	} {
+		expr := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: v}}
+		require.Equal(t, expr, finalBlockFilterIdentity(expr), "畸形/超预算向量保守保留")
+	}
+}
+
 func TestFinalStringInLogicalIdentity(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
@@ -450,8 +521,10 @@ func TestFinalStringInLogicalIdentity(t *testing.T) {
 		}
 		if null {
 			require.NoError(t, vector.AppendBytes(v, nil, true, mp))
+		} else {
+			// 与ConstantFold一致：nullable向量不能直接排序，否则NULL bitmap错位。
+			v.InplaceSortAndCompact()
 		}
-		v.InplaceSortAndCompact()
 		data, err := v.MarshalBinary()
 		require.NoError(t, err)
 		return MakeInExpr(context.Background(), col, int32(v.Length()), data, false)
@@ -464,6 +537,7 @@ func TestFinalStringInLogicalIdentity(t *testing.T) {
 		{"opposite insertion", makeIn([]string{a, b}, false, false, 30), makeIn([]string{b, a}, false, false, 30), 1},
 		{"unreferenced area", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, false, true, 30), 1},
 		{"nullable order", makeIn([]string{a, b}, true, false, 30), makeIn([]string{b, a}, true, false, 30), 1},
+		{"nullable multiplicity", makeIn([]string{a, b}, true, false, 30), makeIn([]string{b, a, a}, true, false, 30), 1},
 		{"different nulls", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, true, false, 30), 2},
 		{"different values", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, c}, false, false, 30), 2},
 		{"different actual type", makeIn([]string{a, b}, false, false, 30), makeIn([]string{a, b}, false, false, 31), 2},
@@ -609,6 +683,9 @@ func TestFinalBlockFiltersPreserveDistinctExpressions(t *testing.T) {
 		{"null bitmap differs", []*planpb.Expr{list(MakePlan2Int64ConstExprWithType(0), bound), list(null, bound), list(null, bound)}, 2},
 		{"same parameter", []*planpb.Expr{list(bound, param(0)), list(bound, param(0))}, 1},
 		{"large static vector unchanged", []*planpb.Expr{list(large...), list(large...)}, 2},
+		// 两个不同成员才能在ConstantFold后保持IN；单成员会改写为等号。
+		{"duplicate plus unrelated comparison", []*planpb.Expr{list(bound, MakePlan2Int64ConstExprWithType(4)), bind("=", col, bound), list(bound, MakePlan2Int64ConstExprWithType(4))}, 2},
+		{"duplicate plus oversized vector", []*planpb.Expr{list(large...), list(bound, MakePlan2Int64ConstExprWithType(4)), list(bound, MakePlan2Int64ConstExprWithType(4))}, 2},
 		{"non IN unchanged", []*planpb.Expr{bind("=", col, bound), bind("=", col, bound)}, 2},
 		{"different parameters", []*planpb.Expr{list(bound, param(0)), list(bound, param(1))}, 2},
 		{"different columns", []*planpb.Expr{bind("=", col, bound), bind("=", GetColExpr(col.Typ, 1, 1), bound)}, 2},

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/binary"
+	"slices"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,11 +103,27 @@ func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	if len(filters) < 2 {
 		return filters
 	}
+	// optimizer与reader共用入口：先按直列分组，不解码/散列不可能重复的域。
+	// 常见的一两个不同列候选无需堆分配；多过滤场景仍为线性预扫描。
+	counts := make(map[[2]int32]int)
+	possible := false
+	for _, filter := range filters {
+		if col := finalBlockFilterCandidateColumn(filter); col != nil {
+			key := [2]int32{col.RelPos, col.ColPos}
+			counts[key]++
+			possible = possible || counts[key] > 1
+		}
+	}
+	if !possible {
+		return filters
+	}
 	buckets := make(map[uint64][]*plan.Expr, len(filters))
 	unique := filters[:0]
 	for _, filter := range filters {
 		// 不把此次修复变成通用表达式去重，也不散列原有大静态向量。
-		if filter.GetF().GetFunc().GetObjName() != "in" || !isSimpleZoneMapFilter(filter) || !zoneMapExprIsStable(filter) {
+		col := finalBlockFilterCandidateColumn(filter)
+		if col == nil || counts[[2]int32{col.RelPos, col.ColPos}] < 2 ||
+			!isSimpleZoneMapFilter(filter) || !zoneMapExprIsStable(filter) {
 			unique = append(unique, filter)
 			continue
 		}
@@ -128,31 +145,24 @@ func DeduplicateFinalBlockFilters(filters []*plan.Expr) []*plan.Expr {
 	return unique
 }
 
+func finalBlockFilterCandidateColumn(expr *plan.Expr) *plan.ColRef {
+	fn := expr.GetF()
+	if fn.GetFunc().GetObjName() != "in" || len(fn.Args) != 2 || fn.Args[0] == nil {
+		return nil
+	}
+	col := fn.Args[0].GetCol()
+	if col == nil || !smallZoneMapInBounds(types.T(fn.Args[0].Typ.Id), fn.Args[1]) {
+		return nil
+	}
+	return col
+}
+
 // 只在通过数量及物理字节预算后构造比较视图，绝不交给 reader。
-// Vec 外层 Typ 可为 tuple；字符串身份取实际 type、NULL 与值，而非 area 偏移。
+// Vec 外层 Typ 可为 tuple；身份取实际 type、NULL 存在性与成员集合。
 func finalBlockFilterIdentity(expr *plan.Expr) *plan.Expr {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Vec:
-		v := vector.TryUnmarshalBinaryVarlena(e.Vec.Data)
-		if v == nil {
-			return &plan.Expr{Expr: e}
-		}
-		values := make([]string, v.Length())
-		for i := range values {
-			if v.IsNull(uint64(i)) {
-				values[i] = "\x00"
-			} else {
-				values[i] = "\x01" + string(v.GetBytesAt(i))
-			}
-		}
-		sort.Strings(values)
-		// 0xff 不是向量 class：私有比较编码不能与未规范的固定长 Vec 混淆。
-		data := append([]byte{0xff}, types.EncodeType(v.GetType())...)
-		for _, value := range values {
-			data = binary.LittleEndian.AppendUint32(data, uint32(len(value)))
-			data = append(data, value...)
-		}
-		return &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: e.Vec.Len, Data: data}}}
+		return finalBlockFilterVectorIdentity(e)
 	case *plan.Expr_F:
 		copyExpr, fn := *expr, *e.F
 		fn.Args = make([]*plan.Expr, len(e.F.Args))
@@ -172,6 +182,42 @@ func finalBlockFilterIdentity(expr *plan.Expr) *plan.Expr {
 	default:
 		return expr
 	}
+}
+
+// 可选去重不能因畸形编码改变执行行为；失败时保留原物理身份。
+func finalBlockFilterVectorIdentity(e *plan.Expr_Vec) (identity *plan.Expr) {
+	identity = &plan.Expr{Expr: e}
+	defer func() {
+		if recover() != nil {
+			identity = &plan.Expr{Expr: e}
+		}
+	}()
+	if e.Vec == nil || e.Vec.Len < 0 || e.Vec.Len > maxZoneMapInCandidates || len(e.Vec.Data) > maxZoneMapInPayloadBytes {
+		return identity
+	}
+	var v vector.Vector
+	data := e.Vec.Data[:len(e.Vec.Data):len(e.Vec.Data)]
+	if err := v.UnmarshalBinary(data); err != nil || v.Length() != int(e.Vec.Len) ||
+		!smallZoneMapInBounds(v.GetType().Oid, identity) {
+		return identity
+	}
+	values := make([]string, v.Length())
+	for i := range values {
+		if v.IsNull(uint64(i)) {
+			values[i] = "\x00"
+		} else {
+			values[i] = "\x01" + string(v.GetRawBytesAt(i))
+		}
+	}
+	sort.Strings(values)
+	values = slices.Compact(values)
+	// 0xff不是向量class，私有集合编码不能与保留的原始payload混淆。
+	data = append([]byte{0xff}, types.EncodeType(v.GetType())...)
+	for _, value := range values {
+		data = binary.LittleEndian.AppendUint32(data, uint32(len(value)))
+		data = append(data, value...)
+	}
+	return &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(len(values)), Data: data}}}
 }
 
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {

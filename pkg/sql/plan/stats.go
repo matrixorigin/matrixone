@@ -1647,19 +1647,12 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 // 字符串只接受已知、可完整放入 ZoneMap 30 字节上界槽的值；未知参数、
 // 长值及二进制族不能假设 AnyIn 已支持截断上界。浮点同样不扩大准入。
 func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
-	const maxCandidates = 64
 	const maxStringBytes = 30
-	// SortAndCompact 可缩短逻辑行数而保留整个 varlen area，不能只检查 Len。
-	const maxPayloadBytes = 4 << 10
-	isString := typ == types.T_char || typ == types.T_varchar
-	if !(typ.IsInteger() || typ.IsDecimal() || typ.IsDateRelate() || typ == types.T_bool || isString) ||
-		types.T(rhs.Typ.Id).IsFloat() {
+	if !smallZoneMapInBounds(typ, rhs) {
 		return false
 	}
+	isString := typ == types.T_char || typ == types.T_varchar
 	if list := rhs.GetList(); list != nil {
-		if len(list.List) > maxCandidates {
-			return false
-		}
 		if isString {
 			for _, item := range list.List {
 				lit := item.GetLit()
@@ -1677,9 +1670,6 @@ func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
 		return isRuntimeConstExpr(rhs)
 	}
 	vec := rhs.GetVec()
-	if vec == nil || vec.Len < 0 || vec.Len > maxCandidates || len(vec.Data) > maxPayloadBytes {
-		return false
-	}
 	if isString {
 		// 只读借用 payload，不复制向量，也不改残余表达式或 NULL bitmap。
 		v := vector.TryUnmarshalBinaryVarlena(vec.Data)
@@ -1693,6 +1683,25 @@ func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+const (
+	maxZoneMapInCandidates   = 64
+	maxZoneMapInPayloadBytes = 4 << 10
+)
+
+// 只看类型/形状/预算，不解码payload；供准入及去重的便宜候选筛选共用。
+func smallZoneMapInBounds(typ types.T, rhs *plan.Expr) bool {
+	if rhs == nil || !(typ.IsInteger() || typ.IsDecimal() || typ.IsDateRelate() ||
+		typ == types.T_bool || typ == types.T_char || typ == types.T_varchar) || types.T(rhs.Typ.Id).IsFloat() {
+		return false
+	}
+	if list := rhs.GetList(); list != nil {
+		return len(list.List) <= maxZoneMapInCandidates
+	}
+	vec := rhs.GetVec()
+	// SortAndCompact 可缩短逻辑行数而保留整个 varlen area，不能只检查 Len。
+	return vec != nil && vec.Len >= 0 && vec.Len <= maxZoneMapInCandidates && len(vec.Data) <= maxZoneMapInPayloadBytes
 }
 
 // This branch's isRuntimeConstExpr also accepts rand() and variable reads.
