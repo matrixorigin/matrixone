@@ -70,10 +70,7 @@ func TestShowMetadataAdmissionIsolation(t *testing.T) {
 	}
 	require.Equal(t, []string{"allowed"}, names("show tables from d"))
 	for _, q := range []string{"show tables from d where exists (select 1 from d.denied)", "show columns from d.allowed where Field = (select cast(id as varchar) from d.denied limit 1)"} {
-		rows, err := reader.QueryContext(ctx, q)
-		if rows != nil {
-			rows.Close()
-		}
+		_, err := reader.ExecContext(ctx, q)
 		require.ErrorContains(t, err, "row-local predicate", q)
 	}
 	_, err = reader.ExecContext(ctx, "select * from d.denied")
