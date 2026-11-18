@@ -3619,8 +3619,10 @@ type projectedColumnSource struct {
 // behavior for them. A set-operation output yields one leaf per branch,
 // and every branch must resolve the same domain before a consumer may
 // recover it: a branch rendering through a different provenance (an
-// explicit TEXT cast) or losing it entirely terminates with false, so
-// heterogeneous set outputs keep their ordinary unprovenanced binding.
+// explicit TEXT cast) or losing it entirely terminates with false. The
+// set-branch exports themselves re-enter their own domains at build time
+// through retypeSetProjectionCeilFloorRender, so this walk commonly meets
+// an already-unified numeric column and leaves it untouched.
 func resolvedProjectedColumnDomain(leaves []*projectedColumnSource) (types.Type, bool) {
 	if len(leaves) == 0 {
 		return types.Type{}, false
@@ -3857,6 +3859,54 @@ func retypeProjectedCeilFloorRenderArgs(b *baseBinder, name string, args []*plan
 		leaves := resolveProjectedColumnSource(b.builder, b.ctx, expr)
 		return resolvedProjectedColumnDomain(leaves)
 	})
+}
+
+// retypeSetProjectionCeilFloorRender recovers the base numeric domain of one
+// exported column of a set-operation branch, or of a CTAS source projection,
+// whose value is a rendered one-argument CEIL/FLOOR result (#32336,
+// #32374, PR #32438 review), replacing the exported entry with the domain
+// cast and reporting the recovered domain. The exported entry is the bound
+// render itself, or a plain column reference that a derived-table/CTE/
+// grouped scope exported from one, resolved one branch at a time through
+// the same provenance leavesOfExpr uses. Recovery never requires
+// cross-branch domain agreement nor a walk budget that scales with the
+// branch count: every branch re-enters its own domain — FLOAT64 for the
+// omitted-length CAST/CONVERT-to-CHAR provenance, exact-integer DECIMAL128
+// for TEXT inputs — so the ordinary common-type rules can unify a rendered
+// branch with numeric literals or explicit-TEXT peers the way the base's
+// numeric outputs unified, and a wide UNION cannot exhaust the walk. A
+// position without an agreeing provenance keeps its ordinary binding.
+func retypeSetProjectionCeilFloorRender(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	nodeID int32,
+	columnIdx int32,
+) (types.Type, bool, error) {
+	if builder == nil || ctx == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return types.Type{}, false, nil
+	}
+	node := builder.qry.Nodes[nodeID]
+	if columnIdx < 0 || int(columnIdx) >= len(node.ProjectList) {
+		return types.Type{}, false, nil
+	}
+	entry := node.ProjectList[columnIdx]
+	if entry == nil {
+		return types.Type{}, false, nil
+	}
+	domain, matched := ceilFloorTextRenderNumericTarget(entry)
+	if !matched && entry.GetCol() != nil {
+		leaves := resolveProjectedColumnSource(builder, ctx, entry)
+		domain, matched = resolvedProjectedColumnDomain(leaves)
+	}
+	if !matched {
+		return types.Type{}, false, nil
+	}
+	numericEntry, err := appendCastBeforeExpr(builder.GetContext(), entry, makePlan2Type(&domain))
+	if err != nil {
+		return types.Type{}, false, err
+	}
+	node.ProjectList[columnIdx] = numericEntry
+	return domain, true, nil
 }
 
 // retypeCeilFloorTextRenderArgs restores the numeric semantics the composed

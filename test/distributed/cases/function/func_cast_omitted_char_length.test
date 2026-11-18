@@ -600,10 +600,16 @@ drop table if exists func_cast_omit_char_ctas3;
 drop table if exists func_cast_omit_char_dom;
 
 -- Set-operation outputs keep every branch's omitted-CHAR numeric domain
--- (#32336, #32374, PR #32438 review): homogeneous render unions keep the
--- base FLOAT64 aggregates and numeric ordering; a mixed-domain branch keeps
--- the ordinary unprovenanced binding, and the explicit-TEXT composition
--- keeps its exact-integer DECIMAL128 route.
+-- (#32336, #32374, PR #32438 review): every union branch that exports a
+-- rendered one-argument CEIL/FLOOR value re-enters its base numeric domain
+-- before the common-type rules compose the columns, the way the base's
+-- numeric branch outputs unified. Homogeneous render unions therefore keep
+-- the base FLOAT64 aggregates, numeric ordering and numeric display
+-- column, mixed-domain branches (a numeric literal, or an explicit-TEXT
+-- exact-integer DECIMAL128 peer) unify through the ordinary numeric
+-- hierarchy instead of failing the outer aggregate, and a wide 56-branch
+-- UNION ALL aggregates without any cross-branch recovery walk or budget;
+-- the explicit-TEXT composition keeps its exact-integer route.
 create table func_cast_omit_char_seto (v varchar(16));
 insert into func_cast_omit_char_seto values ('2'), ('10');
 -- four-row render union aggregate: the frozen base summed 24 over FLOAT64
@@ -612,12 +618,12 @@ select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_s
 select max(n), min(n), avg(n)
   from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
   union all select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
--- numeric ordering: 2 sorts before 10
+-- numeric ordering and numeric output column: 2 sorts before 10
 select n from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
   union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d order by n;
 select n, count(*) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
   union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d group by n order by n;
--- distinct and three-branch variants share the same recovered domain
+-- distinct and three-branch variants share the same unified domain
 select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
   union select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
 select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
@@ -629,12 +635,91 @@ select max(c2) from (select c as c2 from (select ceil(cast(v as char)) as c from
 -- CASE render arms through the boundary keep the base numeric typing
 select sum(c) from (select case when v = '2' then ceil(cast(v as char))
   else floor(convert(v, char)) end as c from func_cast_omit_char_seto) d;
--- mixed-domain branches keep the ordinary binding: the outer aggregate
--- does not assume one branch's domain over the other's
+-- mixed-domain branches unify numerically (mo-bot review round): a
+-- FLOAT64 render branch aggregates with a numeric literal peer and with
+-- the explicit-TEXT branch's exact-integer DECIMAL128 outputs, which the
+-- frozen base summed the same way. The pre-fix digit render lost its
+-- domain at this boundary and SUM rejected the VARCHAR union output.
 create table func_cast_omit_char_setm (v varchar(16));
-insert into func_cast_omit_char_setm values ('2.5');
+insert into func_cast_omit_char_setm values ('2.5'), ('3');
 select sum(c) from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto
   union all select floor(cast(v as text)) as c from func_cast_omit_char_setm) d;
+select sum(c) from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select 1 as c) d;
+-- wide fan-out far beyond the pre-fix recovery-walk budget (48 steps):
+-- per-branch recovery does not walk the branch count from the consumer
+select sum(c) from (
+  select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+  union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+) d;
+-- CTAS of a bare render infers the base numeric column (mo-bot P2 round):
+-- the created column is DOUBLE — the base's CTAS type — not the render's
+-- VARCHAR, so downstream queries read a stored numeric column; the bare
+-- explicit-TEXT render creates its exact-integer DECIMAL128 column
+create table func_cast_omit_char_ctas_bare as select ceil(cast(v as char)) as n from func_cast_omit_char_seto;
+show create table func_cast_omit_char_ctas_bare;
+select n from func_cast_omit_char_ctas_bare order by n;
+select sum(n) as n_sum, max(n) as n_max, avg(n) as n_avg from func_cast_omit_char_ctas_bare;
+drop table if exists func_cast_omit_char_ctas_bare;
+create table func_cast_omit_char_ctas_bare_txt as select floor(cast(v as text)) as n from func_cast_omit_char_setm;
+show create table func_cast_omit_char_ctas_bare_txt;
+select n from func_cast_omit_char_ctas_bare_txt order by n;
+select sum(n) as n_sum from func_cast_omit_char_ctas_bare_txt;
+drop table if exists func_cast_omit_char_ctas_bare_txt;
 drop table if exists func_cast_omit_char_setm;
 -- CEIL over a homogeneous omitted-CHAR widen union composes via FLOAT64:
 -- both '1e40' rows evaluate like the frozen base (review head errored 20301)

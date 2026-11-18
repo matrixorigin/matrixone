@@ -284,6 +284,19 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	rootNode := builder.qry.Nodes[rootId]
 
+	// #32336, #32374 (PR #32438 review): a CTAS source projection that
+	// exports a rendered one-argument CEIL/FLOOR value infers the base
+	// numeric domain for the created column — DOUBLE for the omitted-length
+	// CAST/CONVERT-to-CHAR provenance, exact-integer DECIMAL128 for TEXT
+	// inputs — matching the numeric column the base's CTAS created, so the
+	// recorded schema and downstream numeric consumers keep the base
+	// semantics while the bare SELECT keeps its digit rendering.
+	for i := range rootNode.ProjectList {
+		if _, _, err := retypeSetProjectionCeilFloorRender(builder, bindCtx, rootId, int32(i)); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""

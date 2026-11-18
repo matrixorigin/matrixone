@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -953,15 +954,18 @@ func TestCeilFloorTextRenderNumbersSurviveQueryBoundaries(t *testing.T) {
 
 // TestCeilFloorSetOutputsKeepBaseNumericDomains pins the numeric contract
 // of the omitted-CHAR render/widen provenance through set-operation
-// outputs (PR #32438 review: the mo-bot P1/P2 findings). A set output is
-// the one boundary whose exported column no table binding owns — the
-// outer scope references the set node's own binding tag — so the
-// provenance walk descends the plan node graph and recovers the domain
-// only when every branch leaf agrees with it: the homogeneous omitted-CHAR
-// unions keep the base FLOAT64 semantics for aggregates, ORDER BY,
-// grouped ORDER BY and composed CEIL/FLOOR, while a branch through an
-// explicit TEXT render/cast lost on the base too and keeps the ordinary
-// unprovenanced binding (overload 13 / exact-integer DECIMAL128).
+// outputs (PR #32438 review: the mo-bot P1/P2 findings). Every set branch
+// that exports a rendered one-argument CEIL/FLOOR value re-enters its
+// base numeric domain at build time — FLOAT64 for the omitted-CHAR
+// provenance, exact-integer DECIMAL128 for TEXT inputs — so the ordinary
+// common-type rules unify the branches exactly like the base's numeric
+// outputs: homogeneous and mixed-domain unions keep the base FLOAT64
+// semantics for aggregates, ORDER BY and grouped ORDER BY, and a branch
+// through an explicit TEXT render contributes its exact-integer domain
+// to the same unification instead of failing the outer aggregate. The
+// outer consumer no longer crosses the set boundary through the
+// provenance walk, whose identical-domain requirement and step budget
+// failed valid mixed-domain and wide UNION queries.
 // Control-flow value arms retype the same way before the CASE/IF result
 // unification so the composed outputs keep the base's result typing.
 func TestCeilFloorSetOutputsKeepBaseNumericDomains(t *testing.T) {
@@ -1024,12 +1028,71 @@ func TestCeilFloorSetOutputsKeepBaseNumericDomains(t *testing.T) {
 		"select ceil(c) + 1 from (select cast(vrt as char) as c from text_render_t union all select cast(vrt as text) as c from text_render_t) d",
 		"+", types.T_decimal128)
 
-	// Heterogeneous render unions keep their ordinary binding: the outer
-	// aggregate cannot assume one branch's domain over the other's.
-	_, err = runOneStmt(newMySQLSpecialOrderMock(), t,
-		"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(vt) as c from text_render_t) d")
-	require.Error(t, err,
-		"a marker/TEXT-render union does not collapse to one numeric domain")
+	// Heterogeneous render unions unify numerically (mo-bot review fix):
+	// every branch re-enters its own base domain before the common-type
+	// unification, so the mixed marker/TEXT-render union binds SUM through
+	// FLOAT64 instead of failing with a VARCHAR aggregate argument, the
+	// way the base's numeric branch outputs unified.
+	requirePlanFnResultType(t,
+		"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(vt) as c from text_render_t) d",
+		"sum", types.T_float64)
+	requirePlanFnResultType(t,
+		"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select floor(cast(vrt as text)) as c from text_render_t) d",
+		"sum", types.T_float64)
+	// A numeric-literal branch unifies the same way: the base summed
+	// FLOAT64 over this shape (the marker render previously lost its
+	// domain crossing the set boundary and SUM rejected VARCHAR).
+	requirePlanFnResultType(t,
+		"select sum(c) from (select ceil(cast(vrt as char)) as c from text_render_t union all select 1 as c) d",
+		"sum", types.T_float64)
+	// A wide UNION ALL far beyond the historical provenance-walk budget
+	// (48 steps) still aggregates: per-branch recovery no longer walks
+	// the whole fan-out from the outer consumer.
+	var wideUnion strings.Builder
+	wideUnion.WriteString("select sum(n) from (")
+	for i := 0; i < 56; i++ {
+		if i > 0 {
+			wideUnion.WriteString(" union all ")
+		}
+		wideUnion.WriteString("select ceil(cast(vrt as char)) as n from text_render_t")
+	}
+	wideUnion.WriteString(") d")
+	requirePlanFnResultType(t, wideUnion.String(), "sum", types.T_float64)
+
+	// The plain display of a homogeneous render union now carries the
+	// unified numeric type directly (the VARCHAR union output the review
+	// flagged as a base regression is gone).
+	display, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select c from (select ceil(cast(vrt as char)) as c from text_render_t union all select ceil(cast(vrt as char)) as c from text_render_t) d order by c")
+	require.NoError(t, err)
+	requireSingleSortKeyType(t, display, types.T_float64,
+		"the union output sorts on the unified numeric key")
+	q := display.GetQuery()
+	last := q.Nodes[q.Steps[len(q.Steps)-1]]
+	for _, e := range last.ProjectList {
+		require.Equal(t, int32(types.T_float64), e.Typ.Id,
+			"the union display column keeps the unified numeric type")
+	}
+
+	// CTAS of a bare render infers the base numeric column (mo-bot P2):
+	// the omitted-CHAR provenance creates a DOUBLE column — not the
+	// VARCHAR the render display carries — so downstream queries read a
+	// stored numeric column like on the base.
+	ctas, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"create table repro_ctas_set as select ceil(cast(vrt as char)) as n from text_render_t")
+	require.NoError(t, err)
+	col := ctas.GetDdl().GetCreateTable().TableDef.Cols[0]
+	require.Equal(t, int32(types.T_float64), col.Typ.Id,
+		"CTAS of a bare omitted-CHAR render infers the base DOUBLE column")
+	require.Equal(t, "n", col.Name)
+	// The explicit-TEXT render creates its established exact-integer
+	// DECIMAL128 column.
+	ctasText, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"create table repro_ctas_text as select ceil(vt) as n from text_render_t")
+	require.NoError(t, err)
+	col = ctasText.GetDdl().GetCreateTable().TableDef.Cols[0]
+	require.Equal(t, int32(types.T_decimal128), col.Typ.Id,
+		"CTAS of a bare TEXT render infers the exact-integer DECIMAL128 column")
 
 	// Control-flow value arms: the render arm retypes to its own base
 	// domain before the CASE/IF result unification, so the composed case

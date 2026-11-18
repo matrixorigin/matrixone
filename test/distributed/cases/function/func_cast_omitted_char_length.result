@@ -639,16 +639,16 @@ union all select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
 10.0  ¦  2.0  ¦  6.0
 select n from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
 union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d order by n;
-➤ n[12,-1,0]  𝄀
-2  𝄀
-2  𝄀
-10  𝄀
-10
+➤ n[8,54,0]  𝄀
+2.0  𝄀
+2.0  𝄀
+10.0  𝄀
+10.0
 select n, count(*) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
 union all select ceil(cast(v as char)) as n from func_cast_omit_char_seto) d group by n order by n;
-➤ n[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
-2  ¦  2  𝄀
-10  ¦  2
+➤ n[8,54,0]  ¦  count(*)[-5,64,0]  𝄀
+2.0  ¦  2  𝄀
+10.0  ¦  2
 select sum(n) from (select ceil(cast(v as char)) as n from func_cast_omit_char_seto
 union select ceil(convert(v, char)) as n from func_cast_omit_char_seto) d;
 ➤ sum(n)[8,54,0]  𝄀
@@ -667,10 +667,103 @@ else floor(convert(v, char)) end as c from func_cast_omit_char_seto) d;
 ➤ sum(c)[8,54,0]  𝄀
 12.0
 create table func_cast_omit_char_setm (v varchar(16));
-insert into func_cast_omit_char_setm values ('2.5');
+insert into func_cast_omit_char_setm values ('2.5'), ('3');
 select sum(c) from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto
 union all select floor(cast(v as text)) as c from func_cast_omit_char_setm) d;
-invalid argument aggregate function sum, bad value [VARCHAR]
+➤ sum(c)[8,54,0]  𝄀
+17.0
+select sum(c) from (select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select 1 as c) d;
+➤ sum(c)[8,54,0]  𝄀
+13.0
+select sum(c) from (
+select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+union all select ceil(cast(v as char)) as c from func_cast_omit_char_seto
+) d;
+➤ sum(c)[8,54,0]  𝄀
+672.0
+create table func_cast_omit_char_ctas_bare as select ceil(cast(v as char)) as n from func_cast_omit_char_seto;
+show create table func_cast_omit_char_ctas_bare;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas_bare  ¦  CREATE TABLE `func_cast_omit_char_ctas_bare` (
+  `n` double DEFAULT NULL
+)
+select n from func_cast_omit_char_ctas_bare order by n;
+➤ n[8,54,0]  𝄀
+2.0  𝄀
+10.0
+select sum(n) as n_sum, max(n) as n_max, avg(n) as n_avg from func_cast_omit_char_ctas_bare;
+➤ n_sum[8,54,0]  ¦  n_max[8,54,0]  ¦  n_avg[8,54,0]  𝄀
+12.0  ¦  10.0  ¦  6.0
+drop table if exists func_cast_omit_char_ctas_bare;
+create table func_cast_omit_char_ctas_bare_txt as select floor(cast(v as text)) as n from func_cast_omit_char_setm;
+show create table func_cast_omit_char_ctas_bare_txt;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas_bare_txt  ¦  CREATE TABLE `func_cast_omit_char_ctas_bare_txt` (
+  `n` decimal(38,0) DEFAULT NULL
+)
+select n from func_cast_omit_char_ctas_bare_txt order by n;
+➤ n[3,38,0]  𝄀
+2  𝄀
+3
+select sum(n) as n_sum from func_cast_omit_char_ctas_bare_txt;
+➤ n_sum[3,38,0]  𝄀
+5
+drop table if exists func_cast_omit_char_ctas_bare_txt;
 drop table if exists func_cast_omit_char_setm;
 create table func_cast_omit_char_setw (v varchar(16));
 insert into func_cast_omit_char_setw values ('1e40');

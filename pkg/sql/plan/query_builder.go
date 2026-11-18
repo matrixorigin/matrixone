@@ -3549,6 +3549,27 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// reset all select's return Projection(type cast up)
 	// we use coalesce function's type check&type cast rule
 	for columnIdx, argsType := range projectTypList {
+		// #32336, #32374 (PR #32438 review): every branch that exports a
+		// rendered one-argument CEIL/FLOOR value re-enters its base numeric
+		// domain HERE, before the common-type unification below composes
+		// the branches: the base produced numeric CEIL/FLOOR outputs in
+		// every set branch, so mixing a render with numeric literals or
+		// explicit-TEXT peers must keep unifying numerically, branch by
+		// branch. The per-branch recovery replaces the outer consumer's
+		// cross-branch provenance walk for set outputs, whose
+		// identical-domain requirement and step budget failed valid
+		// mixed-domain and wide (56-branch) UNION queries.
+		for idx := range nodes {
+			domain, retyped, err := retypeSetProjectionCeilFloorRender(
+				builder, subCtxList[idx], nodes[idx], int32(columnIdx),
+			)
+			if err != nil {
+				return 0, err
+			}
+			if retyped {
+				argsType[idx] = domain
+			}
+		}
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
