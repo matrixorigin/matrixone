@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -149,19 +151,21 @@ func roleRuleCacheVersion(ctx context.Context, ses *Session) (disttae.PrivilegeC
 type rewriteRuleIdentity struct {
 	account, user, role uint32
 	secondary           bool
+	sqlMode             string
 }
 
 func rewriteRuleSessionIdentity(ses *Session) rewriteRuleIdentity {
-	return rewriteRuleTenantIdentity(ses.GetTenantInfo())
+	return rewriteRuleIdentityForTenant(ses, ses.GetTenantInfo())
 }
 
-func rewriteRuleTenantIdentity(tenant *TenantInfo) rewriteRuleIdentity {
+func rewriteRuleIdentityForTenant(ses *Session, tenant *TenantInfo) rewriteRuleIdentity {
 	if tenant == nil {
 		return rewriteRuleIdentity{}
 	}
+	sqlMode := sessionSQLModeForParser(ses)
 	tenant.mu.Lock()
 	defer tenant.mu.Unlock()
-	return rewriteRuleIdentity{tenant.TenantID, tenant.UserID, tenant.DefaultRoleID, tenant.useAllSecondaryRole}
+	return rewriteRuleIdentity{account: tenant.TenantID, user: tenant.UserID, role: tenant.DefaultRoleID, secondary: tenant.useAllSecondaryRole, sqlMode: sqlMode}
 }
 
 type rewritePolicyRequestKey struct{}
@@ -202,7 +206,7 @@ func preparedPolicyAlreadyRefreshedLocked(ctx context.Context, ses *Session) boo
 	if r == nil {
 		return false
 	}
-	identity := rewriteRuleTenantIdentity(ses.tenant)
+	identity := rewriteRuleIdentityForTenant(ses, ses.tenant)
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
 	r.mu.Lock()
@@ -284,6 +288,11 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		cachedVersion := ses.ruleCacheVersion
 		revision := ses.ruleCacheRevision
 		cachedIdentity := ses.ruleCacheIdentity
+		// An empty catalog result is independent of parser mode and remains
+		// reusable while the same catalog proof is current.
+		if len(ses.ruleCache) == 0 {
+			cachedIdentity.sqlMode = identity.sqlMode
+		}
 		ses.ruleCacheMu.RUnlock()
 
 		var version any
@@ -336,7 +345,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 
 		// The proof precedes this independent snapshot read. A later commit can
 		// only make this stamp conservative; it cannot bless older rules as new.
-		rules, err := loadRuleCache(ctx, ses)
+		rules, err := loadRuleCache(ctx, ses, identity.sqlMode)
 		if err != nil {
 			return fail(err)
 		}
@@ -990,7 +999,7 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
 // associated with the current user's active roles and returns them as a map.
-func loadRuleCache(ctx context.Context, ses *Session) (_ map[string]string, retErr error) {
+func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[string]string, retErr error) {
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		return map[string]string{}, nil
@@ -1085,7 +1094,7 @@ func loadRuleCache(ctx context.Context, ses *Session) (_ map[string]string, retE
 
 	for _, row := range ruleRows {
 		if existingRule, ok := rules[row.ruleName]; ok {
-			mergedRule, err := mergeRewriteRules(ctx, existingRule, row.rule)
+			mergedRule, err := mergeRewriteRulesWithSQLMode(ctx, existingRule, row.rule, sqlMode)
 			if err != nil {
 				return nil, err
 			}
@@ -1189,7 +1198,7 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
-func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string, error) {
+func mergeRewriteRulesWithSQLMode(ctx context.Context, leftRule, rightRule, sqlMode string) (string, error) {
 	leftRule = trimRewriteRuleForMerge(leftRule)
 	rightRule = trimRewriteRuleForMerge(rightRule)
 
@@ -1197,7 +1206,7 @@ func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string,
 		return leftRule, nil
 	}
 
-	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, sqlMode)
 	if err != nil {
 		return "", err
 	}
@@ -1228,8 +1237,8 @@ type rewriteRuleMergeShape struct {
 // filters expresses that row union directly. This is intentionally not a
 // UNION DISTINCT equivalent for partial projections; two visible base rows that
 // project to the same values should both remain visible.
-func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
-	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule)
+func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
+	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -1237,7 +1246,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 		return "", false, nil
 	}
 
-	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule)
+	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -1255,33 +1264,45 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	merged.Select = &mergedClause
 
 	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
-	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithExecutableStringLiterals()), true, nil
+	sql := tree.StringWithOpts(&merged, dialect.MYSQL, rewriteRuleFormatOptions(sqlMode)...)
+	if !utf8.ValidString(sql) {
+		return "", false, moerr.NewInvalidInput(ctx, "merged rewrite rule cannot be represented as UTF-8")
+	}
+	return sql, true, nil
 }
 
-func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {
+	opts := []tree.FmtCtxOption{tree.WithQuoteIdentifier(), tree.WithExecutableStringLiterals()}
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		opts = append(opts, tree.WithNoBackslashEscape())
+	}
+	return opts
+}
+
+func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
 	return shape, ok, nil
 }
 
-func rewriteRuleMergeShapeForStatement(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s)
+		return rewriteRuleMergeShapeForSelect(s, sqlMode)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return rewriteRuleMergeShapeForStatement(s.Select)
+		return rewriteRuleMergeShapeForStatement(s.Select, sqlMode)
 	default:
 		return nil, false
 	}
 }
 
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
 		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
@@ -1300,16 +1321,17 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: rewriteProjectionKey(clause.Exprs),
+		selectList: rewriteProjectionKey(clause.Exprs, sqlMode),
 		table:      table,
 	}, true
 }
 
 // Fold SQL and identifier case, but never the contents of a string literal.
 // Quote identifiers as well: the column `1` and the integer 1 are distinct.
-func rewriteProjectionKey(exprs tree.SelectExprs) string {
+func rewriteProjectionKey(exprs tree.SelectExprs, sqlMode string) string {
 	var literals []tree.StringLiteralPosition
-	sql := tree.StringWithOpts(&exprs, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithExecutableStringLiterals(), tree.WithStringLiteralPositions(&literals))
+	opts := append(rewriteRuleFormatOptions(sqlMode), tree.WithStringLiteralPositions(&literals))
+	sql := tree.StringWithOpts(&exprs, dialect.MYSQL, opts...)
 	if len(literals) == 0 {
 		return strings.ToLower(sql)
 	}

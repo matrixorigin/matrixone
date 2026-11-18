@@ -390,7 +390,7 @@ func TestLoadRuleCacheTransactionFailures(t *testing.T) {
 			bh.sql2err[failing] = failure
 			stub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer stub.Reset()
-			_, err := loadRuleCache(context.Background(), ses)
+			_, err := loadRuleCache(context.Background(), ses, sessionSQLModeForParser(ses))
 			require.ErrorIs(t, err, failure)
 			require.Equal(t, "begin;", bh.executedSQLs[0])
 			if failing != "begin;" {

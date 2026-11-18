@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -191,7 +192,7 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 	if ctx.ModeIndependentStringLiterals() {
 		switch node.ValType {
 		case P_char:
-			if strings.Contains(node.origString, "\\") {
+			if strings.Contains(node.origString, "\\") || (ctx.preserveTextLiteralWidth && !utf8.ValidString(node.origString)) {
 				if ctx.preserveTextLiteralWidth {
 					// Keep the text literal's value and inferred character width
 					// without a CAST's default width or declared-size limit.

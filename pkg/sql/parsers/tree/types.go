@@ -190,9 +190,17 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		if len(node.EnumValues) > 0 {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
-				ctx.WriteByte('"')
-				ctx.WriteString(enum)
-				ctx.WriteByte('"')
+				if ctx.preserveTextLiteralWidth {
+					// ENUM/SET require STRING tokens, not hex-introduced expressions.
+					if !ctx.NoBackslashEscape() {
+						enum = FormatString(enum)
+					}
+					ctx.WriteValue(P_char, enum)
+				} else {
+					ctx.WriteByte('"')
+					ctx.WriteString(enum)
+					ctx.WriteByte('"')
+				}
 				if i < len(node.EnumValues)-1 {
 					ctx.WriteByte(',')
 				}
