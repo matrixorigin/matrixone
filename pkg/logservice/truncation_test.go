@@ -51,6 +51,76 @@ type failExportRenameOnceFS struct {
 	failed atomic.Bool
 }
 
+type transientSnapshotReadFS struct {
+	vfs.FS
+	failList string
+	failOpen string
+}
+
+func (fs *transientSnapshotReadFS) List(path string) ([]string, error) {
+	if path == fs.failList {
+		return nil, os.ErrPermission
+	}
+	return fs.FS.List(path)
+}
+
+func (fs *transientSnapshotReadFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
+	if name == fs.failOpen {
+		return nil, os.ErrPermission
+	}
+	return fs.FS.Open(name, opts...)
+}
+
+func TestImportCandidateRetainsExportOnTransientReadError(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(cfg.FS, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	_, err = l.append(ctx, shardID, getTestUserEntry())
+	require.NoError(t, err)
+	require.NoError(t, l.exportSnapshot(ctx, shardID, replicaID))
+	index := l.snapshotMgr.NewestIndex(shardID, replicaID)
+	require.NotZero(t, index)
+	dir := l.snapshotMgr.snapshotPath(nodeID{shardID: shardID, replicaID: replicaID}, snapshotIndex(index))
+	fs := &transientSnapshotReadFS{FS: l.cfg.FS}
+	candidate := &store{cfg: Config{FS: fs}}
+
+	for _, tc := range []struct {
+		name string
+		list string
+		open string
+	}{
+		{name: "list image", list: dir},
+		{name: "read metadata", open: fs.PathJoin(dir, "snapshot.metadata")},
+		{name: "read image", open: fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs.failList, fs.failOpen = tc.list, tc.open
+			valid, err := candidate.importCandidateValid(dir)
+			require.False(t, valid)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+			_, err = fs.Stat(dir)
+			require.NoError(t, err)
+		})
+	}
+	fs.failList, fs.failOpen = "", ""
+	valid, err := candidate.importCandidateValid(dir)
+	require.NoError(t, err)
+	require.True(t, valid)
+}
+
 func (fs *failExportRenameOnceFS) Rename(oldname, newname string) error {
 	if strings.HasSuffix(oldname, ".generating") &&
 		strings.Contains(newname, "/shard-1/replica-2/snapshot-") &&
@@ -848,6 +918,9 @@ func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
 		name    string
 		corrupt func(*testing.T, vfs.FS, string, uint64)
 	}{
+		{"missing image", func(t *testing.T, fs vfs.FS, dir string, index uint64) {
+			require.NoError(t, fs.Remove(fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))))
+		}},
 		{"empty image", func(t *testing.T, fs vfs.FS, dir string, index uint64) {
 			file := fs.PathJoin(dir, fmt.Sprintf(snapshotPathPattern+".gbsnap", index))
 			f, err := fs.Create(file)

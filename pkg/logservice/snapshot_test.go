@@ -197,6 +197,52 @@ type removeErrorFS struct{ vfs.FS }
 
 func (fs removeErrorFS) RemoveAll(string) error { return os.ErrPermission }
 
+type selectiveRemoveErrorFS struct {
+	vfs.FS
+	blockedPath string
+}
+
+func (fs *selectiveRemoveErrorFS) RemoveAll(path string) error {
+	if path == fs.blockedPath {
+		return os.ErrPermission
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestDropInvalidRetainsCandidateUntilRemovalSucceeds(t *testing.T) {
+	fs := &selectiveRemoveErrorFS{FS: vfs.NewStrictMem()}
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	for _, index := range []snapshotIndex{100, 200, 300} {
+		testPrepareSnapshot(t, mgr, nid, index)
+	}
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	fs.blockedPath = mgr.snapshotPath(nid, 200)
+	removed, err := mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.False(t, removed)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 3, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(fs.blockedPath)
+	require.NoError(t, err)
+
+	fs.blockedPath = ""
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	dir, index := mgr.EvalImportSnapshot(nid.shardID, nid.replicaID, 200)
+	require.Equal(t, mgr.snapshotPath(nid, 100), dir)
+	require.Equal(t, uint64(100), index)
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.NoError(t, err)
+	require.False(t, removed)
+	removed, err = mgr.DropInvalid(nid.shardID, 99, 200)
+	require.NoError(t, err)
+	require.False(t, removed)
+}
+
 type listErrorFS struct {
 	vfs.FS
 	path string
