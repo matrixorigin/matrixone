@@ -527,14 +527,37 @@ func TestBuiltinRetainsNestedZeroScalarRewriteSources(t *testing.T) {
 	require.True(t, retained["nation"], "folded expression must retain the wrapper source for privilege checks")
 }
 
-func TestBuiltinRejectsFoldedAwayZeroScalarDependency(t *testing.T) {
-	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false, nil)
-	require.ErrorContains(t, err, "function with a correlated scalar LIMIT 0 argument")
+func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		sources []string
+	}{
+		{"direct", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", []string{"region"}},
+		{"nested wrapper", "select null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
+		{"deduplicated inner source", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
+		{"folded argument to UDF", "select f_identity(null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", []string{"region"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+			retained := make(map[string]bool)
+			for _, node := range query.Nodes {
+				if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+					retained[node.ObjRef.ObjName] = true
+					require.NotNil(t, node.TableDef, "carrier must retain catalog identity")
+				}
+			}
+			for _, source := range tc.sources {
+				require.True(t, retained[source], "folded scalar must retain %s for authorization and catalog validation", source)
+				require.False(t, queryHasReachableTable(query, source), "a folded source must not execute")
+			}
+		})
+	}
 }
 
 func TestZeroScalarRetentionIgnoresLiteralSourceMetadata(t *testing.T) {

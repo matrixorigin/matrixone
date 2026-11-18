@@ -34,6 +34,16 @@ select o.a, (select cast(concat(o.a, char(120)) as signed) from inner_rows limit
 from outer_rows o order by o.a;
 select o.a, (select o.a as alias_value from inner_rows i where i.d > o.a order by i.d limit 0) as alias_order_zero
 from outer_rows o order by o.a;
+-- CTE visibility must only exclude a source that actually resolves to a CTE.
+with unused as (select 1) select o.a,
+  (select o.a from inner_rows i where i.d > o.a limit 0) as cte_zero
+from outer_rows o order by o.a;
+with inner_rows as (select 0 as d) select o.a,
+  (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as qualified_zero
+from outer_rows o order by o.a;
+with unused as (select 1) select o.a,
+  (select o.a from inner_rows i where i.d > o.a limit 1) as cte_positive
+from outer_rows o order by o.a;
 select o.a, issue_32869_identity((select (select o.d from inner_rows i limit 0) from inner_rows o limit 1)) as identity_zero
 from outer_rows o order by o.a;
 select o.a, issue_32869_identity((select o.a from inner_rows i where i.d > o.a limit 0)) as direct_identity_zero
@@ -53,6 +63,7 @@ select (select count(*) from (select d from inner_rows limit 0) q) as nested_cou
 -- A discarded wrapper retains its authorization source, and an untyped NULL
 -- remains valid when a dependent plan materializes the output.
 select null + (select (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+select null + (select null + (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
 
 -- The discarded SQL-UDF argument must not erase a nested correlated LIMIT 0
 -- table dependency before privilege checking.
@@ -62,7 +73,6 @@ insert into secret_rows values (5);
 select null + (select o.a from secret_rows s where s.s > o.a limit 0)
 from outer_rows o;
 create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
-create function issue_32869_identity(x int) returns int language sql as '$1';
 select o.a, issue_32869_identity((select o.a from secret_rows s where s.s > o.a limit 0)) as identity_zero
 from outer_rows o order by o.a;
 select o.a, issue_32869_identity(
@@ -81,6 +91,11 @@ grant select on table test_issue_32869.inner_rows to issue_32869_role;
 -- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
 use test_issue_32869;
 select a from outer_rows order by a;
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+               from test_issue_32869.restricted_wrapper c limit 1)
+from test_issue_32869.outer_rows;
 select (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as root_zero
 from test_issue_32869.outer_rows o
 window unused_w as (order by (select s from test_issue_32869.secret_rows limit 1));
