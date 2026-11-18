@@ -190,8 +190,15 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 			return ctx.WriteString(v)
 		}
 	}
-	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+	if ctx.singleQuoteString {
+		switch t {
+		case P_char:
+			return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		case P_ScoreBinary:
+			return ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
+		case P_ScoreBinaryHexnum:
+			return ctx.WriteString("_binary " + v)
+		}
 	}
 	return ctx.WriteString(v)
 }

@@ -478,7 +478,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	rules, err := cache.forSQLMode(context.Background(), "")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
+		"db1.t1": "select `a`, `age` from `db1`.`t1` where (`age` < 3) or (`age` > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
 }
@@ -1266,7 +1266,7 @@ func TestMergeRewriteRules(t *testing.T) {
 	right := "select a from db1.t1 where a = 2"
 	merged, err := mergeRewriteRules(ctx, left, right, "")
 	require.NoError(t, err)
-	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
+	require.Equal(t, "select `a` from `db1`.`t1` where (`a` = 1) or (`a` = 2)", merged)
 
 	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
 	// projected values. Partial projections are intentionally OR-merged so two
@@ -1277,11 +1277,11 @@ func TestMergeRewriteRules(t *testing.T) {
 		"select a from db1.t1 where role_marker = 2", "")
 
 	require.NoError(t, err)
-	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
+	require.Equal(t, "select `a` from `db1`.`t1` where (`role_marker` = 1) or (`role_marker` = 2)", rowUnionMerged)
 
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3", "")
 	require.NoError(t, err)
-	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
+	require.Equal(t, "select `a` from `db1`.`t1` where ((`a` = 1) or (`a` = 2)) or (`a` = 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2", "")
 	require.NoError(t, err)
@@ -1293,14 +1293,14 @@ func TestMergeRewriteRules(t *testing.T) {
 	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select * from db1.t1 where (age > 28) or (age < 3)",
+		"select * from `db1`.`t1` where (`age` > 28) or (`age` < 3)",
 		merged,
 	)
 
 	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select t.* from db1.t1 as t where (age > 28) or (age < 3)",
+		"select `t`.* from `db1`.`t1` as `t` where (`age` > 28) or (`age` < 3)",
 		merged,
 	)
 
@@ -1365,11 +1365,11 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3", "")
 	require.NoError(t, err)
-	require.Equal(t, "select a as x from db1.t1 where (age > 28) or (age < 3)", merged)
+	require.Equal(t, "select `a` as `x` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3", "")
 	require.NoError(t, err)
-	require.Equal(t, "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)", merged)
+	require.Equal(t, "select `a` + 1 as `b` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1", "")
 	require.Error(t, err)
@@ -1414,6 +1414,57 @@ func TestRoleRuleCachePreservesPredicateInStatementMode(t *testing.T) {
 				require.Equal(t, want, got, "mode=%q", mode)
 			}
 		})
+	}
+}
+
+func TestMergeRewriteRulesPreservesIdentifiersAndBinaryLiterals(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct{ mode, column string }{
+		{"ANSI_QUOTES", `"part-code"`},
+		{"", "`part-code`"},
+	} {
+		t.Run(tc.mode+tc.column, func(t *testing.T) {
+			const base = "select id from db.t where "
+			left := tc.column + " = _binary '0001'"
+			right := tc.column + " = _binary 0x4f"
+			merged, err := mergeRewriteRules(ctx, base+left, base+right, tc.mode)
+			require.NoError(t, err)
+			parse := func(sql string) tree.Statement {
+				stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, tc.mode)
+				require.NoError(t, err)
+				return stmt
+			}
+			// AST equality checks identifier vs. subtraction and both binary
+			// literal types and byte spellings, independently of SQL quoting.
+			require.Equal(t, parse(base+"("+left+") or ("+right+")"), parse(merged))
+
+			const subtraction = "select part - code from db.t where id = 2"
+			merged, err = mergeRewriteRules(ctx, "select "+tc.column+" from db.t where id = 1", subtraction, tc.mode)
+			require.NoError(t, err)
+			require.Equal(t, subtraction, merged)
+		})
+	}
+}
+
+func TestRewritePolicyAllowsStandaloneSQLModeRecovery(t *testing.T) {
+	const brokenMode = "NO_BACKSLASH_ESCAPES"
+	const query = "select * from db.t"
+	ctx := context.Background()
+	policy := &rewritePolicySnapshot{enabled: true, roleRules: &roleRuleCache{
+		first: map[string]string{"db.t": `select * from db.t where c = 'O\'Brien'`},
+		later: map[string][]string{"db.t": {`select * from db.t where c = 'other'`}},
+	}}
+	_, err := policy.rewrite(ctx, query, "")
+	require.NoError(t, err)
+	for _, sql := range []string{query, "set sql_mode = (select c from db.t)", "set sql_mode = '', @x = (select c from db.t)", "set @sql_mode = ''", "set global sql_mode = ''"} {
+		got, err := policy.rewrite(ctx, sql, brokenMode)
+		require.ErrorContains(t, err, "failed to parse rewrite rule", sql)
+		require.Equal(t, sql, got)
+	}
+	for _, sql := range []string{"set sql_mode = ''", "set session sql_mode = default"} {
+		got, err := policy.rewrite(ctx, sql, brokenMode)
+		require.NoError(t, err)
+		require.Equal(t, sql, got)
 	}
 }
 
@@ -1479,50 +1530,50 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "simple select",
 			rule:       "select A, Age from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a, age",
-			table:      "db1.t1",
+			selectList: "`a`, `age`",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name:       "star projection",
 			rule:       "select * from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "*",
-			table:      "db1.t1",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name:       "qualified star with alias",
 			rule:       "select t.* from db1.t1 as t where age > 28",
 			ok:         true,
-			selectList: "t.*",
-			table:      "db1.t1 as t",
+			selectList: "`t`.*",
+			table:      "`db1`.`t1` as `t`",
 		},
 		{
 			name:       "aliased column",
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a as x",
-			table:      "db1.t1",
+			selectList: "`a` as `x`",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name:       "where subquery with order by and limit",
 			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
 			ok:         true,
-			selectList: "a",
-			table:      "db1.t1",
+			selectList: "`a`",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name:       "parenthesized single table",
 			rule:       "select a from (db1.t1) where age > 28",
 			ok:         true,
-			selectList: "a",
-			table:      "db1.t1",
+			selectList: "`a`",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name:       "scalar expression",
 			rule:       "select a + 1 from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a + 1",
-			table:      "db1.t1",
+			selectList: "`a` + 1",
+			table:      "`db1`.`t1`",
 		},
 		{
 			name: "aggregate",

@@ -243,22 +243,25 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		}
 		return sql, err
 	}
-	roleRules, err := policy.roleRules.forSQLMode(ctx, sqlMode)
-	if err != nil {
-		return sql, err
+	roleRules, ruleErr := policy.roleRules.forSQLMode(ctx, sqlMode)
+	rewrite := func(fragment string) (string, error) {
+		if ruleErr != nil && !isStandaloneSQLModeAssignment(ctx, fragment, sqlMode) {
+			return fragment, ruleErr
+		}
+		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
 	}
 	if len(fragments) == 1 {
 		if !parsers.FragmentHasStatement(sql) {
 			return sql, nil
 		}
-		return rewriteSingleSQL(ctx, sql, roleRules, policy.sessionRules, policy.sessionRemapDb)
+		return rewrite(sql)
 	}
 
 	for i, fragment := range fragments {
 		if !parsers.FragmentHasStatement(fragment) {
 			continue
 		}
-		rewritten, err := rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
+		rewritten, err := rewrite(fragment)
 		if err != nil {
 			return sql, err
 		}
@@ -269,6 +272,29 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		rewritten += ";"
 	}
 	return rewritten, nil
+}
+
+// A broken rule in the current mode must not prevent restoring a usable mode.
+// Only a standalone session assignment without an evaluable expression is safe
+// here: a general SET can contain a subquery or additional assignments.
+func isStandaloneSQLModeAssignment(ctx context.Context, sql, sqlMode string) bool {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
+	if err != nil {
+		return false
+	}
+	set, ok := stmt.(*tree.SetVar)
+	if !ok || len(set.Assignments) != 1 {
+		return false
+	}
+	a := set.Assignments[0]
+	if !a.System || a.Global || !strings.EqualFold(a.Name, "sql_mode") || a.Reserved != nil {
+		return false
+	}
+	if value, ok := a.Value.(*tree.NumVal); ok {
+		return value.ValType == tree.P_char
+	}
+	_, ok = a.Value.(*tree.DefaultVal)
+	return ok
 }
 
 // rewriteSingleSQL merges a policy snapshot with one statement's own leading
@@ -895,7 +921,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 	merged.Select = &mergedClause
 
 	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
-	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString()}
+	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
 		opts = append(opts, tree.WithNoBackslashEscape())
 	}
@@ -944,7 +970,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: normalizeRewriteSQL(tree.String(&clause.Exprs, dialect.MYSQL)),
+		selectList: normalizeRewriteSQL(tree.StringWithOpts(&clause.Exprs, dialect.MYSQL, tree.WithQuoteIdentifier())),
 		table:      table,
 	}, true
 }
@@ -991,7 +1017,7 @@ func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
 		return "", false
 	}
 
-	return normalizeRewriteSQL(tree.String(tableExpr, dialect.MYSQL)), true
+	return normalizeRewriteSQL(tree.StringWithOpts(tableExpr, dialect.MYSQL, tree.WithQuoteIdentifier())), true
 }
 
 func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
