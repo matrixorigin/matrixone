@@ -4449,6 +4449,7 @@ func (builder *QueryBuilder) appendWindowValidationScans() {
 		scan.NodeId = int32(len(builder.qry.Nodes))
 		scan.ExtraOptions = windowValidationPrivilegeCarrierExtraOptions
 		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+		builder.ctxByNode = append(builder.ctxByNode, nil)
 	}
 }
 

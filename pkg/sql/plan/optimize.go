@@ -115,20 +115,15 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 }
 
 func appendWindowValidationPrivilegeCarriers(oldNodes []*plan.Node, nodes *[]*plan.Node) {
-	seen := make(map[*plan.Node]struct{}, len(*nodes))
-	for _, node := range *nodes {
-		seen[node] = struct{}{}
-	}
 	for _, node := range oldNodes {
 		if !isWindowValidationPrivilegeCarrier(node) {
 			continue
 		}
-		if _, exists := seen[node]; exists {
+		if id := node.NodeId; id >= 0 && int(id) < len(*nodes) && (*nodes)[id] == node {
 			continue
 		}
 		node.NodeId = int32(len(*nodes))
 		*nodes = append(*nodes, node)
-		seen[node] = struct{}{}
 	}
 }
 

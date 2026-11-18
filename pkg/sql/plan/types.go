@@ -462,6 +462,7 @@ type QueryBuilder struct {
 	scalarReaggAliases      map[int32][]scalarReaggAlias
 	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
+	windowValidationSeen    map[string]struct{}
 	nameByColRef            map[[2]int32]string
 	protectedScans          map[int32]int
 	updateTargetScans       map[int32]struct{}
@@ -542,6 +543,7 @@ type QueryBuilder struct {
 	udfResolutionCount          uint64
 	udfExpansionDepth           uint32
 	zeroScalarRewriteGeneration uint64
+	zeroScalarPrograms          map[uint32]struct{}
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32
@@ -1146,7 +1148,6 @@ type BindContext struct {
 	// complete binding pass prove the narrow LIMIT 0 source has no hidden
 	// dependency or UDF expansion.
 	zeroScalarRootSourceSafe bool
-	zeroScalarRootCandidate  bool
 
 	// for join tables
 	bindingTree *BindingTreeNode

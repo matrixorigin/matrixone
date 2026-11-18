@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -759,7 +760,10 @@ func isWindowValidationPrivilegeCarrier(node *plan.Node) bool {
 }
 
 func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuilder) {
-	seen := make(map[string]struct{})
+	if builder.windowValidationSeen == nil {
+		builder.windowValidationSeen = make(map[string]struct{})
+	}
+	seen := builder.windowValidationSeen
 	for _, node := range validationBuilder.qry.Nodes {
 		carrier := windowValidationPrivilegeCarrier(node)
 		if carrier == nil {
@@ -772,6 +776,42 @@ func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuild
 		seen[key] = struct{}{}
 		builder.windowValidationScans = append(builder.windowValidationScans, carrier)
 	}
+}
+
+// retainZeroScalarAuthorizationSources keeps sources of a bound subquery when
+// an enclosing expression may be simplified away after a root-zero rewrite.
+func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(sources map[int32]struct{}) error {
+	if builder.windowValidationSeen == nil {
+		builder.windowValidationSeen = make(map[string]struct{})
+	}
+	seen := builder.windowValidationSeen
+	ids := make([]int32, 0, len(sources))
+	for id := range sources {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return moerr.NewInternalError(builder.GetContext(), "invalid zero-limit authorization source")
+		}
+		node := builder.qry.Nodes[id]
+		carrier := windowValidationPrivilegeCarrier(node)
+		if carrier == nil {
+			continue
+		}
+		key := windowValidationPrivilegeCarrierKey(carrier)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		builder.windowValidationScans = append(builder.windowValidationScans, carrier)
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			if err := builder.recordPreparedPluginDependencies(node); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // windowValidationPrivilegeCarrier mirrors the node classes inspected by
@@ -791,8 +831,10 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		ViewPath:     DeepCopyViewPath(node.ViewPath),
 	}
 	if node.TableDef != nil {
-		// Authorization only needs the table type to identify cluster tables.
-		carrier.TableDef = &plan.TableDef{TableType: node.TableDef.TableType}
+		// Cache validation also needs the source catalog identity.
+		carrier.TableDef = &plan.TableDef{TableType: node.TableDef.TableType,
+			Name: node.TableDef.Name, TblId: node.TableDef.TblId, Version: node.TableDef.Version,
+			DbName: node.TableDef.DbName, DbId: node.TableDef.DbId}
 	}
 
 	switch node.NodeType {
@@ -808,11 +850,11 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
 			return nil
 		}
-		// isPrivilegeBearingTableScan identifies this function by name.
-		carrier.TableDef = &plan.TableDef{
-			TableType: node.TableDef.TableType,
-			TblFunc:   &plan.TableFunction{Name: "table_changes"},
-		}
+		// Authorization uses the underlying table reference. Its real catalog
+		// dependency is already recorded by buildTableChanges; the function's
+		// synthetic TableDef is not a resolvable catalog object.
+		carrier.NodeType = plan.Node_TABLE_SCAN
+		carrier.TableDef = nil
 		return carrier
 	default:
 		return nil

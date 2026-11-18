@@ -1075,8 +1075,8 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	wideTable := &planpb.TableDef{
-		TableType: "ordinary",
-		Cols:      make([]*planpb.ColDef, 1024),
+		TableType: "ordinary", Name: "region", TblId: 42, Version: 7, DbName: "tpch", DbId: 3,
+		Cols: make([]*planpb.ColDef, 1024),
 	}
 	ordinary := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
@@ -1113,14 +1113,16 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	appendWindowValidationPrivilegeScans(owner, validation)
 	require.Len(t, owner.windowValidationScans, 3)
 
-	carriers := make(map[planpb.Node_NodeType]*planpb.Node)
+	carriers := make(map[string]*planpb.Node)
 	for _, carrier := range owner.windowValidationScans {
-		carriers[carrier.NodeType] = carrier
+		carriers[carrier.GetObjRef().GetObjName()] = carrier
 		require.Empty(t, carrier.GetTableDef().GetCols())
 	}
-	require.Equal(t, "region", carriers[planpb.Node_TABLE_SCAN].GetObjRef().GetObjName())
-	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers[planpb.Node_EXTERNAL_SCAN].GetExternScan().GetType())
-	require.Equal(t, "table_changes", carriers[planpb.Node_FUNCTION_SCAN].GetTableDef().GetTblFunc().GetName())
+	require.Equal(t, planpb.Node_TABLE_SCAN, carriers["region"].GetNodeType())
+	require.Equal(t, uint32(7), carriers["region"].GetTableDef().GetVersion())
+	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers["events"].GetExternScan().GetType())
+	require.Equal(t, planpb.Node_TABLE_SCAN, carriers["nation"].GetNodeType())
+	require.Nil(t, carriers["nation"].GetTableDef())
 
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.

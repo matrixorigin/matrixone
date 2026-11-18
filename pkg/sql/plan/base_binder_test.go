@@ -408,10 +408,16 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 		return &function.Udf{Body: "$2", Language: string(tree.SQL)}, nil
 	case "f_identity":
 		return &function.Udf{Body: "$1", Language: string(tree.SQL)}, nil
+	case "f_constant_query":
+		return &function.Udf{Body: "select 1", Language: string(tree.SQL)}, nil
 	case "f_identity_query":
 		return &function.Udf{Body: "select $1", Language: string(tree.SQL)}, nil
+	case "f_forward":
+		return &function.Udf{Body: "f_add_argument_twice($1)", Language: string(tree.SQL)}, nil
 	case "f_add_argument_twice":
 		return &function.Udf{Body: "$1 + $1", Language: string(tree.SQL)}, nil
+	case "f_repeat_other_argument":
+		return &function.Udf{Body: "$1 + $2 + $2", Language: string(tree.SQL)}, nil
 	case "f_ansi_quotes":
 		mode := "ANSI_QUOTES"
 		return &function.Udf{
@@ -545,7 +551,7 @@ func TestBindSQLUDFDirectIdentityRetainsZeroLimitSource(t *testing.T) {
 
 func TestBindSQLUDFQueryBodyIdentityFailsClosedForZeroLimitSource(t *testing.T) {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
-		"select f_identity_query((select n2.n_nationkey from nation n2 where n2.n_nationkey > n.n_nationkey limit 0)) from nation n", 1)
+		"select f_identity_query((select n.n_nationkey from nation n2 where n2.n_nationkey > n.n_nationkey limit 0)) from nation n", 1)
 	require.NoError(t, err)
 	defer func() {
 		for _, stmt := range stmts {
@@ -559,7 +565,7 @@ func TestBindSQLUDFQueryBodyIdentityFailsClosedForZeroLimitSource(t *testing.T) 
 
 func TestBindSQLUDFRepeatedArgumentFailsClosedForZeroLimitSource(t *testing.T) {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
-		"select f_add_argument_twice((select n2.n_nationkey from nation n2 where n2.n_nationkey > n.n_nationkey limit 0)) from nation n", 1)
+		"select f_add_argument_twice((select n.n_nationkey from nation n2 where n2.n_nationkey > n.n_nationkey limit 0)) from nation n", 1)
 	require.NoError(t, err)
 	defer func() {
 		for _, stmt := range stmts {
@@ -571,21 +577,16 @@ func TestBindSQLUDFRepeatedArgumentFailsClosedForZeroLimitSource(t *testing.T) {
 	require.ErrorContains(t, err, "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
 }
 
-func TestHasRepeatedSQLUdfArgumentUsesLexerSemantics(t *testing.T) {
-	tests := []struct {
-		name string
-		sql  string
-		want bool
-	}{
-		{name: "same argument twice", sql: "$1 + $1", want: true},
-		{name: "different arguments", sql: "$1 + $2"},
-		{name: "quoted marker", sql: "concat('$1', $1)"},
-		{name: "comment marker", sql: "$1 /* $1 */"},
-		{name: "identifier marker", sql: "select $1 as `$1`"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, hasRepeatedSQLUdfArgument(test.sql, 2, "PIPES_AS_CONCAT"))
+func TestBindSQLUDFRepeatedUnrelatedArgument(t *testing.T) {
+	for _, projection := range []string{"n2.n_nationkey", "n.n_nationkey"} {
+		t.Run(projection, func(t *testing.T) {
+			sql := "select f_repeat_other_argument((select " + projection + " from nation n2 where n2.n_nationkey > n.n_nationkey limit 0), 1) from nation n"
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
 		})
 	}
 }
@@ -634,7 +635,8 @@ func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
 	)
 	arg := makeInt64ConstPlanExpr(42)
 	body := "select " + userColumn + ", $1"
-	rewritten, markers := binder.expandSQLUdfArguments(body, []*plan.Expr{arg}, "")
+	rewritten, markers, err := binder.expandSQLUdfArguments(body, []*plan.Expr{arg}, "", false)
+	require.NoError(t, err)
 
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, rewritten, 1)
 	require.NoError(t, err)
@@ -2032,4 +2034,31 @@ func TestNormalizeDecimalParamInArgsUsesFloatForMixedApproximateList(t *testing.
 	require.NoError(t, normalizeDecimalParamInArgs(context.Background(), "in", args))
 	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
 	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
+}
+
+func TestSQLUDFDiscardedPredicateOnlyCorrelatedArgument(t *testing.T) {
+	for _, name := range []string{"f_constant_query", "f_keep_second"} {
+		t.Run(name, func(t *testing.T) {
+			args := "(select n2.n_nationkey from nation n2 where n2.n_nationkey > n.n_nationkey limit 0)"
+			if name == "f_keep_second" {
+				args += ", 1"
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+name+"("+args+") from nation n", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestSQLUDFForwardedRepeatedZeroScalarArgument(t *testing.T) {
+	sql := "select f_forward((select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1)) from nation n"
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	require.ErrorContains(t, err, "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
 }
