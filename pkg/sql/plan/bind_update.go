@@ -3419,7 +3419,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		oldPos, newPos, snapshotPos    int32
 		conflict                       *plan.Expr
 	}
-	var keys []keySpec
+	keys := make([]keySpec, 0, len(tableDef.Indexes))
 	updatedCols := assignedColsByTarget[targetIdx]
 	for _, idxDef := range tableDef.Indexes {
 		if err := builder.checkPlanningCanceled(); err != nil {
