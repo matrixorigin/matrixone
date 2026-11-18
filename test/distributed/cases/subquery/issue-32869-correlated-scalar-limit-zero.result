@@ -19,6 +19,13 @@ null  ¦  null  𝄀
 1  ¦  null  𝄀
 1  ¦  null  𝄀
 11  ¦  null
+select o.a, (select o.a from inner_rows i where i.d > o.a + 1 limit 0) as arithmetic_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  arithmetic_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
 select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
 from outer_rows o order by o.a;
 ➤ a[4,32,0]  ¦  unfiltered_zero[4,32,0]  𝄀

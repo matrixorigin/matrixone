@@ -850,11 +850,9 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
 			return nil
 		}
-		// Authorization uses the underlying table reference. Its real catalog
-		// dependency is already recorded by buildTableChanges; the function's
-		// synthetic TableDef is not a resolvable catalog object.
-		carrier.NodeType = plan.Node_TABLE_SCAN
-		carrier.TableDef = nil
+		// Keep the function discriminator for authorization. Catalog validation
+		// uses the underlying table dependency recorded by buildTableChanges.
+		carrier.TableDef.TblFunc = &plan.TableFunction{Name: "table_changes"}
 		return carrier
 	default:
 		return nil
