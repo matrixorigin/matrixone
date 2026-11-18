@@ -297,18 +297,16 @@ type QueryBuilder struct {
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextBindTag                     int32
-	nextMsgTag                      int32
-	nextSQLUdfCallID                uint64
-	udfResolutionCount              uint64
-	udfExpansionDepth               uint32
-	zeroScalarRewriteGeneration     uint64
-	zeroScalarPrivilegeScans        []*plan.Node
-	zeroScalarPrivilegeSources      map[int32]struct{}
-	zeroScalarRewriteCount          uint64
-	zeroScalarRewriteCandidateDepth uint32
-	zeroScalarRootCtx               *BindContext
-	zeroScalarScanIDs               []int32
+	nextBindTag                 int32
+	nextMsgTag                  int32
+	nextSQLUdfCallID            uint64
+	udfResolutionCount          uint64
+	udfExpansionDepth           uint32
+	zeroScalarRewriteGeneration uint64
+	zeroScalarPrivilegeScans    []*plan.Node
+	zeroScalarPrivilegeSources  map[int32]struct{}
+	zeroScalarRootCtx           *BindContext
+	zeroScalarScanIDs           []int32
 
 	// SQL_CALC_FOUND_ROWS 不允许新增会提前截断原关系的候选改写。
 	sqlCalcFoundRows      bool
