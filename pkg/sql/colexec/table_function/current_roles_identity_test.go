@@ -83,7 +83,10 @@ func TestCurrentRoleIdentityQueries(t *testing.T) {
 		{"missing account", base, []roleQuery{{0, "mo_account", nil, nil}}, nil, true},
 		{"missing user", base, []roleQuery{account, {7, "mo_user WHERE", nil, nil}}, nil, true},
 		{"revoked primary", base, []roleQuery{account, user, {7, "role_id = 9", nil, nil}}, nil, true},
+		{"account query error", base, []roleQuery{{0, "mo_account", []int64{7}, failure}}, nil, true},
 		{"query error", base, []roleQuery{account, {7, "mo_user WHERE", []int64{8}, failure}}, nil, true},
+		{"primary grant query error", base, []roleQuery{account, user, {7, "role_id = 9", []int64{9}, failure}}, nil, true},
+		{"all grants query error", base, []roleQuery{account, user, grant, {7, "SELECT DISTINCT", []int64{9, 10}, failure}}, nil, true},
 		{"trusted public", process.CurrentRoleContext{Mode: 1, AccountID: 7, AccountName: "tenant", UserID: 8, UserName: "alice", PrimaryRoleID: 1}, []roleQuery{account, user}, []int64{1}, false},
 		{"non-system role zero is not trusted", process.CurrentRoleContext{Mode: 1, AccountID: 7, AccountName: "tenant", UserID: 8, UserName: "alice", PrimaryRoleID: 0}, []roleQuery{account, user, {7, "role_id = 0", nil, nil}}, nil, true},
 		{"system role zero", process.CurrentRoleContext{Mode: 1, AccountName: "sys", UserID: 8, UserName: "alice"}, []roleQuery{{0, "mo_user WHERE", []int64{8}, nil}}, []int64{0}, false},
@@ -130,6 +133,9 @@ func TestCurrentRoleIdentityQueries(t *testing.T) {
 			roots, err := loadCurrentRoleRoots(proc)
 			if tc.wantErr {
 				require.Error(t, err)
+				if len(tc.queries) > 0 && tc.queries[len(tc.queries)-1].err != nil {
+					require.ErrorIs(t, err, tc.queries[len(tc.queries)-1].err)
+				}
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.roots, roots)

@@ -221,10 +221,11 @@ func loadCurrentRoleRoots(proc *process.Process) ([]int64, error) {
 	}
 	query := func(account uint32, sql string) ([]int64, error) {
 		result, err := runCurrentRolesSQLAsAccount(proc, account, sql)
-		defer result.Close()
 		if err != nil {
+			result.Close()
 			return nil, err
 		}
+		defer result.Close()
 		var ids []int64
 		err = visitCurrentRoleGrants(result, func(v int64) error {
 			if err := proc.Ctx.Err(); err != nil {
