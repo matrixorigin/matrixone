@@ -33,26 +33,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These cases are deliberately separate roots: each diagnostic starts with a
-// new table, and a failed race never feeds rollback/retirement experiments.
-func TestInventoryCASCatalogInternal(t *testing.T) {
-	testInventoryCAS(t, "mo_catalog.nr_cas_inventory", false, pbtxn.TxnIsolation_SI)
-}
-
-func TestInventoryCASOrdinaryInternal(t *testing.T) {
-	testInventoryCAS(t, "nr_cas_probe.inventory", false, pbtxn.TxnIsolation_SI)
-}
-
-func TestInventoryCASOrdinaryPublic(t *testing.T) {
-	testInventoryCAS(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_SI)
-}
-
-func TestInventoryCASCatalogInternalRC(t *testing.T) {
-	testInventoryCAS(t, "mo_catalog.nr_cas_inventory", false, pbtxn.TxnIsolation_RC)
-}
-
-func TestInventoryCASOrdinaryInternalRC(t *testing.T) {
-	testInventoryCAS(t, "nr_cas_probe.inventory", false, pbtxn.TxnIsolation_RC)
+// Each cell creates and removes its own table and transactions. Stop on the
+// first failure so a failed cell cannot contaminate another cell's fixture.
+func TestInventoryCASBasic(t *testing.T) {
+	withInventoryCASCluster(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		for _, tc := range []struct {
+			name, table string
+			public      bool
+			isolation   pbtxn.TxnIsolation
+		}{
+			{"CatalogInternal", "mo_catalog.nr_cas_inventory", false, pbtxn.TxnIsolation_SI},
+			{"OrdinaryInternal", "nr_cas_probe.inventory", false, pbtxn.TxnIsolation_SI},
+			{"OrdinaryPublic", "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_SI},
+			{"CatalogInternalRC", "mo_catalog.nr_cas_inventory", false, pbtxn.TxnIsolation_RC},
+			{"OrdinaryInternalRC", "nr_cas_probe.inventory", false, pbtxn.TxnIsolation_RC},
+		} {
+			if !t.Run(tc.name, func(t *testing.T) {
+				inventoryCASOrder(t, tc.table, tc.public, tc.isolation, 0, false, false)(c)
+			}) {
+				return
+			}
+			// The child cleanup must complete before this cluster is reused.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			var databases, tables int
+			err = db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='nr_cas_probe'").Scan(&databases)
+			if err == nil {
+				err = db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='nr_cas_inventory'").Scan(&tables)
+			}
+			cancel()
+			require.NoError(t, err)
+			require.Zero(t, databases, "child left its database behind")
+			require.Zero(t, tables, "child left its catalog table behind")
+		}
+	})
 }
 
 func TestInventoryCASOrdinaryPublicRC(t *testing.T) {
@@ -78,11 +96,6 @@ func TestInventoryCASOrdinaryPublicRC(t *testing.T) {
 
 func TestInventoryCASOrdinaryPublicRCReverse(t *testing.T) {
 	testInventoryCASOrder(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC, 1, true, false)
-}
-
-func testInventoryCAS(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation) {
-	t.Helper()
-	testInventoryCASOrder(t, table, public, isolation, 0, false, false)
 }
 
 func inventoryCASTxnForConn(t *testing.T, cn embed.ServiceOperator, connID uint32) (string, pbtxn.TxnMeta) {
@@ -118,7 +131,12 @@ func inventoryCASTxnForConn(t *testing.T, cn embed.ServiceOperator, connID uint3
 
 func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation, first int, restart, interfere bool) {
 	t.Helper()
-	withInventoryCASCluster(t, func(c embed.Cluster) {
+	withInventoryCASCluster(t, inventoryCASOrder(t, table, public, isolation, first, restart, interfere))
+}
+
+func inventoryCASOrder(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation, first int, restart, interfere bool) func(embed.Cluster) {
+	t.Helper()
+	return func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -355,6 +373,13 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 		require.Error(t, commits[1-first], "competing epoch update must not commit")
 		require.Regexp(t, "(?i)(conflict|retry|duplicate|def changed)", commits[1-first].Error())
 		require.Equal(t, [][3]uint64{{0, 42, 2}}, final)
+		service.GetTxnClient().IterTxns(func(v client.TxnOverview) bool {
+			id := fmt.Sprintf("%x", v.Meta.ID)
+			if (id == ids[0] || id == ids[1]) && v.Meta.Status == pbtxn.TxnStatus_Active {
+				t.Errorf("CAS writer %s remains active after commit", id)
+			}
+			return true
+		})
 		if restart {
 			require.NoError(t, c.Stop())
 			require.NoError(t, c.Start())
@@ -364,7 +389,7 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 			require.True(t, ok)
 			internal = v.(executor.SQLExecutor)
 		}
-	})
+	}
 }
 
 func withInventoryCASCluster(t *testing.T, fn func(embed.Cluster)) {

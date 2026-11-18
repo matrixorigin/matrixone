@@ -213,11 +213,46 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 		})
 		// Preserve row count while falsifying each metadata field. The predicate
 		// must compare full rows rather than accepting a count-only completion.
-		for _, assignment := range []string{
+		for i, assignment := range []string{
 			"COLLATION_NAME='stale_name'", "CHARACTER_SET_NAME='stale_charset'", "ID=999",
 			"IS_DEFAULT=''", "IS_COMPILED='No'", "SORTLEN=99", "PAD_ATTRIBUTE='PAD SPACE'",
 		} {
-			t.Run(assignment, func(t *testing.T) {
+			if !t.Run(assignment, func(t *testing.T) {
+				if i > 0 {
+					// Exercise the exact upgrade predicate against each corruption in
+					// its own transaction. Roll back before the next field; the first
+					// field below still exercises the complete repair path.
+					rollback := errors.New("rollback collation predicate probe")
+					var before, matches bool
+					err := internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+						var err error
+						before, err = versions.CheckTableDataExist(tx, uint32(accountID), sysview.InformationSchemaCollationsCheckSQL())
+						if err != nil {
+							return err
+						}
+						res, err := tx.Exec("UPDATE information_schema.COLLATIONS SET "+assignment+" WHERE COLLATION_NAME='binary'", versions.UpgradeStatementOption(uint32(accountID)))
+						if err != nil {
+							return err
+						}
+						affected := res.AffectedRows
+						res.Close()
+						if affected != 1 {
+							return fmt.Errorf("expected one corrupted collation, got %d", affected)
+						}
+						matches, err = versions.CheckTableDataExist(tx, uint32(accountID), sysview.InformationSchemaCollationsCheckSQL())
+						if err != nil {
+							return err
+						}
+						return rollback
+					}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
+					joined, ok := err.(interface{ Unwrap() []error })
+					require.True(t, ok, "expected executor rollback result, got %v", err)
+					require.Equal(t, []error{rollback}, joined.Unwrap(), "rollback must succeed")
+					require.True(t, before, "original metadata must satisfy the upgrade predicate")
+					require.False(t, matches, "stale metadata must not satisfy the upgrade predicate")
+					assertMetadata(t, tenantDB)
+					return
+				}
 				seed(t, "UPDATE information_schema.COLLATIONS SET "+assignment+" WHERE COLLATION_NAME='binary'")
 				oldVersion(t)
 				upgrader, owner := newUpgrader(t)
@@ -226,7 +261,9 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 				require.True(t, upgraded)
 				require.Equal(t, 1, owner.deletes)
 				assertMetadata(t, tenantDB)
-			})
+			}) {
+				return
+			}
 		}
 		t.Run("same count duplicate is repaired", func(t *testing.T) {
 			seed(t, "DELETE FROM information_schema.COLLATIONS WHERE COLLATION_NAME='utf8_unicode_ci'",
