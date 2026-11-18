@@ -88,7 +88,7 @@ func zeroLimitScalarSourceSafe(statement tree.SelectStatement, parent *BindConte
 	if !zeroLimitSourceExprSafe(clause.Exprs[0].Expr, true, 0) {
 		return false
 	}
-	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, false, 0) {
+	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, true, 0) {
 		return false
 	}
 	// Bound-expression validation below still rejects unsafe sort keys.
@@ -168,21 +168,33 @@ func zeroLimitSourceExprSafe(expr tree.Expr, allowValueOps bool, depth int) bool
 	case *tree.ParenExpr:
 		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.AndExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
 	case *tree.OrExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
 	case *tree.NotExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.IsNullExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.IsNotNullExpr:
-		return node != nil && zeroLimitSourceExprSafe(node.Expr, false, next)
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.ComparisonExpr:
 		return node != nil && node.SubOp == 0 && node.Escape == nil &&
-			zeroLimitSourceExprSafe(node.Left, false, next) &&
-			zeroLimitSourceExprSafe(node.Right, false, next)
+			zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.IsTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
 	case *tree.BinaryExpr:
 		return allowValueOps && node != nil &&
 			(node.Op == tree.PLUS || node.Op == tree.MINUS || node.Op == tree.MULTI ||
@@ -330,7 +342,7 @@ func (builder *QueryBuilder) emptyCorrelatedScalarScan(root int32, subquery *pla
 			}
 		}
 		for _, expr := range node.FilterList {
-			if !emptyCorrelatedScalarExpressionSafe(expr) {
+			if !emptyCorrelatedScalarResultSafe(expr) {
 				return nil, false
 			}
 		}
@@ -439,12 +451,20 @@ func emptyCorrelatedScalarResultSafe(expr *plan.Expr) bool {
 			if len(item.F.Args) != 1 {
 				return false
 			}
+		case function.ISNOTTRUE:
+			expectedName = "isnottrue"
+		case function.ISNOTFALSE:
+			expectedName = "isnotfalse"
+		case function.ISNOTNULL:
+			expectedName = "isnotnull"
 		default:
-			// Boolean operators are already proven by the stricter shared
-			// expression check, which also rejects disappearing parameters.
-			return emptyCorrelatedScalarExpressionSafe(expr)
+			// Reuse the boolean operator whitelist, but check its operands
+			// under omission rules because the root LIMIT is zero.
+			if !paginationBooleanOperator(item.F.Func.ObjName) {
+				return false
+			}
 		}
-		if !strings.EqualFold(item.F.Func.ObjName, expectedName) || len(item.F.Args) == 0 {
+		if len(item.F.Args) == 0 || (expectedName != "" && !strings.EqualFold(item.F.Func.ObjName, expectedName)) {
 			return false
 		}
 		for _, arg := range item.F.Args {
@@ -894,8 +914,10 @@ func paginationExpressionSafeWithLiteralCasts(expr *plan.Expr, allowLiteralCasts
 		switch item.F.Func.ObjName {
 		case "cast":
 			return (paginationCastConversionSafe(expr) || allowLiteralCasts && paginationIntegerLiteralCastSafe(expr)) && paginationExpressionSafeWithLiteralCasts(item.F.Args[0], allowLiteralCasts)
-		case "coalesce", "ifnull", "case", "isnull", "istrue", "isfalse", "not",
-			"and", "or", "=", "<=>", "<>", "!=", "<", "<=", ">", ">=":
+		default:
+			if !paginationBooleanOperator(item.F.Func.ObjName) {
+				return false
+			}
 			for _, arg := range item.F.Args {
 				if !paginationExpressionSafeWithLiteralCasts(arg, allowLiteralCasts) {
 					return false
@@ -905,6 +927,16 @@ func paginationExpressionSafeWithLiteralCasts(expr *plan.Expr, allowLiteralCasts
 		}
 	}
 	return false
+}
+
+func paginationBooleanOperator(name string) bool {
+	switch name {
+	case "coalesce", "ifnull", "case", "isnull", "istrue", "isfalse", "not",
+		"and", "or", "=", "<=>", "<>", "!=", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
 }
 
 func paginationIntegerLiteralCastSafe(expr *plan.Expr) bool {
