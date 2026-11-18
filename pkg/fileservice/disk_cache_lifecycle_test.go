@@ -21,7 +21,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -789,15 +788,12 @@ func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 			t.Fatal("callback panic stopped the callback chain")
 		}
 	}
-	// The callbacks of an update run in order; updates of different paths may be written,
-	// and their callbacks run, in any order.
-	first := slices.DeleteFunc(slices.Clone(callbackOrder), func(v string) bool { return v == "next update after panic" })
 	require.Equal(t, []string{
 		"panicking callback",
 		"same update after panic",
 		"same update after unformattable panic",
-	}, first)
-	require.Contains(t, callbackOrder, "next update after panic")
+		"next update after panic",
+	}, callbackOrder)
 	require.Equal(t, panicCountBefore+2,
 		promtestutil.ToFloat64(metric.FSDiskCacheAsyncCallbackPanicCounter))
 	require.Eventually(t, func() bool {
@@ -809,7 +805,7 @@ func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 }
 
-func TestDiskCacheAsyncCallbacksRunOnceAndBounded(t *testing.T) {
+func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	cache.fileSync = func(*os.File) error { return nil }
 	releaseCallbacks := make(chan struct{})
@@ -884,7 +880,7 @@ func TestDiskCacheAsyncCallbacksRunOnceAndBounded(t *testing.T) {
 		return len(cache.async.slots) == 0 && cache.async.mu.pendingBytes == 0
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	callbackMu.Lock()
-	require.ElementsMatch(t, expectedPaths, callbackPaths)
+	require.Equal(t, expectedPaths, callbackPaths)
 	callbackMu.Unlock()
 }
 
@@ -1921,4 +1917,55 @@ func TestDiskCacheReadSkipsUnloadedRangeFileOfDeletedObject(t *testing.T) {
 	<-loadDone
 	_, err := os.Stat(rangePath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// The callbacks of async updates run in submission order even when a later update is
+// published first.
+func TestDiskCacheAsyncCallbacksFollowSubmissionOrder(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	firstSyncing := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	cache.fileSync = func(f *os.File) error {
+		b := make([]byte, 1)
+		if _, err := f.ReadAt(b, 0); err == nil && b[0] == 'a' {
+			close(firstSyncing)
+			<-release
+		}
+		return nil
+	}
+	var mu sync.Mutex
+	var order []string
+	ctxOf := func(name string) context.Context {
+		return OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
+			mu.Lock()
+			order = append(order, name)
+			mu.Unlock()
+		})
+	}
+	require.NoError(t, cache.Update(ctxOf("first"), &IOVector{
+		FilePath: "first", Entries: []IOEntry{{Offset: 0, Size: 1, Data: []byte("a")}},
+	}, true))
+	<-firstSyncing
+	require.NoError(t, cache.Update(ctxOf("second"), &IOVector{
+		FilePath: "second", Entries: []IOEntry{{Offset: 0, Size: 1, Data: []byte("b")}},
+	}, true))
+	require.Eventually(t, func() bool {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		_, pending := cache.async.mu.pending[cache.pathForIOEntry("second", IOEntry{Offset: 0, Size: 1})]
+		return !pending
+	}, diskCacheLifecycleTestTimeout, time.Millisecond, "the second update is published while the first syncs")
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	require.Empty(t, order, "no callback runs before the first update's")
+	mu.Unlock()
+	unblock()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(order) == 2
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	require.Equal(t, []string{"first", "second"}, order)
 }

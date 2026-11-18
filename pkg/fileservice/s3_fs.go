@@ -1408,7 +1408,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join.
-	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil {
+	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil &&
+		!vector.Policy.Any(SkipDiskCacheReads) {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}

@@ -50,13 +50,17 @@ var eventDiskCacheAsyncCallbackPanic = logutil.Event{
 }
 
 type diskCacheAsyncUpdate struct {
-	filePath     string
-	diskPath     string
-	entry        IOEntry
-	callbacks    []OnDiskCacheWrittenFunc
-	finalize     *diskCacheAsyncFileFinalize
-	releaseOnce  sync.Once
-	resourceOnce sync.Once
+	filePath  string
+	diskPath  string
+	entry     IOEntry
+	callbacks []OnDiskCacheWrittenFunc
+	// callbacksAfter is closed once the callbacks of the updates submitted before this
+	// one ran; callbacksDone is closed once this update's ran or it ended without them.
+	callbacksAfter chan struct{}
+	callbacksDone  chan struct{}
+	finalize       *diskCacheAsyncFileFinalize
+	releaseOnce    sync.Once
+	resourceOnce   sync.Once
 }
 
 type diskCacheAsyncFileFinalize struct {
@@ -288,6 +292,12 @@ func (d *DiskCache) scheduleAsyncUpdate(
 		},
 		callbacks: append([]OnDiskCacheWrittenFunc(nil), callbacks...),
 	}
+	if len(callbacks) > 0 {
+		a.callbackMu.Lock()
+		job.callbacksAfter, job.callbacksDone = a.callbackTail, make(chan struct{})
+		a.callbackTail = job.callbacksDone
+		a.callbackMu.Unlock()
+	}
 	select {
 	case a.jobs <- job:
 	case <-a.ctx.Done():
@@ -503,6 +513,12 @@ func (d *DiskCache) completeAsyncUpdate(
 				_ = d.observeWriteResult(job.diskPath, cleanupErr)
 			}
 		}
+		if !retainForCallbacks && job.callbacksDone != nil {
+			go func() {
+				<-job.callbacksAfter
+				close(job.callbacksDone)
+			}()
+		}
 		a := &d.async
 		a.mu.Lock()
 		delete(a.mu.pending, job.diskPath)
@@ -516,18 +532,13 @@ func (d *DiskCache) completeAsyncUpdate(
 	})
 }
 
+// scheduleAsyncUpdateCallbacks runs the callbacks of job once those of the updates
+// submitted before it ran.
 func (d *DiskCache) scheduleAsyncUpdateCallbacks(job *diskCacheAsyncUpdate) {
-	a := &d.async
-	a.callbackMu.Lock()
-	previous := a.callbackTail
-	done := make(chan struct{})
-	a.callbackTail = done
-	a.callbackMu.Unlock()
-
 	go func() {
-		defer close(done)
+		defer close(job.callbacksDone)
 		defer d.releaseAsyncUpdateResources(job)
-		<-previous
+		<-job.callbacksAfter
 		for i, fn := range job.callbacks {
 			d.runAsyncUpdateCallback(job, i, fn)
 		}

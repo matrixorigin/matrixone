@@ -231,6 +231,31 @@ func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 	require.Empty(t, fs.diskCache.prefetchObjects.m)
 }
 
+// A read that skips disk-cache reads reads object storage itself instead of waiting for
+// a prefetch range under way.
+func TestS3FSCacheBypassReadSkipsActiveRange(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
+	storage := &blockingStorage{ObjectStorage: fs.storage.(*countingStorage).ObjectStorage,
+		started: make(chan struct{}), release: make(chan struct{})}
+	fs.storage = storage
+	release := sync.OnceFunc(func() { close(storage.release) })
+	t.Cleanup(release)
+
+	first := make(chan []byte, 1)
+	go func() { first <- readRangeOf(t, fs, 0, 5000, 2) }()
+	<-storage.started
+
+	ctx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	vec := &IOVector{FilePath: "object", Policy: SkipAllCache, Entries: []IOEntry{{Offset: 6000, Size: 100}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, data[6000:6100], vec.Entries[0].Data)
+	require.Equal(t, int64(2), storage.reads.Load())
+
+	release()
+	require.Equal(t, data[5000:5002], <-first)
+}
+
 // addFlight registers a prefetch range of diskPath being read.
 func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time) *memoryPrefetchObject {
 	f := &d.prefetchObjects

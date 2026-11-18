@@ -105,7 +105,10 @@ prefetch object ended and no read copies from it.
 
 An asynchronous disk-cache update writes its bytes to a cache file before it returns;
 only the file's publication is asynchronous, so no copy of the bytes waits in memory for
-it. With no publication slot free, the update waits for one. A MemoryPrefetchObject
+it. With no publication slot free, the update waits for one. The written callbacks of
+asynchronous updates run in the order the updates were submitted, whichever is
+published first. A read that skips disk-cache reads reads object storage itself; it
+does not join a prefetch object. A MemoryPrefetchObject
 caches its range before it ends, so the reads after it find the range cached. A download
 the disk cache keeps for a cached file holds no reader of its source once the fill ends
 (decision 2026-11-18, v9, after the TN OOM in the nightly regression: the source of a
@@ -140,7 +143,8 @@ The merged entry keeps the sooner due time and the larger share, and serves both
 scans. It is dropped only when both scans have ended. A request for bytes the running
 download of its object does not download is queued once that download ends (decision
 2026-11-18, v9): before, it was counted as merged and lost, and its scan read those
-columns block by block.
+columns block by block. Such a request is kept only within the queue's bytes, and only
+for scans that have not ended.
 
 Share comes before due time because a download of an object read only in part
 displaces more useful bytes from the cache. A read that reaches such an object first

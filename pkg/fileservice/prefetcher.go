@@ -286,13 +286,17 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		metric.FSPrefetchMergedCounter.Inc()
 		if e.queue == nil && !e.req.covers(req) {
 			// The running download does not download what req asks for: it is queued once
-			// the download ends.
-			if e.next == nil {
-				e.next = &req
-			} else {
-				merged := e.next.merge(req)
-				e.next = &merged
+			// the download ends. Past the queues' bytes, what it asks for is not kept.
+			next, kept := req, int64(0)
+			if e.next != nil {
+				next, kept = e.next.merge(req), e.next.Size
 			}
+			if grow := next.Size - kept; grow > 0 && p.queuedBytesLocked()+next.Size > p.limit() {
+				metric.FSPrefetchDroppedCounter.Inc()
+				return
+			}
+			e.next = &next
+			e.nextScans = slices.DeleteFunc(e.nextScans, func(s *PrefetchScan) bool { return !s.live() })
 			if !slices.Contains(e.nextScans, req.Scan) {
 				e.nextScans = append(e.nextScans, req.Scan)
 			}

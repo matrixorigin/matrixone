@@ -532,6 +532,36 @@ func TestPrefetcherQueuesUncoveredRangesAfterRunningDownload(t *testing.T) {
 	require.Equal(t, []PrefetchRange{other}, ran[1].Ranges, "the uncovered range is downloaded after")
 }
 
+// Requests deferred behind a running download keep no ended scans and stay within the
+// queues' bytes.
+func TestPrefetcherDeferredRequestsBounded(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 100 }, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	defer close(release)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+	<-started
+	for i := 0; i < 4096; i++ {
+		s := &PrefetchScan{}
+		p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}, Scan: s})
+		s.End()
+	}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 200, Ranges: []PrefetchRange{{Offset: 1000, Size: 200}}})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.entries["a"]
+	require.LessOrEqual(t, len(e.nextScans), 2, "ended scans are pruned")
+	require.Equal(t, int64(10), e.next.Size, "a request past the queues' bytes is not kept")
+}
+
 func TestObjectPrefetchCovers(t *testing.T) {
 	r := ObjectPrefetch{Ranges: []PrefetchRange{{Offset: 0, Size: 100}}}
 	require.True(t, r.covers(ObjectPrefetch{Ranges: []PrefetchRange{{Offset: 10, Size: 20}}}))
