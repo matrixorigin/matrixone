@@ -1706,7 +1706,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 		return
 	}
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}

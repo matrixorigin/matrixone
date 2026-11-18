@@ -24,6 +24,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -479,12 +480,29 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
-	var metaBatch *batch.Batch
-	var release func()
-	if metaBatch, release, err = readMetaBatch(ctx, location, mp, fs); err != nil {
-		return
+	metaBatch := ckputil.NewMetaBatch()
+	defer metaBatch.Clean(mp)
+	// Read all columns in one IOVector so a cold cache does not fetch the
+	// checkpoint object twice. Only the selected rows become owned copies.
+	rows, err := ioutil.LoadColumnsDataByUint64Key(
+		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
+		metaBatch.Vecs, tableID, mp, 0,
+	)
+	if err != nil || rows == 0 {
+		return nil, nil, err
 	}
-	defer release()
+	for _, vec := range metaBatch.Vecs {
+		if vec.IsConstNull() || vec.GetNulls().Any() {
+			return nil, nil, moerr.NewInvalidInput(ctx, "null checkpoint table range metadata")
+		}
+	}
+	stats := metaBatch.Vecs[ckputil.MetaAttr_ObjectStats_Idx]
+	for i := range rows {
+		if len(stats.GetBytesAt(i)) != objectio.ObjectStatsLen {
+			return nil, nil, moerr.NewInvalidInput(ctx, "invalid checkpoint object statistics length")
+		}
+	}
+	metaBatch.SetRowCount(rows)
 	dataRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Data)
 	tombstoneRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return
