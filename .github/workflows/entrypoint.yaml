@@ -135,7 +135,7 @@ jobs:
     name: Matrixone UT Coverage execution
     needs: [preflight]
     if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-node-cache-pr.yaml@74a662337f230aa2b160d208e090edd943dec30e
+    uses: matrixorigin/CI/.github/workflows/coverage-node-cache-pr.yaml@d5bf705a68e2efb04836e972cdabcb506d2e892c
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit

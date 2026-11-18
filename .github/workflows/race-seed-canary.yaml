@@ -62,7 +62,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-real-pr-validation.yaml@f74fe7776154622381ba5e5d2ecf8311090ae0b5
+    uses: matrixorigin/CI/.github/workflows/node-cache-real-pr-validation.yaml@d5bf705a68e2efb04836e972cdabcb506d2e892c
     with:
       pr_number: ${{ fromJSON(inputs.matrixone_sha).pr_number }}
       expected_head_sha: ${{ fromJSON(inputs.matrixone_sha).head_sha }}
