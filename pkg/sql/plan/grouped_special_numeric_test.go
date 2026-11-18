@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -263,12 +262,8 @@ func TestGroupedEnumNumericExecution(t *testing.T) {
 		members []string
 	}{{"legacy", []string{"2", "red"}}, {"framed", []string{"a,b", "red"}}} {
 		t.Run(domain.name, func(t *testing.T) {
-			payload, encoding := strings.Join(domain.members, ","), types.EnumEncodingLegacy
-			if domain.name == "framed" {
-				var err error
-				payload, encoding, err = types.EncodeEnumMembers(domain.members)
-				require.NoError(t, err)
-			}
+			payload, encoding, err := types.EncodeEnumMembers(domain.members)
+			require.NoError(t, err)
 			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding}
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
