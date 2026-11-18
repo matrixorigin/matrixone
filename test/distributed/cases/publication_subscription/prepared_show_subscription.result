@@ -1,0 +1,32 @@
+drop account if exists ps_show_subscriber;
+create account ps_show_subscriber admin_name = 'admin' identified by '111';
+drop database if exists ps_show_source;
+create database ps_show_source;
+create table ps_show_source.a (id int);
+create table ps_show_source.b (id int);
+create publication ps_show_pub database ps_show_source account ps_show_subscriber;
+create database ps_show_sub from sys publication ps_show_pub;
+prepare ps_tables from 'show tables from ps_show_sub';
+execute ps_tables;
+➤ Tables_in_ps_show_sub[12,-1,0]  𝄀
+a  𝄀
+b
+alter publication ps_show_pub account sys;
+execute ps_tables;
+internal error: the account ps_show_subscriber is not allowed to subscribe the publication ps_show_pub
+show tables from ps_show_sub;
+internal error: the account ps_show_subscriber is not allowed to subscribe the publication ps_show_pub
+alter publication ps_show_pub account ps_show_subscriber;
+execute ps_tables;
+➤ Tables_in_ps_show_sub[12,-1,0]  𝄀
+a  𝄀
+b
+alter publication ps_show_pub account ps_show_subscriber database ps_show_source table a;
+execute ps_tables;
+➤ Tables_in_ps_show_sub[12,-1,0]  𝄀
+a
+deallocate prepare ps_tables;
+drop database ps_show_sub;
+drop publication ps_show_pub;
+drop database ps_show_source;
+drop account ps_show_subscriber;

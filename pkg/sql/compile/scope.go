@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -325,6 +326,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	var p *pipeline.Pipeline
+	phase := "run_pipeline"
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -333,6 +335,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
+			// Cleanup cancels the pipeline even when the failure came from a
+			// dependency. Classify the result while its context still reflects
+			// what happened during execution.
+			err = s.finishRunError(phase, err)
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
 			// scope is retained for reuse, so do not keep its closed reader
@@ -371,8 +377,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 				readers, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
-					// Classify a local stop before deferred cleanup signals the receiver.
-					return s.finishRunError("build_serial_reader", err)
+					phase = "build_serial_reader"
+					return err
 				}
 
 				s.DataSource.R = readers[0]
@@ -388,7 +394,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	return s.finishRunError("run_pipeline", err)
+	return err
 }
 
 var scopeCancellationFailure = logutil.Event{
@@ -597,7 +603,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			scopeRunResult{err: err, classified: true},
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -662,7 +668,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, classified: true})
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
@@ -671,10 +677,14 @@ func collectMergeRunResults(
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
 // pipeline, its sibling goroutines, and remote receiver registration. It must
-// run before MergeRun waits for those siblings to exit.
+// run before MergeRun waits for those siblings to exit. The execution owner
+// classifies the error before cleanup, so a benign local stop arrives as nil.
 func (s *Scope) cancelMergeSiblingsOnError(err error) error {
-	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
-		s.Proc.Cancel(err)
+	if err != nil && s != nil && s.Proc != nil {
+		table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx, err)
+		if s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
 	}
 	return err
 }

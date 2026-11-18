@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -272,7 +273,8 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	currentRolesCache *table_function.CurrentRolesExecutionCache
+	scopes            []*Scope
 
 	pn *plan.Plan
 
