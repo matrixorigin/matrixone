@@ -375,6 +375,18 @@ alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup whe
 select a, count(*) from db1.t_dup group by a order by a;
 -- @session
 
+-- A cached merge is reparsed in the querying session's mode. Distinguish one
+-- backslash from two, while the other role uses GET_FORMAT's DATE keyword.
+insert into db1.t_dup values (3,4,_utf8mb4 X'615c62'),(4,5,_utf8mb4 X'615c5c62');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = _utf8mb4 X'615c62'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where get_format(DATE, code) is not null" on table db1.t_dup;
+-- @session:id=19&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+select a from db1.t_dup order by a;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

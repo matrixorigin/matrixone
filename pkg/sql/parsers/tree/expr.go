@@ -1099,6 +1099,15 @@ func isDateTimeFormatFunction(name string) bool {
 }
 
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
+	// GET_FORMAT's first argument is a grammar keyword stored as a string for binding.
+	if !node.IsGeneric && node.FuncName != nil && strings.EqualFold(node.FuncName.Origin(), "get_format") && len(node.Exprs) == 2 {
+		if kind, ok := node.Exprs[0].(*NumVal); ok {
+			ctx.WriteString(kind.String())
+			ctx.WriteString(", ")
+			node.Exprs[1].Format(ctx)
+			return
+		}
+	}
 	if ctx.ModeIndependentStringLiterals() &&
 		node.FuncName != nil &&
 		strings.EqualFold(node.FuncName.Origin(), "name_const") &&

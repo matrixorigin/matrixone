@@ -1255,7 +1255,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	merged.Select = &mergedClause
 
 	// The merged rule is reparsed as SQL, so literals must retain their string type and value.
-	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithSingleQuoteString()), true, nil
+	return tree.StringWithOpts(&merged, dialect.MYSQL, tree.WithExecutableStringLiterals()), true, nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
@@ -1300,9 +1300,29 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: normalizeRewriteSQL(tree.String(&clause.Exprs, dialect.MYSQL)),
+		selectList: rewriteProjectionKey(clause.Exprs),
 		table:      table,
 	}, true
+}
+
+// Fold SQL and identifier case, but never the contents of a string literal.
+// Quote identifiers as well: the column `1` and the integer 1 are distinct.
+func rewriteProjectionKey(exprs tree.SelectExprs) string {
+	var literals []tree.StringLiteralPosition
+	sql := tree.StringWithOpts(&exprs, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithExecutableStringLiterals(), tree.WithStringLiteralPositions(&literals))
+	if len(literals) == 0 {
+		return strings.ToLower(sql)
+	}
+	var key strings.Builder
+	key.Grow(len(sql))
+	start := 0
+	for _, lit := range literals {
+		key.WriteString(strings.ToLower(sql[start:lit.Start]))
+		key.WriteString(sql[lit.Start:lit.End])
+		start = lit.End
+	}
+	key.WriteString(strings.ToLower(sql[start:]))
+	return key.String()
 }
 
 func rewriteRuleSelectClauseIsMergeable(clause *tree.SelectClause) bool {

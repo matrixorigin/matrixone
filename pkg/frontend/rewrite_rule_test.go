@@ -2095,7 +2095,7 @@ func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
 	ctx := context.Background()
 	const base = "select a from db1.t1 where "
 	const left = `kind = '单据' and code in (select code from db1.codes where region in ('0001', '0010'))`
-	const right = `label = 'O''Brien\\west'`
+	const right = `label = 'O''Brien' and path = _utf8mb4 X'615c62'`
 
 	merged, err := mergeRewriteRules(ctx, base+left, base+right)
 	require.NoError(t, err)
@@ -2104,10 +2104,49 @@ func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
 	want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"("+left+") or ("+right+")", 1)
 	require.NoError(t, err)
 	defer want.Free()
-	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+		t.Run("sql_mode="+mode, func(t *testing.T) {
+			got, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, merged, 1, mode)
+			require.NoError(t, err)
+			defer got.Free()
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestMergeRewriteRulesGetFormat(t *testing.T) {
+	const base = "select a from db1.t1 where "
+	const filter = "get_format(DATE, locale_col) = 'x'"
+	merged, err := mergeRewriteRules(t.Context(), base+filter, base+"a = 1")
 	require.NoError(t, err)
-	defer got.Free()
-	require.Equal(t, want, got)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Contains(t, merged, "where ("+filter+") or (a = 1)")
+}
+
+func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		compatible  bool
+	}{
+		{"'1'", "1", false},
+		{"'a'", "'A'", false},
+		{"`1`", "1", false},
+		{"concat(Code, 'A')", "concat(code, 'A')", true},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " as a from db1.t1 where n = 1"
+			right := "select " + tc.right + " as a from db1.t1 where n = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.compatible {
+				require.Contains(t, merged, "where (n = 1) or (n = 2)")
+			} else {
+				require.Equal(t, right, merged)
+			}
+		})
+	}
 }
 
 func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
@@ -2215,7 +2254,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "simple select",
 			rule:       "select A, Age from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a, age",
+			selectList: "`a`, `age`",
 			table:      "db1.t1",
 		},
 		{
@@ -2229,35 +2268,35 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "qualified star with alias",
 			rule:       "select t.* from db1.t1 as t where age > 28",
 			ok:         true,
-			selectList: "t.*",
+			selectList: "`t`.*",
 			table:      "db1.t1 as t",
 		},
 		{
 			name:       "aliased column",
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a as x",
+			selectList: "`a` as `x`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "where subquery with order by and limit",
 			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "parenthesized single table",
 			rule:       "select a from (db1.t1) where age > 28",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "scalar expression",
 			rule:       "select a + 1 from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a + 1",
+			selectList: "`a` + 1",
 			table:      "db1.t1",
 		},
 		{

@@ -32,6 +32,7 @@ func TestSpecialFunctionFormatRoundTripForCTAS(t *testing.T) {
 		wantCTAS     string
 		wantOrdinary string
 	}{
+		{"get_format type keyword", "select get_format(date, 'USA') as f from s", `get_format(DATE, "USA")`, `get_format(DATE, 'USA')`},
 		{"trim default", "select trim(b) as t from s", "trim(`b`)", "trim(`b`)"},
 		{"trim removal", "select trim(a from b) as t from s", "trim(`a` from `b`)", "trim(`a` from `b`)"},
 		{"trim both", "select trim(both a from b) as t from s", "trim(both `a` from `b`)", "trim(both `a` from `b`)"},

@@ -192,7 +192,7 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 		switch node.ValType {
 		case P_char:
 			if strings.Contains(node.origString, "\\") {
-				if ctx.viewDefinition {
+				if ctx.preserveTextLiteralWidth {
 					// Keep the text literal's value and inferred character width
 					// without a CAST's default width or declared-size limit.
 					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", []byte(node.origString))
