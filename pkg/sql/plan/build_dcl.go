@@ -772,7 +772,6 @@ func buildSetVariablesWithQuery(
 		}
 		items[idx] = item
 	}
-
 	setVariables := &plan.SetVariables{
 		Items: items,
 	}

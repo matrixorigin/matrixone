@@ -988,6 +988,24 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 	})
 
+	t.Run("folded correlated scalar", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t,
+			"select n.n_nationkey from nation n window unused_w as (order by null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0))")
+		require.NoError(t, err)
+		query := queryPlan.GetQuery()
+		require.False(t, queryHasReachableTable(query, "region"))
+		var retained bool
+		for _, node := range query.Nodes {
+			retained = retained || IsValidationPrivilegeCarrier(node) && node.GetObjRef().GetObjName() == "region"
+		}
+		require.True(t, retained, "the folded window source must still be authorized")
+		var dependency bool
+		for _, ref := range query.CatalogDependencies {
+			dependency = dependency || ref.ObjName == "region"
+		}
+		require.True(t, dependency, "the source must remain a catalog dependency")
+	})
+
 	t.Run("prepare schema invalidation", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
 			NewMockOptimizer(false, newPlanTestProcess(t)), t,
@@ -1066,7 +1084,7 @@ func TestOptimizerRetainsNamedWindowValidationPrivilegeCarriers(t *testing.T) {
 				}
 			}
 			require.NotNil(t, carrier, "optimizer must retain the authorization carrier")
-			require.Equal(t, windowValidationPrivilegeCarrierExtraOptions, carrier.GetExtraOptions())
+			require.Equal(t, validationPrivilegeCarrierExtraOptions, carrier.GetExtraOptions())
 		})
 	}
 }
@@ -1110,11 +1128,11 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 		},
 	)
 
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 3)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 3)
 
 	carriers := make(map[string]*planpb.Node)
-	for _, carrier := range owner.windowValidationScans {
+	for _, carrier := range owner.validationPrivilegeCarriers {
 		carriers[carrier.GetObjRef().GetObjName()] = carrier
 		require.Empty(t, carrier.GetTableDef().GetCols())
 	}
@@ -1132,14 +1150,14 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 		TableDef: wideTable,
 		ViewPath: []*planpb.ViewStep{{DatabaseName: "tpch", ViewName: "region_view", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{}}}},
 	}}
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 4)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 4)
 	// An inner snapshot difference cannot disappear when compacting carriers.
 	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS = &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 5)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 5)
 	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
-	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
+	require.Equal(t, uint32(7), owner.validationPrivilegeCarriers[4].ViewPath[0].Snapshot.TS.LogicalTime)
 
 }
 

@@ -459,14 +459,14 @@ type QueryBuilder struct {
 	// Synthetic scalar reaggregations preserve earlier scalar outputs as
 	// grouping keys. Each alias keeps its original column identity through
 	// final column pruning without changing the executable plan format.
-	scalarReaggAliases      map[int32][]scalarReaggAlias
-	headingProvenanceByNode map[int32]headingProvenanceMap
-	windowValidationScans   []*plan.Node
-	windowValidationSeen    map[string]struct{}
-	nameByColRef            map[[2]int32]string
-	protectedScans          map[int32]int
-	updateTargetScans       map[int32]struct{}
-	projectSpecialGuards    map[int32]*specialIndexGuard
+	scalarReaggAliases             map[int32][]scalarReaggAlias
+	headingProvenanceByNode        map[int32]headingProvenanceMap
+	validationPrivilegeCarriers    []*plan.Node
+	validationPrivilegeCarrierKeys map[string]struct{}
+	nameByColRef                   map[[2]int32]string
+	protectedScans                 map[int32]int
+	updateTargetScans              map[int32]struct{}
+	projectSpecialGuards           map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -545,9 +545,12 @@ type QueryBuilder struct {
 	zeroScalarRewriteGeneration uint64
 	// Tracks discarded scalar sources even when their carrier was deduplicated.
 	zeroScalarRetentionGeneration uint64
-	zeroScalarPrograms            map[uint32]struct{}
-	zeroScalarRootCtx             *BindContext
-	hasZeroScalarSourceCandidate  bool
+	// Tracks special checks in isolated validation builders nested in a scalar.
+	zeroScalarValidationSpecialGeneration uint64
+	zeroScalarPrograms                    map[uint32]struct{}
+	zeroScalarPolicy                      zeroScalarPolicy
+	zeroScalarRequiredLiveNodes           map[int32]zeroScalarLiveRequirement
+	hasZeroScalarSourceCandidate          bool
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32

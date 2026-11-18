@@ -469,7 +469,7 @@ func TestSQLUDFRetainsNestedZeroScalarRewriteSources(t *testing.T) {
 	require.NoError(t, err)
 	retained := make(map[string]bool)
 	for _, node := range built.GetQuery().Nodes {
-		if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+		if IsValidationPrivilegeCarrier(node) && node.ObjRef != nil {
 			retained[node.ObjRef.ObjName] = true
 		}
 	}
@@ -519,7 +519,7 @@ func TestBuiltinRetainsNestedZeroScalarRewriteSources(t *testing.T) {
 	require.NoError(t, err)
 	retained := make(map[string]bool)
 	for _, node := range built.GetQuery().Nodes {
-		if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+		if IsValidationPrivilegeCarrier(node) && node.ObjRef != nil {
 			retained[node.ObjRef.ObjName] = true
 		}
 	}
@@ -547,7 +547,7 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 			require.NoError(t, err)
 			retained := make(map[string]bool)
 			for _, node := range query.Nodes {
-				if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+				if IsValidationPrivilegeCarrier(node) && node.ObjRef != nil {
 					retained[node.ObjRef.ObjName] = true
 					require.NotNil(t, node.TableDef, "carrier must retain catalog identity")
 				}
@@ -558,6 +558,94 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 			}
 		})
 	}
+}
+
+type zeroScalarSavedResultContext struct{ *MockCompilerContext }
+
+func (c *zeroScalarSavedResultContext) ResolveVariable(name string, system, global bool) (interface{}, error) {
+	if name == "save_query_result" {
+		return int8(1), nil
+	}
+	return c.MockCompilerContext.ResolveVariable(name, system, global)
+}
+
+func (c *zeroScalarSavedResultContext) GetQueryResultMeta(string) ([]*plan.ColDef, string, error) {
+	return []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}, "saved-result", nil
+}
+
+func TestZeroScalarSavedResultAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+		column string
+	}{
+		{"result_scan", "result_scan('00000000-0000-0000-0000-000000000001')", "a"},
+		{"meta_scan", "meta_scan('00000000-0000-0000-0000-000000000001')", "account_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, folded := range []bool{false, true} {
+				ctx := &zeroScalarSavedResultContext{NewMockCompilerContext(true, newPlanTestProcess(t))}
+				wrapper := fmt.Sprintf("(select (select q.%s from region r where r.r_regionkey > q.%s limit 0) from %s q limit 1)", tc.column, tc.column, tc.source)
+				if folded {
+					wrapper = "null + " + wrapper
+				}
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+wrapper, 1)
+				require.NoError(t, err)
+				query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+				stmt.Free()
+				if folded {
+					require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+					continue
+				}
+				require.NoError(t, err)
+				var found bool
+				require.NoError(t, plan.WalkQueryNodes(query, func(_ int32, node *plan.Node) error {
+					found = found || zeroScalarNodeLiveRequirements(node)&zeroScalarLiveSavedResult != 0
+					return nil
+				}))
+				require.True(t, found, "live source must reach frontend authorization")
+			}
+			ctx := &zeroScalarSavedResultContext{NewMockCompilerContext(true, newPlanTestProcess(t))}
+			windowSQL := fmt.Sprintf("select n.n_nationkey from nation n window w as (order by (select null + (select q.%s from region r where r.r_regionkey > q.%s limit 0) from %s q limit 1))", tc.column, tc.column, tc.source)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, windowSQL, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(ctx, stmt, false, nil)
+			stmt.Free()
+			require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+
+			ctx = &zeroScalarSavedResultContext{NewMockCompilerContext(true, newPlanTestProcess(t))}
+			windowSQL = fmt.Sprintf("select n.n_nationkey from nation n window w as (order by null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), (select q.%s from %s q limit 1))", tc.column, tc.source)
+			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, windowSQL, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(ctx, stmt, false, nil)
+			stmt.Free()
+			require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+		})
+	}
+}
+
+func TestZeroScalarControlAuthorization(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select null + (select mo_ctl('cn', 'GetProtocolVersion', '') from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", 1)
+	require.NoError(t, err)
+	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	stmt.Free()
+	require.ErrorContains(t, err, "control function in a LIMIT 0 subquery")
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select n.n_nationkey from nation n window w as (order by null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), mo_ctl('cn', 'GetProtocolVersion', ''))", 1)
+	require.NoError(t, err)
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	stmt.Free()
+	require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select null + (select mo_ctl('cn', 'GetProtocolVersion', '') from nation n where (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) is null limit 1) from nation", 1)
+	require.NoError(t, err)
+	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	stmt.Free()
+	require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
 }
 
 func TestZeroScalarRetentionIgnoresLiteralSourceMetadata(t *testing.T) {
@@ -642,7 +730,7 @@ func TestBindSQLUDFRetainsDiscardedSetOperationZeroLimitSource(t *testing.T) {
 	require.NoError(t, err)
 	retained := false
 	for _, node := range built.GetQuery().Nodes {
-		retained = retained || isWindowValidationPrivilegeCarrier(node) &&
+		retained = retained || IsValidationPrivilegeCarrier(node) &&
 			node.ObjRef != nil && node.ObjRef.ObjName == "region"
 	}
 	require.True(t, retained, "discarded UNION argument must retain its source for privilege checks")
