@@ -17,6 +17,7 @@ package logservice
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/lni/vfs"
@@ -197,6 +198,58 @@ type removeErrorFS struct{ vfs.FS }
 
 func (fs removeErrorFS) RemoveAll(string) error { return os.ErrPermission }
 
+type partialSnapshotRemovalFS struct {
+	vfs.FS
+	failed bool
+}
+
+func (fs *partialSnapshotRemovalFS) RemoveAll(path string) error {
+	if strings.HasSuffix(path, ".removing") && !fs.failed {
+		fs.failed = true
+		if err := fs.FS.Remove(fs.FS.PathJoin(path, "dragonboat.snapshot.message")); err != nil {
+			return err
+		}
+		if err := fs.FS.Remove(fs.FS.PathJoin(path, "snapshot.metadata")); err != nil {
+			return err
+		}
+		return os.ErrPermission
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestReconcileInterruptedExportAfterPartialRemovalAndRestart(t *testing.T) {
+	fs := &partialSnapshotRemovalFS{FS: vfs.NewStrictMem()}
+	cfg := &Config{FS: fs, SnapshotExportDir: "/tmp/exported"}
+	mgr := newSnapshotManager(cfg)
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	testPrepareSnapshot(t, mgr, nid, 200)
+	final := mgr.snapshotPath(nid, 200)
+	flag, err := fs.Create(fs.PathJoin(final, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, flag.Close())
+
+	require.ErrorIs(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID), os.ErrPermission)
+	removing := final + "-2.removing"
+	_, err = fs.Stat(final)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = fs.Stat(removing)
+	require.NoError(t, err)
+	_, err = fs.Stat(fs.PathJoin(removing, "snapshot.metadata"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// A new manager has no in-memory cleanup marker. The directory name alone
+	// must make the remainder discoverable after a process restart.
+	restarted := newSnapshotManager(cfg)
+	require.NoError(t, restarted.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+	require.NoError(t, restarted.Init(nid.shardID, nid.replicaID))
+	require.Equal(t, 1, restarted.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(removing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = fs.Stat(mgr.snapshotPath(nid, 100))
+	require.NoError(t, err)
+}
+
 type selectiveRemoveErrorFS struct {
 	vfs.FS
 	blockedPath string
@@ -307,7 +360,11 @@ func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
 
 			err = mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID)
 			require.ErrorIs(t, err, os.ErrPermission)
-			_, err = fs.Stat(dir)
+			remaining := dir
+			if tc.name == "final" {
+				remaining += "-2.removing"
+			}
+			_, err = fs.Stat(remaining)
 			require.NoError(t, err, "a failed cleanup must leave the directory visible")
 		})
 	}

@@ -57,6 +57,35 @@ type failExportFlagCleanupFS struct {
 	blockCleanup atomic.Bool
 }
 
+type pausedFailedFlagFS struct {
+	vfs.FS
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	unblock sync.Once
+	failed  atomic.Bool
+}
+
+func (fs *pausedFailedFlagFS) Remove(path string) error {
+	if strings.HasSuffix(path, "dragonboat.snapshot.message") {
+		var reject bool
+		fs.once.Do(func() {
+			close(fs.entered)
+			<-fs.release
+			fs.failed.Store(true)
+			reject = true
+		})
+		if reject {
+			return os.ErrPermission
+		}
+	}
+	return fs.FS.Remove(path)
+}
+
+func (fs *pausedFailedFlagFS) resume() {
+	fs.unblock.Do(func() { close(fs.release) })
+}
+
 func (fs *failExportFlagCleanupFS) Remove(path string) error {
 	if strings.HasSuffix(path, "dragonboat.snapshot.message") &&
 		fs.failed.CompareAndSwap(false, true) {
@@ -230,6 +259,70 @@ func TestFailedExportCleanupRetriesBeforeSameIndexExport(t *testing.T) {
 	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
 	require.False(t, l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID))
 	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+}
+
+func TestTimedOutExportReconcilesLateWorkerFailure(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &pausedFailedFlagFS{
+		FS: cfg.FS, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fs.resume()
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	for range 10 {
+		_, err = l.append(ctx, shardID, getTestUserEntry())
+		require.NoError(t, err)
+	}
+	require.NoError(t, l.truncateLog(ctx, shardID, 4, 100))
+
+	exportCtx := &controlledDeadlineContext{
+		Context: context.Background(), deadline: time.Now().Add(30 * time.Second),
+		done: make(chan struct{}),
+	}
+	t.Cleanup(exportCtx.expire)
+	result := make(chan error, 1)
+	go func() { result <- l.exportSnapshot(exportCtx, shardID, replicaID) }()
+	select {
+	case <-fs.entered:
+	case err := <-result:
+		t.Fatalf("export returned before flag removal: %v", err)
+	case <-ctx.Done():
+		t.Fatal("export did not reach flag removal")
+	}
+	require.ErrorIs(t, l.beginExport(shardID, replicaID), errSnapshotExportPending)
+	exportCtx.expire()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, dragonboat.ErrTimeout)
+	case <-ctx.Done():
+		t.Fatal("timed-out request did not return")
+	}
+	require.True(t, l.snapshotMgr.HasUnresolvedExport(shardID, replicaID))
+	require.ErrorIs(t, l.beginExport(shardID, replicaID), errSnapshotExportPending)
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+	fs.resume()
+	require.Eventually(t, func() bool {
+		if err := l.processShardTruncateLogWithReplica(ctx, shardID, replicaID); err != nil {
+			return false
+		}
+		return !l.snapshotMgr.HasUnresolvedExport(shardID, replicaID) &&
+			l.snapshotMgr.Count(shardID, replicaID) == 1
+	}, testIOTimeout, 10*time.Millisecond)
+	require.True(t, fs.failed.Load())
 }
 
 func (fs *pausedExportRenameFS) Rename(oldname, newname string) error {

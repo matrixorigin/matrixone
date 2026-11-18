@@ -21,6 +21,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"time"
 
@@ -254,7 +255,9 @@ func (l *store) beginExport(shardID, replicaID uint64) error {
 	defer l.mu.Unlock()
 	for _, rec := range l.mu.metadata.Shards {
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
-			l.snapshotMgr.BeginExport(shardID, replicaID)
+			if !l.snapshotMgr.BeginExport(shardID, replicaID) {
+				return errSnapshotExportPending
+			}
 			return nil
 		}
 	}
@@ -266,15 +269,47 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	if err := l.beginExport(shardID, replicaID); err != nil {
 		return err
 	}
-	var mayFinishLater bool
-	defer func() { l.snapshotMgr.FinishExport(shardID, replicaID, mayFinishLater) }()
+	var mayFinishLater, transferred bool
+	defer func() {
+		if !transferred {
+			l.snapshotMgr.FinishExport(shardID, replicaID, mayFinishLater)
+		}
+	}()
 	opts := dragonboat.SnapshotOption{
 		// set to true means just export snapshot, do NOT truncate logs.
 		Exported:   true,
 		ExportPath: l.snapshotMgr.exportPath(shardID, replicaID),
 	}
 	// Just take a snapshot and export it. This snapshot is invisible to system.
-	idx, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts)
+	if _, ok := ctx.Deadline(); !ok {
+		return dragonboat.ErrInvalidDeadline
+	}
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return dragonboat.ErrTimeout
+		}
+		return dragonboat.ErrCanceled
+	}
+	// The caller's short deadline must not expire Dragonboat's result channel.
+	// Retain the request until its worker reports completion, including after a
+	// caller timeout. One unresolved request per replica bounds this state.
+	rs, err := l.nh.RequestSnapshot(shardID, opts, time.Duration(math.MaxInt64))
+	if err != nil {
+		return err
+	}
+	var idx uint64
+	select {
+	case result := <-rs.AppliedC():
+		rs.Release()
+		idx, err = exportedSnapshotResult(result)
+	case <-ctx.Done():
+		l.snapshotMgr.RetainPendingExport(shardID, replicaID, rs)
+		transferred = true
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return dragonboat.ErrTimeout
+		}
+		return dragonboat.ErrCanceled
+	}
 	if err != nil {
 		var exportErr *dragonboat.SnapshotExportError
 		if errors.As(err, &exportErr) {
@@ -311,6 +346,26 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	// forward the snapshot index.
 	l.shardSnapshotInfo.forwardSnapshot(shardID, idx)
 	return nil
+}
+
+func exportedSnapshotResult(result dragonboat.RequestResult) (uint64, error) {
+	if err := result.Error(); err != nil {
+		return 0, err
+	}
+	switch {
+	case result.Completed():
+		return result.SnapshotIndex(), nil
+	case result.Rejected(), result.Aborted():
+		return 0, dragonboat.ErrRejected
+	case result.Timeout():
+		return 0, dragonboat.ErrTimeout
+	case result.Terminated():
+		return 0, dragonboat.ErrShardClosed
+	case result.Dropped():
+		return 0, dragonboat.ErrShardNotReady
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("unknown snapshot request result")
+	}
 }
 
 func (l *store) reconcileFailedExport(shardID, replicaID uint64) error {
@@ -618,7 +673,30 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 }
 
 func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID uint64, replicaID uint64) error {
-	// Do NOT process before leader is OK.
+	// Retire completed exports and clean up their failed directories even if
+	// this replica has lost its leader in the meantime.
+	result, resolved, pending := l.snapshotMgr.PollPendingExport(shardID, replicaID)
+	if pending {
+		return nil
+	}
+	if resolved && result.Error() != nil {
+		var exportErr *dragonboat.SnapshotExportError
+		if errors.As(result.Error(), &exportErr) {
+			if err := l.reconcileFailedExport(shardID, replicaID); err != nil {
+				l.snapshotMgr.MarkFailedExportCleanup(shardID, replicaID)
+				return errors.Join(result.Error(), err)
+			}
+		} else {
+			return result.Error()
+		}
+	}
+	if l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID) {
+		if err := l.reconcileFailedExport(shardID, replicaID); err != nil {
+			return err
+		}
+		l.snapshotMgr.ClearFailedExportCleanup(shardID, replicaID)
+	}
+	// Do NOT process truncation before leader is OK.
 	leaderID, err := l.leaderID(shardID)
 	if err != nil {
 		l.runtime.Logger().Warn("cannot get leader ID, skip truncate",
@@ -629,12 +707,6 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		l.runtime.Logger().Warn("no leader yet, skip truncate",
 			zap.Uint64("shard ID", shardID))
 		return nil
-	}
-	if l.snapshotMgr.NeedsFailedExportCleanup(shardID, replicaID) {
-		if err := l.reconcileFailedExport(shardID, replicaID); err != nil {
-			return err
-		}
-		l.snapshotMgr.ClearFailedExportCleanup(shardID, replicaID)
 	}
 	// A timed-out export can finish after its request has returned. Refresh
 	// the affected replica before import and quota decisions so completed
