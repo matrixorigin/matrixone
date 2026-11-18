@@ -406,7 +406,10 @@ func TestMOServerRejectsFlushPrivilegesBinaryPrepare(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.Ping(), "handshake and command roundtrip must succeed")
 
-	_, err = db.Prepare("flush privileges")
+	prepared, err := db.Prepare("flush privileges")
+	if prepared != nil {
+		defer prepared.Close()
+	}
 	require.Error(t, err, "the binary COM_STMT_PREPARE request must be rejected")
 	require.NoError(t, db.Ping(), "the same protocol connection must remain usable after the error")
 	require.NoError(t, db.Close())
