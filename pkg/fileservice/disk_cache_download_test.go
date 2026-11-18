@@ -1076,30 +1076,3 @@ func TestDiskCacheDownloadKeepsNoSourceReader(t *testing.T) {
 	defer o.idle.mu.Unlock()
 	require.Empty(t, o.idle.readers)
 }
-
-// An asynchronous update writes its entry's file before it returns, so the caller's bytes
-// are not kept for its publication; an entry read before its object was deleted is not
-// published.
-func TestDiskCacheAsyncUpdateWritesBeforePublication(t *testing.T) {
-	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
-	require.NoError(t, err)
-	defer cache.Close(ctx)
-	data := []byte("0123456789")
-	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 10, Data: data}}}, true))
-	clear(data)
-	cache.Flush(ctx)
-	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 10}}}
-	require.NoError(t, cache.Read(ctx, vec))
-	require.True(t, vec.Entries[0].done)
-	require.Equal(t, []byte("0123456789"), vec.Entries[0].Data)
-	vec.Release()
-
-	mark := cache.readDeletes()
-	require.NoError(t, cache.DeletePaths(ctx, []string{"gone"}))
-	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: "gone", Entries: []IOEntry{{Offset: 0, Size: 10, Data: []byte("0123456789"), readDeletes: mark}}}, true))
-	cache.Flush(ctx)
-	vec = &IOVector{FilePath: "gone", Entries: []IOEntry{{Offset: 0, Size: 10}}}
-	require.NoError(t, cache.Read(ctx, vec))
-	require.False(t, vec.Entries[0].done, "an entry read before the delete is not cached")
-}

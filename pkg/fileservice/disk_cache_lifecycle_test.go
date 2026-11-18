@@ -1658,20 +1658,29 @@ func TestDiskCacheCloseDeadlineDoesNotWaitForQueuedCleanup(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-// An asynchronous update keeps no bytes for its publication. With no async slot free it
-// waits for one, and writes nothing when its caller stops waiting.
-func TestDiskCacheAsyncUpdateKeepsNoBytes(t *testing.T) {
+func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This tests admission and memory release, not filesystem durability.
+	// Keep the flush barrier independent of host fsync latency.
 	cache.fileSync = func(*os.File) error { return nil }
-	for len(cache.async.slots) < cap(cache.async.slots) {
-		cache.async.slots <- struct{}{}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	cache.async.mu.Lock()
+	cache.async.mu.maxPendingBytes = 1
+	cache.async.mu.Unlock()
+
+	release := cache.startUpdate(cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1}))
+	t.Cleanup(release)
+	require.NoError(t, cache.Update(context.Background(), &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}, true))
+	// An update past the pending bytes waits for room, and is dropped when its caller
+	// stops waiting.
+	barCtx, cancelBar := context.WithCancel(context.Background())
+	barDone := make(chan error, 1)
 	go func() {
-		done <- cache.Update(ctx, &IOVector{
-			FilePath: "foo",
-			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+		barDone <- cache.Update(barCtx, &IOVector{
+			FilePath: "bar",
+			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
 		}, true)
 	}()
 	require.Eventually(t, func() bool {
@@ -1679,47 +1688,29 @@ func TestDiskCacheAsyncUpdateKeepsNoBytes(t *testing.T) {
 		defer cache.async.mu.Unlock()
 		return cache.async.mu.freed != nil
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
-	cancel()
+	cancelBar()
 	select {
-	case <-done:
+	case <-barDone:
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("the waiting update did not stop with its caller")
 	}
-	cache.async.mu.Lock()
-	require.Equal(t, int64(1), cache.async.mu.dropped)
-	require.Zero(t, cache.async.mu.pendingBytes)
-	cache.async.mu.Unlock()
 
-	// A waiting update goes on once a slot is freed.
-	go func() {
-		done <- cache.Update(context.Background(), &IOVector{
-			FilePath: "foo",
-			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
-		}, true)
-	}()
-	require.Eventually(t, func() bool {
+	func() {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed != nil
-	}, diskCacheLifecycleTestTimeout, time.Millisecond)
-	cache.async.mu.Lock()
-	for len(cache.async.slots) > 0 {
-		<-cache.async.slots
-	}
-	cache.async.wakeFreedLocked()
-	cache.async.mu.Unlock()
-	require.NoError(t, <-done)
-	cache.async.mu.Lock()
-	require.Zero(t, cache.async.mu.pendingBytes)
-	cache.async.mu.Unlock()
-	flushCtx, cancelFlush := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
-	defer cancelFlush()
+		require.Equal(t, int64(1), cache.async.mu.pendingBytes)
+		require.Len(t, cache.async.mu.pending, 1)
+		require.Equal(t, int64(1), cache.async.mu.dropped)
+	}()
+
+	release()
+	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
-	vec := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 1}}}
-	require.NoError(t, cache.Read(context.Background(), vec))
-	require.True(t, vec.Entries[0].done)
-	vec.Release()
+	cache.async.mu.Lock()
+	defer cache.async.mu.Unlock()
+	require.Zero(t, cache.async.mu.pendingBytes)
 }
 
 func TestDiskCacheAsyncUpdateRejectsCanceledCaller(t *testing.T) {

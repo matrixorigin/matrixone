@@ -396,25 +396,6 @@ func (d *DiskCache) claimAsyncPublication() bool {
 	return !a.mu.closed
 }
 
-// finalizeQueuedFile publishes a file the async workers finalize. The file of an entry is
-// not published when the entry's object was deleted after the entry was read.
-func (d *DiskCache) finalizeQueuedFile(diskPath string, f *os.File, target fillTarget) error {
-	t, ok := target.(entryFillTarget)
-	if !ok {
-		return d.finalizeFileTo(d.async.ctx, diskPath, f, d.claimAsyncPublication, target)
-	}
-	var err error
-	published, _ := d.publishUnlessDeleted(t.filePath, IOEntry{readDeletes: t.readDeletes}, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
-		err = d.finalizeFileTo(d.async.ctx, diskPath, f, claim, target)
-		return err == nil, err
-	})
-	if !published && errors.Is(err, context.Canceled) && d.async.ctx.Err() == nil {
-		// The entry's object was deleted after the entry was read.
-		return nil
-	}
-	return err
-}
-
 // wakeFreedLocked wakes the updates waiting for a slot or pending bytes.
 func (a *diskCacheAsyncState) wakeFreedLocked() {
 	if a.mu.freed != nil {
@@ -455,7 +436,13 @@ func (d *DiskCache) runAsyncUpdates() {
 			if d.async.ctx.Err() == nil {
 				if job.finalize != nil {
 					job.finalize.attempted = true
-					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize.file, job.finalize.target)
+					job.finalize.err = d.finalizeFileTo(
+						d.async.ctx,
+						job.diskPath,
+						job.finalize.file,
+						d.claimAsyncPublication,
+						job.finalize.target,
+					)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
 					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {

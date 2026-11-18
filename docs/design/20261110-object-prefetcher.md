@@ -103,11 +103,10 @@ prefetch object past that bound waits until it fits, or until none is under way.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
 prefetch object ended and no read copies from it.
 
-An asynchronous disk-cache update writes its bytes to a cache file before it returns;
-only the file's publication is asynchronous, so no copy of the bytes waits in memory for
-it. With no publication slot free, the update waits for one. A MemoryPrefetchObject
-caches its range before it ends, so the reads after it find the range cached. A download the disk cache keeps for a cached file holds
-no reader of its source once the fill ends (decision 2026-11-18, v9, after the TN OOM in the
+An asynchronous disk-cache update waits for a free publication slot rather than being
+dropped. A MemoryPrefetchObject caches its range before it ends, so the reads after it
+find the range cached. A download the disk cache keeps for a cached file holds no reader
+of its source once the fill ends (decision 2026-11-18, v9, after the TN OOM in the
 nightly regression: the source of a write's fill is the written object's bytes).
 
 ### What a scan tells the prefetcher (decision)
