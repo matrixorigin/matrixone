@@ -812,7 +812,11 @@ func reportParallelScopeBuildCancellation(
 	if s.RootOp != nil {
 		rootOp = s.RootOp.OpType().String()
 	}
-	process.WarnPipelineCleanupf(
+	logCleanup := process.WarnPipelineCleanupf
+	if normalized && normalizedErr == nil {
+		logCleanup = process.DebugPipelineCleanupf
+	}
+	logCleanup(
 		s.Proc,
 		key,
 		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
@@ -1432,13 +1436,7 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
 		return true
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		terminalSignal,
-		"remote_notify_cleanup_send_terminal_signal",
-		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		err)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_terminal_signal", reg, terminalSignal)
 
 	if terminalSignal.EventType != process.EventEnd {
 		return false
@@ -1449,34 +1447,8 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
 		return false
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		fallbackSignal,
-		"remote_notify_cleanup_send_fallback_abort_signal",
-		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		fallbackErr)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_fallback_abort_signal", reg, fallbackSignal)
 	return false
-}
-
-func logRemoteNotifyCleanupSendFailure(
-	proc *process.Process,
-	reg *process.WaitRegister,
-	signal process.PipelineSignal,
-	key string,
-	format string,
-	err error,
-) {
-	chLen, chCap := process.WaitRegisterChannelState(reg)
-	process.WarnPipelineCleanupf(
-		proc,
-		key,
-		format,
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
-		chLen,
-		chCap,
-		err)
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {

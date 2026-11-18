@@ -476,28 +476,36 @@ func (d *DiskCache) Update(
 	return nil
 }
 
+var (
+	diskCacheWriteCancellation = logutil.Event{
+		Name:    "storage.disk_cache.write_canceled",
+		Message: "disk cache write canceled",
+	}
+	diskCacheWriteFailure = logutil.Event{
+		Name:    "storage.disk_cache.write_failure",
+		Message: "write disk cache error",
+	}
+)
+
 func (d *DiskCache) writeFile(
 	ctx context.Context,
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
-	var numError int64
-	defer func() {
-		if numError > 0 {
-			metric.FSDiskCacheErrorCounter.Add(float64(numError))
-		}
-	}()
-
+	var cleanupErr error
 	defer func() {
 		if err != nil {
-			// ignore errors
-			numError++
-			logutil.Warn(
-				"write disk cache error",
-				zap.Any("error", err),
-				zap.Any("path", diskPath),
-			)
+			// Cache population is optional. Count actionable failures only.
+			fields := func() []zap.Field {
+				return []zap.Field{zap.Error(err), zap.NamedError("cleanup_error", cleanupErr), zap.String("path", diskPath)}
+			}
+			if cleanupErr == nil && (err == context.Canceled || err == context.DeadlineExceeded) && ctx.Err() == err {
+				diskCacheWriteCancellation.DebugLazy(fields)
+			} else {
+				metric.FSDiskCacheErrorCounter.Inc()
+				diskCacheWriteFailure.WarnLazy(fields)
+			}
 			err = nil
 		}
 	}()
@@ -513,8 +521,12 @@ func (d *DiskCache) writeFile(
 		return d.removeUnindexedFile(diskPath)
 	})
 	defer func() {
-		if cleanupErr := doneUpdate(); cleanupErr != nil && err == nil {
-			err = cleanupErr
+		if updateErr := doneUpdate(); updateErr != nil {
+			if err == nil {
+				err = updateErr
+			} else {
+				cleanupErr = updateErr
+			}
 		}
 	}()
 

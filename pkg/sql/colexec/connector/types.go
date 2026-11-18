@@ -154,7 +154,7 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 }
 
-// sendTerminalWithLog sends a terminal signal to Reg, logging a warning on failure.
+// sendTerminalWithLog reports an unqueued signal without changing edge state.
 func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) bool {
 	if connector.Reg == nil {
 		process.WarnPipelineCleanupf(
@@ -169,17 +169,7 @@ func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *proce
 	if process.SendPipelineSignalWithContext(ctx, connector.Reg, signal) {
 		return true
 	}
-	chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
-	process.WarnPipelineCleanupf(
-		proc,
-		"connector_cleanup_send_terminal_signal",
-		"connector cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
-		chLen,
-		chCap,
-		pipelineFailed,
-		err)
+	process.LogPipelineTerminalNotEnqueued(proc, "connector_cleanup_send_terminal_signal", connector.Reg, signal)
 	return false
 }
 

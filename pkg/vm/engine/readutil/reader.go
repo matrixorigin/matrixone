@@ -700,7 +700,7 @@ var (
 	}
 	readerCancellation = logutil.Event{
 		Name:    "storage.reader.cancellation",
-		Message: "LOGREADER-ERROR",
+		Message: "LOGREADER-CANCELED",
 	}
 )
 
@@ -721,23 +721,28 @@ func (r *reader) read(
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+		var readerContextErr error
+		if err != nil {
+			readerContextErr = ctx.Err()
+		}
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
-				event := readerFailure
-				if err == context.Canceled || err == context.DeadlineExceeded {
-					// Keep ordinary cancellation bursts from suppressing storage failures.
-					event = readerCancellation
-				}
-				event.ErrorLazy(func() []zap.Field {
+				fields := func() []zap.Field {
 					return []zap.Field{
 						zap.String("name", r.name),
 						zap.Error(err),
-						zap.NamedError("reader_context_error", ctx.Err()),
+						zap.NamedError("reader_context_error", readerContextErr),
 					}
-				})
+				}
+				if (err == context.Canceled || err == context.DeadlineExceeded) && err == readerContextErr {
+					// The scope decides whether a stopped reader failed the query.
+					readerCancellation.DebugLazy(fields)
+				} else {
+					readerFailure.ErrorLazy(fields)
+				}
 				return
 			}
 			if isEnd {

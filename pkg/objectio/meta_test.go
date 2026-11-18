@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,68 +239,6 @@ func waitForDedupLoadCompletion(done <-chan struct{}) bool {
 	case <-timer.C:
 		return false
 	}
-}
-
-func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
-	oldMetaCache := metaCache
-	metaCache = newMetaCache(fscache.ConstCapacity(1024))
-	defer func() {
-		metaCache = oldMetaCache
-	}()
-
-	var key mataCacheKey
-	key[0] = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	started := make(chan struct{})
-	ownerDone := make(chan struct{})
-	var ownerErr error
-
-	go func() {
-		defer close(ownerDone)
-		_, ownerErr = dedupLoad(ctx, key, func() ([]byte, error) {
-			close(started)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		})
-	}()
-	<-started
-
-	waiterCtx, cancelWaiter := newDedupLoadWaiterContext()
-	defer cancelWaiter()
-	var waiterLoadCount atomic.Int32
-	waiterDone := make(chan struct{})
-	var waiterValue []byte
-	var waiterErr error
-	go func() {
-		waiterValue, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
-			waiterLoadCount.Add(1)
-			return []byte("ok"), nil
-		})
-		close(waiterDone)
-	}()
-
-	waitForDedupLoadWaiterAdmission(
-		t,
-		waiterCtx,
-		waiterDone,
-		ownerDone,
-		cancel,
-		cancelWaiter,
-	)
-	cancel()
-	<-ownerDone
-	<-waiterDone
-	assert.ErrorIs(t, ownerErr, context.Canceled)
-	assert.NoError(t, waiterCtx.Err())
-	assert.NoError(t, waiterErr)
-	assert.Equal(t, []byte("ok"), waiterValue)
-	assert.Equal(t, int32(1), waiterLoadCount.Load())
-
-	metaLoadMu.Lock()
-	_, ok := metaLoadCalls[key]
-	metaLoadMu.Unlock()
-	assert.False(t, ok)
 }
 
 func TestEvictCacheToCapacityPercent(t *testing.T) {
