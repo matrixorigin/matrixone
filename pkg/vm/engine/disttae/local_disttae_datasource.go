@@ -1008,6 +1008,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	// raise their combined peak during replacement.
 	var offsets [64]int64
 	n, firstCol := 0, -1
+	var flushAtScan int
 	var firstSrc *vector.Vector
 	var firstWidth int64
 	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS &&
@@ -1041,6 +1042,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length()+n < int(objectio.BlockMaxRows) {
+			// Bound read-ahead from the first pending row, including candidates
+			// rejected by tombstones or filters.
+			if n > 0 && scan == flushAtScan {
+				if err := flushFirst(false); err != nil {
+					return err
+				}
+			}
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
 				break
 			}
@@ -1096,15 +1104,11 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 					if n == 0 && !src.IsConst() && !src.IsDictionary() &&
 						src.GetNulls().EmptyByFlag() && src.GetGrouping().EmptyByFlag() && len(src.GetArea()) == 0 {
 						firstSrc = src
+						flushAtScan = scan + len(offsets) - 1
 					}
 					if src == firstSrc {
 						offsets[n] = entry.Offset
 						n++
-						if n == len(offsets) {
-							if err := flushFirst(false); err != nil {
-								return err
-							}
-						}
 						continue
 					}
 				}

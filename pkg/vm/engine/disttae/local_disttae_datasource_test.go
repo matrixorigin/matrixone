@@ -249,6 +249,82 @@ type replayAdmissionTombstoner struct {
 	offsets []int64
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	visited int
+}
+
+func (it *countedReplayRows) Next() bool {
+	if !it.RowsIter.Next() {
+		return false
+	}
+	it.visited++
+	return true
+}
+
+func TestCommittedReplayBoundsReadAheadAcrossWorkspaceDeletes(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := make([]testMaterializedSnapshotRow, 129)
+	deleted := make([]int64, 0, len(rows)-1)
+	for i := range rows {
+		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(i)), ts: stamp, id: int64(i + 42)}
+		if i != 0 {
+			deleted = append(deleted, int64(i))
+		}
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	txnOp, closeTxn := client.NewTestTxnOperator(ctx)
+	defer closeTxn()
+	txnOp.AddWorkspace(&Transaction{deletedBlocks: &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{
+		42: {block: deleted},
+	}}})
+	table := &txnTable{tableId: 42, db: &txnDatabase{op: txnOp}}
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+	}{{"denied", 7}, {"fits", 8}} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, table: table, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll &^ engine.Policy_SkipUncommitedInMemory,
+				memPKFilter:     &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(tc.budget, new(replayReadBudget))
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			if tc.budget == 7 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.LessOrEqual(t, it.visited, 64)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+		})
+	}
+}
+
 type replayCountingFileService struct {
 	fileservice.FileService
 	reads int
