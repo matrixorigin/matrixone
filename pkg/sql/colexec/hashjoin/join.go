@@ -641,7 +641,21 @@ func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.
 }
 
 func (ctr *container) locateBuildRow(ordinal int64) (int64, int64) {
-	return ctr.mp.LocateBatchRow(ordinal, colexec.DefaultBatchSize)
+	if !ctr.mp.HasBatchRowEnds() {
+		return locateStandardBuildRow(ordinal)
+	}
+	return ctr.mp.LocateBatchRow(ordinal)
+}
+
+func locateStandardBuildRow(ordinal int64) (int64, int64) {
+	return ordinal / colexec.DefaultBatchSize, ordinal % colexec.DefaultBatchSize
+}
+
+func (ctr *container) buildBatchRows(batchIndex int64) uint64 {
+	if !ctr.mp.HasBatchRowEnds() {
+		return colexec.DefaultBatchSize
+	}
+	return uint64(ctr.rightBats[batchIndex].RowCount())
 }
 
 func (ctr *container) buildRowsLimit() int {
@@ -1842,7 +1856,10 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	rows := &hashJoin.uniqueRightRows
 	outputLimit := ctr.buildRowsLimit()
 	for rowCnt < outputLimit && ctr.rightMatchedIter.HasNext() {
-		batchIdx, row := ctr.locateBuildRow(int64(ctr.rightMatchedIter.Next()))
+		ordinal := int64(ctr.rightMatchedIter.Next())
+		batchIdx, row := ctr.locateBuildRow(ordinal)
+		batchStart := ordinal - row
+		batchRows := ctr.buildBatchRows(batchIdx)
 		rows[0] = row
 		count := 1
 		limit := min(len(rows), outputLimit-rowCnt)
@@ -1850,8 +1867,8 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 		// operator's Find scratch. Only adjacent rows from the same source
 		// batch share a gather; the iterator and output order are unchanged.
 		for count < limit && ctr.rightMatchedIter.HasNext() {
-			nextBatch, nextRow := ctr.locateBuildRow(int64(ctr.rightMatchedIter.PeekNext()))
-			if nextBatch != batchIdx {
+			nextRow := int64(ctr.rightMatchedIter.PeekNext()) - batchStart
+			if uint64(nextRow) >= batchRows {
 				break
 			}
 			ctr.rightMatchedIter.Next()
@@ -1992,8 +2009,14 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 		// Probe outputs are already copied; reuse their selection scratch for
 		// build-local ordinals instead of allocating another per-chunk array.
 		selections := leftRows[:matched]
-		for i, row := range rightRows[:matched] {
-			rightRows[i], selections[i] = ctr.locateBuildRow(row)
+		if ctr.mp.HasBatchRowEnds() {
+			for i, row := range rightRows[:matched] {
+				rightRows[i], selections[i] = ctr.mp.LocateBatchRow(row)
+			}
+		} else {
+			for i, row := range rightRows[:matched] {
+				rightRows[i], selections[i] = locateStandardBuildRow(row)
+			}
 		}
 		for j, rp := range hashJoin.ResultCols {
 			if rp.Rel == 0 {
@@ -2034,11 +2057,13 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 	// grouping all matches by batch would reorder the result stream.
 	for start := 0; start < matched; {
 		batchIdx, row := ctr.locateBuildRow(rightRows[start])
+		batchStart := rightRows[start] - row
+		batchRows := ctr.buildBatchRows(batchIdx)
 		rightRows[start] = row
 		end := start + 1
 		for end < matched {
-			nextBatch, nextRow := ctr.locateBuildRow(rightRows[end])
-			if nextBatch != batchIdx {
+			nextRow := rightRows[end] - batchStart
+			if uint64(nextRow) >= batchRows {
 				break
 			}
 			rightRows[end] = nextRow

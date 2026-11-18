@@ -460,16 +460,12 @@ func (jm *JoinMap) SetBatchRowEnds(ends []int64) {
 	jm.batchRowEnds = ends
 }
 
-// LocateBatchRow resolves a retained ordinal. With no directory the retained
-// batches have the caller's standard size except for the final batch.
-func (jm *JoinMap) LocateBatchRow(ordinal, standardBatchRows int64) (batchIndex, row int64) {
-	if jm == nil || len(jm.batchRowEnds) == 0 {
-		return ordinal / standardBatchRows, ordinal % standardBatchRows
-	}
-	return jm.locateIrregularBatchRow(ordinal)
+func (jm *JoinMap) HasBatchRowEnds() bool {
+	return jm != nil && len(jm.batchRowEnds) != 0
 }
 
-func (jm *JoinMap) locateIrregularBatchRow(ordinal int64) (int64, int64) {
+// LocateBatchRow resolves a retained ordinal when the map has a directory.
+func (jm *JoinMap) LocateBatchRow(ordinal int64) (int64, int64) {
 	index := sort.Search(len(jm.batchRowEnds), func(i int) bool { return jm.batchRowEnds[i] > ordinal })
 	if index > 0 {
 		ordinal -= jm.batchRowEnds[index-1]
