@@ -2048,9 +2048,9 @@ func TestRecreatePythonFunctionRevisionCatalogPreservesCurrentSchema(t *testing.
 			" from `mo_catalog`.`mo_function_revisions`" + sourceSnapshot
 	}
 	validationSQL := fmt.Sprintf(
-		"select %s from %s order by function_id, revision;",
+		"select %s from %s order by function_id, revision limit 128;",
 		functionRevisionCatalogColumns,
-		qualifiedTableName(moCatalog, "mo_function_revisions"),
+		"mo_catalog.mo_function_revisions",
 	)
 
 	t.Run("same account current revision schema", func(t *testing.T) {

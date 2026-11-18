@@ -412,6 +412,49 @@ func restoreRoutineCatalogWithCurrentSchema(
 	return bh.ExecRestore(targetCtx, copySQL, sourceAccount, targetAccount)
 }
 
+// Both passes use the existing restore transaction's stable catalog view.
+// Revision history is not bounded by the distinct artifact publication budget.
+const restoredFunctionRevisionPageSize = 128
+
+func forEachRestoredFunctionRevision(ctx context.Context, bh BackgroundExec, columns string, count int, visit func(int, []string) error) error {
+	defer bh.ClearExecResultSet()
+	indices := make([]uint64, count)
+	for i := range indices {
+		indices[i] = uint64(i)
+	}
+	var lastFunction, lastRevision uint64
+	rowIndex := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		where := ""
+		if rowIndex != 0 {
+			where = fmt.Sprintf(" where function_id > %d or (function_id = %d and revision > %d)", lastFunction, lastFunction, lastRevision)
+		}
+		query := fmt.Sprintf("select %s from mo_catalog.mo_function_revisions%s order by function_id, revision limit %d;", columns, where, restoredFunctionRevisionPageSize)
+		rows, err := getStringColsList(ctx, bh, query, indices...)
+		if err != nil {
+			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored revision catalog cannot be validated")
+		}
+		for _, row := range rows {
+			if err := visit(rowIndex, row); err != nil {
+				return err
+			}
+			functionID, e1 := strconv.ParseUint(row[0], 10, 64)
+			revision, e2 := strconv.ParseUint(row[1], 10, 64)
+			if e1 != nil || e2 != nil || functionID == 0 || revision == 0 || functionID < lastFunction || (functionID == lastFunction && revision <= lastRevision) {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored revision cursor is invalid or not increasing")
+			}
+			lastFunction, lastRevision = functionID, revision
+			rowIndex++
+		}
+		if len(rows) < restoredFunctionRevisionPageSize {
+			return nil
+		}
+	}
+}
+
 // validateRestoredFunctionRevisionCatalog validates the shared immutable
 // revision table. Each language owns a distinct typed implementation contract;
 // accepting a SQL row as Python (or vice versa) would make restore fail for a
@@ -421,17 +464,7 @@ func validateRestoredFunctionRevisionCatalog(
 	bh BackgroundExec,
 	targetCtx context.Context,
 ) error {
-	tableName := qualifiedTableName(moCatalog, "mo_function_revisions")
-	query := fmt.Sprintf(
-		"select %s from %s order by function_id, revision;",
-		functionRevisionCatalogColumns,
-		tableName,
-	)
-	rows, err := getStringColsList(targetCtx, bh, query, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
-	if err != nil {
-		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python revision catalog cannot be validated")
-	}
-	for rowIndex, row := range rows {
+	return forEachRestoredFunctionRevision(targetCtx, bh, functionRevisionCatalogColumns, 20, func(rowIndex int, row []string) error {
 		if len(row) != 20 {
 			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python revision row %d has %d columns", rowIndex, len(row))
 		}
@@ -455,7 +488,7 @@ func validateRestoredFunctionRevisionCatalog(
 			if err := validateRestoredSQLFunctionRevision(functionID, revision, row, definitionSchema); err != nil {
 				return err
 			}
-			continue
+			return nil
 		}
 		if row[8] != udf.LanguagePython ||
 			definitionSchema != udf.PythonDefinitionSchemaVersion ||
@@ -513,8 +546,8 @@ func validateRestoredFunctionRevisionCatalog(
 		if err != nil || row[5] != expectedInput {
 			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d argument descriptor mismatch", functionID, revision)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func validateRestoredSQLFunctionRevision(functionID, revision uint64, row []string, definitionSchema int) error {
@@ -753,52 +786,34 @@ func publishRestoredPythonArtifacts(
 	targetCtx context.Context,
 	targetAccount uint32,
 ) error {
-	rows, err := getStringColsList(
-		targetCtx,
-		bh,
-		"select language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision;",
-		0, 1, 2,
-	)
-	if err != nil {
-		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python artifacts cannot be inspected")
-	}
-	needStore := false
-	for rowIndex, row := range rows {
-		if len(row) != 3 {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored revision row %d has %d artifact columns", rowIndex, len(row))
+	var store pythonudf.ArtifactStore
+	return forEachRestoredFunctionRevision(targetCtx, bh, "function_id, revision, language, artifact_digest, body", 5, func(rowIndex int, row []string) error {
+		if row[2] != udf.LanguagePython {
+			return nil
 		}
-		if row[0] == udf.LanguagePython {
-			needStore = true
-			break
+		if store == nil {
+			pu := getPuIfPresent(sid)
+			if pu == nil || pu.FileService == nil {
+				return moerr.NewNotSupportedNoCtx("Python artifact store is required to restore a current Python revision")
+			}
+			var err error
+			store, err = pythonudf.NewFileArtifactStore(pu.FileService, pythonudf.DefaultMaxArtifactBytes)
+			if err != nil {
+				return err
+			}
 		}
-	}
-	if !needStore {
-		return nil
-	}
-	pu := getPuIfPresent(sid)
-	if pu == nil || pu.FileService == nil {
-		return moerr.NewNotSupportedNoCtx("Python artifact store is required to restore a current Python revision")
-	}
-	store, err := pythonudf.NewFileArtifactStore(pu.FileService, pythonudf.DefaultMaxArtifactBytes)
-	if err != nil {
-		return err
-	}
-	for rowIndex, row := range rows {
-		if row[0] != udf.LanguagePython {
-			continue
-		}
-		body, decodeErr := function.DecodePythonRoutineBody(row[2])
+		body, decodeErr := function.DecodePythonRoutineBody(row[4])
 		if decodeErr != nil {
 			return errutil.Wrapf(decodeErr, "UNSUPPORTED_ROUTINE_VERSION: restored Python artifact row %d is invalid", rowIndex)
 		}
-		if body.ArtifactDigest != row[1] {
+		if body.ArtifactDigest != row[3] {
 			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python artifact row %d digest does not match its revision", rowIndex)
 		}
 		if _, publishErr := store.Publish(ctx, uint64(targetAccount), body.Handler, body.Source); publishErr != nil {
 			return publishErr
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func validateSystemCatalogRestoreHandlers(ctx context.Context) error {

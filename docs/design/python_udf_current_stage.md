@@ -336,7 +336,13 @@ The per-invocation result maximum multiplied by K is a deliberate worst-case
 capacity implication, not a process-wide RSS limit. Arrow/IPC, pickle/pipe,
 temporary snapshots, materialization, Python heap, queues, file descriptors,
 and child processes have different owners; wire-byte limits do not cap arbitrary
-Python heap growth. Artifact count and total FileService bytes are not capped.
+Python heap growth. New artifact publication is capped at 1,024 immutable
+backing-store-wide account/digest reservations (at most 1 GiB of new source
+plus bounded markers). Existing pre-admission objects remain readable. Slots
+are never recycled by rollback, replace/drop, or restore: shared revisions and
+snapshots may still reference them. Cross-account restore consumes new identities;
+reusing an existing identity consumes no additional slot. This lifetime budget
+is not a total FileService quota or retrospective garbage collection.
 The CN's completion retention is longer than the worker's (10 versus 5 minutes);
 the limits are compatible, not equal. The CN retains its own terminal/group
 fences and never transparently resends STARTED work after a worker tombstone

@@ -53,7 +53,7 @@ func TestCatalogDDLOwnsInternalExecutionContext(t *testing.T) {
 			// Current revision restore validates its copied rows. Model an empty
 			// catalog explicitly so this admission test still traverses validation.
 			query := "select " + functionRevisionCatalogColumns + " from " +
-				qualifiedTableName(moCatalog, "mo_function_revisions") + " order by function_id, revision;"
+				"mo_catalog.mo_function_revisions order by function_id, revision limit 128;"
 			bh.sql2result[query] = &MysqlResultSet{}
 			capture := &catalogDDLContextExec{BackgroundExec: bh, t: t}
 			ddl := MoCatalogMoUserDefinedFunctionDDL
