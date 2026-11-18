@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -233,6 +234,79 @@ func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
 	}
 }
 
+type replayAdmissionTombstoner struct {
+	recordingTombstoner
+	err     error
+	offsets []int64
+}
+
+func (t *replayAdmissionTombstoner) ApplyPersistedTombstones(
+	_ context.Context, _ fileservice.FileService, _ *types.TS, _ *types.Blockid, offsets []int64, _ *objectio.Bitmap,
+) ([]int64, error) {
+	t.offsets = append(t.offsets, offsets...)
+	if offsets[0] == 1 {
+		return nil, t.err
+	}
+	return offsets, nil
+}
+
+func TestCommittedReplayAdmissionBeforeLaterTombstoneError(t *testing.T) {
+	srcMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(srcMP)
+	ts := types.BuildTS(4, 0)
+	block := testBlockID(7)
+	state := newTestMaterializedSnapshotPartitionState(t, srcMP, []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: ts, id: 0, payload: 42},
+		{rowID: types.NewRowid(&block, 1), ts: ts, id: 1, payloadNull: true},
+	})
+	tombstoneErr := errors.New("second row tombstone read failed")
+	for _, tc := range []struct {
+		name    string
+		seq     uint16
+		limit   uint64
+		wantErr error
+		offsets []int64
+	}{
+		{"ineligible source", 1, 1, mpool.ErrAllocationAccountCapacity, []int64{0}},
+		{"eligible pending prefix", 0, 1, mpool.ErrAllocationAccountCapacity, []int64{0, 1}},
+		{"eligible prefix fits", 0, 1024, tombstoneErr, []int64{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dstMP := mpool.MustNewZero()
+			defer mpool.DeleteMPool(dstMP)
+			tombstones := &replayAdmissionTombstoner{err: tombstoneErr}
+			ctx := t.Context()
+			ls := &LocalDisttaeDataSource{
+				ctx: ctx, pState: state, snapshotTS: ts, category: engine.ShardingRemoteDataSource,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}, extraTombstones: tombstones,
+			}
+			defer ls.Close()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(tc.limit, new(replayReadBudget))
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, dstMP.CurrNB())
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			typ := types.T_int64.ToType()
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(dstMP)
+			col := []string{"id", "payload"}[tc.seq]
+			out.Attrs = []string{col}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+			err = ls.iterateInMemData(ctx, out.Attrs, []types.Type{typ}, []uint16{tc.seq}, 0, out, dstMP)
+			require.ErrorIs(t, err, tc.wantErr)
+			require.Equal(t, tc.offsets, tombstones.offsets)
+		})
+	}
+}
+
 func TestCommittedReplaySplitAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -315,13 +389,12 @@ func TestCommittedReplaySplitAdmission(t *testing.T) {
 	}
 }
 
-func TestCommittedReplayGatherAcrossBatchesAndReadBoundary(t *testing.T) {
+func TestCommittedReplayProjectionAcrossBatchesAndReadBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	block := testBlockID(9)
-	// Reverse offsets within each input batch: the replay iterator visits rows
-	// in RowID order, not input order. The first source switch and the final
-	// read are both partial gathers.
+	// The scalar projection visits rows in RowID order across both input
+	// batches and the output block boundary, keeping all columns aligned.
 	const size = objectio.BlockMaxRows + 3
 	rows := make([]testMaterializedSnapshotRow, size)
 	for i := range rows {

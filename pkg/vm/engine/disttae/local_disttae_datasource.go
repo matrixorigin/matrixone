@@ -898,10 +898,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 // appendInitialReplayRows may skip intermediate data reservations, but must
 // leave the same capacity as row-wise append: the next grow charges both the
 // new and the old buffer. The replay source has no SQL expression sidecars.
-func appendInitialReplayRows(dst, src *vector.Vector, rows []int64, mp *mpool.MPool) error {
-	width := int64(dst.GetType().TypeSize())
-	if len(rows) > 1 && width > 0 && !src.IsConst() && !src.IsDictionary() &&
-		src.GetNulls().EmptyByFlag() && src.GetGrouping().EmptyByFlag() && len(src.GetArea()) == 0 {
+func appendInitialReplayRows(dst, src *vector.Vector, rows []int64, width int64, mp *mpool.MPool) error {
+	if len(rows) > 1 {
 		want := int64(len(rows)) * width
 		bulk, ok := mpool.GrowCapacity(0, want)
 		var scalar int64
@@ -914,6 +912,10 @@ func appendInitialReplayRows(dst, src *vector.Vector, rows []int64, mp *mpool.MP
 			return dst.Union(src, rows, mp)
 		}
 	}
+	return appendReplayRowsScalar(dst, src, rows, mp)
+}
+
+func appendReplayRowsScalar(dst, src *vector.Vector, rows []int64, mp *mpool.MPool) error {
 	for _, offset := range rows {
 		if err := dst.UnionOne(src, offset, mp); err != nil {
 			return err
@@ -1007,21 +1009,32 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	var offsets [64]int64
 	n, firstCol := 0, -1
 	var firstSrc *vector.Vector
+	var firstWidth int64
 	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS {
 		dst := outBatch.Vecs[0]
-		if dst.AllocationAccountSelection() != nil && !dst.IsConst() && !dst.IsDictionary() &&
+		if width := dst.GetType().TypeSize(); width > 0 &&
+			dst.AllocationAccountSelection() != nil && !dst.IsConst() && !dst.IsDictionary() &&
 			dst.Length() == 0 && dst.Allocated() == 0 && !dst.HasBorrowedBacking() {
 			firstCol = 2 + int(seqNums[0])
+			firstWidth = int64(width)
 		}
 	}
-	flushFirst := func() error {
+	flushFirst := func(laterErr error) error {
 		firstCol = -1
 		if n == 0 {
-			return nil
+			return laterErr
 		}
 		rows := offsets[:n]
 		n = 0
-		return appendInitialReplayRows(outBatch.Vecs[0], firstSrc, rows, mp)
+		if laterErr != nil {
+			// These rows preceded the failure. Preserve their scalar
+			// admission order before returning the later error.
+			if err := appendReplayRowsScalar(outBatch.Vecs[0], firstSrc, rows, mp); err != nil {
+				return err
+			}
+			return laterErr
+		}
+		return appendInitialReplayRows(outBatch.Vecs[0], firstSrc, rows, firstWidth, mp)
 	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length()+n < int(objectio.BlockMaxRows) {
@@ -1036,7 +1049,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			if sels, err = ls.ApplyTombstones(
 				ls.ctx, b, []int64{int64(o)}, applyPolicy,
 			); err != nil {
-				return err
+				return flushFirst(err)
 			}
 
 			if len(sels) == 0 {
@@ -1066,26 +1079,30 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				false,
 				mp,
 			); err != nil {
-				return err
+				return flushFirst(err)
 			}
 			if firstCol >= 0 {
 				if firstCol < len(entry.Batch.Vecs) && entry.Batch.Attrs[firstCol] != "" {
 					src := entry.Batch.Vecs[firstCol]
-					if n == 0 {
+					// Check the first source before reading ahead. Sources
+					// that can only append one row at a time must retain
+					// their admission order relative to tombstone reads.
+					if n == 0 && !src.IsConst() && !src.IsDictionary() &&
+						src.GetNulls().EmptyByFlag() && src.GetGrouping().EmptyByFlag() && len(src.GetArea()) == 0 {
 						firstSrc = src
 					}
 					if src == firstSrc {
 						offsets[n] = entry.Offset
 						n++
 						if n == len(offsets) {
-							if err := flushFirst(); err != nil {
+							if err := flushFirst(nil); err != nil {
 								return err
 							}
 						}
 						continue
 					}
 				}
-				if err := flushFirst(); err != nil {
+				if err := flushFirst(nil); err != nil {
 					return err
 				}
 			}
@@ -1124,7 +1141,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 		}
 		if n > 0 {
-			if err := flushFirst(); err != nil {
+			if err := flushFirst(nil); err != nil {
 				return err
 			}
 		}
