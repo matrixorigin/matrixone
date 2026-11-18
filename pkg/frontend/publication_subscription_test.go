@@ -37,6 +37,82 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func Test_doShowPublicationsSkipsDeletedSubscriberAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(ctrl)
+	ses.tenant = &TenantInfo{
+		Tenant: sysAccountName, User: rootName, DefaultRole: moAdminRoleName,
+		TenantID: sysAccountID, UserID: rootID, DefaultRoleID: moAdminRoleID,
+	}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+	bh.EXPECT().Close().AnyTimes()
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	accounts := mock_frontend.NewMockExecResult(ctrl)
+	accounts.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	accounts.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
+	accounts.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("healthy", nil).AnyTimes()
+	accounts.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
+	accounts.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
+	accounts.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
+
+	publications := mock_frontend.NewMockExecResult(ctrl)
+	publications.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	publications.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub", nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db", nil).AnyTimes()
+	publications.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(1), nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("healthy", nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("created", nil).AnyTimes()
+	publications.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
+	publications.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+	publications.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+	publications.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
+
+	subscriptions := mock_frontend.NewMockExecResult(ctrl)
+	subscriptions.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+	for row, accountID := range []int64{1, 1322852} {
+		r, id := uint64(row), accountID
+		subscriptions.EXPECT().GetInt64(gomock.Any(), r, uint64(0)).Return(id, nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(1)).Return("account", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(2)).Return("db", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(3)).Return("subscribed", nil).AnyTimes()
+		subscriptions.EXPECT().ColumnIsNull(gomock.Any(), r, gomock.Any()).Return(false, nil).AnyTimes()
+		subscriptions.EXPECT().GetInt64(gomock.Any(), r, uint64(4)).Return(int64(0), nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(5)).Return("sys", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(6)).Return("pub", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(7)).Return("db", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(8)).Return("*", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(9)).Return("created", nil).AnyTimes()
+		subscriptions.EXPECT().GetString(gomock.Any(), r, uint64(10)).Return("", nil).AnyTimes()
+		subscriptions.EXPECT().GetInt64(gomock.Any(), r, uint64(11)).Return(int64(1), nil).AnyTimes()
+	}
+
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{publications}).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{accounts}).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{subscriptions}).Times(1)
+
+	require.NoError(t, doShowPublications(ctx, ses, &tree.ShowPublications{}))
+	result := ses.GetMysqlResultSet()
+	require.NotNil(t, result)
+	require.Equal(t, uint64(1), result.GetRowCount())
+	row, err := result.GetRow(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, "pub", row[0])
+	require.Equal(t, "healthy", row[4])
+}
+
 func Test_doCreatePublication(t *testing.T) {
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
