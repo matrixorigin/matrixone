@@ -995,7 +995,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		node.SubscriptionOption.Format(ctx)
 	} else {
 
-		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
+		// A CTAS with an explicit column list keeps the definitions through the
+		// replay; a plain CTAS still formats without the def list (#32542).
+		if (!node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0)) ||
+			(node.IsAsSelect && len(node.Defs) > 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1008,6 +1011,14 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	}
 
+	if node.Options != nil {
+		prefix := " "
+		for _, t := range node.Options {
+			ctx.WriteString(prefix)
+			t.Format(ctx)
+		}
+	}
+
 	if node.IsAsSelect {
 		if node.CTASConflict != "" {
 			ctx.WriteByte(' ')
@@ -1015,14 +1026,6 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
-	}
-
-	if node.Options != nil {
-		prefix := " "
-		for _, t := range node.Options {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-		}
 	}
 
 	if node.IcebergParam != nil {
