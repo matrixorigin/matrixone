@@ -974,8 +974,58 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		delInFile int
 	)
 
+	// Gather runs of accepted offsets from the same immutable replay batch.
+	// Row-at-a-time UnionOne repeatedly grows, charges, copies and releases
+	// the output backing on short index scans. Never reserve for unvisited
+	// rows or change which iterator entries survive visibility checks.
+	var offsets [64]int64
+	var commitTimes [len(offsets)]types.TS
+	needTime := slices.Contains(seqNums, uint16(objectio.SEQNUM_COMMITTS))
+	var source *batch.Batch
+	n := 0
+	flush := func() error {
+		if n == 0 {
+			return nil
+		}
+		for i := range outBatch.Attrs {
+			dst := outBatch.Vecs[i]
+			if i == physicalColumnPos {
+				continue
+			}
+			if seqNums[i] == objectio.SEQNUM_COMMITTS {
+				// Replay stores commit time on the entry, not the retained vector.
+				if err := vector.AppendFixedList(dst, commitTimes[:n], nil, mp); err != nil {
+					return err
+				}
+				continue
+			}
+			idx := 2 + seqNums[i] // rowid and commit time precede user columns
+			if int(idx) >= len(source.Vecs) || source.Attrs[idx] == "" {
+				for range n {
+					if err := vector.AppendAny(dst, nil, true, mp); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			src := source.Vecs[idx]
+			// Union reserves validity for a nullable source even when none of
+			// the selected rows is NULL. Preserve row-specific admission there.
+			if n == 1 || src.IsConst() || !src.GetNulls().EmptyByFlag() || !src.GetGrouping().EmptyByFlag() {
+				for _, offset := range offsets[:n] {
+					if err := dst.UnionOne(src, offset, mp); err != nil {
+						return err
+					}
+				}
+			} else if err := dst.Union(src, offsets[:n], mp); err != nil {
+				return err
+			}
+		}
+		n = 0
+		return nil
+	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
-		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
+		for remaining := int(objectio.BlockMaxRows) - outBatch.Vecs[0].Length(); remaining > 0; {
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
 				break
 			}
@@ -1019,39 +1069,21 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			); err != nil {
 				return err
 			}
-			for i := range outBatch.Attrs {
-				if i == physicalColumnPos {
-					continue
-				}
-				if seqNums[i] == objectio.SEQNUM_COMMITTS {
-					// Replayed rows keep commit time on RowEntry, not in the
-					// retained batch's zero-length timestamp vector.
-					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
-						return err
-					}
-					continue
-				}
-
-				idx := 2 /*rowid and commits*/ + seqNums[i]
-
-				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
-					entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					err = vector.AppendAny(
-						outBatch.Vecs[i],
-						nil,
-						true,
-						mp)
-				} else {
-					err = outBatch.Vecs[i].UnionOne(
-						entry.Batch.Vecs[int(idx)],
-						entry.Offset,
-						mp,
-					)
-				}
-				if err != nil {
+			if n == len(offsets) || source != entry.Batch {
+				if err := flush(); err != nil {
 					return err
 				}
+				source = entry.Batch
 			}
+			offsets[n] = entry.Offset
+			if needTime {
+				commitTimes[n] = entry.Time
+			}
+			n++
+			remaining--
+		}
+		if err := flush(); err != nil {
+			return err
 		}
 
 		deletedMask := objectio.GetReusableBitmap()

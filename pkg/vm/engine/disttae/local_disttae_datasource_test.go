@@ -168,6 +168,113 @@ func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[1], 0))
 }
 
+type replayReadBudget struct {
+	reserves, releases int
+}
+
+func (b *replayReadBudget) AcquireAllocationCapacity(uint64) error { b.reserves++; return nil }
+func (b *replayReadBudget) ReleaseAllocationCapacity(uint64)       { b.releases++ }
+
+func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	block := testBlockID(7)
+	stamp := types.BuildTS(4, 0)
+	rows := make([]testMaterializedSnapshotRow, 100)
+	for i := range rows {
+		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(i)), ts: stamp, id: int64(i)}
+	}
+	// A NULL outside the read snapshot must not allocate a validity bitmap
+	// just because it shares its backing vector with the selected rows.
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, append(rows, testMaterializedSnapshotRow{
+		rowID: types.NewRowid(&block, 100), ts: stamp.Next(), id: 100, payloadNull: true,
+	}))
+	for _, tc := range []struct {
+		name  string
+		seq   uint16
+		limit uint64
+	}{{"id", 0, 1 << 20}, {"payload", 1, 1 << 20}, {"budget-denied", 0, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ls := &LocalDisttaeDataSource{ctx: context.Background(), pState: pState, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			defer ls.Close()
+			budget := new(replayReadBudget)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			acct, err := registry.OpenWithController(tc.limit, budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, acct.Snapshot().Used)
+				require.Equal(t, budget.reserves, budget.releases)
+				_, _, err := registry.CompleteTerminal(acct)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(acct, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			out.Attrs = []string{tc.name}
+			typ := types.T_int64.ToType()
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			defer out.Clean(mp)
+			require.NoError(t, out.SetAllocationAccount(selection))
+			err = ls.filterInMemCommittedInserts(ls.ctx, []types.Type{typ}, []uint16{tc.seq}, mp, out)
+			if tc.limit == 1 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity, "grouped output must not bypass the statement limit")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]), len(rows))
+			require.Positive(t, acct.Snapshot().Used)
+			require.Zero(t, out.Vecs[0].GetNulls().GetBitmap().ExternalStorageCapacity())
+			if tc.seq == 0 {
+				require.LessOrEqual(t, budget.reserves, 2, "reserve for accepted row groups, not each doubling from a single row")
+			}
+		})
+	}
+}
+
+func TestCommittedReplayGatherAcrossBatchesAndReadBoundary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	block := testBlockID(9)
+	// Reverse offsets within each input batch: the replay iterator visits rows
+	// in RowID order, not input order. The first source switch and the final
+	// read are both partial gathers.
+	const size = objectio.BlockMaxRows + 3
+	rows := make([]testMaterializedSnapshotRow, size)
+	for i := range rows {
+		id := size - i - 1
+		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(id)), ts: types.BuildTS(int64(id+1), 0), id: int64(id)}
+	}
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, rows[:size-71])
+	appendTestSnapshotRows(t, mp, pState, rows[size-71:])
+	ls := &LocalDisttaeDataSource{ctx: context.Background(), pState: pState, snapshotTS: types.MaxTs(),
+		tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+	defer ls.Close()
+	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType(), types.T_int64.ToType()}
+	seqs := []uint16{objectio.SEQNUM_ROWID, 0, objectio.SEQNUM_COMMITTS, 5}
+	out := batch.NewWithSize(len(colTypes))
+	out.SetAttributes([]string{objectio.PhysicalAddr_Attr, "id", objectio.DefaultCommitTS_Attr, "added"})
+	for i, typ := range colTypes {
+		out.Vecs[i] = vector.NewVec(typ)
+	}
+	defer out.Clean(mp)
+	seen := make(map[int64]bool, size)
+	for _, want := range []int{objectio.BlockMaxRows, 3, 0} {
+		out.CleanOnlyData()
+		require.NoError(t, ls.filterInMemCommittedInserts(ls.ctx, colTypes, seqs, mp, out))
+		require.Equal(t, want, out.RowCount())
+		for i, id := range vector.MustFixedColWithTypeCheck[int64](out.Vecs[1]) {
+			require.False(t, seen[id])
+			seen[id] = true
+			require.Equal(t, types.NewRowid(&block, uint32(id)), vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], i))
+			require.Equal(t, types.BuildTS(id+1, 0), vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[2], i))
+			require.True(t, out.Vecs[3].IsNull(uint64(i)))
+		}
+	}
+	require.Len(t, seen, size)
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()
