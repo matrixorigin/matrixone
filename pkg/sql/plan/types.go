@@ -543,8 +543,11 @@ type QueryBuilder struct {
 	udfResolutionCount          uint64
 	udfExpansionDepth           uint32
 	zeroScalarRewriteGeneration uint64
-	zeroScalarPrograms          map[uint32]struct{}
-	zeroScalarRootCtx           *BindContext
+	// Tracks discarded scalar sources even when their carrier was deduplicated.
+	zeroScalarRetentionGeneration uint64
+	zeroScalarPrograms            map[uint32]struct{}
+	zeroScalarRootCtx             *BindContext
+	hasZeroScalarSourceCandidate  bool
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32

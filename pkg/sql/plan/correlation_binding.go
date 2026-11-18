@@ -27,15 +27,9 @@ import (
 // zeroLimitScalarSourceSafe checks the original SQL tree before binding can
 // inline SQL UDFs or fold away their unused arguments. The planner rewrite is
 // limited to a one-column SELECT over one direct ordinary-table reference.
-func zeroLimitScalarSourceSafe(statement tree.SelectStatement, parent *BindContext) bool {
-	if parent == nil || parent.remapOption != nil || parent.snapshot != nil {
+func zeroLimitScalarSourceSafe(statement tree.SelectStatement, ctx *BindContext) bool {
+	if ctx == nil || ctx.remapOption != nil || ctx.snapshot != nil {
 		return false
-	}
-	for ctx := parent; ctx != nil; ctx = ctx.parent {
-		// A table name may resolve to a CTE in any visible outer scope.
-		if len(ctx.cteByName) != 0 {
-			return false
-		}
 	}
 
 	var selectNode *tree.Select
@@ -93,12 +87,8 @@ func zeroLimitScalarSourceSafe(statement tree.SelectStatement, parent *BindConte
 	if !ok || table == nil || table.AtTsExpr != nil || table.IcebergRef != nil || table.ExplicitCatalog {
 		return false
 	}
-	if table.Schema() == "" {
-		for ctx := parent; ctx != nil; ctx = ctx.parent {
-			if ctx.findCTE(string(table.ObjectName)) != nil {
-				return false
-			}
-		}
+	if table.Schema() == "" && ctx.findCTE(string(table.ObjectName)) != nil {
+		return false
 	}
 	return true
 }

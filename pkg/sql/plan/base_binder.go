@@ -1216,7 +1216,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
-	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := b.builder.udfResolutionCount
 	udfExpansionDepth := b.builder.udfExpansionDepth
 	b.builder.nextExistentialBlock++
@@ -1242,6 +1242,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var nodeID int32
 	var err error
 	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
+	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -1257,7 +1258,8 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
-	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration {
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
 		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
 		if err != nil {
 			return nil, err
@@ -1268,6 +1270,11 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
 		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+	if subCtx.zeroScalarRootSourceSafe {
+		// Bound scalar references can later be copied into SQL UDF arguments.
+		// Keep this summary sticky for the lifetime of the statement.
+		b.builder.hasZeroScalarSourceCandidate = true
+	}
 
 	rowSize := int32(len(subCtx.results))
 
@@ -4632,12 +4639,32 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
 	}
 	var requiredZeroScalarRoots map[int32]struct{}
+	builtinResult := false
 	defer func() {
-		if bindErr == nil && len(requiredZeroScalarRoots) > 0 &&
-			!exprRetainsZeroScalarRoots(boundExpr, requiredZeroScalarRoots) {
+		if bindErr != nil || len(requiredZeroScalarRoots) == 0 {
+			return
+		}
+		missing := missingZeroScalarRoots(boundExpr, requiredZeroScalarRoots)
+		if len(missing) == 0 {
+			return
+		}
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarRootCtx == nil {
 			boundExpr = nil
 			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+			return
 		}
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, missing)
+		if err == nil && len(sources) == 0 {
+			err = moerr.NewInternalError(b.GetContext(), "missing folded zero-limit scalar source")
+		}
+		if err == nil {
+			err = b.builder.retainZeroScalarAuthorizationSources(sources)
+		}
+		if err != nil {
+			boundExpr, bindErr = nil, err
+			return
+		}
+		b.builder.zeroScalarRetentionGeneration++
 	}()
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
@@ -5273,6 +5300,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 					}
 				}
 			}
+			builtinResult = true
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5306,6 +5334,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 					return nil, err
 				}
 			}
+			builtinResult = true
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5353,7 +5382,7 @@ func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.U
 }
 
 func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
-	if builder == nil || len(args) == 0 {
+	if builder == nil || !builder.hasZeroScalarSourceCandidate || len(args) == 0 {
 		return nil
 	}
 	var roots map[int32]struct{}
@@ -5378,8 +5407,12 @@ func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32
 }
 
 func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bool {
+	return len(missingZeroScalarRoots(expr, required)) == 0
+}
+
+func missingZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) []int32 {
 	if len(required) == 0 {
-		return true
+		return nil
 	}
 	retained := make(map[int32]struct{}, len(required))
 	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
@@ -5390,7 +5423,13 @@ func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bo
 		}
 		return nil
 	})
-	return len(retained) == len(required)
+	var missing []int32
+	for root := range required {
+		if _, ok := retained[root]; !ok {
+			missing = append(missing, root)
+		}
+	}
+	return missing
 }
 
 func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {

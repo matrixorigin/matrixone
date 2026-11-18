@@ -3156,6 +3156,9 @@ func TestCorrelatedScalarRootZeroKeepsInnerScan(t *testing.T) {
 		{"alias", `select n.n_nationkey, (select n.n_nationkey as x from tpch.region r limit 0) as v from tpch.nation n`},
 		{"hidden sort", `select n.n_nationkey, (select n.n_nationkey from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
 		{"cast and sort", `select n.n_nationkey, (select cast(n.n_nationkey as signed) from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"unrelated outer CTE", `with unused as (select 1) select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unqualified table with unrelated CTE", `with unused as (select 1) select n.n_nationkey, (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"qualified table with shadowing CTE", `with region as (select 1 as r_regionkey) select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
@@ -3170,6 +3173,26 @@ func TestCorrelatedScalarRootZeroKeepsInnerScan(t *testing.T) {
 				return nil
 			}))
 			require.True(t, found, "the inner scan must remain reachable for authorization and metadata")
+		})
+	}
+}
+
+func TestZeroLimitScalarSourceRejectsVisibleCTE(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		safe bool
+	}{
+		{"select a from region limit 0", false},
+		{"select a from tpch.region limit 0", true},
+		{"select a from nation limit 0", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			outer := &BindContext{cteByName: map[string]*CTERef{"region": {}}}
+			inner := &BindContext{parent: outer}
+			require.Equal(t, tc.safe, zeroLimitScalarSourceSafe(stmt.(*tree.Select), inner))
 		})
 	}
 }
