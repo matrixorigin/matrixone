@@ -152,3 +152,24 @@ After a read returns, account its current late columns and retire completed memb
 If optional dictionary metadata is refused, leave the pinned scope, release all membership maps/bitmaps, and reuse the ordinary scoped-owned predicate route. No selected wide-payload temporary is allocated before predicate evaluation. The optional stage passes and retires for that scan; the join still owns correctness. Preserve raw input/callback order and conservative fallback column policy.
 
 Focused projection-policy, empty-result retirement and constrained-account nullable/wide predicate regressions pass; owning table_scan/blockio, focused race checks and incremental static checks pass. Existing performance measurements remain pinned to source59acc92f6a; these functional/resource review fixes are not represented as newly timed benchmark results.
+
+## Approved review revision: ordinary-reader fallback scope
+
+On 2026-11-18 the requester approved retaining staged pruning only for pinned,
+identity-visible reads with a proven-total predicate chain. Generic predicates,
+tombstoned/storage-selected blocks and native exact reads use their established
+ordinary reader and the existing post-read local-domain filter. Do not mark an
+unsupported route as capacity-bypassed: its post-read domain must remain active.
+
+Decline before any predicate or membership callback, and release scratch retained
+from an earlier admitted block before the ordinary reader allocates output.
+Remove the unused generic/exact membership map composition and Logical vector.
+The staged total path keeps its existing one-map selection, source pinning and
+capacity-refusal contract. No replay API, new reservation layer, hidden row-map
+allocation, predicate reordering or change to native exact/visibility semantics.
+
+This scope gives up early payload pruning on those ordinary routes. The measured
+Q19 path stays staged; older measurements are not retimed or relabeled. Verify
+ordinary and optional generic/tombstoned/native-exact reads under identical small
+accounts, one callback execution, genuine callback/source errors, stale-scratch
+release, and the TableScan post-read domain application.
