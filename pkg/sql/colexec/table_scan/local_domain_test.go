@@ -87,14 +87,26 @@ func (r *localDomainTestReader) Read(_ context.Context, _ []string, _ *plan.Expr
 
 func (*localDomainTestReader) Close() error { return nil }
 
+type membershipDecliningTestReader struct{ *localDomainTestReader }
+
+func (r *membershipDecliningTestReader) ReadWithFilter(ctx context.Context, cols []string, early []int, request *engine.ReaderFilterRequest, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	end, err := r.Read(ctx, cols, nil, mp, out)
+	if err == nil && !end {
+		_, err = request.Select(out, early)
+	}
+	return end, err
+}
+
 func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		empty bool
-		ndv   float64
-		pass  bool
+		name    string
+		empty   bool
+		ndv     float64
+		pass    bool
+		decline bool
 	}{
 		{name: "complete domain filters before output", ndv: 10000},
+		{name: "ordinary reader keeps post-read membership", ndv: 10000, decline: true},
 		{name: "empty domain avoids probe read", empty: true, ndv: 10000},
 		{name: "unprofitable probe keeps all rows", ndv: 20, pass: true},
 		{name: "unknown probe NDV keeps all rows", pass: true},
@@ -133,9 +145,25 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			probe := makeScan(1)
 			probeReader := &localDomainTestReader{values: []int64{1, 2, 99, 0}, nullAt: 3}
 			probe.Reader = probeReader
+			if tc.decline {
+				probe.Reader = &membershipDecliningTestReader{probeReader}
+			}
 			probe.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id", ProbeNDV: tc.ndv}}
 			require.NoError(t, source.Prepare(proc))
 			require.NoError(t, probe.Prepare(proc))
+			predicateCalls := 0
+			if tc.decline {
+				probe.ctr.readerFilter = &engine.ReaderFilterRequest{
+					Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+						predicateCalls++
+						return engine.ReaderFilterResult{All: true}, nil
+					},
+					Membership: &engine.ReaderMembershipFilter{Columns: []int{0}, Select: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+						t.Fatal("the ordinary reader does not execute the optional membership callback")
+						return engine.ReaderFilterResult{}, nil
+					}},
+				}
+			}
 			for {
 				result, err := source.Call(proc)
 				require.NoError(t, err)
@@ -145,6 +173,10 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			}
 			result, err := probe.Call(proc)
 			require.NoError(t, err)
+			if tc.decline {
+				require.Equal(t, 1, predicateCalls)
+				require.False(t, probe.ctr.readerFilter.Membership.Bypass)
+			}
 			if tc.empty {
 				require.Nil(t, result.Batch)
 				require.Zero(t, probeReader.reads)

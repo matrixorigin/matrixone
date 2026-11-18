@@ -66,7 +66,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			}
 		}
 		handled = true
-		borrowed := scopedMembershipPredicates{columns: early, destinations: read.Sources, marked: marked}
+		borrowed := scopedMembershipPredicates{columns: early, destinations: read.Sources}
 		defer borrowed.restore(output)
 		defer s.Scope.End()
 		for i, column := range early {

@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,335 +29,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// blockDataReadMembership is optional before any predicate callback or I/O.
-// Storage selections already include visibility. Without them, a persisted
-// block's tombstones establish the original physical domain before membership.
+// blockDataReadMembership admits only the pinned, identity-visible total path.
+// Other routes keep the ordinary reader and TableScan's post-read membership.
 func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo, ds engine.DataSource,
 	columns []uint16, typs []types.Type, storageRows []int64, early []int,
 	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
 	request *engine.ReaderFilterRequest, preFilterRows *int) (handled bool, retErr error) {
-	if request == nil || request.Membership == nil || request.Membership.Bypass || request.Membership.Select == nil || request.Select == nil ||
-		request.OutputAllocation == nil || len(request.Membership.Columns) == 0 || len(output.ExtraBuf) != 0 ||
-		info.IsAppendable() || info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
+	if request == nil || request.Membership == nil {
 		return false, nil
 	}
-	for i, column := range request.Membership.Columns {
+	defer func() {
+		if !handled {
+			// A previous admitted block may have retained optional capacity.
+			// Restore that headroom before the ordinary reader allocates.
+			request.FreeMembership(mp)
+		}
+	}()
+	member := request.Membership
+	if member.Bypass || !member.PredicatesTotal || request.Exact != nil || storageRows != nil ||
+		member.Select == nil || request.Select == nil || ds == nil || request.OutputAllocation == nil ||
+		len(member.Columns) == 0 || len(output.ExtraBuf) != 0 || info.IsAppendable() ||
+		info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
+		return false, nil
+	}
+	for i, column := range member.Columns {
 		if column < 0 || column >= len(columns) || !slices.Contains(early, column) ||
-			(i > 0 && request.Membership.Columns[i-1] >= column) {
+			(i > 0 && member.Columns[i-1] >= column) {
 			return false, nil
 		}
+	}
+	if len(member.ColumnUses) == len(columns) {
+		original := request.ColumnUses
+		request.ColumnUses = member.ColumnUses
+		defer func() { request.ColumnUses = original }()
+	}
+	if !scopedOwnedColumns(request, len(columns)) {
+		return false, nil
+	}
+	predicates := member.PredicateColumns
+	if predicates == nil {
+		predicates = early
+	}
+	if len(predicates) == 0 {
+		return false, nil
+	}
+	deleted, err := ds.GetTombstones(ctx, &info.BlockID)
+	identity := deleted.IsEmpty()
+	deleted.Release()
+	if err != nil {
+		return true, err
+	}
+	if !identity {
+		return false, nil
+	}
+	rows := int(info.MetaLocation().Rows())
+	if preFilterRows != nil {
+		*preFilterRows = rows
+	}
+	if rows == 0 {
+		output.SetRowCount(0)
+		return true, nil
 	}
 	s, err := request.MembershipScratch(len(columns))
 	if err != nil {
 		return false, err
 	}
-	identity := false
-	var deleted objectio.Bitmap
-	if storageRows == nil {
-		if ds == nil {
-			return false, nil
-		}
-		deleted, err = ds.GetTombstones(ctx, &info.BlockID)
-		defer deleted.Release()
-		if err != nil {
-			return true, err
-		}
-		identity = deleted.IsEmpty()
-	}
-	// Only an admitted reader changes private-input publication. Restore the
-	// conservative outer policy before any ordinary read fallback can run.
-	if len(request.Membership.ColumnUses) == len(columns) {
-		original := request.ColumnUses
-		request.ColumnUses = request.Membership.ColumnUses
-		defer func() { request.ColumnUses = original }()
-	}
-	if identity && request.Exact == nil && request.Membership.PredicatesTotal && scopedOwnedColumns(request, len(columns)) {
-		predicates := request.Membership.PredicateColumns
-		if predicates == nil {
-			predicates = early
-		}
-		rows := int(info.MetaLocation().Rows())
-		if rows > 0 && len(predicates) > 0 {
-			if preFilterRows != nil {
-				*preFilterRows = rows
-			}
-			// The identity domain needs neither map. A selective membership
-			// result admits only its physical map inside the pinned scope.
-			handled, err := withScopedTotalMembership(ctx, info, columns, typs, early, predicates, rows, policy, output, mp, fs, request, s)
-			if handled || err != nil {
-				return handled, err
-			}
-		}
-	}
-	for _, v := range []*vector.Vector{s.Physical, s.Logical} {
-		if err = v.PreExtend(int(info.MetaLocation().Rows()), mp); err != nil {
-			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
-				request.FreeMembership(mp)
-				return false, nil
-			}
-			return false, err
-		}
-		v.SetLength(int(info.MetaLocation().Rows()))
-	}
-	physical := vector.MustFixedColNoTypeCheck[int64](s.Physical)
-	logical := vector.MustFixedColNoTypeCheck[int64](s.Logical)
-	live := 0
-	if storageRows != nil {
-		live = copy(physical, storageRows)
-	} else {
-		if identity {
-			// Identity coordinates are derived at the first real selection.
-			// Do not fill a map that the membership-first path overwrites.
-			live = int(info.MetaLocation().Rows())
-		} else {
-			for row := range int(info.MetaLocation().Rows()) {
-				if !deleted.Contains(uint64(row)) {
-					physical[live] = int64(row)
-					live++
-				}
-			}
-		}
-	}
-	if preFilterRows != nil {
-		*preFilterRows = live
-	}
-	if live == 0 {
-		output.SetRowCount(0)
-		return true, nil
-	}
-	if request.Exact == nil {
-		return true, blockDataReadPredicateMembership(ctx, info, columns, typs, early, physical[:live], logical[:live], identity, policy, output, mp, fs, request, s)
-	}
-	var keyReadRows []int64
-	if !identity {
-		keyReadRows = physical[:live]
-	}
-	if err := loadMembershipColumns(ctx, info, columns, typs, request.Membership.Columns, keyReadRows,
-		policy, output, mp, fs, request); err != nil {
-		return true, err
-	}
-	output.SetRowCount(live)
-	member, err := request.Membership.Select(output, request.Membership.Columns)
-	if err != nil {
-		return true, err
-	}
-	count := live
-	if !member.All {
-		count = len(member.Sels)
-	}
-	if err := validateReaderFilterResult(member, live, count); err != nil {
-		return true, err
-	}
-	if count == 0 {
-		output.CleanOnlyData()
-		return true, nil
-	}
-	for row := range count {
-		original := int64(row)
-		if !member.All {
-			original = member.Sels[row]
-		}
-		if identity {
-			physical[row] = original
-		} else {
-			physical[row] = physical[original]
-		}
-	}
-	physical = physical[:count]
-	// Preserve the existing native exact program and its owned-payload path.
-	output.CleanOnlyData()
-	return true, blockDataReadExactFilter(ctx, info, ds, columns, typs, physical, policy, output, mp, fs, request, nil)
-}
-
-// blockDataReadPredicateMembership keeps generic predicate work on the original
-// live domain, then tests membership only for its survivors. Payload remains
-// unloaded until both maps have been composed back to physical block rows.
-func blockDataReadPredicateMembership(ctx context.Context, info *objectio.BlockInfo,
-	columns []uint16, typs []types.Type, early []int, physical, logical []int64, identity bool,
-	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
-	request *engine.ReaderFilterRequest, s *engine.ReaderMembershipScratch) error {
-	predicates := request.Membership.PredicateColumns
-	if predicates == nil {
-		predicates = early
-	}
-	for _, column := range predicates {
-		if !slices.Contains(early, column) {
-			return moerr.NewInvalidInputNoCtx("membership predicate column outside early schema")
-		}
-	}
-	s.Predicates = append(s.Predicates[:0], predicates...)
-	s.Keys, s.Overlap = s.Keys[:0], s.Overlap[:0]
-	for _, column := range request.Membership.Columns {
-		if slices.Contains(predicates, column) {
-			s.Overlap = append(s.Overlap, column)
-		} else {
-			s.Keys = append(s.Keys, column)
-		}
-	}
-	defer func() {
-		clear(s.Sources)
-		clear(s.Views)
-		s.Predicates = s.Predicates[:0]
-		s.Keys = s.Keys[:0]
-		s.Overlap = s.Overlap[:0]
-	}()
-	var readRows []int64
-	if !identity {
-		readRows = physical
-	}
-	if identity && len(predicates) > 0 && len(s.Overlap) == 0 && scopedOwnedColumns(request, len(columns)) {
-		return withScopedMembershipPredicates(ctx, info, columns, typs, early, predicates, physical, logical, policy, output, mp, fs, request, s)
-	}
-	if err := loadMembershipColumns(ctx, info, columns, typs, predicates, readRows, policy, output, mp, fs, request); err != nil {
-		return err
-	}
-	return finishPredicateMembership(ctx, info, columns, typs, early, predicates, physical, logical, identity, policy, output, mp, fs, request, s, nil)
-}
-
-func finishPredicateMembership(ctx context.Context, info *objectio.BlockInfo,
-	columns []uint16, typs []types.Type, early, predicates []int, physical, logical []int64, identity bool,
-	policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService,
-	request *engine.ReaderFilterRequest, s *engine.ReaderMembershipScratch, scoped *scopedMembershipPredicates) error {
-	live := len(physical)
-	bound := false
-	restore := func() {
-		if bound {
-			for _, column := range s.Overlap {
-				output.Vecs[column] = s.Sources[column]
-			}
-			s.Scope.End()
-			bound = false
-		}
-	}
-	defer restore()
-	output.SetRowCount(live)
-	residual, err := request.Select(output, predicates)
-	if err != nil {
-		return err
-	}
-	count := live
-	if !residual.All {
-		count = len(residual.Sels)
-	}
-	if err := validateReaderFilterResult(residual, live, count); err != nil {
-		return err
-	}
-	if count == 0 {
-		if scoped != nil {
-			scoped.restore(output)
-		}
-		output.CleanOnlyData()
-		return nil
-	}
-	// Consume the borrowed residual map before calling Membership. Sorted,
-	// unique logical indexes make this in-place prefix composition safe.
-	for row := range count {
-		original := int64(row)
-		if !residual.All {
-			original = residual.Sels[row]
-		}
-		logical[row] = original
-		if identity {
-			physical[row] = original
-		} else {
-			physical[row] = physical[original]
-		}
-	}
-	physical, logical = physical[:count], logical[:count]
-	var readRows []int64
-	if !identity || !residual.All {
-		readRows = physical
-	}
-	if err := loadMembershipColumns(ctx, info, columns, typs, s.Keys, readRows, policy, output, mp, fs, request); err != nil {
-		return err
-	}
-	if !residual.All && len(s.Overlap) > 0 {
-		for _, column := range s.Overlap {
-			s.Sources[column] = output.Vecs[column]
-		}
-		admitted, err := s.Scope.Bind(s.Sources, s.Views, s.Overlap, logical, live, mp, request.OutputAllocation)
-		if err != nil && !errors.Is(err, mpool.ErrAllocationAccountCapacity) {
-			return err
-		}
-		if admitted {
-			bound = true
-			for _, column := range s.Overlap {
-				output.Vecs[column] = s.Views[column]
-			}
-		} else {
-			s.Scope.Free(mp)
-			// Ordinary accounted compaction on refusal. These keys now use
-			// the post-predicate domain, like membership-only key columns.
-			for _, column := range s.Overlap {
-				if err := output.Vecs[column].Shrink(logical, false, mp); err != nil {
-					return err
-				}
-				s.Keys = append(s.Keys, column)
-			}
-			s.Predicates = s.Predicates[:0]
-			for _, column := range predicates {
-				if !slices.Contains(s.Overlap, column) {
-					s.Predicates = append(s.Predicates, column)
-				}
-			}
-		}
-	}
-	output.SetRowCount(count)
-	member, err := request.Membership.Select(output, request.Membership.Columns)
-	if err != nil {
-		return err
-	}
-	selected := count
-	if !member.All {
-		selected = len(member.Sels)
-	}
-	if err := validateReaderFilterResult(member, count, selected); err != nil {
-		return err
-	}
-	restore()
-	if selected == 0 {
-		if scoped != nil {
-			scoped.restore(output)
-		}
-		output.CleanOnlyData()
-		return nil
-	}
-	if !member.All {
-		for row, survivor := range member.Sels {
-			logical[row] = logical[survivor]
-			physical[row] = physical[survivor]
-		}
-		logical, physical = logical[:selected], physical[:selected]
-	}
-	if scoped != nil {
-		output.SetRowCount(selected)
-		if err := scoped.gather(output, logical, residual.All && member.All, request, mp); err != nil {
-			return err
-		}
-	} else if (!residual.All || !member.All) && len(s.Predicates) > 0 {
-		output.SetRowCount(live)
-		if err := publishReaderSelection(output, s.Predicates, logical, request, mp); err != nil {
-			return err
-		}
-	}
-	if !member.All && len(s.Keys) > 0 {
-		// Publisher classification consumes sorted schema positions.
-		slices.Sort(s.Keys)
-		output.SetRowCount(count)
-		if err := publishReaderSelection(output, s.Keys, member.Sels, request, mp); err != nil {
-			return err
-		}
-	}
-	late := columnPositionsComplement(early, len(columns))
-	readRows = nil
-	if !identity || !residual.All || !member.All {
-		readRows = physical
-	}
-	if err := loadMembershipColumns(ctx, info, columns, typs, late, readRows, policy, output, mp, fs, request); err != nil {
-		return err
-	}
-	output.SetRowCount(selected)
-	return nil
+	return withScopedTotalMembership(ctx, info, columns, typs, early, predicates, rows, policy, output, mp, fs, request, s)
 }
 
 func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, columns []uint16, typs []types.Type,
@@ -399,7 +135,6 @@ func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, column
 type scopedMembershipPredicates struct {
 	columns      []int
 	destinations []*vector.Vector
-	marked       []bool
 }
 
 func (p *scopedMembershipPredicates) restore(output *batch.Batch) {
@@ -415,52 +150,20 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 			output.Vecs[column] = destination
 			continue
 		}
-		if p.marked[i] {
-			var err error
-			if all {
-				err = destination.UnionBatch(source, 0, output.RowCount(), nil, mp)
-			} else {
-				err = destination.Union(source, rows, mp)
-			}
-			if err != nil {
-				return err
-			}
-			source.CopyExpressionMetadataTo(destination)
-		} else if !all {
-			if err := destination.Shrink(rows, false, mp); err != nil {
-				return err
-			}
+		var err error
+		if all {
+			err = destination.UnionBatch(source, 0, output.RowCount(), nil, mp)
+		} else {
+			err = destination.Union(source, rows, mp)
 		}
+		if err != nil {
+			return err
+		}
+		source.CopyExpressionMetadataTo(destination)
 		output.Vecs[column] = destination
 	}
 	if request.ObserveSelection != nil {
 		request.ObserveSelection(output.RowCount(), 0, 0)
 	}
 	return nil
-}
-func withScopedMembershipPredicates(ctx context.Context, info *objectio.BlockInfo, columns []uint16, typs []types.Type,
-	early, predicates []int, physical, logical []int64, policy fileservice.Policy, output *batch.Batch,
-	mp *mpool.MPool, fs fileservice.FileService, request *engine.ReaderFilterRequest, s *engine.ReaderMembershipScratch) error {
-	read := &s.PredicateRead
-	read.Clear()
-	defer read.Clear()
-	for _, column := range predicates {
-		read.Seqnums = append(read.Seqnums, columns[column])
-		read.Types = append(read.Types, typs[column])
-		read.Sources = append(read.Sources, output.Vecs[column])
-	}
-	_, err := ioutil.WithColumnsDataInto(ctx, read.Seqnums, read.Types, fs, info.MetaLocation(), read.Sources, request.ColumnScope(), mp, policy, func(inputs []*vector.Vector, marked []bool) error {
-		borrowed := scopedMembershipPredicates{columns: predicates, destinations: read.Sources, marked: marked}
-		for i, column := range predicates {
-			output.Vecs[column] = inputs[i]
-		}
-		defer borrowed.restore(output)
-		for _, input := range inputs {
-			if input.Length() != len(physical) {
-				return moerr.NewInvalidInputNoCtx("scoped membership predicate row mismatch")
-			}
-		}
-		return finishPredicateMembership(ctx, info, columns, typs, early, predicates, physical, logical, true, policy, output, mp, fs, request, s, &borrowed)
-	})
-	return err
 }

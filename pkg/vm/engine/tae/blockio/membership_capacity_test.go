@@ -147,12 +147,23 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		selective      bool
 		bypass         bool
 		predicateError bool
+		ordinary       bool
+		tombstone      bool
+		exact          bool
+		retained       bool
+		sourceError    bool
 	}{
 		{name: "identity", limit: 128},
 		{name: "selective output fits", limit: 128, selective: true},
 		{name: "early output pressure", limit: 64, selective: true, bypass: true},
 		{name: "late output pressure", limit: 96, selective: true, bypass: true},
 		{name: "callback capacity error", limit: 128, predicateError: true},
+		{name: "generic ordinary fallback", limit: 128, ordinary: true},
+		{name: "tombstoned ordinary fallback", limit: 128, ordinary: true, tombstone: true},
+		{name: "native exact ordinary fallback", limit: 128, ordinary: true, exact: true},
+		{name: "ordinary releases retained scratch", limit: 128, ordinary: true, retained: true},
+		{name: "ordinary callback capacity error", limit: 128, ordinary: true, predicateError: true},
+		{name: "ordinary source error", limit: 128, ordinary: true, sourceError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, enabled := range []bool{false, true} {
@@ -175,6 +186,10 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					OutputAllocation: allocation,
 					ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned},
 				}
+				if tc.exact {
+					request.Exact = objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: typs[0], Op: objectio.ExactScanGE, Value: 0}}))
+					t.Cleanup(request.Exact.Close)
+				}
 				request.Apply = func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("scoped reads must use the borrowed Select route")
 					return engine.ReaderFilterResult{}, nil
@@ -192,7 +207,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				}
 				if enabled {
 					request.Membership = &engine.ReaderMembershipFilter{
-						Columns: []int{0}, PredicateColumns: []int{0}, PredicatesTotal: true,
+						Columns: []int{0}, PredicateColumns: []int{0}, PredicatesTotal: !tc.ordinary,
 						Select: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 							memberCalls++
 							memberUsed = account.Snapshot().Used
@@ -202,9 +217,27 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 							return engine.ReaderFilterResult{All: true}, nil
 						},
 					}
+					if tc.retained {
+						scratch, err := request.MembershipScratch(len(typs))
+						require.NoError(t, err)
+						require.NoError(t, scratch.Physical.PreExtend(16, mp))
+					}
 				}
-				_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, typs, -1,
+				ds := &blockReadTestDataSource{}
+				if tc.sourceError {
+					ds.err = context.Canceled
+				}
+				if tc.tombstone {
+					ds.deleted = []uint64{6}
+				}
+				_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, typs, -1,
 					timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "membership-output-capacity", output, cache, mp, fs, []int{0}, request)
+				if tc.sourceError {
+					require.ErrorIs(t, err, context.Canceled)
+					require.Zero(t, memberCalls)
+					require.Zero(t, predicateCalls)
+					continue
+				}
 				if enabled && tc.predicateError {
 					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 					require.Equal(t, 1, predicateCalls)
@@ -213,8 +246,18 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				}
 				require.NoError(t, err, "membership=%v", enabled)
 				wantRows, wantCalls := 8, 1
+				if tc.tombstone {
+					wantRows--
+				}
+				if tc.exact {
+					wantCalls = 0
+				}
 				if enabled {
-					require.Equal(t, 1, memberCalls)
+					wantMember := 1
+					if tc.ordinary {
+						wantMember = 0
+					}
+					require.Equal(t, wantMember, memberCalls)
 					require.Zero(t, memberUsed, "identity inputs must not reserve optional row maps")
 					require.Equal(t, tc.bypass, request.Membership.Bypass)
 					if tc.bypass {
@@ -229,7 +272,11 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					require.Same(t, original[col], v)
 					require.False(t, v.HasBorrowedBacking())
 					for row := range wantRows {
-						require.Equal(t, int32(row+100*col), vector.GetFixedAtNoTypeCheck[int32](v, row))
+						physical := row
+						if tc.tombstone && row >= 6 {
+							physical++
+						}
+						require.Equal(t, int32(physical+100*col), vector.GetFixedAtNoTypeCheck[int32](v, row))
 					}
 				}
 			}

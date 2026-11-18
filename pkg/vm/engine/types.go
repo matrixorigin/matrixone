@@ -1336,8 +1336,8 @@ func (s *ReaderSelectionScratch) Clear() {
 
 type ReaderFilterRequest struct {
 	// Membership is an optional necessary predicate over its key Columns.
-	// It is read-only and runs after storage visibility. Generic filtered reads
-	// run it on residual survivors; native exact reads retain their own order.
+	// It is read-only and runs after storage visibility. Supporting readers
+	// may stage it before proven-total predicates on a pinned identity domain.
 	// Its sorted unique mapping is consumed before another callback. Readers
 	// without staged support ignore it and preserve the ordinary Apply path.
 	Membership *ReaderMembershipFilter
@@ -1389,14 +1389,12 @@ type ReaderMembershipFilter struct {
 }
 
 // ReaderMembershipScratch belongs to the sequential prepared scan, never to a
-// cached block. Maps are accounted vectors; Sources/Views are non-owning operands
+// cached block. The row map is accounted; Sources/Views are non-owning operands
 // cleared before every read returns. Scope cannot escape the synchronous read.
 type ReaderMembershipScratch struct {
-	Physical, Logical *vector.Vector
-	Scope             vector.DictionarySelectionScope
-	Sources, Views    []*vector.Vector
-	Predicates        []int
-	Keys, Overlap     []int
+	Physical       *vector.Vector
+	Scope          vector.DictionarySelectionScope
+	Sources, Views []*vector.Vector
 	// Separate non-owning operands stay stable while nested key/publication
 	// reads reuse the ordinary request scratch inside the predicate I/O scope.
 	PredicateRead ReaderSelectionScratch
@@ -1406,18 +1404,14 @@ func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScr
 	if r.Membership.scratch == nil {
 		r.Membership.scratch = &ReaderMembershipScratch{
 			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
-			Predicates: make([]int, 0, width),
-			Keys:       make([]int, 0, width), Overlap: make([]int, 0, width),
 		}
 	}
 	s := r.Membership.scratch
-	for _, slot := range []**vector.Vector{&s.Physical, &s.Logical} {
-		if *slot == nil {
-			var err error
-			*slot, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
-			if err != nil {
-				return nil, err
-			}
+	if s.Physical == nil {
+		var err error
+		s.Physical, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return s, nil
@@ -1433,9 +1427,6 @@ func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
 	s.Scope.Free(mp)
 	if s.Physical != nil {
 		s.Physical.Free(mp)
-	}
-	if s.Logical != nil {
-		s.Logical.Free(mp)
 	}
 	r.Membership.scratch = nil
 }
