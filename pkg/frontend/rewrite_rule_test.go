@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/hex"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -818,11 +819,46 @@ func TestMergeRewriteRulesPreservesBinaryLiteralAcrossMerges(t *testing.T) {
 	require.NoError(t, err)
 	merged, err = mergeRewriteRules(ctx, merged, base+"a = 3")
 	require.NoError(t, err)
-	want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"((a = 1) or (a = 2)) or (a = 3)", 1)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select X'5553275c' as tag from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", 1)
 	require.NoError(t, err)
 	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+}
+
+func TestMergedBinaryLiteralSurvivesRewriteHint(t *testing.T) {
+	ctx := context.Background()
+	for _, value := range []string{"\xff", "\xff\\", ""} {
+		t.Run(hex.EncodeToString([]byte(value)), func(t *testing.T) {
+			const table = "db1.t1"
+			base := `select _binary '` + strings.ReplaceAll(value, `\`, `\\`) + `' as tag from ` + table + ` where a = `
+			merged, err := mergeRewriteRules(ctx, base+"1", base+"2")
+			require.NoError(t, err)
+			merged, err = mergeRewriteRules(ctx, merged, base+"3")
+			require.NoError(t, err)
+			hint, err := formatRewriteHint(ctx, map[string]string{table: merged})
+			require.NoError(t, err)
+			rules, err := parseRewriteHint(ctx, hint)
+			require.NoError(t, err)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rules[table], 1)
+			require.NoError(t, err)
+			clause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+			require.IsType(t, &tree.OrExpr{}, clause.Where.Expr)
+			literal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok, "projection must still be a binary literal")
+			switch literal.ValType {
+			case tree.P_ScoreBinary:
+				require.Equal(t, value, literal.String())
+			case tree.P_hexnum:
+				decoded, err := hex.DecodeString(literal.String()[2:])
+				require.NoError(t, err)
+				require.Equal(t, value, string(decoded))
+			default:
+				t.Fatalf("unexpected literal type %v", literal.ValType)
+			}
+		})
+	}
 }
 
 func TestMergeRewriteRulesPreservesQuotedIdentifiersAcrossMerges(t *testing.T) {
@@ -889,6 +925,8 @@ func TestMergeRewriteRulesPreservesKeywordArguments(t *testing.T) {
 		"trim('leading' from code) = '0001'",
 		"timestampadd(DAY, 1, dt) = '2026-11-18'",
 		"get_format(DATE, 'ISO') = '%Y-%m-%d'",
+		"convert(code using binary) = '0001'",
+		"convert(concat(code, 'x') using utf8mb4) = '0001x'",
 	} {
 		t.Run(predicate, func(t *testing.T) {
 			merged, err := mergeRewriteRules(ctx, base+predicate, base+"a = 2")

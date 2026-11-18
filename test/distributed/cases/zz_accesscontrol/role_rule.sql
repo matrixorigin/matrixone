@@ -435,7 +435,7 @@ select `2024` from db1.t_dup order by `2024`;
 
 -- Binary literal projections also retain all three roles' rows.
 alter role test_rule_role_dup_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select _binary 'US' as tag from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'US' as tag from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
 alter role test_rule_role_expr_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 3" on table db1.t_dup;
 -- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set enable_remap_hint = 1;

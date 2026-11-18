@@ -32,7 +32,7 @@ type FmtCtx struct {
 	literalPositions  *[]StringLiteralPosition
 }
 
-// StringLiteralPosition is the byte range of a SQL literal emitted in single-quote mode.
+// StringLiteralPosition is the byte range of a single-quoted SQL literal.
 type StringLiteralPosition struct {
 	Start, End int
 }
@@ -157,13 +157,9 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 			return ctx.WriteString(v)
 		}
 	}
-	if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) {
+	if ctx.singleQuoteString && t == P_char {
 		start := ctx.Len()
-		if t == P_ScoreBinary {
-			ctx.WriteString("_binary ")
-		}
-		_, err := ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
-		n := ctx.Len() - start
+		n, err := ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
 		if ctx.literalPositions != nil {
 			*ctx.literalPositions = append(*ctx.literalPositions, StringLiteralPosition{Start: start, End: ctx.Len()})
 		}

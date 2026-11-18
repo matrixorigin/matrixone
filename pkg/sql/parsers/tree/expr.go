@@ -1022,6 +1022,16 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
+	case "convert":
+		// CONVERT(expr, type) parses as a CastExpr. Here the second argument
+		// is a charset name, for which the grammar also accepts a string.
+		if len(node.Exprs) == 2 {
+			node.Exprs[0].Format(ctx)
+			ctx.WriteString(" using ")
+			node.Exprs[1].Format(ctx)
+		} else {
+			node.Exprs.Format(ctx)
+		}
 	case "timestampdiff", "timestampadd", "extract", "get_format":
 		// The first argument is a grammar keyword, not a string literal.
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])

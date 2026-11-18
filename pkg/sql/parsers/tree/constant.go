@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -187,6 +188,22 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if ctx.singleQuoteString {
+		if node.ValType == P_ScoreBinary {
+			// Encode raw bytes before text escaping or UTF-8 transport can change them.
+			if node.origString == "" {
+				ctx.WriteString("X''")
+			} else {
+				ctx.WriteString("0x")
+				ctx.WriteString(hex.EncodeToString([]byte(node.origString)))
+			}
+			return
+		}
+		if node.ValType == P_hexnum && node.origString == "0x" {
+			ctx.WriteString("X''")
+			return
+		}
+	}
 	if strings.Contains(node.origString, "\\") {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return
