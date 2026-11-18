@@ -470,11 +470,16 @@ func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
 		{"unary plus projection", `select n.n_nationkey, (select +n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
 		{"ifnull projection", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
 		{"ifnull with hidden order key", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"alias", `select n.n_nationkey, (select n.n_nationkey as x from tpch.region r limit 0) as v from tpch.nation n`},
+		{"hidden sort", `select n.n_nationkey, (select n.n_nationkey from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"cast and sort", `select n.n_nationkey, (select cast(n.n_nationkey as signed) from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			q := result.GetQuery()
+			defer stmt.Free()
+			q, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
 			require.NotNil(t, q)
 			require.NotEmpty(t, q.Steps)
 			visited := make(map[int32]bool)
@@ -504,6 +509,34 @@ func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
 			require.True(t, found, "the inner scan must remain reachable for authorization and metadata")
 		})
 	}
+}
+
+func TestNestedCorrelatedScalarZeroLimitRetainsAuthorizationSources(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`select null + (select (select o.n_nationkey from tpch.region r where r.r_regionkey > o.n_nationkey limit 0) from tpch.nation o limit 1)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	retained := make(map[string]bool)
+	for _, node := range query.Nodes {
+		if node.ExtraOptions == zeroScalarPrivilegeCarrier && node.ObjRef != nil {
+			retained[node.ObjRef.ObjName] = true
+		}
+	}
+	require.True(t, retained["region"], "folded expression must retain the nested source for privilege checks")
+	require.True(t, retained["nation"], "folded expression must retain the wrapper source for privilege checks")
+}
+
+func TestViewDefinitionDoesNotEnableRootZeroScalarRewrite(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`create view zero_scalar_v as select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err, "view definitions must not accept a rewrite that is unavailable when the view is read")
 }
 
 func TestZeroLimitScalarSourceSafety(t *testing.T) {
