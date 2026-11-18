@@ -4656,7 +4656,7 @@ func appendSelectList(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
 			} else {
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				ctx.headings = append(ctx.headings, ImplicitExpressionHeading(expr))
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -4674,11 +4674,7 @@ func appendSelectList(
 						break
 					}
 				}
-				if heading, ok := nameConstHeading(expr); ok {
-					ctx.headings = append(ctx.headings, heading)
-				} else {
-					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
-				}
+				ctx.headings = append(ctx.headings, ImplicitExpressionHeading(expr))
 			}
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -4693,6 +4689,22 @@ func appendSelectList(
 		}
 	}
 	return selectList, nil
+}
+
+// ImplicitExpressionHeading returns the planner's heading for an unaliased
+// projection expression other than a bare column or star.
+func ImplicitExpressionHeading(expr tree.Expr) string {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	if heading, ok := nameConstHeading(expr); ok {
+		return heading
+	}
+	return tree.String(expr, dialect.MYSQL)
 }
 
 func nameConstHeading(expr tree.Expr) (string, bool) {

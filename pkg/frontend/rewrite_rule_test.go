@@ -842,6 +842,23 @@ func TestMergeRewriteRulesPreservesImplicitBinaryHeading(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestMergeRewriteRulesPreservesNestedBinaryHeadings(t *testing.T) {
+	ctx := context.Background()
+	const base = "select length(_binary '1') from db1.t1 where "
+	const predicate = "a = 1 and (select d.r_name from (select _binary 'r_name') d) = 'r_name'"
+	merged, err := mergeRewriteRules(ctx, base+predicate, base+"a = 2")
+	require.NoError(t, err)
+	merged, err = mergeRewriteRules(ctx, merged, base+"a = 3")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select length(0x31) as `length(1)` from db1.t1 where "+
+			"((a = 1 and (select d.r_name from (select 0x725f6e616d65 as r_name) d) = 'r_name') or (a = 2)) or (a = 3)", 1)
+	require.NoError(t, err)
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 func TestMergeRewriteRulesFoldsCharsetNames(t *testing.T) {
 	ctx := context.Background()
 	merged, err := mergeRewriteRules(ctx,

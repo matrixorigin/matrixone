@@ -433,16 +433,16 @@ set secondary role all;
 select `2024` from db1.t_dup order by `2024`;
 -- @session
 
--- The outer query can use the same implicit binary projection name before and after merging.
-alter role test_rule_role_dup_projection_a add rule "select _binary 'tag' from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select _binary 'tag' from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
-alter role test_rule_role_expr_projection_a add rule "select _binary 'tag' from db1.t_dup where marker = 3" on table db1.t_dup;
+-- Outer queries and derived tables retain implicit projection names after merging.
+alter role test_rule_role_dup_projection_a add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where marker = 1 and (select d.r_name from (select _binary 'r_name' from db1.t1 where a = 1) d) = 'r_name'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
+alter role test_rule_role_expr_projection_a add rule "select _binary 'tag', length(_binary '1') from db1.t_dup where marker = 3" on table db1.t_dup;
 -- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set enable_remap_hint = 1;
 set secondary role none;
-select hex(tag), count(*) from db1.t_dup group by tag;
+select hex(tag), `length(1)`, count(*) from db1.t_dup group by tag, `length(1)`;
 set secondary role all;
-select hex(tag), count(*) from db1.t_dup group by tag;
+select hex(tag), `length(1)`, count(*) from db1.t_dup group by tag, `length(1)`;
 -- @session
 
 -- cleanup all test resources

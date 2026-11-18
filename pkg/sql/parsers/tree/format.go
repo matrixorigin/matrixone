@@ -30,6 +30,8 @@ type FmtCtx struct {
 	singleQuoteString bool
 	quoteIdentifier   bool
 	literalPositions  *[]StringLiteralPosition
+	binaryHexCount    *int
+	binaryHeading     func(Expr) string
 }
 
 // StringLiteralPosition is the byte range of a single-quoted SQL literal.
@@ -69,6 +71,15 @@ func WithSingleQuoteString() FmtCtxOption {
 // WithStringLiteralPositions records byte ranges emitted by WithSingleQuoteString.
 func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
 	return func(ctx *FmtCtx) { ctx.literalPositions = positions }
+}
+
+// WithBinaryProjectionHeadings supplies a heading for unaliased projections
+// whose binary literals are rendered as hex. An empty heading adds no alias.
+func WithBinaryProjectionHeadings(heading func(Expr) string) FmtCtxOption {
+	return func(ctx *FmtCtx) {
+		ctx.binaryHeading = heading
+		ctx.binaryHexCount = new(int)
+	}
 }
 
 func WithQuoteIdentifier() FmtCtxOption {

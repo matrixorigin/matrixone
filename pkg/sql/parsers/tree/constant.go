@@ -190,6 +190,9 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 func (node *NumVal) Format(ctx *FmtCtx) {
 	if ctx.singleQuoteString {
 		if node.ValType == P_ScoreBinary {
+			if ctx.binaryHexCount != nil {
+				*ctx.binaryHexCount++
+			}
 			// Encode raw bytes before text escaping or UTF-8 transport can change them.
 			if node.origString == "" {
 				ctx.WriteString("X''")

@@ -482,10 +482,20 @@ type SelectExpr struct {
 }
 
 func (node *SelectExpr) Format(ctx *FmtCtx) {
+	var before int
+	if ctx.binaryHexCount != nil {
+		before = *ctx.binaryHexCount
+	}
 	node.Expr.Format(ctx)
+	var heading string
 	if node.As != nil && !node.As.Empty() {
+		heading = node.As.Origin()
+	} else if ctx.binaryHeading != nil && before != *ctx.binaryHexCount {
+		heading = ctx.binaryHeading(node.Expr)
+	}
+	if heading != "" {
 		ctx.WriteString(" as ")
-		ctx.WriteIdentifier(Identifier(node.As.Origin()))
+		ctx.WriteIdentifier(Identifier(heading))
 	}
 }
 

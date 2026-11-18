@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -420,14 +421,10 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 		return nil, false
 	}
 
-	// Compare the same headings that the merged rule will expose after reparse.
-	projection := preserveRewriteBinaryHeadings(clause.Exprs)
-	mergedClause := *clause
-	mergedClause.Exprs = projection
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
-		clause:     &mergedClause,
-		selectList: rewriteRuleProjectionKey(&projection),
+		clause:     clause,
+		selectList: rewriteRuleProjectionKey(&clause.Exprs),
 		table:      table,
 	}, true
 }
@@ -514,40 +511,19 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 	}
 }
 
-func preserveRewriteBinaryHeadings(exprs tree.SelectExprs) tree.SelectExprs {
-	var result tree.SelectExprs
-	for i, projection := range exprs {
-		if projection.As != nil && !projection.As.Empty() {
-			continue
-		}
-		expr := projection.Expr
-		for paren, ok := expr.(*tree.ParenExpr); ok; paren, ok = expr.(*tree.ParenExpr) {
-			expr = paren.Expr
-		}
-		literal, ok := expr.(*tree.NumVal)
-		if !ok || literal.ValType != tree.P_ScoreBinary {
-			continue
-		}
-		// Match the planner's implicit heading before hex encoding changes its spelling.
-		// A non-text heading cannot be carried as an identifier in the JSON hint.
-		heading := tree.String(literal, dialect.MYSQL)
-		if heading == "" || !utf8.ValidString(heading) || strings.Contains(heading, "*/") {
-			continue
-		}
-		if result == nil {
-			result = append(tree.SelectExprs(nil), exprs...)
-		}
-		result[i].As = tree.NewCStr(heading, 1)
+func rewriteBinaryHeading(expr tree.Expr) string {
+	heading := plan.ImplicitExpressionHeading(expr)
+	// Not every byte string can be embedded as an identifier in the JSON hint comment.
+	if !utf8.ValidString(heading) || strings.Contains(heading, "*/") {
+		return ""
 	}
-	if result != nil {
-		return result
-	}
-	return exprs
+	return heading
 }
 
 func formatRewriteRuleSQL(node tree.NodeFormatter, literals *[]tree.StringLiteralPosition) string {
 	return tree.StringWithOpts(node, dialect.MYSQL,
-		tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(literals))
+		tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithStringLiteralPositions(literals),
+		tree.WithBinaryProjectionHeadings(rewriteBinaryHeading))
 }
 
 // Fold SQL syntax as before, but keep identifiers distinct from string literals
