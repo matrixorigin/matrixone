@@ -1,5 +1,5 @@
 name: Race seed canary
-run-name: ${{ inputs.coverage_comparison == 'mty-real-pr-2' && 'MTY real PR 32901 - two groups' || inputs.coverage_comparison == 'tke' && 'TKE skip baseline - PR 32590 - no COS OSS' || contains(fromJSON('["mty","mnl2","jed","ruh"]'), inputs.coverage_comparison) && format('{0} S3 UT Coverage - PR 32590', inputs.coverage_comparison) || 'Race seed canary' }}
+run-name: ${{ inputs.coverage_comparison == 'mty-real-pr-2' && format('MTY real PR {0} - two groups', fromJSON(inputs.matrixone_sha).pr_number) || inputs.coverage_comparison == 'tke' && 'TKE skip baseline - PR 32590 - no COS OSS' || contains(fromJSON('["mty","mnl2","jed","ruh"]'), inputs.coverage_comparison) && format('{0} S3 UT Coverage - PR 32590', inputs.coverage_comparison) || 'Race seed canary' }}
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ on:
         type: boolean
         default: false
       matrixone_sha:
-        description: Full MatrixOne SHA; for gomod-warm, the completed cold run ID
+        description: Full MatrixOne SHA; gomod-warm uses cold run ID; mty-real-pr-2 uses JSON with pr_number and head_sha
         required: true
         type: string
         default: '3ac87c30625fc082391e5384a4c94e50a2916cf6'
@@ -56,7 +56,7 @@ jobs:
   mty-real-pr-validation:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && inputs.coverage_comparison == 'mty-real-pr-2' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
-      group: cs-mty-real-pr-32901-${{ inputs.matrixone_sha }}
+      group: cs-mty-real-pr-${{ fromJSON(inputs.matrixone_sha).pr_number }}-${{ fromJSON(inputs.matrixone_sha).head_sha }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -64,8 +64,8 @@ jobs:
       pull-requests: read
     uses: matrixorigin/CI/.github/workflows/node-cache-real-pr-validation.yaml@74a662337f230aa2b160d208e090edd943dec30e
     with:
-      pr_number: 32901
-      expected_head_sha: ${{ inputs.matrixone_sha }}
+      pr_number: ${{ fromJSON(inputs.matrixone_sha).pr_number }}
+      expected_head_sha: ${{ fromJSON(inputs.matrixone_sha).head_sha }}
     secrets: inherit
   mty-missing-cpu-producer:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && contains(fromJSON('["mty-cpu-profile-n1","mty-cpu-profile-n2"]'), inputs.coverage_comparison) && inputs.matrixone_sha == 'dbc7ca14ca8b01cfe6d9e9a151619ea4b5ba14ca' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
