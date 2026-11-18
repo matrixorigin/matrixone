@@ -24,7 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
@@ -163,4 +165,42 @@ func TestCheckpointReplayObjectData(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestWatchReplayHistoryFloorRequiresCheckpointPair(t *testing.T) {
+	end := types.BuildTS(100, 1)
+	previous := end.Prev()
+	const lsn = 10
+	newEntry := func(end types.TS, typ checkpoint.EntryType) *checkpoint.CheckpointEntry {
+		entry := checkpoint.NewCheckpointEntry("", types.TS{}, end, typ, checkpoint.WithStateEntryOption(checkpoint.ST_Finished))
+		entry.SetLSN(lsn, lsn)
+		var locations objectio.LocationSlice
+		locations.AppendLocation(objectio.NewRandomLocation(1, 1))
+		entry.SetTableIDLocation(locations)
+		return entry
+	}
+	global := newEntry(end, checkpoint.ET_Global)
+	incremental := newEntry(previous, checkpoint.ET_Incremental)
+	require.Equal(t, previous, watchReplayHistoryFloor(end, lsn, global, incremental))
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, global, nil), "missing predecessor")
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, nil, incremental), "missing latest checkpoint")
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, newEntry(end, checkpoint.ET_Incremental), incremental))
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn+1, global, incremental), "different replay LSN")
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, global, newEntry(previous.Prev(), checkpoint.ET_Incremental)))
+	otherLSN := newEntry(previous, checkpoint.ET_Incremental)
+	otherLSN.SetLSN(lsn-1, lsn-1)
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, global, otherLSN), "different ICKP LSN")
+	legacyGlobal := newEntry(end, checkpoint.ET_Global)
+	legacyGlobal.SetVersion(logtail.CheckpointVersion12)
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, legacyGlobal, incremental))
+	legacyIncremental := newEntry(previous, checkpoint.ET_Incremental)
+	legacyIncremental.SetTableIDLocation(nil)
+	require.Equal(t, end, watchReplayHistoryFloor(end, lsn, global, legacyIncremental))
+
+	// At logical rollover, the tuple immediately preceding (100,0) is
+	// (99,max). An earlier logical value leaves an uncertified gap.
+	rolloverEnd := types.BuildTS(100, 0)
+	rolloverPrevious := rolloverEnd.Prev()
+	require.Equal(t, rolloverPrevious,
+		watchReplayHistoryFloor(rolloverEnd, lsn, newEntry(rolloverEnd, checkpoint.ET_Global), newEntry(rolloverPrevious, checkpoint.ET_Incremental)))
 }

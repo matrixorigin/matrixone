@@ -27,8 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -206,7 +208,7 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 	original := h.db.BGCheckpointRunner
 	h.db.BGCheckpointRunner = &checkpointRunnerWithMax{Runner: original, entry: entry}
 	defer func() { h.db.BGCheckpointRunner = original }()
-	h.db.LogtailMgr.SetReplayCheckpointEnd(end)
+	h.db.LogtailMgr.SetReplayHistoryFloor(end)
 
 	requested := cmd_util.ScopedChangedTable{AccountID: 0, DatabaseID: 3000, TableID: 1000}
 	wrongAccount := cmd_util.ScopedChangedTable{AccountID: 1, DatabaseID: 3001, TableID: 1001}
@@ -278,4 +280,102 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 		require.False(t, moerr.IsMoErrCode(outcome.err, moerr.ErrChangeWatchHistoryUnavailable))
 		require.Empty(t, outcome.resp)
 	})
+}
+
+func TestScopedChangedTablesIncludesWALAtGlobalCheckpointEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	physical := time.Now().UnixNano()
+	opts.Clock = clock.NewHLCClock(func() int64 { return physical }, 0)
+	h := mockTAEHandle(ctx, t, opts)
+	t.Cleanup(func() { require.NoError(t, h.HandleClose(context.Background())) })
+	registerScopedChangedTablesPublisher(t, h.Handle)
+	schema := catalog.MockSchema(2, 0)
+	schema.Name = "global_equal"
+	create := startScopedChangedTablesTxn(t, h.Handle)
+	database, err := testutil.CreateDatabase2(ctx, create, "global_equal")
+	require.NoError(t, err)
+	relation, err := testutil.CreateRelation2(ctx, create, database, schema)
+	require.NoError(t, err)
+	scope := cmd_util.ScopedChangedTable{DatabaseID: database.GetID(), TableID: relation.ID()}
+	require.NoError(t, create.Commit(ctx))
+
+	// The single HLC physical tick can legally host both the checkpoint's
+	// proposed cutoff and a real later committed transaction.
+	write := startScopedChangedTablesTxn(t, h.Handle)
+	database, err = write.GetDatabase("global_equal")
+	require.NoError(t, err)
+	relation, err = database.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	require.NoError(t, relation.Append(ctx, bat))
+	require.NoError(t, write.Commit(ctx))
+	commit := write.GetCommitTS()
+	require.Equal(t, commit, write.GetPrepareTS())
+	require.Positive(t, commit.Logical())
+	predecessorEnd := commit.Prev()
+	require.NoError(t, h.db.ForceGlobalCheckpoint(ctx, predecessorEnd, time.Hour))
+	latest := h.db.BGCheckpointRunner.MaxCheckpoint()
+	require.True(t, latest.IsGlobal())
+	require.Equal(t, commit, latest.GetEnd())
+	_, markedEnd, have, err := taelogtail.ReadTableIDHistoryRange(ctx, latest.GetTableIDLocation(), common.CheckpointAllocator, h.db.Runtime.Fs)
+	require.NoError(t, err)
+	require.True(t, have)
+	require.Equal(t, predecessorEnd, markedEnd)
+	require.Greater(t, write.GetLSN(), latest.LSN(), "equal-boundary committed DML must be beyond the checkpoint LSN")
+	t.Logf("commit=%s global_end=%s index_end=%s commit_lsn=%d checkpoint_lsn=%d",
+		commit.ToString(), latest.GetEnd().ToString(), markedEnd.ToString(), write.GetLSN(), latest.LSN())
+
+	dir := h.db.Dir
+	require.NoError(t, h.db.Close())
+	reopened, err := db.Open(ctx, dir, opts)
+	require.NoError(t, err)
+	h.Handle = &Handle{db: reopened}
+	registerScopedChangedTablesPublisher(t, h.Handle)
+	require.True(t, reopened.BGCheckpointRunner.MaxCheckpoint().IsGlobal())
+	require.Equal(t, predecessorEnd, reopened.LogtailMgr.GetDirtyHistoryFloor())
+	retained := reopened.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, retained)
+	require.Equal(t, predecessorEnd, retained.GetEnd())
+	require.Equal(t, latest.LSN(), retained.LSN())
+	require.True(t, reopened.LogtailMgr.GetReader(commit, commit).IsDirtyOnTable(scope.DatabaseID, scope.TableID),
+		"global boundary DML beyond its LSN survives in exact WAL replay")
+
+	publish := startScopedChangedTablesTxn(t, h.Handle)
+	_, err = testutil.CreateDatabase2(ctx, publish, "advance_global_frontier")
+	require.NoError(t, err)
+	require.NoError(t, publish.Commit(ctx))
+	to := publish.GetCommitTS().ToTimestamp()
+	req := cmd_util.GetScopedChangedTablesReq{From: predecessorEnd.ToTimestamp(), To: to, Tables: []cmd_util.ScopedChangedTable{scope}}
+	var resp cmd_util.GetScopedChangedTablesResp
+	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &req, &resp)
+	require.NoError(t, err)
+	require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, &req, &resp))
+	require.Equal(t, []cmd_util.ScopedChangedTable{scope}, resp.Tables)
+
+	advance := startScopedChangedTablesTxn(t, h.Handle)
+	_, err = testutil.CreateDatabase2(ctx, advance, "global_clean_window")
+	require.NoError(t, err)
+	require.NoError(t, advance.Commit(ctx))
+	clean := req
+	clean.From, clean.To = to, advance.GetCommitTS().ToTimestamp()
+	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &clean, &resp)
+	require.NoError(t, err)
+	require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, &clean, &resp))
+	require.Empty(t, resp.Tables)
+
+	// An uncertified checkpoint pair keeps the higher replay floor. The
+	// same increment must still fail closed, while a NULL baseline can run.
+	reopened.LogtailMgr.SetReplayHistoryFloor(commit)
+	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &req, &resp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchHistoryUnavailable))
+	require.Empty(t, resp)
+
+	// The NULL baseline path only requires the trusted cut and capability.
+	probe := cmd_util.GetScopedChangedTablesReq{From: to, To: to}
+	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &probe, &resp)
+	require.NoError(t, err)
+	require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(ctx, &probe, &resp))
 }

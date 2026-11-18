@@ -393,7 +393,9 @@ func (db *DB) ReplayWal(
 	lsn uint64,
 	onDone func(), // onDone must be called after replay is done or failed
 ) (ctl *replayCtl, err error) {
-	db.LogtailMgr.SetReplayCheckpointEnd(maxTs)
+	db.LogtailMgr.SetReplayHistoryFloor(watchReplayHistoryFloor(
+		maxTs, lsn, db.BGCheckpointRunner.MaxCheckpoint(), db.BGCheckpointRunner.MaxIncrementalCheckpoint(),
+	))
 	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
 
 	replayer := newWalReplayer(db, maxTs, lsn)
