@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"io"
@@ -525,7 +526,7 @@ func (d *DiskCache) writeFile(
 			if err == nil {
 				err = updateErr
 			} else {
-				cleanupErr = updateErr
+				cleanupErr = errors.Join(cleanupErr, updateErr)
 			}
 		}
 	}()
@@ -560,8 +561,12 @@ func (d *DiskCache) writeFile(
 	}
 	defer func() {
 		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
+			if closeErr := f.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+				cleanupErr = closeErr
+			}
+			if removeErr := os.Remove(f.Name()); removeErr != nil && !os.IsNotExist(removeErr) {
+				cleanupErr = errors.Join(cleanupErr, removeErr)
+			}
 		}
 	}()
 

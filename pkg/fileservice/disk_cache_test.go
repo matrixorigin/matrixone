@@ -1053,6 +1053,32 @@ func TestDiskCacheBadWrite(t *testing.T) {
 		require.False(t, written)
 		require.Equal(t, before+1, promtest.ToFloat64(metric.FSDiskCacheErrorCounter))
 	})
+	t.Run("caller cancellation with temporary file removal failure", func(t *testing.T) {
+		path := filepath.Join(dir, "temp-removal-failure")
+		var tempPath string
+		before := promtest.ToFloat64(metric.FSDiskCacheErrorCounter)
+		written, err := cache.writeFile(canceled, path, func(ctx context.Context) (io.ReadCloser, error) {
+			paths, err := filepath.Glob(filepath.Join(dir, "*"+cacheFileTempSuffix))
+			require.NoError(t, err)
+			require.Len(t, paths, 1)
+			tempPath = paths[0]
+			// Replace the open temp file with a directory so os.Remove
+			// fails deterministically, including when tests run as root.
+			require.NoError(t, os.Remove(tempPath))
+			require.NoError(t, os.Mkdir(tempPath, 0o700))
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(tempPath)) })
+			require.NoError(t, os.WriteFile(filepath.Join(tempPath, "child"), nil, 0o600))
+			return nil, ctx.Err()
+		})
+		require.NoError(t, err)
+		require.False(t, written)
+		require.NoFileExists(t, path)
+		require.DirExists(t, tempPath)
+		done, ok := cache.tryStartUpdate(path)
+		require.True(t, ok, "failed write must release the update slot")
+		done()
+		require.Equal(t, before+1, promtest.ToFloat64(metric.FSDiskCacheErrorCounter))
+	})
 }
 
 func TestDiskCacheGlobalSizeHint(t *testing.T) {
