@@ -53,7 +53,8 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyType, payloadType := types.T_int64.ToType(), types.T_text.ToType()
-			columnTypes := []types.Type{keyType, keyType}
+			columnTypes := make([]types.Type, 2, 2+tc.payloadColumns)
+			columnTypes[0], columnTypes[1] = keyType, keyType
 			for range tc.payloadColumns {
 				columnTypes = append(columnTypes, payloadType)
 			}

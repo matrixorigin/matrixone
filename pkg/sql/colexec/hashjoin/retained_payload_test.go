@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -38,19 +39,22 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 	t.Cleanup(func() { mpool.CapLimit = previousLimit })
 
 	const (
-		buildRows    = 13
+		defaultRows  = 13
 		rowsPerInput = 6
 		valueBytes   = 92 << 10
 		queryBudget  = 16 << 20
+		inlineValue  = "inline"
 	)
 	for _, tc := range []struct {
-		name      string
-		joinType  plan.Node_JoinType
-		probeKeys []int64
-		usePK     bool
+		name        string
+		joinType    plan.Node_JoinType
+		probeKeys   []int64
+		usePK       bool
+		useResidual bool
 	}{
-		{"left-duplicate-continuation", plan.Node_LEFT, []int64{1, 2}, false},
-		{"right-unique-gather-and-finalize", plan.Node_RIGHT, []int64{11, 0, 1, 2, 3, 4, 5, 6}, true},
+		{name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2}},
+		{name: "right-unique-gather-and-finalize", joinType: plan.Node_RIGHT, probeKeys: []int64{11, 0, 1, 2, 3, 4, 5, 6}, usePK: true},
+		{name: "left-residual-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2, 3, 4}, useResidual: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -88,6 +92,24 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}},
 				EqConds:    [][]*plan.Expr{{key}, {key}},
 			}
+			buildRows, wideRows := defaultRows, defaultRows
+			if tc.useResidual {
+				// ON p.k = b.k AND p.k <= b.bound
+				bound := newExpr(3, keyType)
+				bound.GetCol().RelPos = 1
+				cmp, err := function.GetFunctionByName(proc.Ctx, "<=", []types.Type{keyType, keyType})
+				require.NoError(t, err)
+				arg.RightTypes = append(arg.RightTypes, keyType)
+				arg.NonEqCond = &plan.Expr{
+					Typ: types.T_bool.ToType().PlanType(),
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: cmp.GetEncodedOverloadID(), ObjName: "<="},
+						Args: []*plan.Expr{key, bound},
+					}},
+				}
+				wideRows++
+				buildRows = wideRows + 3
+			}
 			arg.AppendChild(probeChild)
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 
@@ -100,20 +122,38 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 
 			for first := 0; first < buildRows; first += rowsPerInput {
 				last := min(first+rowsPerInput, buildRows)
-				input := batch.NewWithSize(3)
+				input := batch.NewWithSize(len(arg.RightTypes))
 				buildChild.WithBatchs([]*batch.Batch{input})
 				for col, typ := range arg.RightTypes {
 					input.Vecs[col] = vector.NewVec(typ)
 				}
 				for row := first; row < last; row++ {
-					value := int64(1)
+					buildKey := int64(1)
+					var payload []byte
+					var payloadNull bool
 					if tc.usePK {
-						value = int64(row)
+						buildKey = int64(row)
 					}
-					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, mp))
+					switch row {
+					case wideRows:
+						buildKey, payload = 2, []byte(inlineValue)
+					case wideRows + 1:
+						buildKey, payloadNull = 2, true
+					case wideRows + 2:
+						buildKey, payload = 3, []byte("rejected")
+					default:
+						payload = bytes.Repeat([]byte{byte(row + 1)}, valueBytes)
+					}
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], buildKey, false, mp))
 					require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(row), false, mp))
-					payload := bytes.Repeat([]byte{byte(row + 1)}, valueBytes)
-					require.NoError(t, vector.AppendBytes(input.Vecs[2], payload, false, mp))
+					require.NoError(t, vector.AppendBytes(input.Vecs[2], payload, payloadNull, mp))
+					if tc.useResidual {
+						bound := buildKey
+						if row == wideRows-2 || row == wideRows+2 {
+							bound = 0
+						}
+						require.NoError(t, vector.AppendFixed(input.Vecs[3], bound, row == wideRows-1, mp))
+					}
 				}
 				input.SetRowCount(last - first)
 			}
@@ -137,6 +177,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 
 			// -1 represents the NULL side of an outer join row.
 			type joinedRow struct{ key, id int64 }
+			inlineID, nullID := int64(wideRows), int64(wideRows+1)
 			want := make(map[joinedRow]bool)
 			for row := range buildRows {
 				key := int64(1)
@@ -151,7 +192,17 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				}
 				want[joinedRow{key, int64(row)}] = true
 			}
-			if !tc.usePK {
+			if tc.useResidual {
+				// The first probe has more qualifying wide rows than one result
+				// batch can hold. Its final candidates are false and NULL.
+				for id := wideRows - 2; id < buildRows; id++ {
+					delete(want, joinedRow{1, int64(id)})
+				}
+				want[joinedRow{2, inlineID}] = true
+				want[joinedRow{2, nullID}] = true
+				want[joinedRow{3, -1}] = true
+				want[joinedRow{4, -1}] = true
+			} else if !tc.usePK {
 				want[joinedRow{2, -1}] = true
 			}
 
@@ -181,8 +232,11 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 					got := joinedRow{key, id}
 					require.True(t, want[got], "unexpected or repeated output row %+v", got)
 					delete(want, got)
-					require.Equal(t, id == -1, out.Vecs[2].IsNull(uint64(row)))
-					if id != -1 {
+					isNull := id == -1 || id == nullID
+					require.Equal(t, isNull, out.Vecs[2].IsNull(uint64(row)))
+					if id == inlineID {
+						require.Equal(t, inlineValue, string(out.Vecs[2].GetBytesAt(row)))
+					} else if !isNull {
 						payload := out.Vecs[2].GetBytesAt(row)
 						require.Len(t, payload, valueBytes)
 						require.Equal(t, valueBytes, bytes.Count(payload, []byte{byte(id + 1)}))
