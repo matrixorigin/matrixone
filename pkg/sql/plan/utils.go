@@ -1697,24 +1697,10 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
