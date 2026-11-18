@@ -4,6 +4,7 @@ drop database if exists non_primary_zonemap;
 create database non_primary_zonemap;
 use non_primary_zonemap;
 set @saved_zonemap_hints=@@optimizer_hints;
+set optimizer_hints='';
 create table clustered (id int primary key, k int);
 create table interleaved (id int primary key, k int);
 
@@ -87,6 +88,10 @@ select k from interleaved where k in (100,150) order by k;
 -- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b",true)
 explain analyze select count(*) from interleaved where k in (100,150);
 
+-- 相同 nullable 域保留两行；不同域只有 id=6 同时命中，漏掉任一谓词都会多出一行。
+select id from clustered where k in (100,150,null) and k in (150,100,null) order by id;
+select id from clustered where k in (100,150,null) and k in (150,1,null) order by id;
+
 -- 字符串期间、NULL 与重复列表值：三个小块，只有两个块包含目标期间。
 create table period_values (id int primary key, period varchar(16), amount decimal(20,7));
 insert into period_values values (1,'2026.12',999),(2,null,999);
@@ -165,7 +170,6 @@ execute zm_binary_in using @zm_binary_other,@zm_binary_hit;
 deallocate prepare zm_binary_in;
 
 -- 同一持久化块混合真假值，BOOL 摘要不能把 true 行排除。
-set optimizer_hints='';
 create table bool_values (id int, enabled bool);
 insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
 select id from bool_values where enabled = true order by id;
@@ -228,6 +232,8 @@ select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as m
 
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+select id from clustered where k in (100,150,null) and k in (150,100,null) order by id;
+select id from clustered where k in (100,150,null) and k in (150,1,null) order by id;
 select count(*) from binary_in_values where k in (unhex('00'),unhex(concat(repeat('ff',30),'01')));
 select id from float_in_values where d in (100,cast('NaN' as double)) order by id;
 select id from float_in_values where f in (100,cast('NaN' as float)) order by id;

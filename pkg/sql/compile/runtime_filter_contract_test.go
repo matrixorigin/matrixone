@@ -132,14 +132,14 @@ func TestInternalInsertFinalBlockFilters(t *testing.T) {
 			continue
 		}
 		scans++
-		filters := plan2.DeepCopyExprList(node.BlockFilterList)
-		require.Len(t, filters, 3, "反例必须实际绕过 optimizer 的最终去重")
-		for _, filter := range filters {
-			_, err = plan2.ReplaceFoldExpr(c.proc, filter, &c.filterExprExes)
-			require.NoError(t, err)
-		}
-		s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+		require.Len(t, node.BlockFilterList, 3, "反例必须实际绕过 optimizer 的最终去重")
+		s := &Scope{Proc: c.proc, DataSource: &Source{}}
+		require.NoError(t, c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList))
+		view := s.DataSource.readerBlockFilters
+		require.Len(t, view, 2)
 		for range 2 {
+			require.NoError(t, c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList))
+			require.Same(t, &view[0], &s.DataSource.readerBlockFilters[0], "复用同一代静态 reader 视图")
 			block, err := s.handleRuntimeFilters(c, nil)
 			require.NoError(t, err)
 			require.Len(t, block, 2)
@@ -188,12 +188,12 @@ func TestReaderBlockFilterFoldReuse(t *testing.T) {
 		filter.GetF().Args[1] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{
 			List: []*plan.Expr{plan2.MakePlan2Int32ConstExprWithType(1), cast},
 		}}}
-		_, err = plan2.ReplaceFoldExpr(c.proc, filter, &c.filterExprExes)
-		require.NoError(t, err)
 		filters = append(filters, filter)
 	}
+	s := &Scope{Proc: c.proc, DataSource: &Source{}}
+	require.NoError(t, c.prepareScanBlockFilters(s.DataSource, filters))
 	require.Len(t, c.filterExprExes, 2)
-	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+	require.Nil(t, s.DataSource.readerBlockFilters, "动态 Fold 不得按当前值缓存去重")
 	empty := vector.NewVec(types.T_varchar.ToType())
 	t.Cleanup(func() { empty.Free(c.proc.Mp()) })
 	c.proc.SetPrepareParams(empty)
@@ -246,18 +246,28 @@ func TestReaderDeduplicatesOnlyStaticFilters(t *testing.T) {
 	static := plan2.DeepCopyExpr(runtimeExpr)
 	other := plan2.MakeInExpr(c.proc.Ctx, plan2.GetColExpr(col.Typ, 1, 1), 2, data, false)
 	source := []*plan.Expr{static, other, plan2.DeepCopyExpr(other)}
-	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: source}}
+	s := &Scope{Proc: c.proc, DataSource: &Source{}}
+	require.NoError(t, c.prepareScanBlockFilters(s.DataSource, source))
+	compiled := s.DataSource.BlockFilterList
 	runtime := []runtimeFilterExpr{{expr: runtimeExpr}, {expr: runtimeExpr}}
 	for range 2 {
 		s.DataSource.FilterExpr = nil
 		block, err := s.handleRuntimeFilters(c, runtime)
 		require.NoError(t, err)
 		require.Len(t, block, 4, "只消除静态区内部重复，runtime 与跨区表达式保持原样")
-		for i, original := range []*plan.Expr{runtimeExpr, runtimeExpr, static, other} {
+		for i, original := range []*plan.Expr{runtimeExpr, runtimeExpr, compiled[0], compiled[1]} {
 			require.Same(t, original, block[i])
 		}
 		require.Len(t, s.DataSource.BlockFilterList, 3)
-		require.NotNil(t, source[2], "独立输出切片不能压缩缓存的 Source")
+		require.NotNil(t, compiled[2], "独立输出切片不能压缩缓存的 Source")
+	}
+	// 更换源列表时旧的两项视图不能泄漏到新一代（包括空列表）。
+	for _, next := range [][]*plan.Expr{{static}, nil} {
+		require.NoError(t, c.prepareScanBlockFilters(s.DataSource, next))
+		block, err := s.handleRuntimeFilters(c, nil)
+		require.NoError(t, err)
+		require.Len(t, block, len(next))
+		require.Nil(t, s.DataSource.readerBlockFilters)
 	}
 }
 
@@ -294,18 +304,15 @@ func TestReaderStringInLogicalIdentity(t *testing.T) {
 	c := newBlockFilterCompile(t)
 	a, b := strings.Repeat("a", 30), strings.Repeat("b", 30)
 	node := blockFilterTestScan(t, c, "n_name in ('"+a+"','"+b+"') and n_name in ('"+b+"','"+a+"')", false)
-	filters := plan2.DeepCopyExprList(node.BlockFilterList)
+	s := &Scope{Proc: c.proc, DataSource: &Source{}}
+	require.NoError(t, c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList))
+	filters := s.DataSource.BlockFilterList
 	require.Len(t, filters, 4, "真实 BuildPlan 保留两种顺序各自的 List/Vec")
-	for _, f := range filters {
-		_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
-		require.NoError(t, err)
-	}
 	first, second := filters[0].GetF().Args[1].GetVec(), filters[1].GetF().Args[1].GetVec()
 	require.NotNil(t, first)
 	require.NotNil(t, second)
 	require.False(t, bytes.Equal(first.Data, second.Data), "必须实际覆盖不同 area 布局")
 	firstData, secondData := bytes.Clone(first.Data), bytes.Clone(second.Data)
-	s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
 	for range 2 {
 		block, err := s.handleRuntimeFilters(c, nil)
 		require.NoError(t, err)
@@ -336,13 +343,10 @@ func TestReaderNullableInLogicalDomains(t *testing.T) {
 			t.Run(mode+tc.name, func(t *testing.T) {
 				c := newBlockFilterCompile(t)
 				node := blockFilterTestScan(t, c, tc.predicate, ordinary)
-				filters := plan2.DeepCopyExprList(node.BlockFilterList)
-				for _, f := range filters {
-					_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
-					require.NoError(t, err)
-				}
+				s := &Scope{Proc: c.proc, DataSource: &Source{}}
+				require.NoError(t, c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList))
+				filters := s.DataSource.BlockFilterList
 				before := plan2.DeepCopyExprList(filters)
-				s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
 				for range 2 {
 					block, err := s.handleRuntimeFilters(c, nil)
 					require.NoError(t, err)
@@ -364,17 +368,17 @@ func BenchmarkReaderDistinctStaticFilters(b *testing.B) {
 	for _, tc := range []struct{ name, predicate string }{
 		{"numeric plus comparison", "n_regionkey in (1,2) and n_nationkey > 0"},
 		{"different string columns", "n_name in ('a','b') and n_comment in ('a','b')"},
+		{"same column numeric rewrite", "n_nationkey in (1,2,3,4) and n_nationkey not in (2,3)"},
+		{"same column nullable strings", "n_name in ('a','b',null) and n_name in ('b','c',null)"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			c := newBlockFilterCompile(b)
 			node := blockFilterTestScan(b, c, tc.predicate, true)
-			filters := plan2.DeepCopyExprList(node.BlockFilterList)
+			s := &Scope{Proc: c.proc, DataSource: &Source{}}
+			require.NoError(b, c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList))
+			filters := s.DataSource.BlockFilterList
 			require.Len(b, filters, 2)
-			for _, f := range filters {
-				_, err := plan2.ReplaceFoldExpr(c.proc, f, &c.filterExprExes)
-				require.NoError(b, err)
-			}
-			s := &Scope{Proc: c.proc, DataSource: &Source{BlockFilterList: filters}}
+			require.Nil(b, s.DataSource.readerBlockFilters)
 			b.ReportAllocs()
 			for b.Loop() {
 				block, err := s.handleRuntimeFilters(c, nil)

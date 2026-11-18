@@ -777,13 +777,11 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []runtimeFilt
 		}
 	}
 
-	// 内部 INSERT/CTAS 绕过 BaseOptimizer，只对独立副本的静态后缀去重。
-	// JOIN runtime 向量保持原样，避免为无关过滤复制/散列整个 payload。
-	// 不缩短缓存的 Source 列表或丢掉后续执行的 Fold 槽位。
-	runtimeCount := len(runtimeExprs)
-	combined := append(runtimeExprs, s.DataSource.BlockFilterList...)
-	static := plan2.DeduplicateFinalBlockFilters(combined[runtimeCount:])
-	return combined[:runtimeCount+len(static)], nil
+	static := s.DataSource.readerBlockFilters
+	if static == nil {
+		static = s.DataSource.BlockFilterList
+	}
+	return append(runtimeExprs, static...), nil
 }
 
 func (s *Scope) isTableScan() bool {
