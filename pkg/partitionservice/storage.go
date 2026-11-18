@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -275,6 +276,7 @@ func (s *storage) Create(
 				return err
 			}
 
+			inheritedEnums := tree.InheritedEnumTypes(def)
 			for _, p := range metadata.Partitions {
 				err := s.createPartitionTable(
 					def,
@@ -282,6 +284,7 @@ func (s *storage) Create(
 					metadata,
 					p,
 					txn,
+					inheritedEnums,
 				)
 				if err != nil {
 					return err
@@ -316,14 +319,13 @@ func (s *storage) Redefine(
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			v, _ := parsers.ParseOne(
-				ctx,
-				dialect.MYSQL,
-				def.Createsql,
-				1,
-			)
+			stmt, err := parsePartitionCreate(ctx, def)
+			if err != nil {
+				return err
+			}
+			defer stmt.Free()
 			tmp := uuid.NewString()
-			stmt := v.(*tree.CreateTable)
+			originalPartitionOption := stmt.PartitionOption
 			stmt.PartitionOption = options
 			table := stmt.Table
 			stmt.Table = *tree.NewTableName(
@@ -338,11 +340,13 @@ func (s *storage) Redefine(
 				tree.WithSingleQuoteString(),
 			)
 
+			stmt.PartitionOption = originalPartitionOption
+
 			// 1. create a temporary table
 			txn.Use(def.DbName)
 			rs, err := txn.Exec(
 				sql,
-				executor.StatementOption{},
+				executor.StatementOption{}.WithInheritedEnums(stmt.InheritedEnums),
 			)
 			if err != nil {
 				return err
@@ -497,12 +501,11 @@ func (s *storage) AddPartitions(
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			stmt, _ := parsers.ParseOne(
-				ctx,
-				dialect.MYSQL,
-				def.Createsql,
-				1,
-			)
+			stmt, err := parsePartitionCreate(ctx, def)
+			if err != nil {
+				return err
+			}
+			defer stmt.Free()
 
 			err = s.updatePartitionCount(
 				metadata,
@@ -515,10 +518,11 @@ func (s *storage) AddPartitions(
 			for _, p := range partitions {
 				err := s.createPartitionTable(
 					def,
-					stmt.(*tree.CreateTable),
+					stmt,
 					metadata,
 					p,
 					txn,
+					stmt.InheritedEnums,
 				)
 				if err != nil {
 					return err
@@ -803,6 +807,7 @@ func (s *storage) createPartitionTable(
 	metadata partition.PartitionMetadata,
 	partition partition.Partition,
 	txn executor.TxnExecutor,
+	inheritedEnums map[string]plan.Type,
 ) error {
 	// create partition table using primary table's schema
 	createPartitionTable := func() error {
@@ -816,7 +821,8 @@ func (s *storage) createPartitionTable(
 			executor.StatementOption{}.
 				WithDisableLock().
 				WithIgnoreForeignKey().
-				WithIgnorePublish(),
+				WithIgnorePublish().
+				WithInheritedEnums(inheritedEnums),
 		)
 		if err != nil {
 			return err
@@ -974,6 +980,43 @@ func (s *storage) updatePartitionCount(
 	}
 	res.Close()
 	return nil
+}
+
+// Rebuilds start from the catalog SQL for constraints and partition options.
+// The typed catalog owns the member boundaries for an existing ENUM.
+func parsePartitionCreate(ctx context.Context, def *plan.TableDef) (*tree.CreateTable, error) {
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, def.Createsql, 1)
+	if err != nil {
+		return nil, err
+	}
+	stmt, ok := parsed.(*tree.CreateTable)
+	if !ok {
+		parsed.Free()
+		return nil, moerr.NewInternalError(ctx, "invalid partition table CREATE metadata")
+	}
+	stmt.InheritedEnums = tree.InheritedEnumTypes(def)
+	for _, item := range stmt.Defs {
+		col, ok := item.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		domain, ok := stmt.InheritedEnums[strings.ToLower(col.Name.ColName())]
+		if !ok {
+			continue
+		}
+		members, err := types.DecodeEnumMembers(domain.Enumvalues, domain.EnumEncoding)
+		if err != nil {
+			stmt.Free()
+			return nil, err
+		}
+		typ, ok := col.Type.(*tree.T)
+		if !ok || typ.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {
+			stmt.Free()
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected type for partition ENUM column %q", col.Name.ColName())
+		}
+		typ.InternalType.EnumValues = members
+	}
+	return stmt, nil
 }
 
 func getPartitionTableCreateSQL(
