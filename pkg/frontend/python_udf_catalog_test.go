@@ -732,13 +732,23 @@ func TestPublishRestoredPythonArtifactsRepublishesExactAccountArtifact(t *testin
 	body := pythonCatalogTestBody(t, types.T_int64)
 	decoded, err := function.DecodePythonRoutineBody(body)
 	require.NoError(t, err)
-	const query = "select language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision;"
+	const query = "select function_id, revision, language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision limit 128;"
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result[query] = newMrsForRestoreStringRows(
-		[]string{"language", "artifact_digest", "body"},
-		[][]interface{}{{"python", decoded.ArtifactDigest, body}},
+		[]string{"function_id", "revision", "language", "artifact_digest", "body"},
+		[][]interface{}{{"44", "1", "python", decoded.ArtifactDigest, body}},
 	)
+
+	// More history than one page may share one immutable artifact identity.
+	first := bh.sql2result[query].(*MysqlResultSet)
+	for revision := 2; revision <= restoredFunctionRevisionPageSize; revision++ {
+		row := append([]interface{}(nil), first.Data[0]...)
+		row[1] = strconv.Itoa(revision)
+		first.AddRow(row)
+	}
+	next := "select function_id, revision, language, artifact_digest, body from mo_catalog.mo_function_revisions where function_id > 44 or (function_id = 44 and revision > 128) order by function_id, revision limit 128;"
+	bh.sql2result[next] = newMrsForRestoreStringRows([]string{"id", "revision", "language", "digest", "body"}, [][]interface{}{{"45", "1", "python", decoded.ArtifactDigest, body}})
 
 	err = publishRestoredPythonArtifacts(
 		t.Context(), sid,
@@ -747,6 +757,8 @@ func TestPublishRestoredPythonArtifactsRepublishesExactAccountArtifact(t *testin
 	)
 	require.NoError(t, err)
 
+	require.Equal(t, []string{query, next}, bh.executedSQLs)
+
 	store, err := pythonudf.NewFileArtifactStore(fs, pythonudf.DefaultMaxArtifactBytes)
 	require.NoError(t, err)
 	resolved, err := store.Resolve(t.Context(), uint64(targetAccount), decoded.Handler, decoded.ArtifactDigest)
@@ -754,6 +766,9 @@ func TestPublishRestoredPythonArtifactsRepublishesExactAccountArtifact(t *testin
 	require.Equal(t, decoded.Source, resolved)
 	_, err = store.Resolve(t.Context(), uint64(targetAccount-1), decoded.Handler, decoded.ArtifactDigest)
 	require.ErrorContains(t, err, "unavailable")
+	bh.sql2result[next].(*MysqlResultSet).Data[0][4] = "{"
+	require.ErrorContains(t, publishRestoredPythonArtifacts(t.Context(), sid, bh, defines.AttachAccountId(t.Context(), targetAccount), targetAccount), "invalid")
+
 }
 
 func TestPublishRestoredPythonArtifactsRejectsMissingArtifactStore(t *testing.T) {
@@ -766,12 +781,12 @@ func TestPublishRestoredPythonArtifactsRejectsMissingArtifactStore(t *testing.T)
 	body := pythonCatalogTestBody(t, types.T_int64)
 	decoded, err := function.DecodePythonRoutineBody(body)
 	require.NoError(t, err)
-	const query = "select language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision;"
+	const query = "select function_id, revision, language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision limit 128;"
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result[query] = newMrsForRestoreStringRows(
-		[]string{"language", "artifact_digest", "body"},
-		[][]interface{}{{"python", decoded.ArtifactDigest, body}},
+		[]string{"function_id", "revision", "language", "artifact_digest", "body"},
+		[][]interface{}{{"44", "1", "python", decoded.ArtifactDigest, body}},
 	)
 
 	err = publishRestoredPythonArtifacts(
@@ -1048,9 +1063,9 @@ func TestValidateRestoredPythonRevisionCatalogChecksCurrentContract(t *testing.T
 	inputDescriptor, _, _, err := function.PythonSignatureMetadata(decodedBody.ArgTypes, decodedBody.ReturnType)
 	require.NoError(t, err)
 	query := fmt.Sprintf(
-		"select %s from %s order by function_id, revision;",
+		"select %s from %s order by function_id, revision limit 128;",
 		functionRevisionCatalogColumns,
-		qualifiedTableName(moCatalog, "mo_function_revisions"),
+		"mo_catalog.mo_function_revisions",
 	)
 	result := &MysqlResultSet{}
 	for index := 0; index < 20; index++ {
@@ -1076,6 +1091,29 @@ func TestValidateRestoredPythonRevisionCatalogChecksCurrentContract(t *testing.T
 	bh.sql2result[query] = result
 	require.NoError(t, validateRestoredFunctionRevisionCatalog(context.Background(), bh, context.Background()))
 
+	// Validation must visit the page boundary even with a repeated digest.
+	for revision := 2; revision <= restoredFunctionRevisionPageSize; revision++ {
+		row := append([]interface{}(nil), result.Data[0]...)
+		row[1] = strconv.Itoa(revision)
+		result.AddRow(row)
+	}
+	next := fmt.Sprintf("select %s from mo_catalog.mo_function_revisions where function_id > 44 or (function_id = 44 and revision > 128) order by function_id, revision limit 128;", functionRevisionCatalogColumns)
+	last := append([]interface{}(nil), result.Data[0]...)
+	last[0], last[1] = "45", "1"
+	page := newMrsForRestoreStringRows(strings.Split(functionRevisionCatalogColumns, ","), [][]interface{}{last})
+	bh.init()
+	bh.sql2result[query], bh.sql2result[next] = result, page
+	bh.executedSQLs = nil
+	require.NoError(t, validateRestoredFunctionRevisionCatalog(t.Context(), bh, t.Context()))
+	require.Equal(t, []string{query, next}, bh.executedSQLs)
+	page.Data[0][17] = "stale-fingerprint"
+	require.ErrorContains(t, validateRestoredFunctionRevisionCatalog(t.Context(), bh, t.Context()), "fingerprint mismatch")
+	bh.sql2err[next] = errors.New("page read failed")
+	require.ErrorContains(t, validateRestoredFunctionRevisionCatalog(t.Context(), bh, t.Context()), "page read failed")
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, validateRestoredFunctionRevisionCatalog(cancelled, bh, cancelled), context.Canceled)
+
 	result.Data[0][17] = "stale-fingerprint"
 	bh.init()
 	bh.sql2result[query] = result
@@ -1100,9 +1138,9 @@ func TestValidateRestoredPythonRevisionCatalogRejectsMalformedContracts(t *testi
 		decoded.NullPolicy, "VOLATILE", fingerprint, "2026-09-11 00:00:00", "INVOKER",
 	}
 	query := fmt.Sprintf(
-		"select %s from %s order by function_id, revision;",
+		"select %s from %s order by function_id, revision limit 128;",
 		functionRevisionCatalogColumns,
-		qualifiedTableName(moCatalog, "mo_function_revisions"),
+		"mo_catalog.mo_function_revisions",
 	)
 	newResult := func(row []string) *MysqlResultSet {
 		result := &MysqlResultSet{}
@@ -1158,9 +1196,9 @@ func TestValidateRestoredSharedRevisionCatalogAcceptsSQLAndRejectsTampering(t *t
 	fingerprint, err := function.SQLRoutineFingerprint(body, argTypes, retType)
 	require.NoError(t, err)
 	query := fmt.Sprintf(
-		"select %s from %s order by function_id, revision;",
+		"select %s from %s order by function_id, revision limit 128;",
 		functionRevisionCatalogColumns,
-		qualifiedTableName(moCatalog, "mo_function_revisions"),
+		"mo_catalog.mo_function_revisions",
 	)
 	newResult := func(body, digest string) *MysqlResultSet {
 		result := &MysqlResultSet{}

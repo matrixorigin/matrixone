@@ -42,11 +42,14 @@ function compose_bvt() {
 
 #create the dir for export logs
 python3 - "${MO_WORKSPACE}/docker-compose-log" <<'PY'
+import os
 import pathlib
 import shutil
 import sys
 
-target = pathlib.Path(sys.argv[1]).resolve()
+target = pathlib.Path(os.path.abspath(sys.argv[1]))
+if target.is_symlink():
+    raise SystemExit(f"refusing symlink log directory: {target}")
 if target == target.parent or target == pathlib.Path("/"):
     raise SystemExit(f"refusing unsafe log directory: {target}")
 shutil.rmtree(target, ignore_errors=True)
