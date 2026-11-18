@@ -562,7 +562,7 @@ func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
 	t.Cleanup(func() { board.CloseAndDrain() })
-	op.ScanCutoff = NewScanCutoff(2*rows, types.T_int64.ToType(), false)
+	op.ScanCutoff = NewScanCutoff(2*rows, types.T_int64.ToType(), false, false)
 	op.ScanCutoffTag = 42
 	cutoff := op.ScanCutoff
 	firstValues := make([]int64, rows)
@@ -592,7 +592,7 @@ func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](firstResult.Batch.Vecs[0])[0])
 	require.Same(t, second, op.ctr.pendingInput)
 	require.Nil(t, op.ctr.batWaitForSort)
-	require.Equal(t, uint64(rows), cutoff.seen, "a pending batch is not yet a witness")
+	require.Equal(t, uint64(rows), cutoff.certified, "a pending batch is not yet a witness")
 	require.False(t, cutoff.Done())
 
 	secondResult, err := vm.Exec(op, proc)
@@ -604,14 +604,14 @@ func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 	require.Nil(t, op.ctr.growthParticipant)
 	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
 	require.True(t, cutoff.Done())
-	require.Equal(t, uint64(2*rows), cutoff.seen, "a replayed batch is counted once after append")
+	require.Equal(t, uint64(2*rows), cutoff.certified, "a replayed batch is counted once after append")
 }
 
 func TestScanCutoffSurvivesConcurrentBoardClose(t *testing.T) {
 	proc, op, _ := newOrderRecoveryTest(t, nil)
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
-	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false, false)
 	op.ScanCutoffTag = 42
 	input := newOrderPairBatch(t, proc, []int64{4, 1, 3, 2}, []int64{4, 1, 3, 2})
 	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
@@ -635,7 +635,7 @@ func TestScanCutoffWitnessFailurePropagates(t *testing.T) {
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
 	t.Cleanup(func() { board.CloseAndDrain() })
-	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false, false)
 	op.ScanCutoffTag = 42
 	cutoff := op.ScanCutoff
 	wantErr := errors.New("scan failed after accepted batch")

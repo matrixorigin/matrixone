@@ -55,7 +55,7 @@ func TestPaginationCutoffPlanAdmission(t *testing.T) {
 		want bool
 	}{
 		{name: "ordinary scan", want: true},
-		{name: "physical nullable", edit: func(_ *Compile, scan, _ *plan.Node) { scan.TableDef.Cols[0].Typ.NotNullable = false }},
+		{name: "physical nullable", want: true, edit: func(_ *Compile, scan, _ *plan.Node) { scan.TableDef.Cols[0].Typ.NotNullable = false }},
 		{name: "partition", edit: func(_ *Compile, scan, _ *plan.Node) { scan.TableDef.Partition = &plan.Partition{} }},
 		{name: "mismatched tag", edit: func(_ *Compile, scan, _ *plan.Node) { scan.RecvMsgList[0].MsgTag++ }},
 		{name: "mismatched direction", edit: func(_ *Compile, scan, _ *plan.Node) { scan.OrderBy[0].Flag = plan.OrderBySpec_DESC }},
@@ -103,13 +103,14 @@ func TestPaginationCutoffPlanAdmission(t *testing.T) {
 
 func TestPaginationCutoffFromSQL(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		sql  string
-		want bool
+		name    string
+		sql     string
+		want    bool
+		wantCol string
 	}{
-		{name: "nonprimary alias and filter", sql: "select b as x, a as y from select_test.bind_select where c > 10 order by x, y limit 5 offset 17000", want: true},
+		{name: "nonprimary alias and filter", sql: "select b as x, a as y from select_test.bind_select where c > 10 order by x, y limit 5 offset 17000", want: true, wantCol: "bind_select.b"},
 		{name: "unsafe filter", sql: "select b as x, a as y from select_test.bind_select where c % 2 = 0 order by x, y limit 5 offset 17000"},
-		{name: "nullable key", sql: "select n from tpch.returning_bool order by n limit 5 offset 17000"},
+		{name: "nullable key", sql: "select n from tpch.returning_bool order by n limit 5 offset 17000", want: true},
 		{name: "found rows", sql: "select sql_calc_found_rows b from select_test.bind_select order by b limit 5 offset 17000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,8 +141,10 @@ func TestPaginationCutoffFromSQL(t *testing.T) {
 			}
 			require.Same(t, scan, candidate)
 			require.Positive(t, tag)
-			require.Equal(t, "bind_select.b", scan.OrderBy[0].Expr.GetCol().Name)
-			require.Equal(t, tag, scan.RecvMsgList[0].MsgTag)
+			if tc.wantCol != "" {
+				require.Equal(t, tc.wantCol, scan.OrderBy[0].Expr.GetCol().Name)
+				require.Equal(t, tag, scan.RecvMsgList[0].MsgTag)
+			}
 			tableOp := table_scan.NewArgument()
 			s := &Scope{Magic: Remote, Proc: c.proc, RootOp: tableOp, NodeInfo: engine.Node{Mcpu: 1},
 				DataSource: &Source{node: scan, TableDef: scan.TableDef, OrderBy: scan.OrderBy, RecvMsgList: scan.RecvMsgList}}

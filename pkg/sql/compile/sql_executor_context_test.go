@@ -1019,12 +1019,22 @@ func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
 
 type namespaceDelegate struct {
 	*plan.MockCompilerContext
-	t        *testing.T
-	snapshot *plan.Snapshot
+	t             *testing.T
+	snapshot      *plan.Snapshot
+	resolutionErr error
 }
 
 func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 	borrowOutput.Reset()
+	if defines.IsPersistentViewBinding(d.GetContext()) {
+		require.Equal(d.t, "subscription_db", db)
+		require.Equal(d.t, "source", table)
+		require.Same(d.t, d.snapshot, snapshot)
+		if d.resolutionErr != nil {
+			return nil, nil, d.resolutionErr
+		}
+		return &plan.ObjectRef{Obj: 11}, &plan.TableDef{TblId: 11}, nil
+	}
 	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
 }
 
@@ -1067,6 +1077,33 @@ func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
 	}
 }
 
+func TestCompilerContextPersistentViewDelegate(t *testing.T) {
+	for _, viewChild := range []bool{false, true} {
+		proc := testutil.NewProcess(t)
+		snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
+		delegate := &namespaceDelegate{MockCompilerContext: plan.NewMockCompilerContext(false, proc), t: t, snapshot: snapshot}
+		original := context.WithValue(delegate.GetContext(), struct{}{}, "delegate")
+		delegate.SetContext(original)
+		binding := defines.WithPersistentViewBinding(attachInternalExecutorCompilerContext(proc.Ctx, delegate))
+		c := &compilerContext{proc: proc, ctx: binding, viewChild: viewChild, viewDelegate: delegate}
+		proc.ReplaceTopCtx(binding)
+		for _, failure := range []error{nil, errors.New("catalog read failed")} {
+			delegate.resolutionErr = failure
+			_, def, err := c.Resolve("subscription_db", "source", snapshot, nil)
+			if failure != nil {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(11), def.TblId)
+			}
+			require.Same(t, original, delegate.GetContext(), "delegation must restore the caller on success and error")
+		}
+		_, def, err := delegate.Resolve("subscription_db", "source", snapshot, nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), def.TblId)
+	}
+}
+
 func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
@@ -1102,6 +1139,15 @@ func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
 			require.Equal(t, uint64(12), def.TblId)
 		}
 	}
+	original := c.GetContext()
+	c.SetContext(defines.WithPersistentViewBinding(original))
+	_, def, err := c.Resolve("db", "t", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), def.TblId)
+	c.SetContext(original)
+	_, def, err = c.Resolve("db", "t", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(12), def.TblId)
 	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil, nil)
 	require.NoError(t, err)
 	require.True(t, def.IsTemporary)

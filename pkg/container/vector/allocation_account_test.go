@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -534,6 +535,69 @@ func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountShrinkSparseBitmaps(t *testing.T) {
+	for _, decoded := range []bool{false, true} {
+		for _, mode := range []string{"slice", "mask", "offset"} {
+			for _, rows := range []int{63, 64, 65, 129} {
+				t.Run(fmt.Sprintf("decoded=%t/%s/rows=%d", decoded, mode, rows), func(t *testing.T) {
+					state := newTestVectorAllocationAccount(t, 1<<20, 16)
+					t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { mpool.DeleteMPool(mp) })
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+					source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+					t.Cleanup(func() { source.Free(mp) })
+					vec := source
+					for row := range rows + 2 {
+						require.NoError(t, AppendFixed(vec, int64(row), row == 2, mp))
+					}
+					require.NoError(t, vec.PreExtendGrouping(3, mp))
+					vec.GetGrouping().Add(1)
+					if decoded {
+						data, err := vec.MarshalBinary()
+						require.NoError(t, err)
+						var grouping bytes.Buffer
+						require.NoError(t, vec.MarshalGroupingTo(&grouping))
+						restored := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+						t.Cleanup(func() { restored.Free(mp) })
+						require.NoError(t, restored.UnmarshalBinaryWithCopy(data, mp))
+						require.NoError(t, restored.UnmarshalGroupingFromReader(&grouping, grouping.Len(), mp))
+						vec = restored
+					}
+					require.Equal(t, 1, vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+					require.Equal(t, 1, vec.GetGrouping().GetBitmap().ExternalStorageCapacity())
+					sels := make([]int64, rows)
+					var mask bitmap.Bitmap
+					mask.InitWithSize(int64(rows + 1))
+					var offset uint64
+					if mode == "offset" {
+						offset = 1
+					}
+					for i := range sels {
+						sels[i] = int64(i + 1)
+						mask.Add(uint64(i+1) - offset)
+					}
+					want := append([]int64(nil), MustFixedColNoTypeCheck[int64](vec)[1:rows+1]...)
+					before := state.account.Snapshot()
+					if mode == "slice" {
+						require.NoError(t, vec.Shrink(sels, false, mp))
+					} else {
+						require.NoError(t, vec.ShrinkByMask(&mask, false, offset, mp))
+					}
+					require.Equal(t, rows, vec.Length())
+					require.Equal(t, want, MustFixedColNoTypeCheck[int64](vec))
+					require.Equal(t, []uint64{1}, vec.GetNulls().ToArray())
+					require.Equal(t, []uint64{0}, vec.GetGrouping().ToArray())
+					require.NoError(t, vec.GetNulls().GetBitmap().Validate())
+					require.NoError(t, vec.GetGrouping().GetBitmap().Validate())
+					require.Equal(t, before.Used, state.account.Snapshot().Used)
+					require.Equal(t, before.Peak, state.account.Snapshot().Peak)
+				})
+			}
+		}
+	}
 }
 
 func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) {
