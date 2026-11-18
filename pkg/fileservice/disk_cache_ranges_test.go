@@ -234,11 +234,7 @@ func TestCachedRangesMatchFullScan(t *testing.T) {
 				c.objectOf = make(map[string]string)
 			}
 			c.objectOf[r.diskPath] = "k"
-			var rs []cachedRange
-			if s := c.snapshot("k"); s != nil {
-				rs = slices.Clone(s.ranges)
-			}
-			c.byObject.Store("k", newRangeSnapshot(append(rs, r)))
+			c.byObject.Store("k", c.snapshot("k").with(r))
 			c.mu.Unlock()
 		}
 		check := func() {

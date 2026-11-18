@@ -48,16 +48,44 @@ type rangeSnapshot struct {
 	reach  []int
 }
 
-func newRangeSnapshot(ranges []cachedRange) *rangeSnapshot {
-	slices.SortFunc(ranges, func(a, b cachedRange) int { return cmp.Compare(a.offset, b.offset) })
+// with returns a snapshot of the ranges of s and r: r is inserted where it sorts, and the
+// reach is recomputed from there.
+func (s *rangeSnapshot) with(r cachedRange) *rangeSnapshot {
+	var old []cachedRange
+	var oldReach []int
+	if s != nil {
+		old, oldReach = s.ranges, s.reach
+	}
+	at, _ := slices.BinarySearchFunc(old, r.offset, func(x cachedRange, t int64) int { return cmp.Compare(x.offset, t) })
+	ranges := make([]cachedRange, len(old)+1)
+	copy(ranges, old[:at])
+	ranges[at] = r
+	copy(ranges[at+1:], old[at:])
 	reach := make([]int, len(ranges))
-	for i := range ranges {
+	copy(reach, oldReach[:at])
+	fillReach(ranges, reach, at)
+	return &rangeSnapshot{ranges: ranges, reach: reach}
+}
+
+// without returns a snapshot of the ranges of s but the one at index at, the reach
+// recomputed from there.
+func (s *rangeSnapshot) without(at int) *rangeSnapshot {
+	ranges := slices.Delete(slices.Clone(s.ranges), at, at+1)
+	reach := make([]int, len(ranges))
+	copy(reach, s.reach[:at])
+	fillReach(ranges, reach, at)
+	return &rangeSnapshot{ranges: ranges, reach: reach}
+}
+
+// fillReach sets reach[i], for i from from on, to the index of the range among the first
+// i+1 that reaches furthest.
+func fillReach(ranges []cachedRange, reach []int, from int) {
+	for i := from; i < len(ranges); i++ {
 		reach[i] = i
 		if i > 0 && ranges[reach[i-1]].offset+ranges[reach[i-1]].size >= ranges[i].offset+ranges[i].size {
 			reach[i] = reach[i-1]
 		}
 	}
-	return &rangeSnapshot{ranges: ranges, reach: reach}
 }
 
 func (c *cachedRanges) snapshot(key string) *rangeSnapshot {
@@ -134,12 +162,7 @@ func (c *cachedRanges) add(root, diskPath string) {
 		c.objectOf = make(map[string]string)
 	}
 	c.objectOf[diskPath] = key
-	var ranges []cachedRange
-	if old := c.snapshot(key); old != nil {
-		ranges = slices.Clone(old.ranges)
-	}
-	ranges = append(ranges, cachedRange{diskPath: diskPath, offset: offset, size: size})
-	c.byObject.Store(key, newRangeSnapshot(ranges))
+	c.byObject.Store(key, c.snapshot(key).with(cachedRange{diskPath: diskPath, offset: offset, size: size}))
 }
 
 // remove forgets the range file at diskPath.
@@ -155,12 +178,15 @@ func (c *cachedRanges) remove(diskPath string) {
 	if old == nil {
 		return
 	}
-	ranges := slices.DeleteFunc(slices.Clone(old.ranges), func(r cachedRange) bool { return r.diskPath == diskPath })
-	if len(ranges) == 0 {
+	at := slices.IndexFunc(old.ranges, func(r cachedRange) bool { return r.diskPath == diskPath })
+	if at < 0 {
+		return
+	}
+	if len(old.ranges) == 1 {
 		c.byObject.Delete(key)
 		return
 	}
-	c.byObject.Store(key, newRangeSnapshot(ranges))
+	c.byObject.Store(key, old.without(at))
 }
 
 // covering returns cached ranges of the object with key that together hold size bytes
