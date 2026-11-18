@@ -326,6 +326,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	var p *pipeline.Pipeline
+	phase := "run_pipeline"
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -334,6 +335,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
+			// Cleanup cancels the pipeline even when the failure came from a
+			// dependency. Classify the result while its context still reflects
+			// what happened during execution.
+			err = s.finishRunError(phase, err)
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
 			// scope is retained for reuse, so do not keep its closed reader
@@ -372,8 +377,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 				readers, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
-					// Classify a local stop before deferred cleanup signals the receiver.
-					return s.finishRunError("build_serial_reader", err)
+					phase = "build_serial_reader"
+					return err
 				}
 
 				s.DataSource.R = readers[0]
@@ -389,7 +394,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	return s.finishRunError("run_pipeline", err)
+	return err
 }
 
 var scopeCancellationFailure = logutil.Event{
