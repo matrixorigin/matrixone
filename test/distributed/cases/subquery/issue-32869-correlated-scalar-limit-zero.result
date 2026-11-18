@@ -33,6 +33,20 @@ null  ¦  null  𝄀
 1  ¦  null  𝄀
 1  ¦  null  𝄀
 11  ¦  null
+select o.a, (select o.a as inner_alias from inner_rows limit 0) as aliased_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  aliased_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select cast(o.a as signed) from inner_rows i order by i.d limit 0) as sorted_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  sorted_zero[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
 from outer_rows o order by o.a;
 ➤ a[4,32,0]  ¦  offset_zero[4,32,0]  𝄀
@@ -92,7 +106,28 @@ null  𝄀
 null
 create table secret_rows (s int);
 insert into secret_rows values (5);
+select null + (select o.a from secret_rows s where s.s > o.a limit 0)
+from outer_rows o;
+function with a correlated scalar LIMIT 0 argument may discard its table dependency is not yet implemented
 create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
+create function issue_32869_identity(x int) returns int language sql as '$1';
+function issue_32869_identity already exists
+select o.a, issue_32869_identity((select o.a from secret_rows s where s.s > o.a limit 0)) as identity_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, issue_32869_identity(
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1)
+) as nested_identity_zero from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  nested_identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
 create role issue_32869_role;
 create user issue_32869_reader identified by '111' default role issue_32869_role;
 grant connect on account * to issue_32869_role;
@@ -114,21 +149,29 @@ select issue_32869_keep_second(
 from test_issue_32869.inner_rows o limit 1),
 a
 ) from test_issue_32869.outer_rows;
-SQL UDF with an unretained correlated scalar LIMIT 0 source is not yet implemented
+internal error: do not have privilege to execute the statement
 select issue_32869_keep_second(
 (select (select o.d from test_issue_32869.inner_rows s where s.d > o.d limit 0)
 from test_issue_32869.restricted_wrapper o limit 1),
 a
 ) from test_issue_32869.outer_rows;
-SQL UDF with an unretained correlated scalar LIMIT 0 source is not yet implemented
+internal error: do not have privilege to execute the statement
 select issue_32869_keep_second(
 (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
 from test_issue_32869.inner_rows o
 union all select 5 limit 1),
 a
 ) from test_issue_32869.outer_rows;
-SQL UDF with an unretained correlated scalar LIMIT 0 source is not yet implemented
+internal error: do not have privilege to execute the statement
 select cast(null as signed) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0) from test_issue_32869.restricted_wrapper c limit 1) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity((select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0))
+from test_issue_32869.outer_rows o;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o limit 1)
+) from test_issue_32869.outer_rows;
 internal error: do not have privilege to execute the statement
 select s from test_issue_32869.secret_rows;
 internal error: do not have privilege to execute the statement

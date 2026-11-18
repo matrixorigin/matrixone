@@ -371,6 +371,10 @@ type sqlUdfMockCompilerContext struct {
 
 func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
 	switch name {
+	case "f_identity":
+		return &function.Udf{Body: "$1", Language: string(tree.SQL)}, nil
+	case "f_discard":
+		return &function.Udf{Body: "1", Language: string(tree.SQL)}, nil
 	case "f_values_constant":
 		return &function.Udf{
 			Body:     "1 + 1",
@@ -406,8 +410,6 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 		}, nil
 	case "f_keep_second":
 		return &function.Udf{Body: "$2", Language: string(tree.SQL)}, nil
-	case "f_identity":
-		return &function.Udf{Body: "$1", Language: string(tree.SQL)}, nil
 	case "f_constant_query":
 		return &function.Udf{Body: "select 1", Language: string(tree.SQL)}, nil
 	case "f_identity_query":
@@ -457,6 +459,129 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 	}
 }
 
+func TestSQLUDFRetainsNestedZeroScalarRewriteSources(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_discard((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n union all select 1))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false, nil)
+	require.NoError(t, err)
+	retained := make(map[string]bool)
+	for _, node := range built.GetQuery().Nodes {
+		if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+			retained[node.ObjRef.ObjName] = true
+		}
+	}
+	require.True(t, retained["region"], "discarded UDF argument must retain its source for privilege checks")
+}
+
+func TestSQLIdentityUDFKeepsNestedZeroScalarSources(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_identity((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, query.Correlation)
+	require.GreaterOrEqual(t, len(query.Correlation.Programs), 2,
+		"the wrapper and nested scalar must remain separate invocation-local programs")
+	programScans := make(map[string]bool)
+	for _, program := range query.Correlation.Programs {
+		seen := make(map[int32]bool)
+		pending := []int32{program.RootNode}
+		for len(pending) != 0 {
+			nodeID := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] || query.Nodes[nodeID] == nil {
+				continue
+			}
+			seen[nodeID] = true
+			node := query.Nodes[nodeID]
+			if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
+				programScans[node.TableDef.GetName()] = true
+			}
+			pending = append(pending, node.Children...)
+		}
+	}
+	require.True(t, programScans["nation"], "the identity UDF must retain its wrapper table source")
+	require.True(t, programScans["region"], "the nested LIMIT 0 program must retain its table source")
+}
+
+func TestBuiltinRetainsNestedZeroScalarRewriteSources(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select null + (select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false, nil)
+	require.NoError(t, err)
+	retained := make(map[string]bool)
+	for _, node := range built.GetQuery().Nodes {
+		if isWindowValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+			retained[node.ObjRef.ObjName] = true
+		}
+	}
+	require.True(t, retained["region"], "folded expression must retain the nested source for privilege checks")
+	require.True(t, retained["nation"], "folded expression must retain the wrapper source for privilege checks")
+}
+
+func TestBuiltinRejectsFoldedAwayZeroScalarDependency(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	require.ErrorContains(t, err, "function with a correlated scalar LIMIT 0 argument")
+}
+
+func TestZeroScalarRetentionIgnoresLiteralSourceMetadata(t *testing.T) {
+	required := map[int32]struct{}{7: {}}
+	subquery := &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+		NodeId: 7,
+		Typ:    plan.SubqueryRef_SCALAR,
+	}}}
+	constant := makePlan2Int64ConstExprWithType(1)
+	constant.GetLit().Src = subquery
+	require.False(t, exprRetainsZeroScalarRoots(constant, required),
+		"provenance on a literal is not an executable source dependency")
+	window := &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: &plan.FrameClause{
+		Start: &plan.FrameBound{Val: subquery},
+	}}}}
+	require.False(t, exprRetainsZeroScalarRoots(window, required),
+		"window frame metadata is not an executable expression operand for this rewrite")
+
+	call := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{subquery}}}}
+	require.True(t, exprRetainsZeroScalarRoots(call, required),
+		"an executable function argument keeps the source dependency")
+}
+
+func TestSQLIdentityUDFKeepsZeroScalarDependentProgram(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_identity((select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, query.Correlation)
+	require.Len(t, query.Correlation.Programs, 1)
+	programRoot := query.Correlation.Programs[0].RootNode
+	foundScan := false
+	err = plan.WalkQueryNodes(query, func(_ int32, node *plan.Node) error {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.GetName() == "region" {
+			foundScan = true
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, foundScan, "the identity UDF must retain the authorized table scan")
+	require.GreaterOrEqual(t, programRoot, int32(0))
+}
+
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.Background(),
@@ -480,7 +605,7 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
 }
 
-func TestBindSQLUDFRejectsDiscardedSetOperationZeroLimitSource(t *testing.T) {
+func TestBindSQLUDFRetainsDiscardedSetOperationZeroLimitSource(t *testing.T) {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
 		"select f_keep_second((select (select o.r_regionkey from region i where i.r_regionkey > o.r_regionkey limit 0) from region o union all select 5 limit 1), n.n_nationkey) from nation n", 1)
 	require.NoError(t, err)
@@ -490,9 +615,14 @@ func TestBindSQLUDFRejectsDiscardedSetOperationZeroLimitSource(t *testing.T) {
 		}
 	}()
 	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-	_, err = BuildPlan(ctx, stmts[0], false, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unretained correlated scalar LIMIT 0 source")
+	built, err := BuildPlan(ctx, stmts[0], false, nil)
+	require.NoError(t, err)
+	retained := false
+	for _, node := range built.GetQuery().Nodes {
+		retained = retained || isWindowValidationPrivilegeCarrier(node) &&
+			node.ObjRef != nil && node.ObjRef.ObjName == "region"
+	}
+	require.True(t, retained, "discarded UNION argument must retain its source for privilege checks")
 }
 
 func TestCollectUDFArgumentAuthorizationSourcesIncludesNonTableScans(t *testing.T) {
