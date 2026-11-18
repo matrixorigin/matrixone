@@ -69,13 +69,13 @@ type indexStatsState struct {
 func indexStatsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
 	state := &indexStatsState{}
 	if len(tf.Args) != 3 && len(tf.Args) != 4 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats requires 3 arguments (database, table, index)")
+		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats requires 3 or 4 arguments (database, table, index [, options])")
 	}
 	if err := json.Unmarshal(tf.Params, &state.config); err != nil {
 		return nil, err
 	}
-	if state.config.Analyze == nil && len(tf.Args) != 3 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats requires 3 arguments")
+	if (len(tf.Args) == 4) != (state.config.Analyze != nil) {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: invalid planned options")
 	}
 	return state, nil
 }

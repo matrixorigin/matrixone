@@ -22,14 +22,14 @@ import (
 )
 
 func TestAnalyzeOptions(t *testing.T) {
-	opts, err := ParseAnalyzeOptions(context.Background(), "")
+	opts, err := ParseAnalyzeOptions(context.Background(), "{}")
 	require.NoError(t, err)
 	require.Equal(t, 100, opts.SampleCount)
 	require.Equal(t, .95, opts.RecallTarget)
 	opts, err = ParseAnalyzeOptions(context.Background(), `{"sample_count":1,"recall_target":1,"retrain":true}`)
 	require.NoError(t, err)
 	require.True(t, opts.Retrain)
-	for _, raw := range []string{`null`, `[]`, `{`, `{} {}`, `{"unknown":1}`, `{"sample_count":0}`, `{"sample_count":257}`, `{"recall_target":0}`, `{"recall_target":1.1}`} {
+	for _, raw := range []string{"", `null`, `[]`, `{`, `{} {}`, `{"unknown":1}`, `{"sample_count":0}`, `{"sample_count":257}`, `{"recall_target":0}`, `{"recall_target":1.1}`} {
 		_, err := ParseAnalyzeOptions(context.Background(), raw)
 		require.Error(t, err, raw)
 	}

@@ -172,9 +172,46 @@ func TestMoIndexStatsPlannerRejectsInvalidOrUnsupportedTargets(t *testing.T) {
 	mock := indexStatsTestContext(t)
 	builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
 	_, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), nil)
-	require.ErrorContains(t, err, "requires 3 arguments")
+	require.ErrorContains(t, err, "requires 3 or 4 arguments")
 	_, err = builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{nil, nil, nil})
 	require.ErrorContains(t, err, "non-empty string literals")
+}
+
+func TestMoIndexStatsPlannerDeepOptions(t *testing.T) {
+	for _, tc := range []struct {
+		options string
+		want    *indexstats.AnalyzeOptions
+	}{
+		{"", nil},
+		{"{}", &indexstats.AnalyzeOptions{SampleCount: 100, RecallTarget: .95}},
+		{`{"sample_count":32,"recall_target":0.9,"retrain":true}`, &indexstats.AnalyzeOptions{SampleCount: 32, RecallTarget: .9, Retrain: true}},
+	} {
+		t.Run(tc.options, func(t *testing.T) {
+			mock := indexStatsTestContext(t)
+			builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
+			args := []*pbplan.Expr{makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType("idx")}
+			if tc.options != "" {
+				args = append(args, makePlan2StringConstExprWithType(tc.options))
+			}
+			node, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), args)
+			require.NoError(t, err)
+			tf := builder.qry.Nodes[node].TableDef.TblFunc
+			require.Equal(t, indexstats.FunctionName, tf.Name)
+			var cfg indexstats.Config
+			require.NoError(t, json.Unmarshal(tf.Param, &cfg))
+			require.Equal(t, tc.want, cfg.Analyze)
+		})
+	}
+	mock := indexStatsTestContext(t)
+	builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
+	args := []*pbplan.Expr{makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType("idx"), nil}
+	_, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), args)
+	require.ErrorContains(t, err, "JSON string literal")
+	args[3] = makePlan2StringConstExprWithType("")
+	_, err = builder.buildIndexStats(nil, NewBindContext(builder, nil), args)
+	require.ErrorContains(t, err, "JSON object")
+	_, err = builder.buildIndexStats(nil, NewBindContext(builder, nil), append(args, makePlan2StringConstExprWithType("{}")))
+	require.ErrorContains(t, err, "requires 3 or 4 arguments")
 }
 
 func TestMoIndexStatsFulltextPlanner(t *testing.T) {

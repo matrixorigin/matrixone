@@ -7818,7 +7818,7 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	}
 	if node.NodeType == plan.Node_FUNCTION_SCAN {
 		switch node.GetTableDef().GetTblFunc().GetName() {
-		case "table_changes", "mo_index_stats", "mo_index_analyze":
+		case "table_changes", "mo_index_stats":
 			return true
 		}
 	}

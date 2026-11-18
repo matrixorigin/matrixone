@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const AnalyzeFunctionName = "mo_index_analyze"
-
 type AnalyzeOptions struct {
 	SampleCount  int     `json:"sample_count"`
 	RecallTarget float64 `json:"recall_target"`
@@ -33,20 +31,19 @@ type AnalyzeOptions struct {
 
 func ParseAnalyzeOptions(ctx context.Context, raw string) (*AnalyzeOptions, error) {
 	opts := &AnalyzeOptions{SampleCount: 100, RecallTarget: .95}
-	if raw != "" {
-		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
-			return nil, moerr.NewInvalidInput(ctx, "index analysis options must be a JSON object")
-		}
-		dec := json.NewDecoder(strings.NewReader(raw))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(opts); err != nil {
-			return nil, moerr.NewInvalidInputf(ctx, "invalid index analysis options: %v", err)
-		}
-		var extra any
-		if err := dec.Decode(&extra); err != io.EOF {
-			return nil, moerr.NewInvalidInput(ctx, "index analysis options must contain one JSON object")
-		}
+	if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		return nil, moerr.NewInvalidInput(ctx, "index analysis options must be a JSON object")
 	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(opts); err != nil {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid index analysis options: %v", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, moerr.NewInvalidInput(ctx, "index analysis options must contain one JSON object")
+	}
+
 	if opts.SampleCount < 1 || opts.SampleCount > 256 || !(opts.RecallTarget > 0 && opts.RecallTarget <= 1) {
 		return nil, moerr.NewInvalidInput(ctx, "sample_count must be 1..256 and recall_target must be in (0,1]")
 	}
