@@ -88,13 +88,23 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			execSQLRequire(t, ctx, sys0, q)
 		}
 
-		t.Run("ordinary sys catalog reads include cold accounts", func(t *testing.T) {
+		t.Run("sys explicitly activates a cross-account catalog", func(t *testing.T) {
 			execSQLRequire(t, ctx, sys0, "create account lazy_catalog_reader_owner admin_name 'admin' identified by '111'")
 			tenant := open(t, 0, "lazy_catalog_reader_owner#admin#accountadmin")
 			execSQLRequire(t, ctx, tenant, "create database lazy_catalog_reader_db")
 			execSQLRequire(t, ctx, tenant, "create table lazy_catalog_reader_db.one(id int)")
 			id := accountID(t, "lazy_catalog_reader_owner")
 			require.False(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()))
+			var count int
+			require.NoError(t, sys1.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables").Scan(&count))
+			stmt, err := sys1.PrepareContext(ctx, "select count(*) from mo_catalog.mo_tables where account_id=?")
+			require.NoError(t, err)
+			defer stmt.Close()
+			require.NoError(t, stmt.QueryRowContext(ctx, id).Scan(&count))
+			require.False(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()),
+				"neither a global scan nor a prepared scoped scan should subscribe the CN")
+			execSQLRequire(t, ctx, sys1, fmt.Sprintf("select mo_ctl('cn','ActivateTenantCatalog','%d')", id))
+			require.True(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()))
 			check := func(query string, want int) {
 				t.Helper()
 				for _, db := range []*sql.DB{sys0, sys1} {
@@ -111,8 +121,6 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			check("select count(*) from mo_catalog.mo_tables where account_id=%d and reldatabase='lazy_catalog_reader_db' and relname='two'", 1)
 			execSQLRequire(t, ctx, tenant, "drop table lazy_catalog_reader_db.two")
 			check("select count(*) from mo_catalog.mo_tables where account_id=%d and reldatabase='lazy_catalog_reader_db' and relname='two'", 0)
-			require.False(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()),
-				"a catalog scan must not silently add a cold account's persistent cache/subscription")
 		})
 
 		t.Run("show accounts includes cold catalog counts", func(t *testing.T) {

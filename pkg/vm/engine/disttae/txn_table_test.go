@@ -65,6 +65,49 @@ func TestTxnTableWriteTableName(t *testing.T) {
 	))
 }
 
+func TestCatalogPartitionReadsReuseSubscribedState(t *testing.T) {
+	for _, tableID := range []uint64{catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID} {
+		t.Run(fmt.Sprint(tableID), func(t *testing.T) {
+			eng, db, workspace, _ := newResultOwnershipFixture(t, nil, false)
+			db.databaseId, db.databaseName = catalog.MO_CATALOG_ID, catalog.MO_CATALOG
+			eng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+			eng.pClient.eng = eng
+			eng.pClient.subscribed = subscribedTable{
+				eng: eng,
+				m:   map[uint64]*subEntry{tableID: {dbID: db.databaseId, state: Subscribed}},
+			}
+			eng.pClient.lazyCatalog = newLazyCatalogCNState()
+			eng.pClient.lazyCatalog.enable()
+			eng.pClient.lazyCatalog.setAccountReady(0, timestamp.Timestamp{})
+			eng.pClient.lazyCatalog.setAccountReady(10, timestamp.Timestamp{PhysicalTime: 150})
+			part := eng.GetOrCreateLatestPart(t.Context(), 0, db.databaseId, tableID)
+			state, done := part.MutateState()
+			state.UpdateDuration(types.TS{}, types.MaxTs())
+			done()
+			expected := part.Snapshot()
+			tbl := &txnTable{eng: eng, db: db, tableId: tableID}
+			snapshot := timestamp.Timestamp{}
+			workspace.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().DoAndReturn(func() timestamp.Timestamp {
+				return snapshot
+			}).AnyTimes()
+			for _, caller := range []context.Context{
+				t.Context(),
+				defines.AttachAccountId(t.Context(), 0),
+				defines.AttachAccountId(t.Context(), 10),
+				defines.AttachAccountId(t.Context(), 20),
+			} {
+				for _, physical := range []int64{100, 150, 200} {
+					snapshot = timestamp.Timestamp{PhysicalTime: physical}
+					got, err := tbl.getPartitionState(caller)
+					require.NoError(t, err)
+					require.Same(t, expected, got,
+						"physical partition reads must not depend on account cache readiness or re-pull catalog rows")
+				}
+			}
+		})
+	}
+}
+
 func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 	colexec.NewServer("")
 	for _, tc := range []struct {

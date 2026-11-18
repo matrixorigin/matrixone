@@ -3,7 +3,6 @@
 drop account if exists acc_branch_meta;
 create account acc_branch_meta admin_name "root1" identified by "111";
 
--- Cross-account catalog queries must work without manually activating the tenant.
 set @acc_id = (
   select account_id from mo_catalog.mo_account
   where account_name = 'acc_branch_meta'
@@ -26,6 +25,8 @@ drop table if exists branch_tbl;
 data branch create table branch_tbl from base_tbl{snapshot="sp_base_tbl"};
 
 -- @session
+-- Activate the tenant on the sys connection's CN before resolving its table IDs.
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
 set @branch_tbl_id = (
   select rel_id from mo_catalog.mo_tables
   where account_id = @acc_id and reldatabase = 'br_meta_db' and relname = 'branch_tbl'

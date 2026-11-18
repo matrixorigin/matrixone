@@ -1300,7 +1300,6 @@ func (c *PushClient) replayCatalogCacheAt(
 	// through the always-ready sys catalog, not the not-yet-ready tenant
 	// catalog that we are in the process of activating.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-	ctx = context.WithValue(ctx, catalogReplayContextKey{}, true)
 
 	var op client.TxnOperator
 	ccache := e.catalog.Load()

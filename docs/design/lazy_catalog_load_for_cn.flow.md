@@ -62,20 +62,21 @@
 
 ---
 
-## Flow 5：存储回退（account 未激活）
+## Flow 5：目录读取与存储回退
 
-当 `CanServeAccount(X) == false` 时，engine 退回 `loadTableFromStorage()`：
+登录和已知目标的跨账户业务入口先通过 `ActivateTenantCatalog(X)` 激活目标，再读取其目录。
+sys 直接查三表时不会触发激活。依赖其他租户的元数据时，用户须先在当前 CN 主动激活相应租户；
+否则结果可能不完整，见[使用限制](lazy_catalog_load_for_cn.plan.md#使用限制sys-直接读取跨租户目录)。
+当事务 snapshot 不在 CatalogCache 的可服务范围时，engine 退回 `loadTableFromStorage()`：
 
 1. `Engine.Database("mo_catalog")` 短路（`engine.go:369`），不查 cache。
 2. `relation("mo_tables")` 强制 `accountId=0`（`txn_database.go:107`），sys 始终 ready。
 3. `execReadSql(SELECT ... FROM mo_tables WHERE account_id=X)` 进入 catalog reader。
-4. 普通 sys SQL 或 caller account 未就绪时，在现有订阅与 snapshot coverage 检查后，
-   通过 TN `OpGetLogTail` 按事务 snapshot TS 读取完整 checkpoint + delta。
-5. 从固定 bootstrap 基线 fork reader 私有 `PartitionState`，不写回共享 PS，不激活冷租户。
+4. reader 通过现有订阅、pending logtail 和 snapshot coverage 检查读取共享 `PartitionState`。
+5. 更早的历史 snapshot 沿用已有 checkpoint 选择和 snapshot manager；同事务写入由 workspace 合并。
 
-**数据新鲜度**：不能用缺少冷租户增量的共享 push PS 回答普通 SQL。
-**边界**：已就绪 tenant 仍使用本地 PS；已接收完整 tail 的内部 account replay 跳过回退；
-历史 snapshot 沿用已有 checkpoint coverage 路径，同事务写入由 workspace 合并。
+**数据新鲜度**：共享 PS 可能缺少冷租户增量，不能据此认定目录行不存在。
+**边界**：物理 PS 的 snapshot coverage 与账户 cache 的 readyTS 独立；对象维护只需要全局 object metadata。
 
 ---
 

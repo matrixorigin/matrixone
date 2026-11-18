@@ -117,40 +117,50 @@ response apply 失败进入现有接收错误/重连路径；已失效 seq 的 r
 CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >= readyTS[X]
 ```
 
-回退时 `loadTableFromStorage` → `execReadSql` → catalog reader。共享 push
-`PartitionState` 缺少冷租户的后续 row delta，不能作为任意 sys catalog SQL 的完整数据源。
-reader 保留已有订阅、pending logtail 和 snapshot coverage 检查。普通 sys SQL 若能从 scan
-谓词证明结果只属于已就绪账户，则复用已订阅的分区，不逐次拉取全局快照。证明识别规范列名
-（ColPos 已由 scan 重排）、整数常量及 uint32 folded 常量；AND 有一个限定项即可，OR 每个分支
-都必须限定。检查 readiness 与取得分区快照期间持有同一账户状态读锁，避免 reconnect 混用代次。
-其余普通 sys SQL 以及未就绪租户的 catalog 读取，复用 TN `OpGetLogTail`，按事务 snapshot TS
-获取完整 checkpoint + delta。
-结果仅属于本次 reader，不写回共享 push partition，不发布 cache ready，也不添加 wanted account。
-CN 仅额外保留三张表的固定 bootstrap 基线；其 COW fork 在 engine 锁内串行，RPC/I/O 在锁外。
-回源结果保留 checkpoint 的实际起始时间，不能宣称覆盖 `[0, snapshot]`。若全局 checkpoint
-晚于请求 snapshot，则复用原有历史 checkpoint 选择、读取及 snapshot manager，不发布账户 ready。
-同事务写入仍由 workspace 合并。workspace 维护优先按 account、database ID 和表名复用事务已打开
+登录、restore、订阅等已知目标的业务入口负责激活对应账户。普通 SQL 不根据扫描谓词激活租户，也不枚举账户。
+`loadTableFromStorage` → `execReadSql` → catalog reader 只负责已有 snapshot 下的元数据解析。
+reader 沿用订阅、pending logtail 和 snapshot coverage 检查；历史 snapshot 由原有 checkpoint
+选择和 snapshot manager 处理。物理 `PartitionState` 的覆盖范围与 `CatalogCache.readyTS` 分开判断。
+对象维护和 tombstone transfer 直接使用共享 PS 的全局 object metadata，不触发账户目录补齐。
+同事务写入由 workspace 合并。workspace 维护优先按 account、database ID 和表名复用事务已打开
 的 Relation，保留事务内删除及 RC schema/database 身份失效检查，避免 Commit 关闭 SQL 入口后再回读元数据。
 事务新建数据库中的表由 workspace tableOps/cache 管理；账户、库名及数据库 ID 精确匹配时，
 缺表直接返回不存在，不因账户尚未 ready 而重复回源。创建回滚后仍走普通目录查询，不增加持久化负缓存。
 
-只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以使用
-内部 replay 标记；普通 SQL 的快路径只依赖谓词证明，不得借用该标记。系统表的物理 `accountId=0` 不代表调用方
-具有完整 catalog，判断使用实际 caller account。
-
 ---
+
+### 使用限制：sys 直接读取跨租户目录
+
+启用 lazy catalog 时，当前 CN 不保证收到未激活租户的全部目录行增量。sys 直接查询
+`mo_catalog.mo_database`、`mo_catalog.mo_tables` 或 `mo_catalog.mo_columns` 时，即使指定了
+`WHERE account_id = ...`，也可能漏行或读到旧值，不一定报错。未限定账户的 `COUNT(*)`
+也不保证是集群总数，不同 CN 的结果可能不同。普通查询和预处理查询遵守同一限制。
+
+如果结果依赖其他租户，sys 用户应先从 `mo_catalog.mo_account` 获取其 ID，在执行查询的同一
+CN 上为每个目标租户显式激活一次，再开始需要这些元数据的查询。例如在同一连接上执行：
+
+```sql
+SET @id = (SELECT account_id FROM mo_catalog.mo_account WHERE account_name = 'tenant_a');
+SELECT mo_ctl('cn', 'ActivateTenantCatalog', CAST(@id AS CHAR));
+SELECT relname FROM mo_catalog.mo_tables WHERE account_id = @id;
+```
+
+激活只对当前 CN 生效，不广播；换到另一 CN 要重新确认。已 ready 的租户不会重复加载。
 
 ## 7. Frontend
 
-`activateAccountCatalogIfNeeded`（`snapshot.go:533`）：对 `accountID==0` 直接返回。`EntireEngine` 必须转发 `TenantCatalogActivator` 接口。
+`activateAccountCatalogIfNeeded` 对 `accountID==0` 直接返回。`EntireEngine` 必须转发 `TenantCatalogActivator` 接口。
 
 | 调用位置 | 场景 |
 |---------|------|
-| `session.go:1395` | 登录 |
-| `authenticate.go:3289/4048` | ALTER/DROP ACCOUNT |
-| `show_account.go:717` | SHOW ACCOUNTS |
-| `snapshot.go:623,631,2385,2394` | RESTORE |
-| `clone.go:257,378` | CLONE TABLE/DATABASE |
+| `AuthenticateUser` | 登录账户 |
+| `doAlterAccount` / `doDropAccount` | ALTER/DROP ACCOUNT 的目标账户 |
+| `doShowAccounts` / `getSpecialTableInfo` | SHOW ACCOUNTS 结果中的账户 |
+| `doRestoreSnapshot` / `restoreAccountUsingClusterSnapshotToNew` | RESTORE 涉及的源、目标账户 |
+| `handleCloneTable` / `handleCloneDatabaseWithSource` | CLONE 的目标账户 |
+| `GetSubscriptionMeta` / `ResolveSnapshotWithSnapshotName` | 订阅的发布账户、命名快照的所属账户 |
+| `featureLimitCheckerForAccount` | 需要检查配额的账户 |
+| `activateRemoteTenantCatalog` | 远端 CN 执行 pipeline 时的账户 |
 
 `SHOW ACCOUNTS` 先从 sys catalog 枚举账号，再激活结果中的租户并重新查询库表数量，
 避免将冷租户的缺失增量当作零。全量查询会加载所有返回账号的 catalog，不保证操作之后
@@ -207,7 +217,7 @@ Acceptance: verify sys-only startup; independent cold-account activation; mixed-
 6. reconnect 批量恢复，不逐个 activation
 7. auth 路径在 tenant SQL 前完成 activation
 8. delete 和 insert/update 同样按 account 过滤
-9. 存储回退读 subscribe-time 快照，login 路径保证不触发
+9. 目录读取前激活目标账户，历史 snapshot 沿用已有 checkpoint 路径
 10. TN push 对三表做 per-session account 过滤
 11. phase1 在 pull 后立即过滤，不进串行路径
 12. `EntireEngine` 必须转发 `TenantCatalogActivator`
