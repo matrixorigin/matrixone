@@ -106,6 +106,10 @@ update empty_src set v=11 where e+0=1;
 update empty_src set v=22 where e+0=0;
 create table empty_lookup(e enum('') collate utf8mb4_bin);
 insert ignore into empty_lookup values('bad');
+create table empty_corr_outer(id int);
+insert into empty_corr_outer values(1);
+create table empty_corr_lookup(id int,e enum('') collate utf8mb4_bin);
+insert ignore into empty_corr_lookup values(1,'bad');
 data branch pick empty_src into empty_dst keys(select e from empty_lookup);
 select e+0,v from empty_dst order by e+0;
 data branch pick empty_src into empty_dst keys(select cast_value_to_index('a,b','a'));
@@ -113,6 +117,12 @@ select e+0,v from empty_dst order by e+0;
 data branch pick empty_src into empty_dst keys(select cast(e as char) from empty_lookup);
 select e+0,v from empty_dst order by e+0;
 data branch pick empty_src into empty_dst keys(select cast(e as unsigned) from empty_lookup);
+select e+0,v from empty_dst order by e+0;
+-- A correlated scalar program must expose the inner ENUM display cast to PICK.
+data branch pick empty_src into empty_dst keys(
+  select (select l.e from empty_corr_lookup l where l.id>=o.id limit 1)
+  from empty_corr_outer o
+);
 select e+0,v from empty_dst order by e+0;
 -- A pushed ENUM filter cannot taint a separately projected numeric key.
 create table empty_scan_lookup(id int,e enum('') collate utf8mb4_bin);

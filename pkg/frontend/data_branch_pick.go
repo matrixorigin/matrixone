@@ -976,6 +976,21 @@ func pickEnumExprHasAmbiguousDisplay(
 		}
 		return false
 	}
+	if dependent := expr.GetDependent(); dependent != nil {
+		if dependent.Reducer != pbplan.SubqueryRef_SCALAR || dependent.Comparison != nil ||
+			query.Correlation == nil || dependent.ProgramId == 0 ||
+			int(dependent.ProgramId) > len(query.Correlation.Programs) {
+			return false
+		}
+		program := query.Correlation.Programs[dependent.ProgramId-1]
+		if program == nil || len(program.OutputTypes) == 0 {
+			return false
+		}
+		// A scalar dependent call publishes output slot 0 from its registered
+		// program. Follow that executable projection so ENUM's implicit display
+		// cast cannot hide the ordinal-0/empty-member ambiguity.
+		return pickEnumOutputSlotHasAmbiguousDisplay(query, program.RootNode, 0, visited)
+	}
 	col := expr.GetCol()
 	if col == nil {
 		return false

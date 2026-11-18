@@ -161,6 +161,10 @@ update empty_src set v=11 where e+0=1;
 update empty_src set v=22 where e+0=0;
 create table empty_lookup(e enum('') collate utf8mb4_bin);
 insert ignore into empty_lookup values('bad');
+create table empty_corr_outer(id int);
+insert into empty_corr_outer values(1);
+create table empty_corr_lookup(id int,e enum('') collate utf8mb4_bin);
+insert ignore into empty_corr_lookup values(1,'bad');
 data branch pick empty_src into empty_dst keys(select e from empty_lookup);
 invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
 select e+0,v from empty_dst order by e+0;
@@ -180,6 +184,15 @@ select e+0,v from empty_dst order by e+0;
 0  ¦  20  𝄀
 1  ¦  10
 data branch pick empty_src into empty_dst keys(select cast(e as unsigned) from empty_lookup);
+select e+0,v from empty_dst order by e+0;
+➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
+0  ¦  22  𝄀
+1  ¦  10
+data branch pick empty_src into empty_dst keys(
+select (select l.e from empty_corr_lookup l where l.id>=o.id limit 1)
+from empty_corr_outer o
+);
+invalid input: KEYS subquery presents ENUM values as text and cannot distinguish ordinal 0 from an empty member; CAST the original key AS UNSIGNED or CHAR before projecting it
 select e+0,v from empty_dst order by e+0;
 ➤ e + 0[-5,64,0]  ¦  v[4,32,0]  𝄀
 0  ¦  22  𝄀

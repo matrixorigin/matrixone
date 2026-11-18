@@ -230,6 +230,7 @@ func TestPickEnumValidatesOptimizerOutputLineage(t *testing.T) {
 		{"UNION left ENUM output", "select e from lookup_t union all select 'x'", single, true},
 		{"UNION right ENUM output", "select 'x' from lookup_t union all select e from lookup_t", single, true},
 		{"aggregate ENUM display output", "select max(e) from lookup_t", single, true},
+		{"correlated scalar bare ENUM output", "select (select i.e from lookup_t i where i.id >= o.id limit 1) from lookup_t o", single, true},
 		{"numeric output with pushed ENUM predicate", "select id from lookup_t where e='x'", single, false},
 		{"numeric key with unrelated label filter", "select k from (select cast(e as unsigned) k, e as label from lookup_t) q where length(label)=0", single, false},
 		{"composite key with numeric ENUM slot", "select cast(e as unsigned), id from lookup_t", composite, false},
@@ -245,6 +246,10 @@ func TestPickEnumValidatesOptimizerOutputLineage(t *testing.T) {
 			defer stmt.Free()
 			query, err := sqlplan.NewBaseOptimizer(compiler).Optimize(stmt, false, nil)
 			require.NoError(t, err, orderedSQL)
+			if tc.name == "correlated scalar bare ENUM output" {
+				require.NotNil(t, query.Correlation, "the regression must exercise a scalar dependent program")
+				require.NotEmpty(t, query.Correlation.Programs, "the regression must register the correlated scalar output")
+			}
 			for _, node := range query.Nodes {
 				require.Empty(t, node.BindingTags, "the test must exercise optimizer-local column positions")
 			}
