@@ -1266,8 +1266,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			return nil, err
 		}
 	}
-	subCtx.zeroScalarRootNodeID = nodeID
-
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
 		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
 
@@ -3854,8 +3852,6 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
 	}
 	args := make([]*Expr, len(astArgs))
-	restoreZeroScalarCandidate := b.beginZeroScalarRewriteCandidate()
-	defer restoreZeroScalarCandidate()
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
@@ -3863,7 +3859,6 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 		}
 		args[i] = expr
 	}
-	restoreZeroScalarCandidate()
 
 	if b.builder == nil {
 		return nil, moerr.NewInvalidInputf(
@@ -4721,8 +4716,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	}
 
 	// bind ast function's args
-	restoreZeroScalarCandidate := b.beginZeroScalarRewriteCandidate()
-	defer restoreZeroScalarCandidate()
 	var args []*Expr
 	if name == "bit_cast" {
 		bitCastExpr := astArgs[0].(*tree.BitCastExpr)
@@ -4895,7 +4888,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			args[idx] = expr
 		}
 	}
-	restoreZeroScalarCandidate()
 	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
@@ -5360,20 +5352,6 @@ func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.U
 	return compiler.ResolveUdf(name, args)
 }
 
-func (b *baseBinder) beginZeroScalarRewriteCandidate() func() {
-	if b.builder == nil {
-		return func() {}
-	}
-	b.builder.zeroScalarRewriteCandidateDepth++
-	active := true
-	return func() {
-		if active {
-			b.builder.zeroScalarRewriteCandidateDepth--
-			active = false
-		}
-	}
-}
-
 func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
 	if builder == nil || len(args) == 0 {
 		return nil
@@ -5462,14 +5440,6 @@ func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) 
 		}
 	}
 	return nil
-}
-
-func isIdentitySQLUDF(udf *function.Udf, argCount int) bool {
-	if udf == nil || udf.Language != string(tree.SQL) || argCount != 1 {
-		return false
-	}
-	body := strings.ToLower(strings.Join(strings.Fields(udf.Body), " "))
-	return body == "$1"
 }
 
 func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
