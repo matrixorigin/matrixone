@@ -137,7 +137,8 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type EngineType `toml:"type"`
+		Type                    EngineType `toml:"type"`
+		CatalogSubscriptionMode string     `toml:"catalog-subscription-mode"`
 
 		// only prefetch the matched dbname.tablename
 		//	'^mo_catalog\.mo_tables$',
@@ -368,6 +369,13 @@ func (c *Config) Validate() error {
 	if c.Engine.Type != EngineDistributedTAE {
 		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
 	}
+	switch c.Engine.CatalogSubscriptionMode {
+	case "":
+		c.Engine.CatalogSubscriptionMode = "lazy"
+	case "lazy", "full":
+	default:
+		return moerr.NewBadConfigNoCtx("unsupported catalog-subscription-mode: " + c.Engine.CatalogSubscriptionMode)
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -558,6 +566,9 @@ func (c *SiriusConfig) validate() error {
 
 // SetDefaultValue applies defaults without Validate's checks or global side effects.
 func (c *Config) SetDefaultValue() {
+	if c.Engine.CatalogSubscriptionMode == "" {
+		c.Engine.CatalogSubscriptionMode = "lazy"
+	}
 	foundMachineHost := c.setServiceDefaults()
 	c.setHAKeeperDefaults()
 	c.setTaskRunnerDefaults()

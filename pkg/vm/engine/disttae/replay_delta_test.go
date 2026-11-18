@@ -141,7 +141,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			var replayResult error
 			go func() {
 				defer close(finished)
-				replayResult = e.pClient.replayCatalogCache(ctx, e)
+				replayResult = e.pClient.replayCatalogCache(ctx, e, []uint32{0})
 			}()
 			defer func() {
 				cancel()

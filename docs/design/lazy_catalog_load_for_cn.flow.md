@@ -2,6 +2,8 @@
 
 ## 关键规则
 
+以下流程描述默认 `lazy` CN。配置为 `full` 的 CN 在启动和重连时全量订阅、全量回放三表，不维护 per-account 激活状态。
+
 1. **subscribe/activation 保留共享 checkpoint 和 object metadata**：row-level data 才按 account 过滤；不提供 per-account PartitionState 或硬内存隔离。
 2. **`PartitionState` 只保存全局基线**：object/metadata 全局推进；row-level delta 按 account 过滤。
 3. **account ready 点是 `replayTS`，不是 `targetTS`**。

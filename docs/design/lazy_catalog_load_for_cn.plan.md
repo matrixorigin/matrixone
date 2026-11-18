@@ -12,7 +12,13 @@ Owning issue: [#23777](https://github.com/matrixorigin/matrixone/issues/23777).
 
 ## 1. 目标与边界
 
-**目标**：startup 后 `CatalogCache` 只加载 sys account；运行中新增 account 走 activation；reconnect 按批量恢复处理。
+**默认模式**：startup 后 `CatalogCache` 只加载 sys account；运行中新增 account 走 activation；reconnect 按批量恢复处理。
+
+专用 CN 可以在 `[cn.Engine]` 设置 `catalog-subscription-mode = "full"`；省略或指定
+`"lazy"` 保持默认行为，非法值拒绝启动。模式只作用于目录三表，重启后才可更改。
+full CN 向同一 TN 发普通订阅，启动和重连均不按账户过滤回放；回放及积压增量应用完毕后才对外就绪。
+后续新建和删除的账户自动纳入全量增量，不需要逐个激活。代价是该 CN 的全量目录内存和恢复时间。
+模式不设置 CN 调度标签，也不改变普通 SQL 或后台任务的调度。
 
 **非目标**：不改 checkpoint 按账户懒化；不改 `PartitionState` 为 per-account 隔离；不改普通表的订阅/推送/反订阅；不提供每租户硬内存配额或 activated-account eviction。
 

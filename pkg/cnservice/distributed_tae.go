@@ -82,6 +82,7 @@ func (s *service) initDistributedTAE(
 			s.cfg.Engine.PrefetchOnSubscribed,
 		),
 		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
+		disttae.WithFullCatalogSubscription(s.cfg.Engine.CatalogSubscriptionMode == "full"),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
 		disttae.WithMoServerStateChecker(func() bool {
 			return frontend.MoServerIsStarted(s.cfg.UUID)

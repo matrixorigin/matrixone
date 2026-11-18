@@ -337,7 +337,8 @@ func TestReconnectInitialActiveAccounts(t *testing.T) {
 	c := &PushClient{lazyCatalog: newLazyCatalogCNState()}
 	c.lazyCatalog.setAccountReady(5, timestamp.Timestamp{PhysicalTime: 10})
 
-	require.ElementsMatch(t, []uint32{0, 5}, c.reconnectInitialActiveAccounts())
+	require.ElementsMatch(t, []uint32{0, 5}, c.initialCatalogAccounts())
+	require.Nil(t, (&PushClient{}).initialCatalogAccounts())
 }
 
 func TestLazyCatalogCNStateShouldDelayCatalogCacheApplyEntryInsert(t *testing.T) {

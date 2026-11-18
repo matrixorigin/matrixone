@@ -23,11 +23,96 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFullAndLazyCatalogSubscribers(t *testing.T) {
+	mode := "lazy"
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(op embed.ServiceOperator) {
+		if op.ServiceType() == metadata.ServiceType_CN {
+			op.Adjust(func(c *embed.ServiceConfig) {
+				c.CN.Frontend.SkipCheckUser = false
+				c.CN.Engine.CatalogSubscriptionMode = mode
+			})
+		}
+	}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	open := func(user string, op embed.ServiceOperator) *sql.DB {
+		t.Helper()
+		db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, op.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		return db
+	}
+	lazy, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	sys := open("dump", lazy)
+	require.NoError(t, waitSystemBootstrap(ctx, sys))
+	execSQLRequire(t, ctx, sys, "create account mixed_a admin_name 'root' identified by '111'")
+	a := open("mixed_a#root#accountadmin", lazy)
+	execSQLRequire(t, ctx, a, "create database mixed")
+	execSQLRequire(t, ctx, a, "create table mixed.before_start(id int)")
+	var owner uint32
+	var dbID uint64
+	require.NoError(t, a.QueryRowContext(ctx, "select account_id,dat_id from mo_catalog.mo_database where datname='mixed'").Scan(&owner, &dbID))
+	mode = "full"
+	require.NoError(t, cluster.StartNewCNService(1))
+	full, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	reader := open("dump", full)
+	eng := full.RawService().(cnservice.Service).GetEngine().(*disttae.Engine)
+	check := func(name string, want int) {
+		t.Helper()
+		var count int
+		require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mixed' and relname=?", name).Scan(&count))
+		require.Equal(t, want, count)
+		names, _ := eng.GetLatestCatalogCache().Tables(owner, dbID, types.MaxTs().ToTimestamp())
+		if want != 0 {
+			require.Contains(t, names, name)
+		} else {
+			require.NotContains(t, names, name)
+		}
+	}
+	check("before_start", 1)
+	execSQLRequire(t, ctx, a, "create table mixed.after_start(id int)")
+	check("after_start", 1)
+	execSQLRequire(t, ctx, a, "drop table mixed.before_start")
+	check("before_start", 0)
+	execSQLRequire(t, ctx, reader, "create account mixed_b admin_name 'root' identified by '111'")
+	var id uint32
+	require.NoError(t, reader.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name='mixed_b'").Scan(&id))
+	cold := lazy.RawService().(cnservice.Service).GetEngine().(*disttae.Engine).PushClient()
+	require.False(t, cold.CanServeAccount(id, types.MaxTs().ToTimestamp()))
+	cn := full.RawService().(cnservice.Service)
+	push := cn.GetEngine().(*disttae.Engine).PushClient()
+	reconnected := make(chan struct{}, 1)
+	push.SetReconnectHandler(func() {
+		select {
+		case reconnected <- struct{}{}:
+		default:
+		}
+	})
+	defer push.SetReconnectHandler(nil)
+	require.NoError(t, push.Disconnect())
+	select {
+	case <-reconnected:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.NoError(t, checkLogtailResumed(ctx, cn))
+	check("after_start", 1)
+	check("before_start", 0)
+	require.False(t, cold.CanServeAccount(id, types.MaxTs().ToTimestamp()))
+}
 
 func TestCatalogReplayMultiCN(t *testing.T) {
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithPreStart(func(op embed.ServiceOperator) {

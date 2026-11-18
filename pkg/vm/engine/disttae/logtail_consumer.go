@@ -495,7 +495,9 @@ func (c *PushClient) init(
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan chan struct{})
-		c.lazyCatalog = newLazyCatalogCNState()
+		if !e.config.fullCatalogSubscription {
+			c.lazyCatalog = newLazyCatalogCNState()
+		}
 	}
 	c.initialized = true
 
@@ -787,7 +789,13 @@ func (c *PushClient) forcedSubscribeCatalogTable(
 	s := c.subscriber
 
 	tbl := api.TableID{DbId: dbId, TbId: tblId}
-	if err := s.subscribeCatalogTable(ctx, tbl, initialActiveAccounts); err != nil {
+	var err error
+	if c.lazyCatalog == nil {
+		err = s.subscribeTable(ctx, tbl)
+	} else {
+		err = s.subscribeCatalogTable(ctx, tbl, initialActiveAccounts)
+	}
+	if err != nil {
 		return err
 	}
 	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
@@ -1197,12 +1205,12 @@ func (c *PushClient) waitTimestamp(ctx context.Context) error {
 	}
 }
 
-func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
+func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine, accounts []uint32) (err error) {
 	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
 		return moerr.NewInternalError(ctx, "catalog-load replay catalog cache error injected")
 	}
 	ts := c.receivedLogTailTime.getTimestamp()
-	if err = c.replayCatalogCacheAt(ctx, e, ts, []uint32{0}); err != nil {
+	if err = c.replayCatalogCacheAt(ctx, e, ts, accounts); err != nil {
 		return err
 	}
 	ccache := e.catalog.Load()
@@ -1226,11 +1234,11 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	return nil
 }
 
-// reconnectInitialActiveAccounts builds wantedAccounts ∪ {0} for use as
-// initial_active_accounts during reconnect.
-func (c *PushClient) reconnectInitialActiveAccounts() []uint32 {
+// At startup only sys is wanted. Reconnect also restores previously wanted
+// tenants. A full subscriber replays all rows without an account predicate.
+func (c *PushClient) initialCatalogAccounts() []uint32 {
 	if c.lazyCatalog == nil {
-		return []uint32{0}
+		return nil
 	}
 	wanted := c.lazyCatalog.snapshotWantedAccounts()
 	if !slices.Contains(wanted, uint32(0)) {
@@ -1645,7 +1653,8 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		for {
 			c.dcaReset()
-			err := c.subSysTables(ctx, []uint32{0})
+			accounts := c.initialCatalogAccounts()
+			err := c.subSysTables(ctx, accounts)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					logutil.Errorf("%s connect failed as context canceled: %v", logTag, ctx.Err())
@@ -1674,7 +1683,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				return
 			}
 
-			if err := c.replayCatalogCache(ctx, e); err != nil {
+			if err := c.replayCatalogCache(ctx, e, accounts); err != nil {
 				c.pause(false)
 				logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
 				continue
@@ -1737,7 +1746,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		c.dcaReset()
 
-		reconnectAccounts := c.reconnectInitialActiveAccounts()
+		reconnectAccounts := c.initialCatalogAccounts()
 		err = c.subSysTables(ctx, reconnectAccounts)
 		if err != nil {
 			c.pause(true)
