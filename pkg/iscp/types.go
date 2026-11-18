@@ -54,6 +54,7 @@ const (
 
 type DataRetriever interface {
 	Next() (iscpData *ISCPData)
+	GuardSnapshot(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	GetDataType() int8
 	GetAccountID() uint32
@@ -133,9 +134,9 @@ type InitWatermark struct {
 type ISCPTaskExecutor struct {
 	tables      *btree.BTreeG[*TableEntry]
 	tableMu     sync.RWMutex
-	packer      *types.Packer
 	mp          *mpool.MPool
 	cnUUID      string
+	taskID      uint64
 	txnEngine   engine.Engine
 	cnTxnClient client.TxnClient
 	// rootFS is the CN's root FileService (the one that resolves the LOCAL SSD
@@ -166,6 +167,11 @@ type ISCPTaskExecutor struct {
 
 	running   bool
 	runningMu sync.Mutex
+	// recoveryMu lets Pause interrupt recovery while recovery owns runningMu.
+	recoveryMu     sync.Mutex
+	recoveryCancel context.CancelFunc
+	pauseRequested bool
+	stopEpoch      uint64
 
 	runtimeMu        sync.Mutex
 	fencedJobs       map[JobRuntimeKey]JobFence
@@ -254,6 +260,9 @@ type ConsumerInfo struct {
 	Columns      []string
 	SrcTable     TableInfo
 	InitSQL      string
+	// Set only by a plugin's SourceSnapshotInitializer. Other initializers may
+	// build only a model and must still consume a complete source snapshot.
+	InitSQLCoversSnapshot bool `json:",omitempty"`
 }
 
 type TableInfo struct {

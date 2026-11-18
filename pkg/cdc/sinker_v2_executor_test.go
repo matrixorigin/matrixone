@@ -80,6 +80,110 @@ func (s *fakeMySQLServer) addr(t *testing.T) (string, int) {
 	return host, port
 }
 
+func TestConnectionCancellationDuringHandshake(t *testing.T) {
+	for _, mode := range []string{"initial", "reconnect"} {
+		t.Run(mode, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer listener.Close()
+			host, portStr, err := net.SplitHostPort(listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portStr)
+			require.NoError(t, err)
+			accepted := make(chan net.Conn, 1)
+			go func() {
+				conn, acceptErr := listener.Accept()
+				if acceptErr == nil {
+					accepted <- conn
+				}
+			}()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				if mode == "initial" {
+					db, openErr := OpenDbConn(ctx, "user", "password", host, port, "0s")
+					if db != nil {
+						_ = db.Close()
+					}
+					result <- openErr
+					return
+				}
+				exec := &Executor{user: "user", password: "password", ip: host, port: port, timeout: "0s"}
+				result <- exec.ExecSQL(ctx, nil, []byte("     SELECT 1"), false)
+			}()
+			var conn net.Conn
+			select {
+			case conn = <-accepted:
+				defer conn.Close()
+			case <-time.After(2 * time.Second):
+				t.Fatal("client did not start the handshake")
+			}
+			cancel()
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(2 * time.Second):
+				t.Fatal("canceled handshake did not return")
+			}
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			_, err = conn.Read(make([]byte, 1))
+			require.ErrorIs(t, err, io.EOF, "canceled handshake must close its connection")
+		})
+	}
+}
+
+func TestSinkInitializationCancellationDoesNotStartLaterDDL(t *testing.T) {
+	dropEntered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	server := startFakeMySQLServer(t, func(query string) uint16 {
+		if strings.HasPrefix(query, "DROP TABLE") {
+			close(dropEntered)
+			<-release
+		}
+		return 0
+	})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	host, port := server.addr(t)
+	info := &DbTableInfo{SinkDbName: "sinkdb", SinkTblName: "sinktable", IdChanged: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := CreateMysqlSinker2(ctx, UriInfo{SinkTyp: CDCSinkType_MySQL, User: "user", Password: "password", Ip: host, Port: port},
+			1, "task", info, nil, nil, 0, time.Second, NewCdcActiveRoutine(), 1024, "0s")
+		result <- err
+	}()
+	select {
+	case <-dropEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sink initialization did not reach DROP TABLE")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("sink initialization did not stop after cancellation")
+	}
+	require.True(t, info.IdChanged, "a canceled DROP has an unknown remote outcome")
+	releaseOnce.Do(func() { close(release) })
+	serverDone := make(chan struct{})
+	go func() { server.wg.Wait(); close(serverDone) }()
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake sink connection did not close")
+	}
+	var queries []string
+	for len(server.queries) > 0 {
+		queries = append(queries, <-server.queries)
+	}
+	require.Len(t, queries, 3)
+	require.True(t, strings.HasPrefix(queries[2], "DROP TABLE"), "%v", queries)
+}
+
 func (s *fakeMySQLServer) serve() {
 	defer s.wg.Done()
 
@@ -618,7 +722,7 @@ func TestExecutor_ExecSQL(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -662,7 +766,7 @@ func TestExecutor_ExecSQLAfterTryConnUsesReuseQueryBuf(t *testing.T) {
 	require.NoError(t, err)
 	cfg.MaxAllowedPacket = 64 << 20
 
-	db, err := tryConn(cfg)
+	db, err := tryConn(t.Context(), cfg)
 	require.NoError(t, err)
 
 	executor := &Executor{conn: db}
@@ -697,7 +801,7 @@ func TestExecutorDeadlockWireIdentity(t *testing.T) {
 			cfg, err := makeMysqlConfig("user", "password", host, port, "5s")
 			require.NoError(t, err)
 			cfg.MaxAllowedPacket = 64 << 20
-			db, err := tryConn(cfg)
+			db, err := tryConn(t.Context(), cfg)
 			require.NoError(t, err)
 			// One extra attempt detects statement retry without overflowing the
 			// fake server's bounded query recorder on the failing implementation.

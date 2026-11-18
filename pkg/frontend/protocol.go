@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -264,6 +265,13 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 				errMsg = fmt.Sprintf("%s\n%s", myerr.Error(), attachAbort)
 			}
 			return mp.sendErrPacket(code, myerr.SqlState(), errMsg)
+		}
+		if driverErr, ok := err.(*mysql.MySQLError); ok && driverErr != nil {
+			state := string(driverErr.SQLState[:])
+			if driverErr.SQLState == [5]byte{} {
+				state = DefaultMySQLState
+			}
+			return mp.sendErrPacket(driverErr.Number, state, driverErr.Message)
 		}
 		errMsg := ""
 		if attachAbort != "" {

@@ -169,7 +169,7 @@ func (holder *testHolder) Create(command pb.CreateTaskService) error {
 	panic("implement me")
 }
 
-func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
+func TestStopTaskReportsRunnerAndHolderFailures(t *testing.T) {
 	holderErr := errors.New("holder close failed")
 	runnerErr := errors.New("runner stop failed")
 	holder := &testHolder{closeErr: holderErr}
@@ -183,6 +183,29 @@ func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
 	assert.ErrorIs(t, err, runnerErr)
 	assert.Equal(t, 1, holder.closed)
 	assert.Equal(t, 1, runner.stopped)
+}
+
+type storageUsingStopRunner struct {
+	*testRunner
+	holder *testHolder
+}
+
+func (r *storageUsingStopRunner) Stop() error {
+	if r.holder.closed != 0 {
+		return moerr.NewInternalErrorNoCtx("task storage closed before runner drained")
+	}
+	return r.testRunner.Stop()
+}
+
+func TestStopTaskKeepsStorageOpenUntilRunnerDrains(t *testing.T) {
+	holder := &testHolder{}
+	runner := &storageUsingStopRunner{testRunner: &testRunner{}, holder: holder}
+	sv := &service{logger: zap.NewNop()}
+	sv.task.holder = holder
+	sv.task.runner = runner
+	require.NoError(t, sv.stopTask())
+	require.Equal(t, 1, holder.closed)
+	require.Equal(t, 1, runner.stopped)
 }
 
 var _ taskservice.TaskService = new(testTS)
@@ -297,6 +320,10 @@ func (ts *testTS) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, de
 	panic("implement me")
 }
 
+func (ts *testTS) UpdateOwnedCDCTask(context.Context, taskservice.CDCTaskOwner, taskservice.CDCTaskTransition, func(context.Context, taskservice.SqlExecutor) error) error {
+	panic("implement me")
+}
+
 func (ts *testTS) UpdateCDCTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CDCTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
 	//TODO implement me
 	panic("implement me")
@@ -339,6 +366,7 @@ func Test_registerExecutorsLocked(t *testing.T) {
 		cfg:             conf,
 		_hakeeperClient: client,
 		sqlExecutor:     exec,
+		logger:          zap.NewNop(),
 	}
 	sv.task.runner = run
 
@@ -349,9 +377,18 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	}
 
 	sv.registerExecutorsLocked()
+	require.Nil(t, run.GetExecutor(task.TaskCode_ISCPExecutor), "unsupported storage must not claim ISCP")
+	require.Nil(t, run.GetExecutor(task.TaskCode_InitCdc), "unsupported storage must not claim CDC")
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
 	require.Len(t, ts.cronTasks, 1)
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
 	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
 	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
+
+	compatible := &testRunner{}
+	sv.task.runner = compatible
+	sv.task.taskLeaseInCatalog = true
+	sv.registerExecutorsLocked()
+	require.NotNil(t, compatible.GetExecutor(task.TaskCode_ISCPExecutor))
+	require.NotNil(t, compatible.GetExecutor(task.TaskCode_InitCdc))
 }

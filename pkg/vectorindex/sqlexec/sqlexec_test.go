@@ -23,9 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -200,6 +203,80 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), commitTenant)
+}
+
+type txnStartTestEngine struct {
+	engine.Engine
+	applied timestamp.Timestamp
+	newErr  error
+	calls   int
+}
+
+func (e *txnStartTestEngine) LatestLogtailAppliedTime() timestamp.Timestamp { return e.applied }
+func (e *txnStartTestEngine) New(context.Context, client.TxnOperator) error {
+	e.calls++
+	return e.newErr
+}
+
+type txnStartTestClient struct {
+	client.TxnClient
+	latest timestamp.Timestamp
+	min    timestamp.Timestamp
+	op     client.TxnOperator
+	err    error
+}
+
+func (c *txnStartTestClient) GetLatestCommitTS() timestamp.Timestamp { return c.latest }
+func (c *txnStartTestClient) New(_ context.Context, min timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+	c.min = min
+	return c.op, c.err
+}
+
+type txnStartTestOperator struct {
+	client.TxnOperator
+	rollbacks   int
+	rollbackErr error
+}
+
+func (op *txnStartTestOperator) Rollback(context.Context) error {
+	op.rollbacks++
+	return op.rollbackErr
+}
+
+func TestGetTxnUsesLatestCommitAndRollsBackSetupFailures(t *testing.T) {
+	t.Run("latest local commit is a snapshot lower bound", func(t *testing.T) {
+		latest := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+		op := &txnStartTestOperator{}
+		txnClient := &txnStartTestClient{latest: latest, op: op}
+		txnEngine := &txnStartTestEngine{applied: timestamp.Timestamp{PhysicalTime: 10}}
+		got, err := GetTxn(t.Context(), txnEngine, txnClient, "test")
+		require.NoError(t, err)
+		require.Same(t, op, got)
+		require.Equal(t, latest, txnClient.min)
+	})
+
+	t.Run("creation returns transaction and error", func(t *testing.T) {
+		createErr := errors.New("transaction creation failed")
+		op := &txnStartTestOperator{}
+		txnClient := &txnStartTestClient{op: op, err: createErr}
+		txnEngine := &txnStartTestEngine{}
+		got, err := GetTxn(t.Context(), txnEngine, txnClient, "test")
+		require.Nil(t, got)
+		require.ErrorIs(t, err, createErr)
+		require.Equal(t, 1, op.rollbacks)
+		require.Zero(t, txnEngine.calls)
+	})
+
+	t.Run("engine setup fails", func(t *testing.T) {
+		setupErr := errors.New("engine setup failed")
+		op := &txnStartTestOperator{}
+		txnClient := &txnStartTestClient{op: op}
+		txnEngine := &txnStartTestEngine{newErr: setupErr}
+		got, err := GetTxn(t.Context(), txnEngine, txnClient, "test")
+		require.Nil(t, got)
+		require.ErrorIs(t, err, setupErr)
+		require.Equal(t, 1, op.rollbacks)
+	})
 }
 
 // TestSqlProcessServiceAndAccount covers the GetService/GetAccountID accessors added for the

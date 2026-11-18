@@ -331,6 +331,10 @@ func daemonTaskType(ctx context.Context, details *task.Details) (task.TaskType, 
 	return taskType, nil
 }
 
+func (s *taskService) UpdateOwnedCDCTask(ctx context.Context, owner CDCTaskOwner, target CDCTaskTransition, mutate func(context.Context, SqlExecutor) error) error {
+	return s.store.UpdateOwnedCDCTask(ctx, owner, target, mutate)
+}
+
 func (s *taskService) UpdateCDCTask(
 	ctx context.Context,
 	targetStatus task.TaskStatus,

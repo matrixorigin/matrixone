@@ -17,11 +17,13 @@ package iscp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -108,11 +110,12 @@ type DataRetrieverImpl struct {
 	jobID     uint64
 	lsn       uint64
 
-	typ          int8
-	insertDataCh chan *ISCPData
-	ctx          context.Context
-	cancel       context.CancelFunc
-	err          error
+	typ            int8
+	validateOutput func(context.Context, uint32, client.TxnOperator) error
+	insertDataCh   chan *ISCPData
+	ctx            context.Context
+	cancel         context.CancelFunc
+	err            error
 
 	mu sync.Mutex
 }
@@ -162,18 +165,20 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 	if r.IsCanceled() {
 		return r.terminalError()
 	}
+	if r.validateOutput != nil {
+		if err := r.validateOutput(ctx, r.accountID, txn); err != nil {
+			return err
+		}
+	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
 	defer cancel()
 
-	if r.typ == ISCPDataType_Snapshot {
-		return nil
-	}
+	r.status.LSN = r.lsn
 	statusJson, err := MarshalJobStatus(r.status)
 	if err != nil {
 		return err
 	}
-	r.status.LSN = r.lsn
 	updateWatermarkSQL := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		r.accountID,
 		r.tableID,
@@ -184,11 +189,44 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		ISCPJobState_Completed,
 		r.status.LSN,
 	)
+	// Both snapshot completion and tail output belong to the running
+	// generation. A successor must not publish with the previous LSN.
+	updateWatermarkSQL += fmt.Sprintf(" AND job_state = %d", ISCPJobState_Running)
 	res, err := ExecWithResult(ctxWithSysAccount, updateWatermarkSQL, cnUUID, txn)
 	if err != nil {
 		return err
 	}
 	defer res.Close()
+	if res.AffectedRows != 1 {
+		return moerr.NewInternalErrorNoCtxf("iscp update watermark: update affected %d rows for job %s (id=%d), expected 1", res.AffectedRows, r.jobName, r.jobID)
+	}
+	return nil
+}
+
+func (r *DataRetrieverImpl) GuardSnapshot(ctx context.Context, cnUUID string, txn client.TxnOperator) error {
+	if r.IsCanceled() {
+		return r.terminalError()
+	}
+	if r.typ != ISCPDataType_Snapshot || txn == nil {
+		return moerr.NewInternalErrorNoCtx("iscp snapshot guard requires a snapshot output transaction")
+	}
+	if r.validateOutput != nil {
+		if err := r.validateOutput(ctx, r.accountID, txn); err != nil {
+			return err
+		}
+	}
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	sql := cdc.CDCSQLBuilder.ISCPLogGuardIterationSQL(r.accountID, r.tableID, r.jobName, r.jobID, r.lsn, ISCPJobState_Running)
+	res, err := ExecWithResult(ctx, sql, cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.AffectedRows != 1 {
+		return moerr.NewInternalErrorNoCtxf("iscp snapshot guard: update affected %d rows for job %s (id=%d), expected 1", res.AffectedRows, r.jobName, r.jobID)
+	}
 	return nil
 }
 
@@ -258,7 +296,10 @@ func (r *DataRetrieverImpl) Cancel(err error) {
 	r.err = err
 	for {
 		select {
-		case data := <-r.insertDataCh:
+		case data, ok := <-r.insertDataCh:
+			if !ok {
+				return
+			}
 			data.Done()
 		default:
 			return

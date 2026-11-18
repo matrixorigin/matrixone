@@ -163,9 +163,8 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 		"alter table t1 change column title headline varchar(128)",
 	)
 
-	pkAffected, err := ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	err := ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
 	require.NoError(t, err)
-	require.False(t, pkAffected)
 	require.Equal(t, "headline", copyTable.ClusterBy.Name)
 	require.Equal(t, "title", alterCtx.alterColMap["headline"].sexprStr)
 	require.Equal(t, "headline", alterCtx.changColDefMap[3].Name)
@@ -173,26 +172,6 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.Contains(t, strings.Join(alterCtx.UpdateSqls, "\n"), "set algo_params")
 	require.Equal(t, []string{"headline", "note"}, copyTable.Indexes[0].IncludedColumns)
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
-}
-
-func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T) {
-	affectedCols := appendAffectedAlterColumnNames(nil, "title", "headline")
-	require.Equal(t, []string{"title", "headline"}, affectedCols)
-
-	indexes := []*planpb.IndexDef{
-		{
-			IndexName: "idx_title",
-			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
-			Parts:     []string{"title"},
-		},
-		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "note"}),
-	}
-
-	names, err := collectAffectedIndexNamesForAlter(indexes, affectedCols)
-	require.NoError(t, err)
-	require.Equal(t, []string{"idx_ivf", "idx_title"}, names)
-
-	require.Equal(t, []string{"title"}, appendAffectedAlterColumnNames(nil, "title", "title"))
 }
 
 func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
@@ -268,7 +247,6 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
-	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
 	alterPlan := &planpb.AlterTable{
 		Database:     origin.DbName,
 		TableDef:     origin,
@@ -280,9 +258,8 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 		"alter table t1 alter column note set default 'memo'",
 	)
 
-	pkAffected, err := AlterColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	err := alterColumn(mock.CurrentContext(), alterPlan, spec)
 	require.NoError(t, err)
-	require.False(t, pkAffected)
 	require.Contains(t, copyTable.Cols[3].Default.OriginString, "memo")
 }
 
@@ -309,19 +286,21 @@ func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
 
 func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 	oldTable := &TableDef{
+		Cols: []*ColDef{{Name: "title"}},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "idx_note", Unique: false, Parts: []string{"note"}},
 		},
 	}
 	newTable := &TableDef{
+		Cols: []*ColDef{{Name: "title"}},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "uk_note", Unique: true, Parts: []string{"note"}},
 		},
 	}
 
-	skip := skipUniqueIdxDedup(oldTable, newTable)
+	skip := skipUniqueIdxDedup(oldTable, newTable, map[string]selectExpr{"title": {sexprType: exprColumnName, sexprStr: "title"}}, nil)
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
 }
 

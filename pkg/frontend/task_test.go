@@ -17,14 +17,97 @@ package frontend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
+
+type taskServiceAfterQuery struct {
+	taskservice.TaskService
+	afterQuery func()
+}
+
+func (s *taskServiceAfterQuery) QueryDaemonTask(ctx context.Context, conds ...taskservice.Condition) ([]task.DaemonTask, error) {
+	tasks, err := s.TaskService.QueryDaemonTask(ctx, conds...)
+	if err == nil && s.afterQuery != nil {
+		s.afterQuery()
+	}
+	return tasks, err
+}
+
+func TestDaemonTaskControlPreservesConcurrentLease(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		before     task.TaskStatus
+		concurrent task.TaskStatus
+		after      task.TaskStatus
+		wantErr    bool
+		call       func(context.Context, *Session) error
+	}{
+		{"pause", task.TaskStatus_Running, task.TaskStatus_Running, task.TaskStatus_PauseRequested, false, func(ctx context.Context, ses *Session) error {
+			return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1})
+		}},
+		{"cancel", task.TaskStatus_Running, task.TaskStatus_Running, task.TaskStatus_CancelRequested, false, func(ctx context.Context, ses *Session) error {
+			return handleCancelDaemonTask(ctx, ses, 1)
+		}},
+		{"resume", task.TaskStatus_Paused, task.TaskStatus_Paused, task.TaskStatus_ResumeRequested, false, func(ctx context.Context, ses *Session) error {
+			return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: 1})
+		}},
+		{"pause-superseded", task.TaskStatus_Running, task.TaskStatus_CancelRequested, task.TaskStatus_CancelRequested, true, func(ctx context.Context, ses *Session) error {
+			return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := taskservice.NewMemTaskStorage()
+			service := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+			original := task.DaemonTask{ID: 1, Metadata: task.TaskMetadata{ID: tc.name}, AccountID: 1,
+				TaskStatus: tc.before, TaskRunner: "old-cn", LastHeartbeat: time.Unix(1, 0)}
+			n, err := store.AddDaemonTask(ctx, original)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			newHeartbeat := time.Unix(2, 0)
+			wrapped := &taskServiceAfterQuery{TaskService: service, afterQuery: func() {
+				newer := original
+				newer.TaskRunner = "new-cn"
+				newer.LastHeartbeat = newHeartbeat
+				newer.TaskStatus = tc.concurrent
+				updated, updateErr := service.UpdateDaemonTask(ctx, []task.DaemonTask{newer})
+				require.NoError(t, updateErr)
+				require.Equal(t, 1, updated)
+			}}
+			serviceName := "task-control-" + tc.name
+			InitServerLevelVars(serviceName)
+			pu := &config.ParameterUnit{SV: &config.FrontendParameters{}}
+			pu.SetTaskService(wrapped)
+			setPu(serviceName, pu)
+			ses := &Session{feSessionImpl: feSessionImpl{service: serviceName, accountId: 1}}
+			err = tc.call(ctx, ses)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			got, err := service.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, 1))
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			require.Equal(t, tc.after, got[0].TaskStatus)
+			require.Equal(t, "new-cn", got[0].TaskRunner)
+			require.Equal(t, newHeartbeat, got[0].LastHeartbeat)
+		})
+	}
+}
 
 // TestHandlePauseDaemonTask_TaskServiceNil tests the error case in handlePauseDaemonTask function
 // when the task service is nil

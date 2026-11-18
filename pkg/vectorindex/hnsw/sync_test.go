@@ -808,3 +808,29 @@ func TestSyncInsertDuplicateKeyFailsCleanly(t *testing.T) {
 	require.Equal(t, int64(physical), sync.indexes[0].Len.Load(),
 		"logical Len diverged from physical index size after the failed add")
 }
+
+func TestSyncSnapshotReplacesEmptyOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sp := sqlexec.NewSqlProcess(proc)
+	oldTxn, oldSQL := runTxn, runSql
+	t.Cleanup(func() { runTxn = oldTxn; runSql = oldSQL })
+	runSql = mock_runSql_empty
+	var statements []string
+	runTxn = func(_ *sqlexec.SqlProcess, fn func(executor.TxnExecutor) error) error {
+		return fn(&MockTxnExecutor{exec: func(sql string, _ executor.StatementOption) (executor.Result, error) {
+			statements = append(statements, sql)
+			return executor.Result{}, nil
+		}})
+	}
+	defs := mockMoIndexes()
+	defs[1].IndexAlgoTableType = catalog.Hnsw_TblType_Storage
+	syncer, err := NewHnswSnapshotSync[float32](sp, "db", "src", "idx", defs, int32(types.T_array_float32), 3)
+	require.NoError(t, err)
+	defer syncer.Destroy()
+	require.Empty(t, syncer.indexes)
+	require.NoError(t, syncer.Save(sp))
+	require.Equal(t, []string{"DELETE FROM `db`.`__meta` WHERE TRUE", "DELETE FROM `db`.`__storage` WHERE TRUE"}, statements)
+	// A backward wall clock cannot reuse a previously persisted generation.
+	syncer.generationFloor = 1 << 62
+	require.Greater(t, syncer.nextTimestamp(), syncer.generationFloor)
+}

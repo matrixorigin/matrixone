@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 
@@ -127,6 +128,35 @@ func Test_SendResponse(t *testing.T) {
 		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
 		convey.So(string(packets[0][9:]), convey.ShouldEqual,
 			"execute context: invalid input: bad numeric parameter")
+
+		driverErr := &mysql.MySQLError{Number: moerr.ErrTxnWWConflict, SQLState: [5]byte{'H', 'Y', '0', '0', '0'}, Message: "w-w conflict"}
+		for _, tc := range []struct {
+			name    string
+			err     error
+			code    uint16
+			state   string
+			message string
+		}{
+			{"driver conflict", driverErr, moerr.ErrTxnWWConflict, "HY000", "w-w conflict"},
+			{"driver duplicate", &mysql.MySQLError{Number: moerr.ER_DUP_ENTRY, SQLState: [5]byte{'2', '3', '0', '0', '0'}, Message: "duplicate"}, moerr.ER_DUP_ENTRY, "23000", "duplicate"},
+			{"missing state", &mysql.MySQLError{Number: moerr.ErrTxnWWConflict, Message: "conflict"}, moerr.ErrTxnWWConflict, "HY000", "conflict"},
+			{"wrapped driver error", fmt.Errorf("execute: %w", driverErr), moerr.ER_UNKNOWN_ERROR, "HY000", "execute: Error 20619 (HY000): w-w conflict"},
+			{"joined rollback error", errors.Join(driverErr, errors.New("rollback failed")), moerr.ER_UNKNOWN_ERROR, "HY000", "Error 20619 (HY000): w-w conflict\nrollback failed"},
+			{"joined commit error", errors.Join(driverErr), moerr.ER_UNKNOWN_ERROR, "HY000", "Error 20619 (HY000): w-w conflict"},
+			{"nil driver error", (*mysql.MySQLError)(nil), moerr.ER_UNKNOWN_ERROR, "HY000", "<nil>"},
+		} {
+			convey.Convey(tc.name, func() {
+				rawConn.data = nil
+				resp.SetData(tc.err)
+				err = mp.SendResponse(ctx, resp)
+				convey.So(err, convey.ShouldBeNil)
+				packets = splitProtocolPackets(t, rawConn.data)
+				convey.So(len(packets), convey.ShouldEqual, 1)
+				convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, tc.code)
+				convey.So(string(packets[0][4:9]), convey.ShouldEqual, tc.state)
+				convey.So(string(packets[0][9:]), convey.ShouldEqual, tc.message)
+			})
+		}
 
 		resp.category = -1
 		err = mp.SendResponse(ctx, resp)

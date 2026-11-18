@@ -171,6 +171,7 @@ type Executor struct {
 
 // NewExecutor creates a new Executor with database connection
 func NewExecutor(
+	ctx context.Context,
 	user, password string,
 	ip string,
 	port int,
@@ -190,7 +191,7 @@ func NewExecutor(
 	}
 	e.debugTxnRecorder.doRecord = doRecord
 
-	if err := e.Connect(); err != nil {
+	if err := e.Connect(ctx); err != nil {
 		return nil, err
 	}
 
@@ -200,8 +201,8 @@ func NewExecutor(
 }
 
 // Connect establishes a database connection
-func (e *Executor) Connect() error {
-	conn, err := OpenDbConn(e.user, e.password, e.ip, e.port, e.timeout)
+func (e *Executor) Connect(ctx context.Context) error {
+	conn, err := OpenDbConn(ctx, e.user, e.password, e.ip, e.port, e.timeout)
 	if err != nil {
 		return err
 	}
@@ -282,6 +283,9 @@ func (e *Executor) ExecSQL(
 	if len(sqlBuf) <= v2SQLBufReserved {
 		return moerr.NewInternalError(ctx, "SQL buffer too short")
 	}
+	if err := checkExecutorStop(ctx, ar); err != nil {
+		return err
+	}
 
 	if err := e.ensureConnection(ctx); err != nil {
 		return err
@@ -295,6 +299,9 @@ func (e *Executor) ExecSQL(
 	e.recordTxnSQL(sqlBuf)
 
 	execFunc := func() error {
+		if err := checkExecutorStop(ctx, ar); err != nil {
+			return err
+		}
 		if err := e.ensureConnection(ctx); err != nil {
 			return err
 		}
@@ -318,11 +325,6 @@ func (e *Executor) ExecSQL(
 	// sql.Tx. Let the stream roll back and replay the unacknowledged range;
 	// retrying only the failed statement can commit incomplete data.
 	if !needRetry || e.tx != nil {
-		if needRetry {
-			if err := checkExecutorStop(ctx, ar); err != nil {
-				return err
-			}
-		}
 		err := execFunc()
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		return err
@@ -573,7 +575,7 @@ func (e *Executor) ensureConnection(ctx context.Context) error {
 		return nil
 	}
 
-	if err := e.Connect(); err != nil {
+	if err := e.Connect(ctx); err != nil {
 		return err
 	}
 

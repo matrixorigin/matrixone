@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -96,25 +97,6 @@ func (jobEntry *JobEntry) update(
 		needApply = true
 	}
 	if needApply {
-		if jobEntry.watermark.GT(&watermark) {
-			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
-				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
-			FlushPermanentErrorMessage(
-				ctx,
-				jobEntry.tableInfo.exec.cnUUID,
-				jobEntry.tableInfo.exec.txnEngine,
-				jobEntry.tableInfo.exec.cnTxnClient,
-				jobEntry.tableInfo.accountID,
-				jobEntry.tableInfo.tableID,
-				[]string{jobEntry.jobName},
-				[]uint64{jobEntry.jobID},
-				[]uint64{jobStatus.LSN},
-				[]*JobStatus{jobStatus},
-				types.MaxTs(),
-				errMsg,
-				[]uint64{jobEntry.currentLSN},
-			)
-		}
 		jobEntry.currentLSN = jobStatus.LSN
 		jobEntry.persistedWatermark = watermark
 		jobEntry.watermark = watermark
@@ -124,34 +106,6 @@ func (jobEntry *JobEntry) update(
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
 	return jobEntry.state == ISCPJobState_Completed
-}
-
-func (jobEntry *JobEntry) UpdateWatermark(
-	from, to types.TS,
-	watermarkFlushThreshold time.Duration,
-) {
-	if from.GE(&to) {
-		return
-	}
-	expectedFrom := jobEntry.watermark.Next()
-	if !expectedFrom.EQ(&from) {
-		FlushPermanentErrorMessage(
-			jobEntry.tableInfo.exec.ctx,
-			jobEntry.tableInfo.exec.cnUUID,
-			jobEntry.tableInfo.exec.txnEngine,
-			jobEntry.tableInfo.exec.cnTxnClient,
-			jobEntry.tableInfo.accountID,
-			jobEntry.tableInfo.tableID,
-			[]string{jobEntry.jobName},
-			[]uint64{jobEntry.jobID},
-			[]uint64{jobEntry.currentLSN},
-			[]*JobStatus{{}},
-			types.MaxTs(),
-			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
-			[]uint64{jobEntry.currentLSN},
-		)
-	}
-	jobEntry.watermark = to
 }
 
 func (jobEntry *JobEntry) tryFlushWatermark(
@@ -164,19 +118,12 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		return
 	}
 	needFlush = true
-	emptyStatus := &JobStatus{LSN: jobEntry.currentLSN + 1}
-	statusJson, err := MarshalJobStatus(emptyStatus)
-	if err != nil {
-		return
-	}
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+	sql := cdc.CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
 		jobEntry.tableInfo.accountID,
 		jobEntry.tableInfo.tableID,
 		jobEntry.jobName,
 		jobEntry.jobID,
 		jobEntry.watermark,
-		statusJson,
-		ISCPJobState_Completed,
 		jobEntry.currentLSN,
 	)
 	result, err := ExecWithResult(
@@ -199,9 +146,11 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
-	jobEntry.state = ISCPJobState_Pending
+	if result.AffectedRows != 1 {
+		result.Close()
+		return true, moerr.NewInternalErrorNoCtxf("iscp flush watermark: update affected %d rows for job %s (id=%d), expected 1", result.AffectedRows, jobEntry.jobName, jobEntry.jobID)
+	}
 	result.Close()
-	jobEntry.persistedWatermark = jobEntry.watermark
 	return
 }
 

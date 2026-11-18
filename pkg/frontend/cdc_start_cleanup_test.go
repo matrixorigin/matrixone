@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"runtime"
 	"strings"
@@ -34,6 +35,74 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// ownedCatalogTestService adapts the existing catalog fixtures to the owned
+// transaction boundary. Real lease and rollback behavior is tested separately
+// against the task-service storage and embedded cluster.
+type ownedCatalogTestService struct {
+	taskservice.TaskService
+	factory     func() ie.InternalExecutor
+	mu          sync.Mutex
+	owners      []taskservice.CDCTaskOwner
+	transitions []taskservice.CDCTaskTransition
+}
+
+func bindOwnedCatalogTest(exec *CDCTaskExecutor, catalog ie.InternalExecutor) *ownedCatalogTestService {
+	service := &ownedCatalogTestService{factory: func() ie.InternalExecutor { return catalog }}
+	exec.taskService = service
+	exec.taskOwner = taskservice.CDCTaskOwner{
+		DaemonID: 1,
+		Runner:   "test-cn",
+		Key:      taskservice.CDCTaskKey{AccountId: exec.spec.Accounts[0].Id, TaskId: exec.spec.TaskId},
+	}
+	return service
+}
+
+func (s *ownedCatalogTestService) UpdateOwnedCDCTask(ctx context.Context, owner taskservice.CDCTaskOwner, transition taskservice.CDCTaskTransition, mutate func(context.Context, taskservice.SqlExecutor) error) error {
+	if err := mutate(ctx, &ownedCatalogTestSQL{executor: s.factory()}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.owners = append(s.owners, owner)
+	s.transitions = append(s.transitions, transition)
+	s.mu.Unlock()
+	return nil
+}
+
+type ownedCatalogTestSQL struct{ executor ie.InternalExecutor }
+
+func (*ownedCatalogTestSQL) PrepareContext(ctx context.Context, _ string) (*sql.Stmt, error) {
+	return nil, moerr.NewNotSupported(ctx, "prepare in CDC catalog test")
+}
+
+func (*ownedCatalogTestSQL) QueryContext(ctx context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, moerr.NewNotSupported(ctx, "query in CDC catalog test")
+}
+
+func (s *ownedCatalogTestSQL) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var state, previous, message, taskID string
+	var account uint64
+	if strings.Contains(query, "state=state") {
+		account, taskID, previous = args[0].(uint64), args[1].(string), args[2].(string)
+		state = previous
+	} else if len(args) == 5 {
+		state, message, account, taskID, previous = args[0].(string), args[1].(string), args[2].(uint64), args[3].(string), args[4].(string)
+	} else {
+		state, account, taskID, previous = args[0].(string), args[1].(uint64), args[2].(string), args[3].(string)
+	}
+	sqlText := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgByStateSQL(account, taskID, state, message, previous)
+	if statusExec, ok := s.executor.(ie.InternalExecutorWithStatus); ok {
+		status, err := statusExec.ExecWithStatus(ctx, sqlText, ie.SessionOverrideOptions{})
+		return ownedCatalogTestResult(status.AffectedRows), err
+	}
+	err := s.executor.Exec(ctx, sqlText, ie.SessionOverrideOptions{})
+	return ownedCatalogTestResult(1), err
+}
+
+type ownedCatalogTestResult uint64
+
+func (ownedCatalogTestResult) LastInsertId() (int64, error)   { return 0, nil }
+func (r ownedCatalogTestResult) RowsAffected() (int64, error) { return int64(r), nil }
 
 // TestStartCleansUpOldReaders verifies that Start() properly cleans up old readers before starting new ones
 func TestStartCleansUpOldReaders(t *testing.T) {
@@ -286,6 +355,7 @@ func TestStartCleanupWithClosedReaders(t *testing.T) {
 }
 
 func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
+	catalog := &captureExecContextIE{}
 	exec := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
@@ -296,6 +366,7 @@ func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
 		stateMachine: NewExecutorStateMachine(),
 		holdCh:       make(chan int, 1),
 	}
+	bindOwnedCatalogTest(exec, catalog)
 
 	// Pretend we were running and the previous Start left a signal in holdCh
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
@@ -361,8 +432,8 @@ func TestCDCCompletionWinsWhenTimeoutIsAlsoReady(t *testing.T) {
 		completion <- expected
 		timeout <- time.Now()
 
-		result, timedOut := selectCDCCompletion(completion, timeout)
-		require.False(t, timedOut)
+		result, waitErr := waitForCDCCompletion(context.Background(), completion, timeout)
+		require.NoError(t, waitErr)
 		require.ErrorIs(t, result, expected)
 	}
 }
@@ -378,6 +449,7 @@ func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
 			},
 			ie: catalog,
 		}
+		bindOwnedCatalogTest(exec, catalog)
 		const generation = uint64(1)
 		ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
 		_, attempt := newCDCStartAttempt(context.Background(), generation)
@@ -422,6 +494,7 @@ func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
 			},
 			ie: &captureExecContextIE{execErr: catalogErr},
 		}
+		bindOwnedCatalogTest(exec, exec.ie)
 
 		required, err := exec.publishStartupCatalogTransition(
 			context.Background(),
@@ -446,6 +519,7 @@ func TestFreshRestartRetryReopensFailedCatalogAdmission(t *testing.T) {
 		},
 		ie: catalog,
 	}
+	bindOwnedCatalogTest(exec, catalog)
 
 	require.NoError(t, exec.admitRestartCatalogState(context.Background()))
 	require.Equal(t, cdc.CDCState_Restarting, catalog.getState())
@@ -462,7 +536,7 @@ func TestFreshRestartRetryReopensFailedCatalogAdmission(t *testing.T) {
 	require.Equal(t, cdc.CDCState_Running, catalog.getState())
 }
 
-func TestRestartEarlyStartFailureMovesGenerationToFailed(t *testing.T) {
+func TestRestartEarlyCatalogReadFailureKeepsAdmissionRetryable(t *testing.T) {
 	retrieveErr := errors.New("catalog read unavailable")
 	catalog := &captureExecContextIE{queryErr: retrieveErr}
 	exec := &CDCTaskExecutor{
@@ -476,6 +550,7 @@ func TestRestartEarlyStartFailureMovesGenerationToFailed(t *testing.T) {
 		stateMachine: NewExecutorStateMachine(),
 		holdCh:       make(chan int, 1),
 	}
+	bindOwnedCatalogTest(exec, catalog)
 	exec.startFunc = exec.Start
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
@@ -485,7 +560,7 @@ func TestRestartEarlyStartFailureMovesGenerationToFailed(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return exec.activeStart() == nil
 	}, time.Second, time.Millisecond)
-	require.True(t, catalog.containsExecutedSQL("SET state = 'failed'"))
+	require.True(t, catalog.containsExecutedSQL("SET state = 'restarting'"))
 	require.True(t, catalog.containsExecutedSQL("AND state = 'restarting'"))
 }
 
@@ -803,11 +878,9 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 		cnUUID:                      "restart-publication-timeout-cn",
 		stateMachine:                NewExecutorStateMachine(),
 		holdCh:                      make(chan int, 1),
-		restartStartupTimeout:       25 * time.Millisecond,
+		restartStartupTimeout:       5 * time.Second,
 		restartStartupTimeoutSignal: restartTimeout,
-		restartCatalogExecutorFactory: func() ie.InternalExecutor {
-			return catalog
-		},
+		taskService:                 &ownedCatalogTestService{factory: func() ie.InternalExecutor { return catalog }},
 	}
 	exec.startFunc = exec.Start
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
@@ -821,6 +894,9 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 		t.Fatal("replacement did not enter restarting-to-running publication")
 	}
 	require.True(t, detector.IsTaskRegistered(exec.spec.TaskId))
+	callback := detector.Callbacks[exec.spec.TaskId]
+	require.NotNil(t, callback)
+	require.ErrorContains(t, callback(nil), "CDC startup admission is pending")
 	restartTimeout <- time.Now()
 
 	select {
@@ -836,10 +912,11 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	require.Equal(t, cdc.CDCState_Failed, catalog.getState())
 	require.False(t, detector.IsTaskRegistered(exec.spec.TaskId))
+	require.NoError(t, callback(nil), "a fenced callback must not start work")
 	require.Equal(t, StateFailed, exec.stateMachine.State())
 
-	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-	require.False(t, timedOut)
+	persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+	require.NoError(t, waitErr)
 	require.NoError(t, persistErr)
 }
 
@@ -868,9 +945,7 @@ func TestRestartTimeoutPersistenceDoesNotWaitForActiveCatalogExecutor(t *testing
 				stateMachine:          NewExecutorStateMachine(),
 				holdCh:                make(chan int, 1),
 				restartStartupTimeout: 25 * time.Millisecond,
-				restartCatalogExecutorFactory: func() ie.InternalExecutor {
-					return timeoutCatalog
-				},
+				taskService:           &ownedCatalogTestService{factory: func() ie.InternalExecutor { return timeoutCatalog }},
 			}
 			require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 			require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
@@ -911,8 +986,8 @@ func TestRestartTimeoutPersistenceDoesNotWaitForActiveCatalogExecutor(t *testing
 				t.Fatal("Restart waited behind the timed-out Start catalog executor")
 			}
 
-			persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-			require.False(t, timedOut)
+			persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+			require.NoError(t, waitErr)
 			require.NoError(t, persistErr)
 			require.True(t, timeoutCatalog.containsExecutedSQL("SET state = 'failed'"))
 			require.True(t, timeoutCatalog.containsExecutedSQL("AND state = 'restarting'"))
@@ -934,10 +1009,8 @@ func TestRestartTimeoutPersistenceIsJoinedByLifecycleScheduler(t *testing.T) {
 			TaskName: "restart-timeout-lifecycle-owner",
 			Accounts: []*task.Account{{Id: 1}},
 		},
-		restartStartupTimeout: time.Second,
-		restartCatalogExecutorFactory: func() ie.InternalExecutor {
-			return catalog
-		},
+		restartStartupTimeout:  time.Second,
+		taskService:            &ownedCatalogTestService{factory: func() ie.InternalExecutor { return catalog }},
 		lifecycleTaskScheduler: lifecycle.RunNamedTask,
 	}
 
@@ -973,8 +1046,8 @@ func TestRestartTimeoutPersistenceIsJoinedByLifecycleScheduler(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("lifecycle shutdown did not join timeout persistence cleanup")
 	}
-	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-	require.False(t, timedOut)
+	persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+	require.NoError(t, waitErr)
 	require.ErrorIs(t, persistErr, context.Canceled)
 }
 
@@ -994,8 +1067,8 @@ func TestRestartTimeoutPersistenceCompletesWhenLifecycleSchedulerRejects(t *test
 		nil,
 		moerr.NewInternalErrorNoCtx("CDC restart startup timed out"),
 	)
-	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-	require.False(t, timedOut)
+	persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+	require.NoError(t, waitErr)
 	require.ErrorContains(t, persistErr, "cannot schedule CDC restart timeout persistence")
 }
 
@@ -1036,6 +1109,7 @@ func TestRestartSerializesGenerationAndTimeoutPersistence(t *testing.T) {
 	t.Cleanup(timeoutCatalog.unblock)
 	firstStartEntered := make(chan struct{})
 	var startCalls atomic.Int32
+	var catalogCalls atomic.Int32
 	exec := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
@@ -1047,9 +1121,12 @@ func TestRestartSerializesGenerationAndTimeoutPersistence(t *testing.T) {
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		restartStartupTimeout: 50 * time.Millisecond,
-		restartCatalogExecutorFactory: func() ie.InternalExecutor {
-			return timeoutCatalog
-		},
+		taskService: &ownedCatalogTestService{factory: func() ie.InternalExecutor {
+			if catalogCalls.Add(1) == 1 {
+				return timeoutCatalog
+			}
+			return catalog
+		}},
 		startFunc: func(ctx context.Context) error {
 			if startCalls.Add(1) == 1 {
 				close(firstStartEntered)
@@ -1111,9 +1188,7 @@ func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		restartStartupTimeout: 25 * time.Millisecond,
-		restartCatalogExecutorFactory: func() ie.InternalExecutor {
-			return catalog
-		},
+		taskService:           &ownedCatalogTestService{factory: func() ie.InternalExecutor { return catalog }},
 	}
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
@@ -1137,8 +1212,8 @@ func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 
 	err := exec.Restart()
 	require.ErrorContains(t, err, "CDC restart startup timed out")
-	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-	require.False(t, timedOut)
+	persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+	require.NoError(t, waitErr)
 	require.NoError(t, persistErr)
 	select {
 	case <-oldCancelled:
@@ -1175,9 +1250,7 @@ func TestRestartTimeoutDoesNotPersistLateStartupCauseAcrossRetry(t *testing.T) {
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		restartStartupTimeout: 25 * time.Millisecond,
-		restartCatalogExecutorFactory: func() ie.InternalExecutor {
-			return catalog
-		},
+		taskService:           &ownedCatalogTestService{factory: func() ie.InternalExecutor { return catalog }},
 		startFunc: func(context.Context) error {
 			<-releaseStart
 			return errors.New("downstream authentication rejected")
@@ -1187,8 +1260,8 @@ func TestRestartTimeoutDoesNotPersistLateStartupCauseAcrossRetry(t *testing.T) {
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
 
 	require.ErrorContains(t, exec.Restart(), "CDC restart startup timed out")
-	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
-	require.False(t, timedOut)
+	persistErr, waitErr := waitForRestartPersistenceForTest(t, exec)
+	require.NoError(t, waitErr)
 	require.NoError(t, persistErr)
 	close(releaseStart)
 	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
@@ -1404,6 +1477,53 @@ func TestResumeReplacementStopsWithExecutorLifecycle(t *testing.T) {
 	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
 }
 
+func TestCanceledResumeDrainsBeforeDetectorReuse(t *testing.T) {
+	detector := createMockTableDetectorForTest()("test-cn")
+	stub := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector { return detector })
+	defer stub.Reset()
+	registered := make(chan bool, 1)
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	const taskID = "resume-drain-detector"
+	exec := newCDCExecutorForLifecycleTest(taskID, func(ctx context.Context) error {
+		registered <- detector.RegisterIfAbsent(taskID, 1, nil, nil, func(map[uint32]cdc.TblMap) error { return nil })
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		// Model Start's error cleanup, which unregisters by task ID.
+		detector.UnRegister(taskID)
+		return ctx.Err()
+	})
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+	require.NoError(t, exec.Resume())
+	select {
+	case ok := <-registered:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("resume replacement did not register")
+	}
+	require.NoError(t, exec.Cancel())
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("resume replacement was not canceled")
+	}
+	stoppedCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, exec.CancelAndWait(stoppedCtx), context.Canceled)
+	releaseOnce.Do(func() { close(release) })
+	ctx, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	require.NoError(t, exec.CancelAndWait(ctx), "a timed-out drain must allow cleanup to be retried")
+	require.True(t, detector.RegisterIfAbsent(taskID, 1, nil, nil, func(map[uint32]cdc.TblMap) error { return nil }))
+	require.True(t, detector.IsTaskRegistered(taskID), "old cleanup must not remove the successor")
+}
+
 func TestExecutorLifecycleDoesNotInheritStartAttemptValues(t *testing.T) {
 	exec := &CDCTaskExecutor{}
 	rootCtx := taskservice.WithRestartAdmission(context.Background())
@@ -1485,4 +1605,11 @@ func TestRestartReplacementStopsWithExecutorLifecycle(t *testing.T) {
 		t.Fatal("restart replacement waited for its timeout after executor lifecycle cancellation")
 	}
 	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+}
+
+func waitForRestartPersistenceForTest(t *testing.T, exec *CDCTaskExecutor) (error, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	return exec.waitForRestartCatalogPersistence(ctx)
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -292,12 +293,13 @@ const (
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_state = %d,` +
 		`watermark = '%s',` +
-		`job_status = '%s'` +
+		`job_status = %s ` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND job_name = '%s'` +
+		`AND job_name = %s ` +
 		`AND job_id = %d ` +
+		`AND drop_at IS NULL ` +
 		`AND job_state != 4 ` +
 		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
@@ -1001,13 +1003,31 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
 		jobState,
 		newWatermark.ToString(),
-		jobStatus,
+		sqlquote.String(jobStatus),
 		accountID,
 		tableID,
-		jobName,
+		sqlquote.String(jobName),
 		jobID,
 		expectPrevLSN,
 	)
+}
+
+// ISCPLogAdvanceWatermarkSQL preserves initialization and diagnostics when an
+// idle job advances its watermark.
+func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(accountID uint32, tableID uint64, jobName string, jobID uint64, watermark types.TS, prevLSN uint64) string {
+	return fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET watermark = '%s', job_status = JSON_SET(job_status, '$.LSN', %d) "+
+		"WHERE account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d AND job_state = 3 AND drop_at IS NULL AND JSON_EXTRACT(job_status, '$.LSN') = '%d'",
+		watermark.ToString(), prevLSN+1, accountID, tableID, sqlquote.String(jobName), jobID, prevLSN)
+}
+
+// ISCPLogGuardIterationSQL makes a snapshot output transaction conflict with
+// a concurrent job retirement or a successor iteration. The same-value update
+// is a write: it must commit in the transaction that writes the output.
+func (b cdcSQLBuilder) ISCPLogGuardIterationSQL(accountID uint32, tableID uint64, jobName string, jobID, lsn uint64, runningState int8) string {
+	return fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET job_state = job_state "+
+		"WHERE account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d "+
+		"AND drop_at IS NULL AND job_state = %d AND JSON_EXTRACT(job_status, '$.LSN') = '%d'",
+		accountID, tableID, sqlquote.String(jobName), jobID, runningState, lsn)
 }
 
 func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(

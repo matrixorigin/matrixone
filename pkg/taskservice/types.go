@@ -721,6 +721,9 @@ type TaskService interface {
 		) (int, error),
 		...Condition,
 	) (int, error)
+	// UpdateOwnedCDCTask applies a catalog mutation only while the specified
+	// CDC daemon lease is still owned. Both writes commit in one transaction.
+	UpdateOwnedCDCTask(context.Context, CDCTaskOwner, CDCTaskTransition, func(context.Context, SqlExecutor) error) error
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to
@@ -808,6 +811,10 @@ type TaskStorage interface {
 		) (int, error),
 		...Condition,
 	) (int, error)
+	UpdateOwnedCDCTask(context.Context, CDCTaskOwner, CDCTaskTransition, func(context.Context, SqlExecutor) error) error
+	// ClaimCDCRestart normalizes the durable CDC admission and claims a stale
+	// RestartRequested daemon in one transaction.
+	ClaimCDCRestart(context.Context, task.DaemonTask, string, time.Time) (bool, error)
 
 	// AddSQLTask adds sql tasks and returns number of successful added.
 	AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error)
@@ -912,3 +919,41 @@ type CDCTaskKey struct {
 	AccountId uint64
 	TaskId    string
 }
+
+// CDCTaskOwner identifies the daemon lease authorizing a catalog mutation.
+type CDCTaskOwner struct {
+	DaemonID uint64
+	Runner   string
+	Status   task.TaskStatus
+	Key      CDCTaskKey
+}
+
+// CDCTaskTransition updates only fields owned by a CDC lifecycle transition.
+type CDCTaskTransition struct {
+	Status       task.TaskStatus
+	ReleaseLease bool
+	StartedAt    time.Time
+}
+
+// CDCTaskStorageError identifies a failure at the owned transaction boundary.
+// A failed commit may already have taken effect and must be reconciled.
+type CDCTaskStorageError struct {
+	Err           error
+	CommitUnknown bool
+}
+
+func (e *CDCTaskStorageError) Error() string { return e.Err.Error() }
+func (e *CDCTaskStorageError) Unwrap() error { return e.Err }
+
+func cdcTaskStorageError(err error, commitUnknown bool) error {
+	if err == nil {
+		return nil
+	}
+	return &CDCTaskStorageError{Err: err, CommitUnknown: commitUnknown}
+}
+
+// CDCTaskOwnerMismatch means that a catalog mutation lost its daemon guard.
+type CDCTaskOwnerMismatch struct{ err error }
+
+func (e *CDCTaskOwnerMismatch) Error() string { return e.err.Error() }
+func (e *CDCTaskOwnerMismatch) Unwrap() error { return e.err }

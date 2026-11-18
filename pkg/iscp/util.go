@@ -449,14 +449,24 @@ func getTxn(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	info string,
+	txnOptions ...client.TxnOption,
 ) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
+	if latestCommitTS := cnTxnClient.GetLatestCommitTS(); latestCommitTS.Greater(nowTs) {
+		// A transaction on this CN must see its own last commit even when the
+		// local logtail has not applied that commit yet. TxnClient.New waits for
+		// this lower bound to become visible before admitting the snapshot.
+		nowTs = latestCommitTS
+	}
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
 		info,
 		0)
-	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	options := make([]client.TxnOption, 0, len(txnOptions)+1)
+	options = append(options, createByOpt)
+	options = append(options, txnOptions...)
+	op, err := cnTxnClient.New(ctx, nowTs, options...)
 	if err != nil {
 		return nil, err
 	}
