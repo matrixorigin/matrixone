@@ -1203,12 +1203,21 @@ stmt_list:
             yylex.(*Lexer).AppendStmt($1)
         }
     }
+|   flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendStmt($1)
+    }
 |   stmt_list ';' stmt
     {
         yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
         if $3 != nil {
             yylex.(*Lexer).AppendStmt($3)
         }
+    }
+|   stmt_list ';' flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
+        yylex.(*Lexer).AppendStmt($3)
     }
 
 block_stmt:
@@ -1247,11 +1256,7 @@ block_type_stmt:
     }
 
 stmt:
-    flush_privileges_stmt
-    {
-        $$ = $1
-    }
-|   block_stmt
+    block_stmt
     {
         $$ = $1
     }

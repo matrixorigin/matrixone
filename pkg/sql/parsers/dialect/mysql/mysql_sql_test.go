@@ -7686,7 +7686,7 @@ func TestFlushPrivilegesSyntax(t *testing.T) {
 		require.NoError(t, err, sql)
 		stmt.Free()
 	}
-	for _, sql := range []string{"flush tables", "flush privileges, tables", "flush", "flush privileges extra", "begin flush privileges; end"} {
+	for _, sql := range []string{"flush tables", "flush privileges, tables", "flush", "flush privileges extra", "begin flush privileges; end", "with c as (flush privileges) select 1"} {
 		_, err := ParseOne(context.Background(), sql, 1)
 		require.Error(t, err, sql)
 	}
