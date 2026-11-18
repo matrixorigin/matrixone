@@ -895,6 +895,33 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	return nil
 }
 
+// appendInitialReplayRows may skip intermediate data reservations, but must
+// leave the same capacity as row-wise append: the next grow charges both the
+// new and the old buffer. The replay source has no SQL expression sidecars.
+func appendInitialReplayRows(dst, src *vector.Vector, rows []int64, mp *mpool.MPool) error {
+	width := int64(dst.GetType().TypeSize())
+	if len(rows) > 1 && width > 0 && !src.IsConst() && !src.IsDictionary() &&
+		src.GetNulls().EmptyByFlag() && src.GetGrouping().EmptyByFlag() && len(src.GetArea()) == 0 {
+		want := int64(len(rows)) * width
+		bulk, ok := mpool.GrowCapacity(0, want)
+		var scalar int64
+		for ok && scalar < want {
+			// At most 64 fixed-size descriptors; use the allocator's own
+			// growth policy at each single-row overflow.
+			scalar, ok = mpool.GrowCapacity(scalar, (scalar/width+1)*width)
+		}
+		if ok && scalar == bulk {
+			return dst.Union(src, rows, mp)
+		}
+	}
+	for _, offset := range rows {
+		if err := dst.UnionOne(src, offset, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	ctx context.Context,
 	colTypes []types.Type,
@@ -974,58 +1001,30 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		delInFile int
 	)
 
-	// Gather runs of accepted offsets from the same immutable replay batch.
-	// Row-at-a-time UnionOne repeatedly grows, charges, copies and releases
-	// the output backing on short index scans. Never reserve for unvisited
-	// rows or change which iterator entries survive visibility checks.
+	// Only coalesce the first backing allocation for a single ordinary column.
+	// With multiple charged columns even changing row-major append order can
+	// raise their combined peak during replacement.
 	var offsets [64]int64
-	var commitTimes [len(offsets)]types.TS
-	needTime := slices.Contains(seqNums, uint16(objectio.SEQNUM_COMMITTS))
-	var source *batch.Batch
-	n := 0
-	flush := func() error {
+	n, firstCol := 0, -1
+	var firstSrc *vector.Vector
+	if len(outBatch.Attrs) == 1 && physicalColumnPos < 0 && seqNums[0] != objectio.SEQNUM_COMMITTS {
+		dst := outBatch.Vecs[0]
+		if dst.AllocationAccountSelection() != nil && !dst.IsConst() && !dst.IsDictionary() &&
+			dst.Length() == 0 && dst.Allocated() == 0 && !dst.HasBorrowedBacking() {
+			firstCol = 2 + int(seqNums[0])
+		}
+	}
+	flushFirst := func() error {
+		firstCol = -1
 		if n == 0 {
 			return nil
 		}
-		for i := range outBatch.Attrs {
-			dst := outBatch.Vecs[i]
-			if i == physicalColumnPos {
-				continue
-			}
-			if seqNums[i] == objectio.SEQNUM_COMMITTS {
-				// Replay stores commit time on the entry, not the retained vector.
-				if err := vector.AppendFixedList(dst, commitTimes[:n], nil, mp); err != nil {
-					return err
-				}
-				continue
-			}
-			idx := 2 + seqNums[i] // rowid and commit time precede user columns
-			if int(idx) >= len(source.Vecs) || source.Attrs[idx] == "" {
-				for range n {
-					if err := vector.AppendAny(dst, nil, true, mp); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			src := source.Vecs[idx]
-			// Union reserves validity for a nullable source even when none of
-			// the selected rows is NULL. Preserve row-specific admission there.
-			if n == 1 || src.IsConst() || !src.GetNulls().EmptyByFlag() || !src.GetGrouping().EmptyByFlag() {
-				for _, offset := range offsets[:n] {
-					if err := dst.UnionOne(src, offset, mp); err != nil {
-						return err
-					}
-				}
-			} else if err := dst.Union(src, offsets[:n], mp); err != nil {
-				return err
-			}
-		}
+		rows := offsets[:n]
 		n = 0
-		return nil
+		return appendInitialReplayRows(outBatch.Vecs[0], firstSrc, rows, mp)
 	}
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
-		for remaining := int(objectio.BlockMaxRows) - outBatch.Vecs[0].Length(); remaining > 0; {
+		for outBatch.Vecs[0].Length()+n < int(objectio.BlockMaxRows) {
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
 				break
 			}
@@ -1069,21 +1068,65 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			); err != nil {
 				return err
 			}
-			if n == len(offsets) || source != entry.Batch {
-				if err := flush(); err != nil {
+			if firstCol >= 0 {
+				if firstCol < len(entry.Batch.Vecs) && entry.Batch.Attrs[firstCol] != "" {
+					src := entry.Batch.Vecs[firstCol]
+					if n == 0 {
+						firstSrc = src
+					}
+					if src == firstSrc {
+						offsets[n] = entry.Offset
+						n++
+						if n == len(offsets) {
+							if err := flushFirst(); err != nil {
+								return err
+							}
+						}
+						continue
+					}
+				}
+				if err := flushFirst(); err != nil {
 					return err
 				}
-				source = entry.Batch
 			}
-			offsets[n] = entry.Offset
-			if needTime {
-				commitTimes[n] = entry.Time
+			for i := range outBatch.Attrs {
+				if i == physicalColumnPos {
+					continue
+				}
+				if seqNums[i] == objectio.SEQNUM_COMMITTS {
+					// Replayed rows keep commit time on RowEntry, not in the
+					// retained batch's zero-length timestamp vector.
+					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
+						return err
+					}
+					continue
+				}
+
+				idx := 2 /*rowid and commits*/ + seqNums[i]
+
+				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
+					entry.Batch.Attrs[idx] == "" /*drop column*/ {
+					err = vector.AppendAny(
+						outBatch.Vecs[i],
+						nil,
+						true,
+						mp)
+				} else {
+					err = outBatch.Vecs[i].UnionOne(
+						entry.Batch.Vecs[int(idx)],
+						entry.Offset,
+						mp,
+					)
+				}
+				if err != nil {
+					return err
+				}
 			}
-			n++
-			remaining--
 		}
-		if err := flush(); err != nil {
-			return err
+		if n > 0 {
+			if err := flushFirst(); err != nil {
+				return err
+			}
 		}
 
 		deletedMask := objectio.GetReusableBitmap()

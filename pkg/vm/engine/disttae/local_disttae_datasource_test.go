@@ -180,7 +180,7 @@ func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	block := testBlockID(7)
 	stamp := types.BuildTS(4, 0)
-	rows := make([]testMaterializedSnapshotRow, 100)
+	rows := make([]testMaterializedSnapshotRow, 100, 101)
 	for i := range rows {
 		rows[i] = testMaterializedSnapshotRow{rowID: types.NewRowid(&block, uint32(i)), ts: stamp, id: int64(i)}
 	}
@@ -228,6 +228,88 @@ func TestCommittedReplayAccountedRangeGrowth(t *testing.T) {
 			require.Zero(t, out.Vecs[0].GetNulls().GetBitmap().ExternalStorageCapacity())
 			if tc.seq == 0 {
 				require.LessOrEqual(t, budget.reserves, 2, "reserve for accepted row groups, not each doubling from a single row")
+			}
+		})
+	}
+}
+
+func TestCommittedReplaySplitAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		split   int
+		limit   uint64
+		columns int
+	}{
+		{"split-at-scalar-peak", 60, 768, 1},
+		{"tiny-first-batch", 1, 768, 1},
+		{"below-output-size", 60, 511, 1},
+		{"two-batches-constrained", 60, 1152, 1},
+		{"one-batch-constrained", 64, 1152, 1},
+		{"wide-two-batches", 60, 128*512 + 256, 128},
+		{"wide-one-batch", 64, 128*512 + 256, 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srcMP := mpool.MustNewZero()
+			defer mpool.DeleteMPool(srcMP)
+			dstMP := mpool.MustNewZero()
+			defer mpool.DeleteMPool(dstMP)
+			ctx := context.Background()
+			block := testBlockID(4)
+			ts := types.BuildTS(4, 0)
+			rows := make([]testMaterializedSnapshotRow, 64)
+			for i := range rows {
+				rows[i] = testMaterializedSnapshotRow{
+					rowID: types.NewRowid(&block, uint32(i)), ts: ts, id: int64(i),
+				}
+			}
+			state := newTestMaterializedSnapshotPartitionState(t, srcMP, rows[:tc.split])
+			if tc.split < len(rows) {
+				appendTestSnapshotRows(t, srcMP, state, rows[tc.split:])
+			}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: ts,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			defer ls.Close()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(tc.limit, new(replayReadBudget))
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, dstMP.CurrNB(), "destination allocation cleanup")
+				require.Zero(t, account.Snapshot().Used, "account cleanup")
+				_, _, e := registry.CompleteTerminal(account)
+				require.NoError(t, e)
+			}()
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(tc.columns)
+			defer out.Clean(dstMP)
+			typ := types.T_int64.ToType()
+			colTypes := make([]types.Type, tc.columns)
+			seqs := make([]uint16, tc.columns)
+			out.Attrs = make([]string, tc.columns)
+			for i := range tc.columns {
+				out.Attrs[i] = "id"
+				out.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+				colTypes[i] = typ
+			}
+			require.NoError(t, out.SetAllocationAccount(allocation))
+			err = ls.filterInMemCommittedInserts(ctx, colTypes, seqs, dstMP, out)
+			snap := account.Snapshot()
+			t.Logf("split=%d limit=%d peak=%d live=%d rows=%d vec_len=%d error=%v",
+				tc.split, tc.limit, snap.Peak, snap.Used, out.RowCount(), out.Vecs[0].Length(), err)
+			if tc.limit < 512 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				return
+			}
+			require.LessOrEqual(t, snap.Peak, uint64(512*tc.columns+256), "one old backing during row-wise growth")
+			require.NoError(t, err, "same 64-row projection should fit regardless of replay batch boundaries")
+			require.Equal(t, 64, out.RowCount())
+			for _, v := range out.Vecs {
+				col := vector.MustFixedColWithTypeCheck[int64](v)
+				require.Len(t, col, len(rows))
+				for i, got := range col {
+					require.Equal(t, int64(i), got)
+				}
 			}
 		})
 	}
