@@ -2270,6 +2270,10 @@ normal_ident:
         tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
         $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
     }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
+    }
 
 columns_or_variable_list_opt:
     {
@@ -3682,6 +3686,15 @@ update_value:
     column_name '=' expr_or_default
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
+    }
+|   END '=' expr_or_default
+    {
+        $$ = &tree.UpdateExpr{
+            Names: []*tree.UnresolvedName{
+                tree.NewUnresolvedName(tree.NewCStr($1, 1)),
+            },
+            Expr: $3,
+        }
     }
 
 lock_stmt:
@@ -6917,6 +6930,10 @@ insert_target_column:
     {
         $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1))
+    }
 |   ident '.' ident
     {
         tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
@@ -7450,6 +7467,19 @@ select_no_parens:
             return 1
         }
         $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: $1}
         if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
@@ -11200,6 +11230,60 @@ create_table_stmt:
         if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
         t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
     }
+// MySQL orders table options before [IGNORE|REPLACE] [AS] query_expression
+// (options after the query stay rejected). The option list is the non-empty
+// table_option_list so an empty list can never compete with '(' (#32542).
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Options = $6
+        t.AsSource = $7
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
+        t.AsSource = $10
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $11; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $9; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($12); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $12; $$ = t
+    }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {
         t := tree.NewCreateTable()
@@ -12859,6 +12943,14 @@ column_def:
     column_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
+    }
+|   END column_type column_attribute_list_opt
+    {
+        $$ = tree.NewColumnTableDef(
+            tree.NewUnresolvedName(tree.NewCStr($1, 1)),
+            $2,
+            $3,
+        )
     }
 |   column_name SERIAL column_attribute_list_opt
     {
