@@ -375,10 +375,12 @@ func TestMOServerRejectsFlushPrivilegesBinaryPrepare(t *testing.T) {
 	t.Cleanup(func() { _ = clientConn.Close() })
 	t.Cleanup(func() { _ = serverConn.Close() })
 	registerConn(clientConn)
+	stubEmptyRewriteRuleCache(t)
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
+	pu.SV.SetDefaultValues()
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
@@ -410,7 +412,7 @@ func TestMOServerRejectsFlushPrivilegesBinaryPrepare(t *testing.T) {
 	if prepared != nil {
 		defer prepared.Close()
 	}
-	require.Error(t, err, "the binary COM_STMT_PREPARE request must be rejected")
+	require.ErrorContains(t, err, "SQL parser error", "the binary COM_STMT_PREPARE request must reach the prepareable-statement parser")
 	require.NoError(t, db.Ping(), "the same protocol connection must remain usable after the error")
 	require.NoError(t, db.Close())
 

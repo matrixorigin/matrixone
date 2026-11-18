@@ -4482,6 +4482,7 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 }
 
 func TestComStmtPrepareRejectsFlushPrivileges(t *testing.T) {
+	stubEmptyRewriteRuleCache(t)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -4498,6 +4499,8 @@ func TestComStmtPrepareRejectsFlushPrivileges(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
 	require.Equal(t, int(COM_STMT_PREPARE), resp.cmd)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrParseError),
+		"the COM_STMT_PREPARE rejection must come from the prepareable-statement parser: %v", resp.GetData())
 
 	prepared, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(ses.GetLastStmtId()))
 	require.Error(t, err)
