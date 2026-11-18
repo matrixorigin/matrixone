@@ -10048,6 +10048,10 @@ role_name:
 	{
 		$$ = tree.NewCStr($1, 1)
     }
+|   FLUSH
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
 |   QUOTE_ID
 	{
 		$$ = tree.NewCStr($1, 1)
@@ -12373,6 +12377,10 @@ iceberg_ref_opt:
 
 iceberg_ref_name:
     ID
+    {
+        $$ = $1
+    }
+|   FLUSH
     {
         $$ = $1
     }
@@ -14750,6 +14758,16 @@ std_dev_pop:
 
 function_call_generic:
     ID '(' expression_list_opt ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
+    }
+|   FLUSH '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{

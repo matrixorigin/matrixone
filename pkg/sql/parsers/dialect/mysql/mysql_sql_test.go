@@ -7691,3 +7691,19 @@ func TestFlushPrivilegesSyntax(t *testing.T) {
 		require.Error(t, err, sql)
 	}
 }
+
+func TestFlushKeywordPreservesIdentifierUses(t *testing.T) {
+	for _, sql := range []string{
+		"create role flush",
+		"set role flush",
+		"drop role flush",
+		"select flush(1)",
+		"select * from t for iceberg ref flush",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			stmt.Free()
+		})
+	}
+}
