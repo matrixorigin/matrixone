@@ -1621,7 +1621,11 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 			return err
 		}
 		for _, subInfo := range subscribedInfos {
-			subscribedAccountNames = append(subscribedAccountNames, accIdInfoMap[subInfo.SubAccountId].Name)
+			account, exists := accIdInfoMap[subInfo.SubAccountId]
+			if !exists {
+				continue
+			}
+			subscribedAccountNames = append(subscribedAccountNames, account.Name)
 		}
 		slices.Sort(subscribedAccountNames)
 
