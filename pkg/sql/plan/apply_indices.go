@@ -403,8 +403,11 @@ func (builder *QueryBuilder) clearProjectGuard(projID int32) {
 }
 
 func (builder *QueryBuilder) isScanProtected(scanID int32) bool {
-	if builder == nil || builder.protectedScans == nil {
+	if builder == nil {
 		return false
+	}
+	if _, ok := builder.updateTargetScans[scanID]; ok {
+		return true
 	}
 	return builder.protectedScans[scanID] > 0
 }
@@ -1342,6 +1345,9 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		return -1, nil
 	}
 	if scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || scanNode.IndexScanInfo.IsIndexScan {
+		return scanNode.NodeId, nil
+	}
+	if builder.isScanProtected(scanNode.NodeId) {
 		return scanNode.NodeId, nil
 	}
 	hintSet := builder.indexHintsByScan[scanNode.NodeId]

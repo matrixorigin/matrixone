@@ -636,6 +636,9 @@ message UpdateCtx {
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
   bool ignore_affected_rows = 13;
+  bool dedup_by_target_row_id = 14;
+  int32 target_update_ctx_idx = 15;
+  repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
@@ -1000,6 +1003,9 @@ message Node {
   // makes build-side selection idempotent across repeated optimizer passes.
   FuzzyBuildSide fuzzy_build_side = 77;
 
+  // FILTER only: keep predicates on their final DML row image.
+  bool filter_is_barrier = 79;
+
   // Statement-local scalar vector source; field number matches main.
   int32 vector_query_source_id = 93;
 }
@@ -1228,6 +1234,13 @@ message PreInsertUkCtx {
   int32 pk_column = 2;
   Type pk_type = 3 [(gogoproto.nullable) = false];
   Type uk_type = 4 [(gogoproto.nullable) = false];
+  // Ordered repeated-target UPDATE IGNORE arbitration; positions refer to its input.
+  bool update_ignore_arbitration = 20;
+  repeated int32 update_old_keys = 21;
+  repeated int32 update_new_keys = 22;
+  repeated int32 update_initial_conflicts = 23;
+  int32 update_row_id = 24;
+  repeated int32 update_outputs = 25;
 }
 
 message PreInsertCtx {
@@ -1239,6 +1252,10 @@ message PreInsertCtx {
   Expr cluster_by_expr = 6;
   bool is_old_update = 7;
   bool is_new_update = 8;
+  bool has_target_selector = 9;
+  int32 target_row_number_col = 10;
+  int32 target_active_col = 11;
+  int32 target_row_id_col = 12;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

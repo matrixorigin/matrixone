@@ -33,10 +33,10 @@ func TestPipelineEdgeMetadataCoversConstructedOwners(t *testing.T) {
 		perEdge, ok := PipelineEdgeMetadataBound(33)
 		require.True(t, ok)
 		// Independent concrete inventory, including each actual receiver array,
-		// durable edge struct, two hchan headers and scanned signal payload.
+		// durable edge struct, four hchan headers and scanned signal payload.
 		live := uint64(reflect.TypeFor[PipelineSignalReceiver]().Size()) + uint64(cap(receiver.srcReg))*uint64(reflect.TypeFor[*WaitRegister]().Size()) + uint64(cap(receiver.doneCh))*uint64(reflect.TypeFor[chan struct{}]().Size()) + uint64(cap(receiver.nbs))*uint64(reflect.TypeFor[int]().Size()) + uint64(cap(receiver.regs))*uint64(reflect.TypeFor[reflect.SelectCase]().Size())
 		for _, reg := range regs {
-			live += uint64(reflect.TypeFor[WaitRegister]().Size()) + 512 + uint64(cap(reg.Ch2))*uint64(reflect.TypeFor[PipelineSignal]().Size())
+			live += uint64(reflect.TypeFor[WaitRegister]().Size()) + 4*256 + uint64(cap(reg.Ch2))*uint64(reflect.TypeFor[PipelineSignal]().Size())
 		}
 		require.GreaterOrEqual(t, uint64(perEdge)*uint64(fanIn), live)
 	}

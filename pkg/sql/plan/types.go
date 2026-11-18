@@ -282,6 +282,7 @@ type QueryBuilder struct {
 	ctxByNode                        []*BindContext
 	nameByColRef                     map[[2]int32]string
 	protectedScans                   map[int32]int
+	updateTargetScans                map[int32]struct{}
 	projectSpecialGuards             map[int32]*specialIndexGuard
 	vectorCandidateAuto              *vectorCandidateAutoSummary
 	mysqlSpecialStorageByDisplayNode map[[2]int32]int32
@@ -353,6 +354,7 @@ type QueryBuilder struct {
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
 	irregularMaintSkipInsert  bool
+	irregularUpdateMaints     []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -376,6 +378,16 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep  int32
+	deleteStep  int32
+	deletePkPos int32
+	deletePkTyp plan.Type
+	indexes     []*plan.IndexDef
+	tableDef    *plan.TableDef
+	objRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {

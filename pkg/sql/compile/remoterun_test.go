@@ -34,6 +34,7 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -354,7 +355,17 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		root:   &scopeContext{},
 		parent: &scopeContext{},
 	}
-	proc := &process.Process{Base: &process.BaseProcess{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
 
 	roundTrip := func(t *testing.T, original vm.Operator) vm.Operator {
 		t.Helper()
@@ -436,6 +447,126 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+}
+
+func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	selectorPreInsert := &preinsert.PreInsert{HasTargetSelector: true}
+	targetAwareMultiUpdate := &multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{
+			DedupByTargetRowID: true,
+		}},
+	}
+	targetIndexedMultiUpdate := &multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{
+			TargetUpdateCtxIdx: 1,
+		}},
+	}
+	affectedRowsMultiUpdate := &multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{
+			AffectedRowsCols: []int{9, 10},
+		}},
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, nil))
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, &pipeline.Pipeline{}))
+	_, _, err := convertToPipelineInstruction(selectorPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 12")
+	_, _, err = convertToPipelineInstruction(targetAwareMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 12")
+	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 12")
+	targetAwarePipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasTargetSelector: true,
+			},
+		}},
+	}}}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline),
+		"requires MORPC protocol version 12")
+	targetAwareMultiUpdatePipeline := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.MultiUpdate),
+			MultiUpdate: &pipeline.MultiUpdate{
+				UpdateCtxList: []*planpb.UpdateCtx{{DedupByTargetRowId: true}},
+			},
+		}},
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwareMultiUpdatePipeline),
+		"requires MORPC protocol version 12")
+
+	_, _, err = convertToPipelineInstruction(&preinsert.PreInsert{}, proc, ctx, 1)
+	require.NoError(t, err, "legacy PRE_INSERT stays wire-compatible")
+	_, _, err = convertToPipelineInstruction(&multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{}},
+	}, proc, ctx, 1)
+	require.NoError(t, err, "non-target-aware MULTI_UPDATE stays wire-compatible")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, _, err = convertToPipelineInstruction(selectorPreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	_, _, err = convertToPipelineInstruction(targetAwareMultiUpdate, proc, ctx, 1)
+	require.NoError(t, err)
+	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 13")
+	affectedRowsPipeline := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.MultiUpdate),
+			MultiUpdate: &pipeline.MultiUpdate{
+				UpdateCtxList: []*planpb.UpdateCtx{{
+					AffectedRowsCols: []planpb.ColRef{{ColPos: 9}, {ColPos: 10}},
+				}},
+			},
+		}},
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 13")
+	combinedPipeline := &pipeline.Pipeline{
+		InstructionList: append(targetAwarePipeline.Children[0].InstructionList, affectedRowsPipeline.InstructionList...),
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline),
+		"requires MORPC protocol version 13",
+		"a preceding v12-compatible operator must not hide a later v13 field")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline))
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline))
+
+	unique := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{UpdateIgnoreArbitration: true}}
+	arbitrationPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{{
+		PreInsertUnique: &pipeline.PreInsertUnique{PreInsertUkCtx: &planpb.PreInsertUkCtx{UpdateIgnoreArbitration: true}},
+	}}}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, _, err = convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 13")
+	require.ErrorContains(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, arbitrationPipeline), "requires MORPC protocol version 13")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	_, _, err = convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, arbitrationPipeline))
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
@@ -632,8 +763,17 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		root:   &scopeContext{},
 		parent: &scopeContext{},
 	}
-	proc := &process.Process{}
-	proc.Base = &process.BaseProcess{}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
 
 	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
 		probeType := &planpb.Type{
@@ -877,12 +1017,15 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
-					TableDef:       &plan.TableDef{Name: "t1"},
-					InsertCols:     []int{0, 1, 2},
-					DeleteCols:     []int{3, 4},
-					PartitionCols:  []int{5, 6},
-					InsertPkColIdx: 1,
+					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
+					TableDef:           &plan.TableDef{Name: "t1"},
+					InsertCols:         []int{0, 1, 2},
+					DeleteCols:         []int{3, 4, 8},
+					PartitionCols:      []int{5, 6},
+					InsertPkColIdx:     1,
+					DedupByTargetRowID: true,
+					TargetUpdateCtxIdx: 0,
+					AffectedRowsCols:   []int{9, 10},
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -896,8 +1039,11 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
-		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, []int{3, 4, 8}, restoredOp.MultiUpdateCtx[0].DeleteCols)
 		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
+		require.True(t, restoredOp.MultiUpdateCtx[0].DedupByTargetRowID)
+		require.Equal(t, 0, restoredOp.MultiUpdateCtx[0].TargetUpdateCtxIdx)
+		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
@@ -957,11 +1103,21 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restored.(*multi_update.MultiUpdate).RejectZeroTemporal)
 	})
 
-	t.Run("PreInsert_RejectZeroTemporal", func(t *testing.T) {
-		op := &preinsert.PreInsert{RejectZeroTemporal: true}
+	t.Run("PreInsert_State", func(t *testing.T) {
+		op := &preinsert.PreInsert{
+			RejectZeroTemporal: true,
+			HasTargetSelector:  true,
+			TargetRowNumberCol: 7,
+			TargetActiveCol:    8,
+			TargetRowIDCol:     9,
+		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
+		require.True(t, pipeInstr.PreInsert.HasTargetSelector)
+		require.Equal(t, int32(7), pipeInstr.PreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(8), pipeInstr.PreInsert.TargetActiveCol)
+		require.Equal(t, int32(9), pipeInstr.PreInsert.TargetRowIdCol)
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -971,7 +1127,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
-		require.True(t, restored.(*preinsert.PreInsert).RejectZeroTemporal)
+		restoredPreInsert := restored.(*preinsert.PreInsert)
+		require.True(t, restoredPreInsert.RejectZeroTemporal)
+		require.True(t, restoredPreInsert.HasTargetSelector)
+		require.Equal(t, int32(7), restoredPreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(8), restoredPreInsert.TargetActiveCol)
+		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {

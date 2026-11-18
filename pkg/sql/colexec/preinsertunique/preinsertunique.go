@@ -51,6 +51,9 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
+	if preInsertUnique.PreInsertCtx != nil && preInsertUnique.PreInsertCtx.UpdateIgnoreArbitration {
+		return preInsertUnique.prepareUpdateIgnore(proc)
+	}
 	return nil
 }
 
@@ -91,6 +94,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
+	}
+	if preInsertUnique.PreInsertCtx != nil && preInsertUnique.PreInsertCtx.UpdateIgnoreArbitration {
+		return preInsertUnique.callUpdateIgnore(proc, result)
 	}
 	inputBat := result.Batch
 	var bitMap *nulls.Nulls

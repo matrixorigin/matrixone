@@ -27,11 +27,63 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+func TestBuildIrregularUpdateTargetProjectionUsesTargetLocalLayout(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: 1}},
+			{Name: "body", Typ: planpb.Type{Id: 2}},
+			{Name: catalog.Row_ID, Typ: planpb.Type{Id: 3}},
+		},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "body": 1, catalog.Row_ID: 2},
+	}
+	finalProjList := make([]*planpb.Expr, 7)
+	for i := range finalProjList {
+		finalProjList[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(i + 10)}}
+	}
+	finalColName2Idx := map[string]int32{
+		"f.id":                3,
+		"f.body":              4,
+		"f." + catalog.Row_ID: 5,
+	}
+
+	projectList, deletePkPos := buildIrregularUpdateTargetProjection(
+		"f", tableDef, 99, finalProjList, finalColName2Idx, 6)
+	require.Len(t, projectList, 4)
+	require.Equal(t, int32(3), deletePkPos)
+	for localPos, globalPos := range []int32{3, 4, 5, 6} {
+		col := projectList[localPos].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, int32(99), col.RelPos)
+		require.Equal(t, globalPos, col.ColPos)
+	}
+
+	projectList, deletePkPos = buildIrregularUpdateTargetProjection(
+		"f", tableDef, 99, finalProjList, finalColName2Idx, 3)
+	require.Len(t, projectList, 3)
+	require.Equal(t, int32(0), deletePkPos)
+}
+
+func TestUpdateTargetScanProtectionSurvivesSpecialGuardSuspension(t *testing.T) {
+	builder := &QueryBuilder{
+		protectedScans:    map[int32]int{7: 1},
+		updateTargetScans: map[int32]struct{}{8: {}},
+	}
+	require.True(t, builder.isScanProtected(7))
+	require.True(t, builder.isScanProtected(8))
+
+	restore := builder.suspendScanProtection(8)
+	require.True(t, builder.isScanProtected(8))
+	restore()
+	require.True(t, builder.isScanProtected(8))
+}
 
 func TestClassifyUpdatePlannerError(t *testing.T) {
 	ctx := context.Background()
@@ -175,11 +227,16 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 		wantRoute  updatePlannerRoute
 		wantReason updatePlannerRouteReason
 	}{
+		{name: "distinct targets retain 4.2 planner", sql: "UPDATE emp, dept SET emp.sal = 1, dept.loc = 'x'", wantRoute: updatePlannerLegacy, wantReason: updateRouteReasonMultiTarget},
+		{name: "single writable joined target retains 4.2 planner", sql: "UPDATE nation a JOIN nation b ON a.n_nationkey=b.n_nationkey SET a.n_name='x'", wantRoute: updatePlannerLegacy, wantReason: updateRouteReasonMultiTarget},
 		{
-			name:       "multi target",
-			sql:        "UPDATE emp, dept SET emp.sal = 1, dept.loc = 'x'",
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonMultiTarget,
+			name: "foreign key metadata",
+			sql:  "UPDATE nation SET n_name = 'x'",
+			prepare: func(mock *MockOptimizer) {
+				mock.ctxt.tables["nation"].Fkeys = []*planpb.ForeignKeyDef{{Name: "fk"}}
+			},
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
 			name: "irregular index column",
@@ -194,6 +251,13 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 					TableExist:         true,
 				}}
 			},
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
+		},
+		{
+			name: "repeated writable aliases use modern planner",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_name = 'a', b.n_comment = 'b'",
 			wantRoute:  updatePlannerModern,
 			wantReason: updateRouteReasonNone,
 		},
@@ -357,6 +421,71 @@ func TestUpdateWithoutIrregularIndexKeepsLockAtDMLInput(t *testing.T) {
 	require.Equal(t, baseTable.TblId, lockNode.LockTargets[0].TableId)
 }
 
+func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
+	bindDirect := func(t *testing.T, mock *MockOptimizer, sql string) error {
+		t.Helper()
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		return err
+	}
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		require.ErrorContains(t, err, "overlapping update paths for table 'emp'")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	}
+
+	for _, action := range []planpb.ForeignKeyDef_RefAction{
+		planpb.ForeignKeyDef_CASCADE,
+		planpb.ForeignKeyDef_SET_NULL,
+	} {
+		t.Run(action.String()+" overlaps explicit child target", func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockEmpDeptForeignKeyAction(
+				t, mock, planpb.ForeignKeyDef_RESTRICT, action)
+			err := bindDirect(
+				t,
+				mock,
+				"UPDATE dept d JOIN emp e ON d.deptno=e.deptno JOIN emp e2 ON e.empno=e2.empno "+
+					"SET d.deptno=2,e.sal=5,e2.sal=6",
+			)
+			assertRejected(t, err)
+		})
+	}
+
+	t.Run("two parent targets cascade to one child", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(
+			t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
+
+		emp := mock.ctxt.tables["emp"]
+		nation := mock.ctxt.tables["nation"]
+		require.NotNil(t, emp)
+		require.NotNil(t, nation)
+		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
+			Name:        "fk_emp_nation",
+			Cols:        []uint64{emp.Cols[5].ColId},
+			ForeignTbl:  nation.TblId,
+			ForeignCols: []uint64{nation.Cols[0].ColId},
+			OnUpdate:    planpb.ForeignKeyDef_CASCADE,
+		})
+		nation.RefChildTbls = []uint64{emp.TblId}
+
+		err := bindDirect(
+			t,
+			mock,
+			"UPDATE dept d JOIN nation n ON d.deptno=n.n_nationkey JOIN nation n2 ON n.n_nationkey=n2.n_nationkey "+
+				"SET d.deptno=2,n.n_nationkey=3,n2.n_name='x'",
+		)
+		assertRejected(t, err)
+	})
+}
+
 func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	prepareEmpDept := func(mock *MockOptimizer) {
 		emp := mock.ctxt.tables["emp"]
@@ -464,7 +593,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		))
 	})
 
-	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
+	t.Run("auto increment child key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
@@ -485,10 +614,9 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		require.NoError(t, err)
+		require.Equal(t, 1, countUpdateFkPlanNodes(builder.qry, planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkAsserts(builder.qry))
 	})
 
 	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
@@ -514,6 +642,38 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
 		require.Equal(t, 0, countUpdateFkMarkJoins(query))
+	})
+
+	t.Run("multi target auto increment child key stays modern", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		logicPlan, err := runOneStmt(mock, t,
+			"UPDATE emp a JOIN emp b ON a.empno=b.empno JOIN dept d ON a.deptno=d.deptno "+
+				"SET a.deptno=DEFAULT,b.sal=5,d.loc='changed'")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		var preInsert *planpb.Node
+		for _, node := range query.Nodes {
+			if node.NodeType == planpb.Node_PRE_INSERT {
+				preInsert = node
+				break
+			}
+		}
+		require.NotNil(t, preInsert)
+		require.True(t, preInsert.PreInsertCtx.HasTargetSelector)
+		require.Len(t, preInsert.Children, 1)
+		inputCols := int32(len(query.Nodes[preInsert.Children[0]].ProjectList))
+		require.Less(t, preInsert.PreInsertCtx.TargetRowNumberCol, inputCols)
+		require.Less(t, preInsert.PreInsertCtx.TargetActiveCol, inputCols)
+		require.Less(t, preInsert.PreInsertCtx.TargetRowIdCol, inputCols)
 	})
 
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
@@ -1038,10 +1198,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		return -1
 	}
 
-	t.Run("child generated key uses legacy final row validation", func(t *testing.T) {
+	t.Run("child generated key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
-		mock.ctxt.tables["emp"].Cols[7].Typ.AutoIncr = true
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
 		stmt, err := parsers.ParseOne(
 			mock.CurrentContext().GetContext(),
 			dialect.MYSQL,
@@ -1051,15 +1215,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "auto_increment foreign key update")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		query := bindDirect(t, mock, "UPDATE emp SET deptno = DEFAULT")
+		preInsertPos := firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		})
+		require.NotEqual(t, -1, preInsertPos)
 	})
 
-	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {
+	t.Run("parent action on generated key uses modern planner", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		mock.ctxt.tables["dept"].Cols[0].Typ.AutoIncr = true
@@ -1073,12 +1236,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "auto-increment referenced key")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		query := bindDirect(t, mock, "UPDATE dept SET deptno = DEFAULT")
+		require.NotNil(t, query)
+		require.NotEqual(t, -1, firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		}))
+		require.NotEqual(t, -1, firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_MULTI_UPDATE
+		}))
 	})
 
 	t.Run("disabled checks preserve pre-insert input schema", func(t *testing.T) {
@@ -1097,6 +1262,174 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 			return node.NodeType == planpb.Node_PRE_INSERT
 		}))
 	})
+}
+
+func TestBindUpdateSupportsMultipleAutoIncrementTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for tableName, colName := range map[string]string{"nation": "n_regionkey", "nation2": "r_regionkey"} {
+		for _, col := range mock.ctxt.tables[tableName].Cols {
+			if col.Name == colName {
+				col.Typ.AutoIncr = true
+				break
+			}
+		}
+	}
+	queryPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey=b.n_nationkey JOIN nation2 n2 ON a.n_nationkey=n2.n_nationkey "+
+			"SET a.n_regionkey=DEFAULT,b.n_name='x',n2.r_regionkey=DEFAULT",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan.GetQuery())
+	preInsertCount := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT {
+			preInsertCount++
+			require.True(t, node.PreInsertCtx.HasTargetSelector)
+		}
+	}
+	require.Equal(t, 2, preInsertCount)
+}
+
+func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_nationkey = a.n_nationkey + 1, b.n_name = 'b'",
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Primary key/partition key update is not allowed")
+	moErr := err.(*moerr.Error)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
+	require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
+	require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+}
+
+func TestRepeatedPhysicalTargetGeneratedProtectedKeyGuard(t *testing.T) {
+	assignment := tree.NewDefaultVal(nil)
+	for _, tc := range []struct {
+		name              string
+		first, second     []string
+		configure         func(*planpb.TableDef)
+		conflict, invalid bool
+	}{
+		{name: "transitive primary", first: []string{"source"}, second: []string{"other"}, conflict: true},
+		{name: "source on second alias", first: []string{"other"}, second: []string{"source"}, conflict: true},
+		{name: "composite primary", first: []string{"source"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Pkey.Names = []string{"tail", "late_generated"} }, conflict: true},
+		{name: "unrelated payload", first: []string{"other"}, second: []string{"other"}},
+		{name: "read only sibling", first: []string{"source"}},
+		{name: "generated DEFAULT sibling is not a writer", first: []string{"source"}, second: []string{"middle"}},
+		{name: "generated DEFAULT alongside payload", first: []string{"source"}, second: []string{"middle", "other"}, conflict: true},
+		{name: "automatic generated input", first: []string{"other"}, second: []string{"other"}, configure: func(d *planpb.TableDef) {
+			d.Cols[0].OnUpdate = &planpb.OnUpdate{Expr: MakePlan2Int64ConstExprWithType(1)}
+		}, conflict: true},
+		{name: "nil automatic expression", first: []string{"other"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Cols[0].OnUpdate = &planpb.OnUpdate{} }},
+		{name: "automatic protected root", first: []string{"source"}, second: []string{"late_source"}, configure: func(d *planpb.TableDef) {
+			d.Pkey.Names = []string{"other"}
+			d.Cols[5].OnUpdate = &planpb.OnUpdate{Expr: MakePlan2Int64ConstExprWithType(1)}
+		}, conflict: true},
+		{name: "generated partition root", first: []string{"source"}, second: []string{"late_source"}, configure: func(d *planpb.TableDef) {
+			d.Pkey = nil
+			d.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: generatedColumnRefExpr(d.Cols[2].Typ, 2, "tail")}}}
+		}, conflict: true},
+		{name: "malformed generated metadata", first: []string{"source"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Cols[2].GeneratedCol.Expr.GetCol().ColPos = 99 }, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := generatedDependencyTestTable()
+			d.TblId = 32827
+			d.Pkey = &planpb.PrimaryKeyDef{Names: []string{"tail"}, PkeyColName: "tail"}
+			if tc.configure != nil {
+				tc.configure(d)
+			}
+			updates := []map[string]tree.Expr{make(map[string]tree.Expr), make(map[string]tree.Expr)}
+			for i, names := range [][]string{tc.first, tc.second} {
+				for _, name := range names {
+					updates[i][name] = assignment
+				}
+			}
+			ctx := &DMLContext{aliases: []string{"a", "b"}, tableDefs: []*planpb.TableDef{d, d}, updateCol2Expr: updates}
+			err := validateRepeatedPhysicalTargetPrimaryKeyUpdate(context.Background(), ctx)
+			if tc.conflict {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict), "%v", err)
+				moErr := err.(*moerr.Error)
+				require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
+				require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+				require.ErrorContains(t, err, "'a' and 'b'")
+			} else if tc.invalid {
+				require.ErrorContains(t, err, "invalid generated column reference position 99")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, ctx.updateCol2Expr[0], len(tc.first), "the guard must not consume assignments")
+			require.Len(t, ctx.updateCol2Expr[1], len(tc.second))
+		})
+	}
+}
+
+func TestRepeatedPhysicalTargetGeneratedPrimaryKeyPlanning(t *testing.T) {
+	for _, keyword := range []string{"UPDATE", "UPDATE IGNORE"} {
+		t.Run(keyword, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			configureMockGeneratedPrimaryKey(t, mock)
+			_, err := runOneStmt(mock, t, keyword+" constraint_test.t_on_update_gen a JOIN constraint_test.t_on_update_gen b ON a.id=b.id SET a.val=2,b.updated_at=NULL")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict), "%v", err)
+		})
+	}
+}
+
+func TestRepeatedPhysicalTargetPartitionKeyUpdateIsRejected(t *testing.T) {
+	partitionExpr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{
+		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "n_name", ColPos: 1}}},
+		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "n_regionkey", ColPos: 2}}},
+	}}}}
+
+	for _, test := range []struct {
+		name      string
+		sql       string
+		wantError bool
+	}{
+		{
+			name: "first partition expression column",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_name = 'a', b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "second non-primary partition expression column",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_regionkey = 11, b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "update ignore cannot bypass partition key check",
+			sql: "UPDATE IGNORE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_regionkey = 11, b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "unrelated columns remain legal",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_comment = 'a', b.n_comment = 'b'",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["nation"]
+			tableDef.FeatureFlag |= features.Partitioned
+			tableDef.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: partitionExpr}}}
+
+			_, err := runOneStmt(mock, t, test.sql)
+			if test.wantError {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {

@@ -15,7 +15,11 @@
 package preinsertunique
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -28,7 +32,8 @@ import (
 var _ vm.Operator = new(PreInsertUnique)
 
 type container struct {
-	buf *batch.Batch
+	buf              *batch.Batch
+	updateIgnoreKeys []updateIgnoreKeyState
 }
 type PreInsertUnique struct {
 	ctr          container
@@ -36,7 +41,72 @@ type PreInsertUnique struct {
 
 	packers util.PackerList
 
+	allocationAccount  *mpool.AllocationAccount
+	hashAllocation     *hashtable.AllocationAccountSelection
+	vectorAllocation   *vector.AllocationAccountSelection
+	iteratorAllocation *hashmap.IteratorAllocation
+
 	vm.OperatorBase
+}
+
+const updateIgnoreAllocationOwner mpool.AllocationOwner = 1
+
+const (
+	updateIgnoreHashCell mpool.AllocationSite = iota + 1
+	updateIgnoreHashDescriptor
+	updateIgnoreVectorData
+	updateIgnoreVectorArea
+	updateIgnoreVectorNulls
+	updateIgnoreVectorGrouping
+	updateIgnoreIteratorScratch
+)
+
+// Only the ordered UPDATE IGNORE mode retains state across input batches.
+func (preInsertUnique *PreInsertUnique) ActivatesAllocationAccountLifecycle() bool {
+	return preInsertUnique != nil && preInsertUnique.PreInsertCtx != nil && preInsertUnique.PreInsertCtx.UpdateIgnoreArbitration
+}
+
+func (preInsertUnique *PreInsertUnique) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if preInsertUnique == nil || account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if preInsertUnique.allocationAccount != nil {
+		if preInsertUnique.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(preInsertUnique.ctr.updateIgnoreKeys) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashAllocation, err := hashtable.NewAllocationAccountSelection(account, updateIgnoreAllocationOwner, updateIgnoreHashCell, updateIgnoreHashDescriptor)
+	if err != nil {
+		return err
+	}
+	vectorAllocation, err := vector.NewAllocationAccountSelection(account, updateIgnoreAllocationOwner, updateIgnoreVectorData, updateIgnoreVectorArea, updateIgnoreVectorNulls, updateIgnoreVectorGrouping)
+	if err != nil {
+		return err
+	}
+	iteratorAllocation, err := hashmap.NewIteratorAllocation(account, updateIgnoreAllocationOwner, updateIgnoreIteratorScratch)
+	if err != nil {
+		return err
+	}
+	preInsertUnique.allocationAccount, preInsertUnique.hashAllocation, preInsertUnique.vectorAllocation, preInsertUnique.iteratorAllocation = account, hashAllocation, vectorAllocation, iteratorAllocation
+	return nil
+}
+
+func (preInsertUnique *PreInsertUnique) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if preInsertUnique == nil || preInsertUnique.allocationAccount == nil {
+		return nil
+	}
+	if preInsertUnique.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(preInsertUnique.ctr.updateIgnoreKeys) != 0 || (preInsertUnique.ActivatesAllocationAccountLifecycle() && preInsertUnique.ctr.buf != nil) {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	preInsertUnique.allocationAccount, preInsertUnique.hashAllocation, preInsertUnique.vectorAllocation, preInsertUnique.iteratorAllocation = nil, nil, nil, nil
+	return nil
 }
 
 func (preInsertUnique *PreInsertUnique) GetOperatorBase() *vm.OperatorBase {
@@ -71,8 +141,14 @@ func (preInsertUnique *PreInsertUnique) Release() {
 }
 
 func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	preInsertUnique.freeUpdateIgnore(proc)
 	if preInsertUnique.ctr.buf != nil {
-		preInsertUnique.ctr.buf.CleanOnlyData()
+		if preInsertUnique.ActivatesAllocationAccountLifecycle() {
+			preInsertUnique.ctr.buf.Clean(proc.Mp())
+			preInsertUnique.ctr.buf = nil
+		} else {
+			preInsertUnique.ctr.buf.CleanOnlyData()
+		}
 	}
 	if preInsertUnique.packers.PackerCount() > 10 {
 		preInsertUnique.packers.Free()
@@ -80,6 +156,7 @@ func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFai
 }
 
 func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
+	preInsertUnique.freeUpdateIgnore(proc)
 	if preInsertUnique.ctr.buf != nil {
 		preInsertUnique.ctr.buf.Clean(proc.Mp())
 		preInsertUnique.ctr.buf = nil

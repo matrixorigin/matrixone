@@ -46,6 +46,8 @@ type PipelineEdge struct {
 	// --- terminal state ---
 	done chan struct{}
 	abrt chan struct{}
+	// A coalesced hint that a receiver removed a signal. Ch2 remains authoritative.
+	capacityNotify chan struct{}
 
 	initOnce sync.Once
 
@@ -177,6 +179,7 @@ func (signal *PipelineSignal) release() {
 func (e *PipelineEdge) resetTerminalStateLocked() {
 	e.done = make(chan struct{})
 	e.abrt = make(chan struct{})
+	e.capacityNotify = make(chan struct{}, 1)
 	e.initOnce = sync.Once{}
 	e.terminalErr = nil
 	e.fatalSignal = PipelineSignal{}
@@ -312,6 +315,9 @@ func (e *PipelineEdge) initTerminalState() {
 		}
 		if e.abrt == nil {
 			e.abrt = make(chan struct{})
+		}
+		if e.capacityNotify == nil {
+			e.capacityNotify = make(chan struct{}, 1)
 		}
 	})
 }
@@ -555,4 +561,14 @@ func (e *PipelineEdge) ChannelState() (int, int) {
 		return 0, 0
 	}
 	return len(e.Ch2), cap(e.Ch2)
+}
+
+// notifyCapacity wakes a capacity waiter after a receive. The bounded hint can
+// be stale or coalesced; waiters always recheck Ch2.
+func (e *PipelineEdge) notifyCapacity() {
+	e.initTerminalState()
+	select {
+	case e.capacityNotify <- struct{}{}:
+	default:
+	}
 }

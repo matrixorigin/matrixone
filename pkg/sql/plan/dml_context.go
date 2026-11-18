@@ -29,8 +29,9 @@ type DMLContext struct {
 	aliases              []string
 	isClusterTable       []bool
 
-	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
-	updatePartCol  []bool                 //If update cols contains col that Partition expr used
+	updateCol2Expr    []map[string]tree.Expr // This slice index correspond to tableDefs
+	updateTargetOrder []int                  // writable aliases in table-list order
+	updatePartCol     []bool                 //If update cols contains col that Partition expr used
 	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	//newColPosMap   []map[string]int       // insert/update values to their position in derived table
 	//nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
@@ -47,6 +48,7 @@ func NewDMLContext() *DMLContext {
 }
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
+	dmlCtx.updateTargetOrder = nil
 	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred)
 	if err != nil {
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
@@ -115,22 +117,60 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 	}
 
-	if len(usedTbl) > 1 {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
-		)
-	}
-
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
 	}
+	dmlCtx.collectUpdateTargetOrder(stmt.Tables)
 
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
 
 	return nil
+}
+
+func (dmlCtx *DMLContext) collectUpdateTargetOrder(tableExprs tree.TableExprs) {
+	var collect func(tree.TableExpr)
+	collect = func(tableExpr tree.TableExpr) {
+		for {
+			switch tbl := tableExpr.(type) {
+			case *tree.ParenTableExpr:
+				tableExpr = tbl.Expr
+				continue
+			case *tree.AliasedTableExpr:
+				if alias := string(tbl.As.Alias); alias != "" {
+					if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+						dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+					}
+					return
+				}
+				tableExpr = tbl.Expr
+				continue
+			case *tree.JoinTableExpr:
+				if tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+					collect(tbl.Right)
+					collect(tbl.Left)
+				} else {
+					collect(tbl.Left)
+					if tbl.Right != nil {
+						collect(tbl.Right)
+					}
+				}
+				return
+			case *tree.TableName:
+				alias := string(tbl.ObjectName)
+				if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+					dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+				}
+				return
+			default:
+				return
+			}
+		}
+	}
+	for _, tableExpr := range tableExprs {
+		collect(tableExpr)
+	}
 }
 
 type foreignKeyResolvePolicy uint8
@@ -289,17 +329,27 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		}
 	}
 
-	//if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-	//	dmlCtx.needAggFilter = true
-	//	err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, dmlCtx, aliasMap, withMap)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if joinTbl.Right != nil {
-	//		return setTableExprToDmlTableInfo(ctx, joinTbl.Right, dmlCtx, aliasMap, withMap)
-	//	}
-	//	return nil
-	//}
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok && foreignKeyPolicy == foreignKeyResolveDeferred {
+		if err := dmlCtx.resolveSingleTable(
+			ctx,
+			joinTbl.Left,
+			aliasMap,
+			withMap,
+			foreignKeyPolicy,
+		); err != nil {
+			return err
+		}
+		if joinTbl.Right != nil {
+			return dmlCtx.resolveSingleTable(
+				ctx,
+				joinTbl.Right,
+				aliasMap,
+				withMap,
+				foreignKeyPolicy,
+			)
+		}
+		return nil
+	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		dbName = string(baseTbl.SchemaName)

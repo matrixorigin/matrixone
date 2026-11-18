@@ -282,7 +282,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				}
 			}
 		}
-		idx = planCtx.updateColLength + len(tableDef.Cols)
+		idx += planCtx.updateColLength + len(tableDef.Cols)
 	}
 	return nil
 }

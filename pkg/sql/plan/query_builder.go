@@ -2490,6 +2490,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_FILTER:
+		if node.FilterIsBarrier {
+			node.ProjectList = nil
+		}
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -2553,7 +2556,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				ref := [2]int32{tag, int32(i)}
+				if colRefCnt[ref] == 0 {
+					colRefCnt[ref] = 1
+				}
 			}
 		}
 
@@ -2977,6 +2983,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+
+			for _, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3006,6 +3016,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for i, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.AffectedRowsCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -3048,7 +3066,182 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_PRE_INSERT_UK:
+		ctx := node.PreInsertUkCtx
+		if ctx == nil || !ctx.UpdateIgnoreArbitration || len(node.BindingTags) != 1 || len(node.Children) != 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid UPDATE IGNORE arbitration plan")
+		}
+		child := builder.qry.Nodes[node.Children[0]]
+		if len(child.BindingTags) != 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid UPDATE IGNORE arbitration input")
+		}
+		childTag, outputTag := child.BindingTags[0], node.BindingTags[0]
+		refs := make([][2]int32, 0, 1+len(ctx.UpdateOldKeys)+len(ctx.UpdateNewKeys)+len(ctx.UpdateInitialConflicts))
+		addRef := func(pos int32) {
+			ref := [2]int32{childTag, pos}
+			refs = append(refs, ref)
+			colRefCnt[ref]++
+		}
+		addRef(ctx.UpdateRowId)
+		for _, pos := range ctx.UpdateOldKeys {
+			addRef(pos)
+		}
+		for _, pos := range ctx.UpdateNewKeys {
+			addRef(pos)
+		}
+		for _, pos := range ctx.UpdateInitialConflicts {
+			addRef(pos)
+		}
+		for _, expr := range node.ProjectList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+		nextRef := 0
+		remapPosition := func() (int32, error) {
+			ref := refs[nextRef]
+			nextRef++
+			colRefCnt[ref]--
+			pos, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "missing UPDATE IGNORE arbitration input")
+			}
+			return pos[1], nil
+		}
+		if ctx.UpdateRowId, err = remapPosition(); err != nil {
+			return nil, err
+		}
+		for i := range ctx.UpdateOldKeys {
+			if ctx.UpdateOldKeys[i], err = remapPosition(); err != nil {
+				return nil, err
+			}
+		}
+		for i := range ctx.UpdateNewKeys {
+			if ctx.UpdateNewKeys[i], err = remapPosition(); err != nil {
+				return nil, err
+			}
+		}
+		for i := range ctx.UpdateInitialConflicts {
+			if ctx.UpdateInitialConflicts[i], err = remapPosition(); err != nil {
+				return nil, err
+			}
+		}
+		ctx.UpdateOutputs = make([]int32, len(node.ProjectList))
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		remapInfo.tip = "UpdateIgnoreArbitration"
+		for i, expr := range node.ProjectList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = i
+			if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+				return nil, err
+			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
+			col := expr.GetCol()
+			if col == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid UPDATE IGNORE arbitration output")
+			}
+			ctx.UpdateOutputs[i] = col.ColPos
+			remapping.addColRef([2]int32{outputTag, int32(i)})
+		}
+
 	case plan.Node_PRE_INSERT:
+		if node.PreInsertCtx.IsNewUpdate && len(node.BindingTags) == 1 && len(node.ProjectList) > 0 {
+			outputTag := node.BindingTags[0]
+			selectorPositions := [3]int32{-1, -1, -1}
+			if node.PreInsertCtx.HasTargetSelector {
+				selectorPositions = [3]int32{
+					node.PreInsertCtx.TargetRowNumberCol,
+					node.PreInsertCtx.TargetActiveCol,
+					node.PreInsertCtx.TargetRowIdCol,
+				}
+				for _, pos := range selectorPositions {
+					if pos < 0 || int(pos) >= len(node.ProjectList) {
+						return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+					}
+				}
+			}
+
+			// UPDATE PRE_INSERT uses ColOffset to mutate the target table's columns
+			// in place. Preserve the complete positional projection across a chain
+			// of AUTO_INCREMENT targets so pruning cannot move another target (or
+			// row_id) into that fixed slice.
+			neededOutputs := make([]int32, 0, len(node.ProjectList))
+			for pos, expr := range node.ProjectList {
+				neededOutputs = append(neededOutputs, int32(pos))
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+
+			childRemapping, err := builder.remapAllColRefs(
+				node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+			newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+			selectorOutputPos := [3]int32{-1, -1, -1}
+			remapInfo.tip = "PreInsertUpdateProjection"
+			for outputPos, needed := range neededOutputs {
+				expr := node.ProjectList[needed]
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = int(needed)
+				if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+				refreshExprNullabilityFromInputs(expr, childProjList)
+				remapping.addColRef([2]int32{outputTag, needed})
+				newProjectList = append(newProjectList, expr)
+				for selectorIdx, selectorPos := range selectorPositions {
+					if needed == selectorPos {
+						selectorOutputPos[selectorIdx] = int32(outputPos)
+					}
+				}
+			}
+			node.ProjectList = newProjectList
+			if node.PreInsertCtx.HasTargetSelector {
+				for _, pos := range selectorOutputPos {
+					if pos < 0 {
+						return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+					}
+				}
+				node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+				node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+				node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
+			}
+			break
+		}
+
+		var selectorRefs [3][2]int32
+		if node.PreInsertCtx.HasTargetSelector {
+			selectorInput := builder.qry.Nodes[node.Children[0]]
+			// Target-aware UPDATE can place pass-through ASSERT/FILTER nodes and
+			// another PRE_INSERT between this operator and the project that owns
+			// the selector columns. Walk through any single-child node without an
+			// output binding instead of assuming only nested PRE_INSERT can occur.
+			for len(selectorInput.BindingTags) == 0 {
+				if len(selectorInput.Children) != 1 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+				}
+				selectorInput = builder.qry.Nodes[selectorInput.Children[0]]
+			}
+			if len(selectorInput.BindingTags) == 0 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+			}
+			selectorProject := selectorInput.ProjectList
+			selectorPositions := []int32{
+				node.PreInsertCtx.TargetRowNumberCol,
+				node.PreInsertCtx.TargetActiveCol,
+				node.PreInsertCtx.TargetRowIdCol,
+			}
+			for i, pos := range selectorPositions {
+				if pos < 0 || int(pos) >= len(selectorProject) {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+				}
+				selectorRefs[i] = [2]int32{selectorInput.BindingTags[0], pos}
+				colRefCnt[selectorRefs[i]]++
+			}
+		}
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
 				increaseRefCnt(expr, 1, colRefCnt)
@@ -3060,9 +3253,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
+			}
+			if node.PreInsertCtx.HasTargetSelector {
+				for selectorIdx, selectorRef := range selectorRefs {
+					if globalRef == selectorRef {
+						selectorOutputPos[selectorIdx] = int32(len(node.ProjectList))
+					}
+				}
 			}
 
 			remapping.addColRef(globalRef)
@@ -3077,6 +3278,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+		if node.PreInsertCtx.HasTargetSelector {
+			for _, pos := range selectorOutputPos {
+				if pos < 0 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+				}
+			}
+			node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+			node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+			node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
 		}
 
 		if node.PreInsertCtx.CompPkeyExpr != nil {
@@ -3264,6 +3475,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		colMap := make(map[[2]int32]int)
 		colGroup := make([]int, 0)
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
@@ -10357,6 +10571,19 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+func (builder *QueryBuilder) checkPlanningCanceled() error {
+	ctx := builder.GetContext()
+	select {
+	case <-ctx.Done():
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // parseRankOption parses rank options from a map of option key-value pairs.

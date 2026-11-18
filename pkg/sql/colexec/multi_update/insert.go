@@ -141,9 +141,9 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
 		return err
 	}
-	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+	tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 	update.addInsertAffectRows(tableType, uint64(newRowCount))
-	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+	source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -200,7 +200,7 @@ func (update *MultiUpdate) insert_table(
 		return
 	}
 
-	info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+	info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 	writeBatch := insertBatch
 	if info.isContiguous {
 		if info.refBatch == nil {
@@ -341,9 +341,9 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	newRowCount := insertBatch.Vecs[0].Length()
 	if newRowCount > 0 {
 		insertBatch.SetRowCount(newRowCount)
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		update.addInsertAffectRows(tableType, uint64(newRowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+		source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)

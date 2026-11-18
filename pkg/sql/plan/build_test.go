@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -64,6 +65,21 @@ func setMockTxnMode(mock *MockOptimizer, mode txnpb.TxnMode) {
 type sqlModeMockCompilerContext struct {
 	*MockCompilerContext
 	sqlMode string
+}
+
+type cancelAfterGetContextCompilerContext struct {
+	CompilerContext
+	ctx       context.Context
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func (c *cancelAfterGetContextCompilerContext) GetContext() context.Context {
+	c.remaining--
+	if c.remaining == 0 {
+		c.cancel()
+	}
+	return c.ctx
 }
 
 func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -6708,4 +6724,257 @@ func TestSubqueryInJoinOn(t *testing.T) {
 	runTestShouldError(mock, t, []string{
 		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
 	})
+}
+func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"JOIN nation2 n2 ON n2.n_nationkey = a.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b', n2.n_name = 'n2'",
+	} {
+		mock := NewMockOptimizer(true)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		query := logicPlan.GetQuery()
+		var multiUpdate *plan.Node
+		mainContexts := 0
+		hasUnionAll := false
+		hasAggregate := false
+		for _, node := range query.Nodes {
+			switch node.NodeType {
+			case plan.Node_MULTI_UPDATE:
+				multiUpdate = node
+			case plan.Node_UNION_ALL:
+				hasUnionAll = true
+			case plan.Node_AGG:
+				hasAggregate = true
+			}
+		}
+
+		require.NotNil(t, multiUpdate)
+		require.True(t, hasUnionAll)
+		require.True(t, hasAggregate)
+		var tableID uint64
+		for _, updateCtx := range multiUpdate.UpdateCtxList {
+			if updateCtx.TableDef == nil || updateCtx.TableDef.Name != "nation" {
+				continue
+			}
+			mainContexts++
+			require.True(t, updateCtx.DedupByTargetRowId)
+			require.Len(t, updateCtx.AffectedRowsCols, 2)
+			if tableID == 0 {
+				tableID = updateCtx.TableDef.TblId
+			} else {
+				require.Equal(t, tableID, updateCtx.TableDef.TblId)
+			}
+		}
+		require.Equal(t, 1, mainContexts)
+		if strings.Contains(sql, "nation2") {
+			require.Len(t, multiUpdate.UpdateCtxList, 2)
+		}
+	}
+}
+
+func TestModernMultiTargetGeneratedColumns(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp a JOIN emp b ON a.empno=b.empno JOIN dept d ON a.deptno=d.deptno "+
+			"SET a.job=d.loc,b.job=d.loc,d.loc=a.job")
+	require.NoError(t, err)
+
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdates++
+		}
+	}
+	require.Equal(t, 1, multiUpdates)
+}
+
+func TestUpdateIgnoreChecksRepeatedPhysicalAliasesAtMergedCandidate(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "two aliases",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"SET a.dname = 'conflict', b.loc = 'safe'",
+		},
+		{
+			name: "conflict alias follows safe owner",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"SET a.loc = 'safe', b.dname = 'conflict'",
+		},
+		{
+			name: "three aliases",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"JOIN dept c ON b.deptno = c.deptno " +
+				"SET a.dname = 'conflict', b.loc = 'safe-b', c.loc = 'safe-c'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var arbitrationIDs []int32
+			for nodeID, node := range query.Nodes {
+				if node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx != nil && node.PreInsertUkCtx.UpdateIgnoreArbitration {
+					require.Len(t, node.PreInsertUkCtx.UpdateNewKeys, 1)
+					arbitrationIDs = append(arbitrationIDs, int32(nodeID))
+				}
+			}
+			require.Len(t, arbitrationIDs, 1, "only one alias in this fixture mutates the UNIQUE key")
+			arbitrationAfterMerge := false
+			for nodeID, node := range query.Nodes {
+				if node.NodeType == plan.Node_AGG && planNodeDependsOn(query, arbitrationIDs[0], int32(nodeID), make(map[int32]struct{})) {
+					arbitrationAfterMerge = true
+					break
+				}
+			}
+			require.True(t, arbitrationAfterMerge, "UNIQUE arbitration must consume the merged physical candidate source")
+		})
+	}
+}
+
+func TestUpdateIgnoreRecomputesGeneratedColumnsForRepeatedPhysicalCandidates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno "+
+			"SET a.loc = 'first', b.loc = 'second'")
+	require.NoError(t, err)
+
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdates++
+		}
+	}
+	require.Equal(t, 1, multiUpdates)
+}
+
+func buildRepeatedAliasUpdateSQL(aliasCount int) string {
+	var from strings.Builder
+	from.WriteString("nation a0")
+	for i := 1; i < aliasCount; i++ {
+		fmt.Fprintf(&from, " join nation a%d on a0.n_nationkey=a%d.n_nationkey", i, i)
+	}
+	assignments := make([]string, aliasCount)
+	for i := range assignments {
+		assignments[i] = fmt.Sprintf("a%d.n_comment='v%d'", i, i)
+	}
+	return "update ignore " + from.String() + " set " + strings.Join(assignments, ",")
+}
+
+func TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate(t *testing.T) {
+	const childEnv = "MO_UPDATE_IGNORE_ALIAS_STRESS_CHILD"
+	if os.Getenv(childEnv) == "" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0],
+			"-test.run=^TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate$",
+			"-test.count=1")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		return
+	}
+
+	for _, aliasCount := range []int{8, 16, 24} {
+		t.Run(fmt.Sprintf("%d aliases", aliasCount), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			logicPlan, err := runOneStmt(mock, t, buildRepeatedAliasUpdateSQL(aliasCount))
+			require.NoError(t, err)
+			aggregates := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG {
+					aggregates++
+				}
+			}
+			require.Equal(t, 1, aggregates,
+				"every greedy stage must reuse the same physical-row contribution aggregate")
+			require.Less(t, len(logicPlan.GetQuery().Nodes), 40*aliasCount,
+				"greedy candidate/fallback stages must remain linear in the alias count")
+		})
+	}
+}
+
+func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
+	const aliasCount = 24
+
+	t.Run("filter pushdown stops after in-flight cancellation", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(t.Context(), buildRepeatedAliasUpdateSQL(aliasCount), 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		mock := NewMockOptimizer(true)
+		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, bindErr)
+
+		cancelCtx, cancel := context.WithCancel(t.Context())
+		builder.compCtx = &cancelAfterGetContextCompilerContext{
+			CompilerContext: builder.compCtx,
+			ctx:             cancelCtx,
+			cancel:          cancel,
+			remaining:       8,
+		}
+		builder.pushdownFilters(rootID, nil, false)
+		require.ErrorIs(t, builder.checkPlanningCanceled(), context.Canceled)
+		require.NotEmpty(t, builder.optimizationHistory)
+	})
+
+	t.Run("create query returns cancellation", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(t.Context(), buildRepeatedAliasUpdateSQL(aliasCount), 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		mock := NewMockOptimizer(true)
+		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, bindErr)
+		builder.qry.Steps = append(builder.qry.Steps, rootID)
+
+		canceledCtx, cancel := context.WithCancel(t.Context())
+		cancel()
+		mock.ctxt.SetContext(canceledCtx)
+		_, createErr := builder.createQuery()
+		require.ErrorIs(t, createErr, context.Canceled)
+	})
+}
+
+func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited map[int32]struct{}) bool {
+	if nodeID == dependencyID {
+		return true
+	}
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	if _, ok := visited[nodeID]; ok {
+		return false
+	}
+	visited[nodeID] = struct{}{}
+	for _, childID := range query.Nodes[nodeID].Children {
+		if planNodeDependsOn(query, childID, dependencyID, visited) {
+			return true
+		}
+	}
+	for _, sourceStep := range query.Nodes[nodeID].SourceStep {
+		if sourceStep < 0 || int(sourceStep) >= len(query.Steps) {
+			continue
+		}
+		if planNodeDependsOn(query, query.Steps[sourceStep], dependencyID, visited) {
+			return true
+		}
+	}
+	return false
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1024,5 +1025,164 @@ func TestPipelineEdgeResetForReuseDrainsOldChannel(t *testing.T) {
 	// New channel should accept data.
 	if !edge.SendDataDirect(context.Background(), batch.EmptyBatch, mp) {
 		t.Fatal("new channel not usable after ResetForReuse")
+	}
+}
+
+func TestPipelineCapacityHintFollowsReceiveAndReuse(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	input := batch.NewWithSize(0)
+	input.SetRowCount(1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(input, nil, nil)
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != input {
+		t.Fatalf("receive: got %v, error %v", got, err)
+	}
+	receiver.releaseCurrent()
+	if len(edge.capacityNotify) != 1 {
+		t.Fatal("a receive must publish a capacity hint")
+	}
+	oldHint := edge.capacityNotify
+	edge.ResetForReuse(1, 1)
+	if edge.capacityNotify == oldHint || len(edge.capacityNotify) != 0 {
+		t.Fatal("a reused edge must not inherit the old generation's hint")
+	}
+}
+
+func TestPipelineCapacityMultipleProducersFinish(t *testing.T) {
+	const producers, perProducer = 4, 64
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	edge := NewPipelineEdge(1, 1)
+	receiver := InitPipelineSignalReceiver(ctx, []*WaitRegister{edge})
+	received := make(chan int, 1)
+	receiveErr := make(chan error, 1)
+	go func() {
+		count := 0
+		for {
+			b, err := receiver.GetNextBatch(nil)
+			if err != nil {
+				receiveErr <- err
+				return
+			}
+			if b == nil {
+				received <- count
+				return
+			}
+			count += b.RowCount()
+		}
+	}()
+	var wg sync.WaitGroup
+	failures := make(chan struct{}, producers)
+	for i := 0; i < producers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perProducer; j++ {
+				if !WaitPipelineSignalCapacity(ctx, edge) {
+					failures <- struct{}{}
+					return
+				}
+				b := batch.NewWithSize(0)
+				b.SetRowCount(1)
+				if !edge.SendDataDirect(ctx, b, nil) {
+					failures <- struct{}{}
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if len(failures) != 0 {
+		t.Fatalf("%d producers did not finish", len(failures))
+	}
+	if !edge.SendEnd() {
+		t.Fatal("could not finish the edge")
+	}
+	select {
+	case err := <-receiveErr:
+		t.Fatal(err)
+	case count := <-received:
+		if count != producers*perProducer {
+			t.Fatalf("received %d rows", count)
+		}
+	case <-ctx.Done():
+		t.Fatal("pipeline capacity wait did not terminate", ctx.Err())
+	}
+}
+
+func TestPipelineCapacityHintWakesWithoutPolling(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		edge := NewPipelineEdge(1, 1)
+		input := batch.NewWithSize(0)
+		input.SetRowCount(1)
+		edge.Ch2 <- NewPipelineSignalToDirectly(input, nil, nil)
+		receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan bool, 1)
+		go func() { result <- WaitPipelineSignalCapacity(ctx, edge) }()
+		synctest.Wait()
+		select {
+		case <-result:
+			t.Fatal("capacity wait finished while the queue was full")
+		default:
+		}
+		got, err := receiver.GetNextBatch(nil)
+		if err != nil || got != input {
+			t.Fatalf("receive: %v, %v", got, err)
+		}
+		synctest.Wait()
+		select {
+		case ok := <-result:
+			if !ok {
+				t.Fatal("capacity wait failed after a receive")
+			}
+		default:
+			t.Fatal("receive did not wake the capacity wait before the polling timer")
+		}
+		receiver.releaseCurrent()
+	})
+}
+
+func TestPipelineCapacityWaitStopsOnTerminalAndUnbufferedCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	unbuffered := &WaitRegister{Ch2: make(chan PipelineSignal)}
+	if WaitPipelineSignalCapacity(ctx, unbuffered) {
+		t.Fatal("an unbuffered edge must respect a canceled context")
+	}
+	for _, stop := range []string{"cancel", "abort"} {
+		t.Run(stop, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				edge := NewPipelineEdge(1, 1)
+				edge.Ch2 <- NewPipelineSignalToDirectly(batch.NewWithSize(0), nil, nil)
+				result := make(chan bool, 1)
+				go func() { result <- WaitPipelineSignalCapacity(ctx, edge) }()
+				synctest.Wait()
+				select {
+				case <-result:
+					t.Fatal("capacity wait finished while the queue was full")
+				default:
+				}
+				if stop == "cancel" {
+					cancel()
+				} else {
+					edge.Abort(moerr.NewInternalErrorNoCtx("stop capacity wait"))
+				}
+				<-edge.Ch2 // Also free capacity after signaling stop.
+				synctest.Wait()
+				select {
+				case ok := <-result:
+					if ok {
+						t.Fatal("a stopped capacity wait succeeded")
+					}
+				default:
+					t.Fatal("a stopped capacity wait did not finish")
+				}
+			})
+		})
 	}
 }

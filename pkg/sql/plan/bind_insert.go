@@ -410,20 +410,42 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 func (builder *QueryBuilder) appendResolvedIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	targetRowNumberPos, targetActivePos int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
 	deleteOld bool,
-) int32 {
+) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
+	maintStep := joinStep
+	if targetRowNumberPos >= 0 {
+		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+		selectedScan := builder.qry.Nodes[selectedScanID]
+		selected, err := builder.buildTargetSelectedExpr(
+			finalProjTag, selectedScan, targetRowNumberPos, targetActivePos)
+		if err != nil {
+			return 0, err
+		}
+		selectedID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+		}, bindCtx)
+		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
+		maintStep = builder.appendStep(selectedSinkID)
+	}
+
+	// Maintenance consumers are appended after createQuery; keep their source columns.
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[builder.qry.Steps[maintStep]] = struct{}{}
 
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
-	builder.irregularMaintSourceStep = joinStep
+	builder.irregularMaintSourceStep = maintStep
 	builder.irregularMaintDeleteStep = -1
 	if deleteOld {
-		builder.irregularMaintDeleteStep = joinStep
+		builder.irregularMaintDeleteStep = maintStep
 		builder.irregularMaintDeletePkPos = deletePkPos
 		builder.irregularMaintDeletePkTyp = deletePkTyp
 	}
@@ -431,19 +453,20 @@ func (builder *QueryBuilder) appendResolvedIrregularMaintSource(
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
-	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag), nil
 }
 
 // ODKU and REPLACE both remove stale entries before inserting the final image.
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	targetRowNumberPos, targetActivePos int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
-) int32 {
+) (int32, error) {
 	return builder.appendResolvedIrregularMaintSource(bindCtx, finalProjNodeID, finalProjTag,
-		deletePkPos, deletePkTyp, irregularIndexes, tableDef, objRef, true)
+		deletePkPos, deletePkTyp, targetRowNumberPos, targetActivePos, irregularIndexes, tableDef, objRef, true)
 }
 
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
@@ -875,10 +898,23 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
+	if len(builder.irregularUpdateMaints) > 0 {
+		for _, maint := range builder.irregularUpdateMaints {
+			builder.irregularMaintSourceStep = maint.sourceStep
+			builder.irregularMaintDeleteStep = maint.deleteStep
+			builder.irregularMaintDeletePkPos = maint.deletePkPos
+			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintTableDef = maint.tableDef
+			builder.irregularMaintObjRef = maint.objRef
+			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+				return err
+			}
+		}
+	} else if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -2740,9 +2776,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			lastNodeID = builder.appendResolvedIrregularMaintSource(
+			lastNodeID, err = builder.appendResolvedIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
-				irregularIndexes, tableDef, dmlCtx.objRefs[0], onDupAction == plan.Node_UPDATE)
+				-1, -1, irregularIndexes, tableDef, dmlCtx.objRefs[0], onDupAction == plan.Node_UPDATE)
+			if err != nil {
+				return 0, err
+			}
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
