@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -791,6 +793,23 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
+}
+
+func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
+	ctx := context.Background()
+	const base = "select a from db1.t1 where "
+	const left = `kind = '单据' and code in (select code from db1.codes where region in ('0001', '0010'))`
+	const right = `label = 'O''Brien\\west'`
+
+	merged, err := mergeRewriteRules(ctx, base+left, base+right)
+	require.NoError(t, err)
+	// Compare reparsed trees, not SQL spelling: another pair of quotes is fine,
+	// but changing a string into a number or changing its decoded value is not.
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"("+left+") or ("+right+")", 1)
+	require.NoError(t, err)
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
