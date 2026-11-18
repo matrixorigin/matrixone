@@ -24,6 +24,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -479,41 +480,29 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
-	tableIDs := containers.NewVectors(1)
-	_, release, _, err := ioutil.LoadColumnsData(
-		ctx, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
-		fs, location, tableIDs, mp, 0,
-	)
-	if err != nil {
-		return
-	}
-	defer release()
-
-	// Select while the fixed-width ID column is pinned; do not duplicate the
-	// global checkpoint's varlen metadata for each subscribing table.
-	ids := vector.MustFixedColNoTypeCheck[uint64](&tableIDs[0])
-	start := vector.OrderedFindFirstIndexInSortedSlice(tableID, ids)
-	if start == -1 {
-		return nil, nil, nil
-	}
-	end := start + 1
-	for end < len(ids) && ids[end] == tableID {
-		end++
-	}
-	sels := make([]int64, end-start)
-	for i := range sels {
-		sels[i] = int64(start + i)
-	}
-
 	metaBatch := ckputil.NewMetaBatch()
 	defer metaBatch.Clean(mp)
-	if _, _, err = ioutil.LoadColumnsDataInto(
+	// Read all columns in one IOVector so a cold cache does not fetch the
+	// checkpoint object twice. Only the selected rows become owned copies.
+	rows, err := ioutil.LoadColumnsDataByUint64Key(
 		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
-		metaBatch.Vecs, sels, nil, mp, 0,
-	); err != nil {
-		return
+		metaBatch.Vecs, tableID, mp, 0,
+	)
+	if err != nil || rows == 0 {
+		return nil, nil, err
 	}
-	metaBatch.SetRowCount(len(sels))
+	for _, vec := range metaBatch.Vecs {
+		if vec.IsConstNull() || vec.GetNulls().Any() {
+			return nil, nil, moerr.NewInvalidInput(ctx, "null checkpoint table range metadata")
+		}
+	}
+	stats := metaBatch.Vecs[ckputil.MetaAttr_ObjectStats_Idx]
+	for i := range rows {
+		if len(stats.GetBytesAt(i)) != objectio.ObjectStatsLen {
+			return nil, nil, moerr.NewInvalidInput(ctx, "invalid checkpoint object statistics length")
+		}
+	}
+	metaBatch.SetRowCount(rows)
 	dataRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Data)
 	tombstoneRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return

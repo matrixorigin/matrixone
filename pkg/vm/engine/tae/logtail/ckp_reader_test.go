@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -477,22 +478,30 @@ func makeCheckpointMetaFixture(
 	fs.SetAsyncUpdate(false)
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		fs.Close(ctx)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	return fs, writeCheckpointMeta(t, fs, mp, ranges), mp
+}
+
+func writeCheckpointMeta(
+	t testing.TB, fs fileservice.FileService, mp *mpool.MPool, ranges []ckputil.TableRange,
+) objectio.Location {
+	t.Helper()
+	ctx := context.Background()
 	bat := ckputil.NewMetaBatch()
 	defer bat.Clean(mp)
 	for i := range ranges {
 		require.NoError(t, ranges[i].AppendTo(bat, mp))
 	}
 	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
-	_, err = writer.WriteBatch(bat)
+	_, err := writer.WriteBatch(bat)
 	require.NoError(t, err)
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
-	return fs, stats.ObjectLocation(), mp
+	return stats.ObjectLocation()
 }
 
 func checkpointMetaRange(tableID uint64, objectType int8, ordinal int) ckputil.TableRange {
@@ -550,6 +559,42 @@ func TestReadMetaWithTableIDSelectedRanges(t *testing.T) {
 	}
 }
 
+func TestReadMetaWithTableIDColdMemoryCache(t *testing.T) {
+	ctx := t.Context()
+	capacity := toml.ByteSize(1 << 20)
+	fs, err := fileservice.NewS3FS(ctx,
+		fileservice.ObjectStorageArguments{Name: "checkpoints", Endpoint: "disk", Bucket: t.TempDir()},
+		fileservice.CacheConfig{MemoryCapacity: &capacity}, nil, false, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.SetAsyncUpdate(false)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	ranges := []ckputil.TableRange{
+		checkpointMetaRange(1, ckputil.ObjectType_Data, 0),
+		checkpointMetaRange(2, ckputil.ObjectType_Data, 1),
+		checkpointMetaRange(2, ckputil.ObjectType_Tombstone, 2),
+	}
+	loc := writeCheckpointMeta(t, fs, mp, ranges)
+	fs.FlushCache(ctx)
+	// Prime only the object header, which both the old and new readers need.
+	_, err = objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+	require.NoError(t, err)
+	var counters perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counters)
+
+	for _, mode := range []string{"cold", "warm"} {
+		data, tombstone, err := readMetaWithTableID(ctx, loc, 2, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, ranges[1:2], data)
+		require.Equal(t, ranges[2:], tombstone)
+		require.EqualValues(t, 1, counters.FileService.S3.Get.Load(), "%s backing-store reads", mode)
+	}
+}
+
 type checkpointMetaLease struct {
 	fscache.Data
 	releases *atomic.Int64
@@ -570,23 +615,17 @@ func (d *checkpointMetaLease) Release() {
 
 type checkpointMetaReadFS struct {
 	fileservice.FileService
-	failIDs, failSelected, corruptIDs, corruptSelected bool
-	failure                                            error
-	leases, releases                                   atomic.Int64
-	selectedReads                                      int
-	beforeSelectedRead                                 func()
+	failure          error
+	corruptColumn    *int
+	leases, releases atomic.Int64
+	afterRead        func()
 }
 
 func (fs *checkpointMetaReadFS) Read(ctx context.Context, v *fileservice.IOVector) error {
-	ids := len(v.Entries) == 1
-	selected := len(v.Entries) == len(ckputil.MetaSeqnums)
-	if selected {
-		fs.selectedReads++
-		if fs.beforeSelectedRead != nil {
-			fs.beforeSelectedRead()
-		}
+	if len(v.Entries) != len(ckputil.MetaSeqnums) {
+		return fs.FileService.Read(ctx, v)
 	}
-	if (ids && fs.failIDs) || (selected && fs.failSelected) {
+	if fs.failure != nil {
 		return fs.failure
 	}
 	if err := fs.FileService.Read(ctx, v); err != nil {
@@ -594,14 +633,16 @@ func (fs *checkpointMetaReadFS) Read(ctx context.Context, v *fileservice.IOVecto
 	}
 	for i := range v.Entries {
 		entry := &v.Entries[i]
-		corrupt := (ids && fs.corruptIDs) ||
-			(selected && fs.corruptSelected && i == len(v.Entries)-1)
-		if entry.CachedData != nil && (ids || corrupt) {
+		if entry.CachedData != nil {
 			fs.leases.Add(1)
 			entry.CachedData = &checkpointMetaLease{
-				Data: entry.CachedData, releases: &fs.releases, corrupt: corrupt,
+				Data: entry.CachedData, releases: &fs.releases,
+				corrupt: fs.corruptColumn != nil && i == *fs.corruptColumn,
 			}
 		}
+	}
+	if fs.afterRead != nil {
+		fs.afterRead()
 	}
 	return nil
 }
@@ -616,31 +657,29 @@ func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
 	require.NoError(t, err)
 	readErr := errors.New("checkpoint metadata read failure")
 	for _, test := range []struct {
-		name                                               string
-		failIDs, failSelected, corruptIDs, corruptSelected bool
+		name          string
+		corruptColumn int
+		wantErr       error
 	}{
-		{name: "ID read", failIDs: true},
-		{name: "selected read", failSelected: true},
-		{name: "ID decode", corruptIDs: true},
-		{name: "partial materialization", corruptSelected: true},
+		{"read", -1, readErr},
+		{"ID decode", ckputil.MetaAttr_Table_Idx, io.ErrUnexpectedEOF},
+		{"partial materialization", ckputil.MetaAttr_ObjectStats_Idx, io.ErrUnexpectedEOF},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			wrapped := &checkpointMetaReadFS{FileService: fs, failure: readErr,
-				failIDs: test.failIDs, failSelected: test.failSelected,
-				corruptIDs: test.corruptIDs, corruptSelected: test.corruptSelected}
-			data, tombstone, err := readMetaWithTableID(ctx, loc, 1, mp, wrapped)
-			if test.failIDs || test.failSelected {
-				require.ErrorIs(t, err, readErr)
+			wrapped := &checkpointMetaReadFS{FileService: fs}
+			if test.corruptColumn < 0 {
+				wrapped.failure = readErr
 			} else {
-				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+				wrapped.corruptColumn = &test.corruptColumn
 			}
+			data, tombstone, err := readMetaWithTableID(ctx, loc, 1, mp, wrapped)
+			require.ErrorIs(t, err, test.wantErr)
 			require.Nil(t, data)
 			require.Nil(t, tombstone)
 			require.Zero(t, mp.CurrNB())
 			require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
-			if test.failSelected || test.corruptSelected {
-				require.Positive(t, wrapped.leases.Load())
-				require.Equal(t, 1, wrapped.selectedReads)
+			if test.corruptColumn >= 0 {
+				require.EqualValues(t, len(ckputil.MetaSeqnums), wrapped.leases.Load())
 			}
 			// Injected failures must not poison the shared cached representation.
 			data, tombstone, err = readMetaWithTableID(ctx, loc, 1, mp, fs)
@@ -655,11 +694,11 @@ func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
 	_, _, err = readMetaWithTableID(canceled, loc, 1, mp, fs)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, mp.CurrNB())
-	t.Run("canceled with ID lease held", func(t *testing.T) {
+	t.Run("canceled with column leases held", func(t *testing.T) {
 		canceled, cancel := context.WithCancel(ctx)
 		defer cancel()
 		wrapped := &checkpointMetaReadFS{FileService: fs}
-		wrapped.beforeSelectedRead = func() {
+		wrapped.afterRead = func() {
 			require.Greater(t, wrapped.leases.Load(), wrapped.releases.Load())
 			cancel()
 		}
@@ -667,7 +706,6 @@ func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		require.Nil(t, data)
 		require.Nil(t, tombstone)
-		require.Equal(t, 1, wrapped.selectedReads)
 		require.Positive(t, wrapped.leases.Load())
 		require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
 		require.Zero(t, mp.CurrNB())
@@ -681,7 +719,7 @@ func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, data)
 	require.Nil(t, tombstone)
-	require.Zero(t, wrapped.selectedReads)
+	require.EqualValues(t, len(ckputil.MetaSeqnums), wrapped.leases.Load())
 	require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
 }
 
