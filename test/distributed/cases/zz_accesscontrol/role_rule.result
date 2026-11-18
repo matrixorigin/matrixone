@@ -471,14 +471,18 @@ select `2024` from db1.t_dup order by `2024`;
 10  𝄀
 20  𝄀
 30
-alter role test_rule_role_dup_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select _binary 'US' as tag from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
-alter role test_rule_role_expr_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 3" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select _binary 'tag' from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'tag' from db1.t_dup where convert(code using binary) = _binary 'O''Brien'" on table db1.t_dup;
+alter role test_rule_role_expr_projection_a add rule "select _binary 'tag' from db1.t_dup where marker = 3" on table db1.t_dup;
 set enable_remap_hint = 1;
+set secondary role none;
+select hex(tag), count(*) from db1.t_dup group by tag;
+➤ hex(tag)[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
+746167  ¦  1
 set secondary role all;
 select hex(tag), count(*) from db1.t_dup group by tag;
 ➤ hex(tag)[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
-5553  ¦  3
+746167  ¦  3
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;

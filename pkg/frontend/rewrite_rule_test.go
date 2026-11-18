@@ -827,6 +827,35 @@ func TestMergeRewriteRulesPreservesBinaryLiteralAcrossMerges(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestMergeRewriteRulesPreservesImplicitBinaryHeading(t *testing.T) {
+	ctx := context.Background()
+	const base = "select _binary 'n_name' from db1.t1 where a = "
+	merged, err := mergeRewriteRules(ctx, base+"1", base+"2")
+	require.NoError(t, err)
+	merged, err = mergeRewriteRules(ctx, merged, base+"3")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select 0x6e5f6e616d65 as n_name from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", 1)
+	require.NoError(t, err)
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestMergeRewriteRulesFoldsCharsetNames(t *testing.T) {
+	ctx := context.Background()
+	merged, err := mergeRewriteRules(ctx,
+		"select convert(code using BINARY) as code from db1.t1 where a = 1",
+		"select convert(code using binary) as code from db1.t1 where a = 2")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select convert(code using BINARY) as code from db1.t1 where (a = 1) or (a = 2)", 1)
+	require.NoError(t, err)
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 func TestMergedBinaryLiteralSurvivesRewriteHint(t *testing.T) {
 	ctx := context.Background()
 	for _, value := range []string{"\xff", "\xff\\", ""} {

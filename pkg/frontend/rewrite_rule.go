@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -419,10 +420,14 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 		return nil, false
 	}
 
+	// Compare the same headings that the merged rule will expose after reparse.
+	projection := preserveRewriteBinaryHeadings(clause.Exprs)
+	mergedClause := *clause
+	mergedClause.Exprs = projection
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
-		clause:     clause,
-		selectList: rewriteRuleProjectionKey(&clause.Exprs),
+		clause:     &mergedClause,
+		selectList: rewriteRuleProjectionKey(&projection),
 		table:      table,
 	}, true
 }
@@ -507,6 +512,37 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 			),
 		}
 	}
+}
+
+func preserveRewriteBinaryHeadings(exprs tree.SelectExprs) tree.SelectExprs {
+	var result tree.SelectExprs
+	for i, projection := range exprs {
+		if projection.As != nil && !projection.As.Empty() {
+			continue
+		}
+		expr := projection.Expr
+		for paren, ok := expr.(*tree.ParenExpr); ok; paren, ok = expr.(*tree.ParenExpr) {
+			expr = paren.Expr
+		}
+		literal, ok := expr.(*tree.NumVal)
+		if !ok || literal.ValType != tree.P_ScoreBinary {
+			continue
+		}
+		// Match the planner's implicit heading before hex encoding changes its spelling.
+		// A non-text heading cannot be carried as an identifier in the JSON hint.
+		heading := tree.String(literal, dialect.MYSQL)
+		if heading == "" || !utf8.ValidString(heading) || strings.Contains(heading, "*/") {
+			continue
+		}
+		if result == nil {
+			result = append(tree.SelectExprs(nil), exprs...)
+		}
+		result[i].As = tree.NewCStr(heading, 1)
+	}
+	if result != nil {
+		return result
+	}
+	return exprs
 }
 
 func formatRewriteRuleSQL(node tree.NodeFormatter, literals *[]tree.StringLiteralPosition) string {

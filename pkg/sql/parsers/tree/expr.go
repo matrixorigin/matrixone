@@ -1028,7 +1028,10 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 		if len(node.Exprs) == 2 {
 			node.Exprs[0].Format(ctx)
 			ctx.WriteString(" using ")
-			node.Exprs[1].Format(ctx)
+			// A charset name is case-insensitive syntax even when spelled as a string.
+			charsetCtx := *ctx
+			charsetCtx.literalPositions = nil
+			node.Exprs[1].Format(&charsetCtx)
 		} else {
 			node.Exprs.Format(ctx)
 		}
