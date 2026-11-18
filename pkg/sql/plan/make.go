@@ -695,6 +695,11 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
+		if isEnumPlanType(&expr.Typ) && expr.Typ.EnumEncoding != targetType.EnumEncoding {
+			result := *expr
+			result.Typ.Enumvalues, result.Typ.EnumEncoding = targetType.Enumvalues, targetType.EnumEncoding
+			return &result, nil
+		}
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
