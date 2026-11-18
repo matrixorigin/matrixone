@@ -61,7 +61,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-cpu-profile-producer.yaml@1d4f6b6f82fcbfac887f31ded3433e76ec1df121
+    uses: matrixorigin/CI/.github/workflows/node-cache-cpu-profile-producer.yaml@b1487cb82b7741794653e978f34dfec9886af76e
     with:
       node: ${{ inputs.coverage_comparison == 'mty-cpu-profile-n1' && 'mo-standard-1' || 'mo-standard-2' }}
     secrets:
