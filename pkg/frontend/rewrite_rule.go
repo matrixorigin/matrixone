@@ -336,7 +336,12 @@ type rewriteRuleMergeShape struct {
 	stmt       *tree.Select
 	clause     *tree.SelectClause
 	selectList string
-	table      string
+	table      rewriteRuleSource
+}
+
+// Keep each identifier separate: a quoted name can itself contain dots or AS.
+type rewriteRuleSource struct {
+	catalog, schema, table, alias string
 }
 
 // Rewrite rules from active roles are a source-row visibility union: if any
@@ -454,39 +459,35 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+func rewriteRuleSingleTableSource(from *tree.From) (rewriteRuleSource, bool) {
 	if from == nil || len(from.Tables) != 1 {
-		return "", false
+		return rewriteRuleSource{}, false
 	}
-
-	tableExpr, ok := rewriteRuleSingleTableExpr(from.Tables[0])
-	if !ok {
-		return "", false
-	}
-
-	return normalizeRewriteSQL(tree.String(tableExpr, dialect.MYSQL)), true
-}
-
-func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
+	expr := from.Tables[0]
 	if joinExpr, ok := expr.(*tree.JoinTableExpr); ok {
 		// The MySQL parser wraps a lone table reference as a CROSS JoinTableExpr.
 		if joinExpr.Right != nil || joinExpr.Cond != nil || joinExpr.Option != "" {
-			return nil, false
+			return rewriteRuleSource{}, false
 		}
 		expr = joinExpr.Left
 	}
 
 	tableExpr, ok := expr.(*tree.AliasedTableExpr)
 	if !ok || tableExpr.As.Cols != nil || len(tableExpr.IndexHints) > 0 {
-		return nil, false
+		return rewriteRuleSource{}, false
 	}
 
 	tableName, ok := tableExpr.Expr.(*tree.TableName)
 	if !ok || tableName.AtTsExpr != nil {
-		return nil, false
+		return rewriteRuleSource{}, false
 	}
 
-	return tableExpr, true
+	return rewriteRuleSource{
+		catalog: strings.ToLower(string(tableName.CatalogName)),
+		schema:  strings.ToLower(string(tableName.SchemaName)),
+		table:   strings.ToLower(string(tableName.ObjectName)),
+		alias:   strings.ToLower(string(tableExpr.As.Alias)),
+	}, true
 }
 
 func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {

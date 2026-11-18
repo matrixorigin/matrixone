@@ -433,6 +433,16 @@ set secondary role all;
 select `2024` from db1.t_dup order by `2024`;
 -- @session
 
+-- Binary literal projections also retain all three roles' rows.
+alter role test_rule_role_dup_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'US' as tag from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_expr_projection_a add rule "select _binary 'US' as tag from db1.t_dup where marker = 3" on table db1.t_dup;
+-- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select hex(tag), count(*) from db1.t_dup group by tag;
+-- @session
+
 -- cleanup all test resources
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;

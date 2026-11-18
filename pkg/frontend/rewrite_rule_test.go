@@ -795,6 +795,36 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMergeRewriteRulesDistinguishesSourceComponents(t *testing.T) {
+	ctx := context.Background()
+	for _, pair := range [][2]string{
+		{"db1.`sales as s`", "db1.sales as s"},
+		{"`db1.sales`", "db1.sales"},
+	} {
+		t.Run(pair[0], func(t *testing.T) {
+			left := "select a from " + pair[0] + " where a = 1"
+			right := "select a from " + pair[1] + " where a = 2"
+			merged, err := mergeRewriteRules(ctx, left, right)
+			require.NoError(t, err)
+			require.Equal(t, right, merged)
+		})
+	}
+}
+
+func TestMergeRewriteRulesPreservesBinaryLiteralAcrossMerges(t *testing.T) {
+	ctx := context.Background()
+	const base = `select _binary 'US''\\' as tag from db1.t1 where `
+	merged, err := mergeRewriteRules(ctx, base+"a = 1", base+"a = 2")
+	require.NoError(t, err)
+	merged, err = mergeRewriteRules(ctx, merged, base+"a = 3")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"((a = 1) or (a = 2)) or (a = 3)", 1)
+	require.NoError(t, err)
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 func TestMergeRewriteRulesPreservesQuotedIdentifiersAcrossMerges(t *testing.T) {
 	ctx := context.Background()
 	const base = "select `2024` from db1.t1 where region = "
@@ -884,6 +914,8 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 		{"'1'", "1"},
 		{"'1'", "`'1'`"},
 		{"'UP'", "'up'"},
+		{"_binary 'US'", "_binary 'us'"},
+		{"_binary 'US'", "'US'"},
 	} {
 		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
 			left := "select " + tc.left + " as x from db1.t1 where a = 1"
@@ -951,56 +983,56 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 		rule       string
 		ok         bool
 		selectList string
-		table      string
+		table      rewriteRuleSource
 	}{
 		{
 			name:       "simple select",
 			rule:       "select A, Age from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "`a`, `age`",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name:       "star projection",
 			rule:       "select * from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "*",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name:       "qualified star with alias",
 			rule:       "select t.* from db1.t1 as t where age > 28",
 			ok:         true,
 			selectList: "`t`.*",
-			table:      "db1.t1 as t",
+			table:      rewriteRuleSource{schema: "db1", table: "t1", alias: "t"},
 		},
 		{
 			name:       "aliased column",
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "`a` as `x`",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name:       "where subquery with order by and limit",
 			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
 			ok:         true,
 			selectList: "`a`",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name:       "parenthesized single table",
 			rule:       "select a from (db1.t1) where age > 28",
 			ok:         true,
 			selectList: "`a`",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name:       "scalar expression",
 			rule:       "select a + 1 from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "`a` + 1",
-			table:      "db1.t1",
+			table:      rewriteRuleSource{schema: "db1", table: "t1"},
 		},
 		{
 			name: "aggregate",
