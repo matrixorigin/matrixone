@@ -123,6 +123,15 @@ func TestInsertRowAliasSQLContracts(t *testing.T) {
 		scalar("select concat(a,',',b) from keyed", "13,2")
 		exec("insert into keyed values(1,99,88) on duplicate key update b=(select max(y) from udf_source)")
 		scalar("select concat(a,',',b) from keyed", "13,20")
+		// Legacy ODKU must evaluate the scalar subquery only after a conflict.
+		const legacyScalarUpdate = "insert into keyed values(2,21,22) on duplicate key update b=(select y from udf_source)"
+		exec(legacyScalarUpdate)
+		scalar("select concat(a,',',b) from keyed where id=2", "21,22")
+		_, err = conn.ExecContext(ctx, legacyScalarUpdate)
+		require.ErrorAs(t, err, &wire)
+		require.Contains(t, wire.Message, "more than 1 row")
+		scalar("select concat(a,',',b) from keyed where id=2", "21,22")
+		exec("delete from keyed where id=2")
 		exec("insert into keyed values(1,99,88) as n on duplicate key update b=n.b")
 		scalar("select concat(a,',',b) from keyed", "13,88")
 	})

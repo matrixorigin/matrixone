@@ -247,10 +247,6 @@ func NewOndupUpdateBinder(
 	return b
 }
 
-func (b *OndupUpdateBinder) SetTargetCorrelationTag(tag int32) {
-	b.targetCorrelationTag = tag
-}
-
 func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if funcExpr, ok := astExpr.(*tree.FuncExpr); ok {
 		funcRef, ok := funcExpr.Func.FunctionReference.(*tree.UnresolvedName)
@@ -390,11 +386,7 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
 				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 		}
-		relPos := b.scanTag
-		if depth > 0 && b.targetCorrelationTag != 0 {
-			relPos = b.targetCorrelationTag
-		}
-		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
+		return b.makeColRef(int(idx), int(idx), depth, colName, b.scanTag), nil
 	}
 
 	if b.rowAlias != nil {
@@ -412,11 +404,7 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 	}
 
 	if idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames); ok && (b.rowAlias == nil || !b.tableDef.Cols[idx].Hidden) {
-		relPos := b.scanTag
-		if depth > 0 && b.targetCorrelationTag != 0 {
-			relPos = b.targetCorrelationTag
-		}
-		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
+		return b.makeColRef(int(idx), int(idx), depth, colName, b.scanTag), nil
 	}
 	if depth > 0 {
 		return b.bindOuterColRef(astExpr, depth, isRoot)

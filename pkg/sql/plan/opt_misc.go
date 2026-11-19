@@ -196,16 +196,6 @@ func (builder *QueryBuilder) removeSimpleProjectionsUnder(nodeID int32, parentTy
 		replaceColumnsForExprList(right.TblFuncExprList, projMap)
 	}
 
-	// This projection is an explicit row-image boundary for an INSERT ODKU
-	// subquery. Its output positions are part of the DEDUP input contract, so
-	// callers must keep references to its binding tag instead of propagating
-	// the child projection map past it.
-	if node.NodeType == plan.Node_PROJECT {
-		if _, protected := builder.preserveInsertSubqueryProjection[node.NodeId]; protected {
-			return nodeID, nil
-		}
-	}
-
 	if builder.canRemoveProject(parentType, node, matchAbove) {
 		allColRef := true
 		tag := node.BindingTags[0]

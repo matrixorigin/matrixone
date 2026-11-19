@@ -555,6 +555,9 @@ insert into odku_legacy_v1 values (1, 12, 102) on duplicate key update v = value
 insert into odku_legacy_v1 values (1, 13, 103) on duplicate key update v = (select 13);
 insert into odku_legacy_v1 values (1, 14, 104) on duplicate key update v = if(exists (select 1), values(v), v);
 select id, u, v from odku_legacy_v1 order by id;
+insert into odku_legacy_v1 values (3, 30, 300) on duplicate key update v = (select x from (select 10 as x union all select 20) as s);
+insert into odku_legacy_v1 values (3, 30, 300) on duplicate key update v = (select x from (select 10 as x union all select 20) as s);
+select id, u, v from odku_legacy_v1 where id=3;
 drop table odku_legacy_v1;
 create table odku_legacy_v1_nokey (a int, b int);
 insert into odku_legacy_v1_nokey values (1, 2) on duplicate key update b = b + 1;

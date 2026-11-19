@@ -168,12 +168,11 @@ func TestInsertRowAliasBinderUsesVisibleTargetForCorrelation(t *testing.T) {
 	)
 	require.NoError(t, err)
 	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
-	binder.SetTargetCorrelationTag(13)
 
 	expr, err := binder.BindColRef(testInsertAliasName("t", "a"), 1, true)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), expr.GetCorr().Depth)
-	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(11), expr.GetCorr().RelPos)
 	require.Equal(t, int32(1), expr.GetCorr().ColPos)
 }
 
@@ -531,100 +530,14 @@ func TestInsertRowAliasBinderResolvesBareAndRejectsQualifiedEdges(t *testing.T) 
 	require.Equal(t, int32(7), expr.GetCol().RelPos)
 	require.Equal(t, int32(1), expr.GetCol().ColPos)
 
-	binder.SetTargetCorrelationTag(13)
 	expr, err = binder.BindColRef(testInsertAliasName("a"), 1, true)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), expr.GetCorr().Depth)
-	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(11), expr.GetCorr().RelPos)
 	require.Equal(t, int32(1), expr.GetCorr().ColPos)
 
 	_, err = binder.BindColRef(testInsertAliasName("missing"), 0, true)
 	require.Error(t, err)
-}
-
-func TestInsertRowAliasScopeRefsTraverseAndRewrite(t *testing.T) {
-	col := func(tag, pos int32) *planpb.Expr {
-		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos}}}
-	}
-	corr := func(tag, pos, depth int32) *planpb.Expr {
-		return &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: tag, ColPos: pos, Depth: depth}}}
-	}
-	emptyExprs := []*planpb.Expr{
-		{Expr: &planpb.Expr_Col{}},
-		{Expr: &planpb.Expr_Corr{}},
-		{Expr: &planpb.Expr_F{}},
-		{Expr: &planpb.Expr_List{}},
-		{Expr: &planpb.Expr_W{}},
-		{Expr: &planpb.Expr_Sub{}},
-	}
-
-	refs := make([]insertScopeRef, 0)
-	seen := make(map[[2]int32]struct{})
-	collectInsertScopeRefs(nil, &refs, seen)
-	for _, expr := range emptyExprs {
-		collectInsertScopeRefs(expr, &refs, seen)
-	}
-
-	listExpr := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
-		col(22, 6), corr(22, 6, 2), col(88, 12),
-	}}}}
-	windowExpr := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
-		WindowFunc:  col(7, 7),
-		PartitionBy: []*planpb.Expr{col(11, 8)},
-		OrderBy:     []*planpb.OrderBySpec{nil, {Expr: col(99, 9)}},
-		Frame:       &planpb.FrameClause{Start: &planpb.FrameBound{Val: col(7, 10)}, End: &planpb.FrameBound{Val: col(11, 11)}},
-	}}}
-	subqueryExpr := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{}}}
-	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{
-		col(7, 1),
-		corr(7, 2, 1),
-		corr(7, 3, 2),
-		col(11, 3),
-		col(99, 4),
-		col(0, 5),
-		col(7, 1),
-		listExpr,
-		corr(11, 13, 2),
-		corr(88, 13, 2),
-		windowExpr,
-		subqueryExpr,
-	}}}}
-	collectInsertScopeRefs(expr, &refs, seen)
-
-	got := make([][2]int32, 0, len(refs))
-	for _, ref := range refs {
-		got = append(got, [2]int32{ref.tag, ref.pos})
-	}
-	require.Equal(t, [][2]int32{
-		{7, 1}, {7, 2}, {7, 3}, {11, 3}, {99, 4}, {22, 6}, {88, 12},
-		{11, 13}, {88, 13}, {7, 7}, {11, 8}, {99, 9}, {7, 10}, {11, 11},
-	}, got)
-
-	rewriteInsertScopeRefs(nil, 7, 20, 11, 4, map[[2]int32]int32{})
-	for _, empty := range emptyExprs {
-		rewriteInsertScopeRefs(empty, 7, 20, 11, 4, map[[2]int32]int32{})
-	}
-	rewriteInsertScopeRefs(expr, 7, 20, 11, 4, map[[2]int32]int32{
-		{99, 4}: 8,
-		{22, 6}: 10,
-		{99, 9}: 11,
-	})
-
-	args := expr.GetF().Args
-	require.Equal(t, int32(20), args[0].GetCol().RelPos)
-	require.Equal(t, int32(2), args[1].GetCol().ColPos)
-	require.Equal(t, int32(20), args[2].GetCorr().RelPos)
-	require.Equal(t, int32(7), args[3].GetCol().ColPos)
-	require.Equal(t, int32(8), args[4].GetCol().ColPos)
-	require.Equal(t, int32(0), args[5].GetCol().RelPos)
-	require.Equal(t, int32(10), args[7].GetList().List[0].GetCol().ColPos)
-	require.Equal(t, int32(10), args[7].GetList().List[1].GetCorr().ColPos)
-	require.Equal(t, int32(88), args[7].GetList().List[2].GetCol().RelPos)
-	require.Equal(t, int32(17), args[8].GetCorr().ColPos)
-	require.Equal(t, int32(88), args[9].GetCorr().RelPos)
-	require.Equal(t, int32(20), args[10].GetW().WindowFunc.GetCol().RelPos)
-	require.Equal(t, int32(20), args[10].GetW().OrderBy[1].Expr.GetCol().RelPos)
-	require.Equal(t, int32(20), args[10].GetW().Frame.Start.Val.GetCol().RelPos)
 }
 
 func TestInsertRowAliasParamOffsetsHandleEmptyExpressions(t *testing.T) {
@@ -888,8 +801,7 @@ func TestLegacyOndupAdmissionCTEOwnership(t *testing.T) {
 	// Recovery in the discarded admission plan must not make the real CTE valid.
 	_, err = runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select missing_column as x) select x from q)")
-	require.Error(t, err)
-	require.NotContains(t, err.Error(), odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, "missing_column")
 }
 
 func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
