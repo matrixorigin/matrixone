@@ -1,0 +1,90 @@
+name: Admit and collect one coverage group
+on:
+  workflow_call:
+    inputs:
+      group: {type: number, required: true}
+      head: {type: string, required: true}
+      source: {type: string, required: true}
+permissions:
+  contents: read
+jobs:
+  select:
+    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' && github.event_name == 'push' && github.actor == 'Ariznawlll'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      child: ${{ steps.select.outputs.child }}
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/matrixone
+        ref: ${{ github.sha }}
+        sparse-checkout: .github/standby-trial/coverage_standby.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - id: select
+      env:
+        PR: "32922"
+        GROUP: ${{ inputs.group }}
+        HEAD: ${{ inputs.head }}
+        SOURCE: ${{ inputs.source }}
+        ACTIONS_TOKEN: ${{ github.token }}
+      run: python3 -I .github/standby-trial/coverage_standby.py choose
+    - name: Release exactly one worker
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: coverage-admit-${{ steps.select.outputs.child }}
+        path: ${{ runner.temp }}/grant.json
+        if-no-files-found: error
+        retention-days: 1
+  collect:
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/matrixone
+        ref: ${{ github.sha }}
+        sparse-checkout: .github/standby-trial/coverage_standby.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Wait for selected group, including its UT result
+      env:
+        CHILD: ${{ needs.select.outputs.child }}
+        ACTIONS_TOKEN: ${{ github.token }}
+      run: python3 -I .github/standby-trial/coverage_standby.py wait
+    - name: Collect selected child's skips
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        github-token: ${{ github.token }}
+        run-id: ${{ needs.select.outputs.child }}
+        name: ut-coverage-skips-group-${{ inputs.group }}-${{ needs.select.outputs.child }}-1
+        path: ${{ runner.temp }}/skips
+    - name: Retain skips in parent's original generation
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ut-coverage-skips-group-${{ inputs.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/skips/*
+        if-no-files-found: error
+        retention-days: 7
+    - name: Collect selected child's profile
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        github-token: ${{ github.token }}
+        run-id: ${{ needs.select.outputs.child }}
+        name: ut-coverage-group-${{ inputs.group }}-generation-${{ needs.select.outputs.child }}-1
+        path: ${{ runner.temp }}/profile
+    - name: Retain profile in parent's original generation
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ut-coverage-group-${{ inputs.group }}-generation-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/profile/ut-coverage.out
+        if-no-files-found: error
+        retention-days: 7

@@ -1,0 +1,181 @@
+name: PR 32922 / real 10-minute CS to Shanghai queue handoff
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/coverage-standby-pr32922.yaml]
+permissions:
+  contents: read
+jobs:
+  authorize:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '12dd8d6f9b5f60737ebfe6feff61733e777de546' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: read
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+      source: ${{ steps.auth.outputs.head_repository }}
+      sha: ${{ steps.auth.outputs.head_sha }}
+    steps:
+      - name: Reuse the ordinary UT preflight and coverage eligibility for exactly this head
+        id: auth
+        shell: bash
+        env:
+          API_TOKEN: ${{ github.token }}
+          ORG_MEMBERSHIP_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request as u
+          repo = "matrixorigin/matrixone"
+          fork = "Ariznawlll/matrixone"
+          sha = "3b95c0878f88b3da58bf3e65c369b7ef4d13104e"
+          run_id = 44479715183
+          def check(ok, msg):
+              if not ok: raise SystemExit(msg)
+          def get(path):
+              request = u.Request(f"https://api.github.com/repos/{repo}/" + path, headers={"Authorization": "Bearer "+os.environ["API_TOKEN"], "Accept":"application/vnd.github+json"})
+              with u.urlopen(request, timeout=20) as response: return json.load(response)
+          p = get("pulls/32922")
+          check(p["number"]==32922 and p["state"]=="open" and not p["draft"] and p["base"]["repo"]["full_name"]==repo and p["base"]["ref"]=="main", "wrong or inactive PR")
+          check(p["head"]["sha"]==sha and p["head"]["repo"]["full_name"]==fork, "PR head mismatch")
+          check(p["user"]["login"]=="Ariznawlll" and "kind/test-ci" in {x["name"] for x in p["labels"]}, "author or label mismatch")
+          class NoRedirect(u.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): return None
+          req=u.Request("https://api.github.com/orgs/matrixorigin/members/Ariznawlll",headers={"Authorization":"Bearer "+os.environ["ORG_MEMBERSHIP_TOKEN"]})
+          with u.build_opener(NoRedirect).open(req,timeout=20) as member:
+              check(member.status==204,"organization membership not confirmed")
+          r = get(f"actions/runs/{run_id}")
+          check(r["repository"]["full_name"]==repo and r["event"]=="pull_request_target" and r["path"]==".github/workflows/entrypoint.yaml" and r["head_sha"]==sha and r["head_repository"]["full_name"]==fork and r["head_branch"]==p["head"]["ref"] and r["run_attempt"]==1, "ordinary pipeline provenance mismatch")
+          for job_id, name in ((135409062519,"CI preflight"),(135409149322,"Matrixone UT Coverage execution / Check coverage eligibility")):
+              j=get(f"actions/jobs/{job_id}")
+              check((j["run_id"],j["run_attempt"],j["name"],j["head_sha"],j["status"],j["conclusion"])==(run_id,1,name,sha,"completed","success"),name+" not accepted")
+          print("Matched official PR preflight and Coverage eligibility for #32922 at "+sha)
+          with open(os.environ["GITHUB_OUTPUT"],"a") as f:
+              print(f"allowed=true\nhead_repository={fork}\nhead_sha={sha}", file=f)
+          from pathlib import Path
+          Path(os.environ["RUNNER_TEMP"], "real-pr-authorization.json").write_text(json.dumps({"allowed":"true","verified_membership_http_status":204,"pr_number":str(p["number"]),"author":p["user"]["login"],"head_repository":fork,"head_sha":sha}))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: real-pr-snapshot-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/real-pr-authorization.json
+          if-no-files-found: error
+  coverage:
+    name: Route Coverage group ${{ matrix.group }}
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0, 1]
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/standby-trial-route.yaml
+    with:
+      group: ${{ matrix.group }}
+      head: ${{ needs.authorize.outputs.sha }}
+      source: ${{ needs.authorize.outputs.source }}
+  merge:
+    needs: [authorize, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      percent: ${{ steps.total.outputs.percent }}
+      artifact: ${{ steps.profile.outputs.artifact-url }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+          sparse-checkout: scripts
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ut-coverage-skips-group-*-${{ github.run_id }}-*
+          path: raw/groups
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ut-coverage-group-*-generation-${{ github.run_id }}-*
+          path: raw/profiles
+      - name: Verify and merge both groups
+        env:
+          EXPECTED_HEAD_SHA: ${{ needs.authorize.outputs.sha }}
+          GROUP_COUNT: '2'
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_HEAD_SHA"
+          python3 scripts/coverage_group_collect.py --groups raw/groups --profiles raw/profiles --output selected --run-id "$GITHUB_RUN_ID" --group-count "$GROUP_COUNT"
+          python3 scripts/coverage_two_groups_merge.py selected/groups combined-skip-manifest.json --expected-sha "$EXPECTED_HEAD_SHA" --group-count "$GROUP_COUNT"
+          for ((group=0;group<GROUP_COUNT;group++)); do
+            test "$(head -n 1 "selected/profiles/$group/ut-coverage.out")" = 'mode: set'
+            if [ "$group" = 0 ]; then
+              cat "selected/profiles/$group/ut-coverage.out" > "$RUNNER_TEMP/ut-coverage.out"
+            else
+              tail -n +2 "selected/profiles/$group/ut-coverage.out" >> "$RUNNER_TEMP/ut-coverage.out"
+            fi
+          done
+          go run scripts/compact_coverage_profile.go "$RUNNER_TEMP/ut-coverage.out"
+      - id: total
+        name: Compute covered statement percentage from the compacted set profile
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          total = covered = 0
+          with (pathlib.Path(os.environ["RUNNER_TEMP"]) / "ut-coverage.out").open() as f:
+              assert next(f).strip() == "mode: set"
+              for line in f:
+                  _, n, hit = line.rsplit(None, 2)
+                  count, flag = int(n), int(hit)
+                  assert count >= 0 and flag in (0, 1)
+                  total += count
+                  covered += flag * count
+          assert total > 0
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              print(f"percent={covered*100/total:.2f}", file=f)
+          PY
+      - id: profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ut-coverage-generation-${{ github.run_id }}-${{ github.run_attempt }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ut-coverage.out
+          if-no-files-found: error
+  feedback:
+    needs: [authorize, merge]
+    permissions:
+      statuses: write
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report isolated UT coverage on the same still-open PR head
+        env:
+          STATUS_TOKEN: ${{ github.token }}
+          PROFILE_URL: ${{ needs.merge.outputs.artifact }}
+          PERCENT: ${{ needs.merge.outputs.percent }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          SOURCE: ${{ needs.authorize.outputs.source }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request as r
+          repo = "matrixorigin/matrixone"
+          base = f"https://api.github.com/repos/{repo}"
+          headers = {"Authorization": "Bearer "+os.environ["STATUS_TOKEN"], "Content-Type": "application/json"}
+          with r.urlopen(r.Request(base+"/pulls/32922",headers=headers),timeout=15) as res:
+              pr=json.load(res)
+          head=os.environ["SHA"]; url=os.environ["PROFILE_URL"]; pct=os.environ["PERCENT"]
+          assert pr["state"]=="open" and not pr["draft"] and pr["base"]["ref"]=="main"
+          assert pr["head"]["sha"]==head=="3b95c0878f88b3da58bf3e65c369b7ef4d13104e"
+          assert pr["head"]["repo"]["full_name"]==os.environ["SOURCE"] and "kind/test-ci" in {l["name"] for l in pr["labels"]}
+          assert re.fullmatch(r"https://github\.com/matrixorigin/matrixone/actions/runs/"+os.environ["GITHUB_RUN_ID"]+r"/artifacts/[0-9]+",url)
+          assert re.fullmatch(r"[0-9]{1,3}\.[0-9]{2}",pct) and 0 <= float(pct) <= 100
+          data={"state":"success","context":"CS queue standby / Coverage UT (trial)","description":f"2 groups passed; UT statement coverage {pct}%","target_url":url}
+          with r.urlopen(r.Request(base+"/statuses/"+head,headers=headers,data=json.dumps(data).encode()),timeout=15) as res:
+              assert res.status==201
+              published=json.load(res)
+          with r.urlopen(r.Request(base+"/commits/"+head+"/statuses?per_page=100",headers=headers),timeout=15) as res:
+              assert any(row["id"]==published["id"] and row["context"]==data["context"] and row["state"]=="success" and row["target_url"]==url for row in json.load(res))
+          print("Confirmed two-group coverage status on PR #32922 head "+head)
+          PY

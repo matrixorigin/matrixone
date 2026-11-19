@@ -1,0 +1,44 @@
+name: Coverage standby single-group worker
+run-name: ${{ github.event_name == 'push' && 'Register' || 'Coverage standby' }} / ${{ fromJSON(inputs.ticket || '{}').parent }}/${{ fromJSON(inputs.ticket || '{}').attempt }}/${{ fromJSON(inputs.ticket || '{}').group }}/${{ fromJSON(inputs.ticket || '{}').head }}/${{ inputs.pool }}/${{ fromJSON(inputs.ticket || '{}').key }}
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/coverage-standby-worker.yaml]
+  workflow_dispatch:
+    inputs:
+      ticket: {description: 'Trusted parent admission envelope', required: true, type: string}
+      pool: {description: 'Single target pool', type: choice, required: true, options: [cs, idc]}
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+jobs:
+  cs:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.run_attempt == 1 && inputs.pool == 'cs'
+    uses: ./.github/workflows/standby-trial-worker-cs.yaml
+    with:
+      group: ${{ fromJSON(inputs.ticket || '{}').group }}
+      source: ${{ fromJSON(inputs.ticket || '{}').source }}
+      head: ${{ fromJSON(inputs.ticket || '{}').head }}
+      ticket: ${{ inputs.ticket }}
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_COVERAGE_CACHE_READ_TOKEN: ${{ secrets.CS_COVERAGE_CACHE_READ_TOKEN }}
+      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
+  idc:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.run_attempt == 1 && inputs.pool == 'idc'
+    uses: ./.github/workflows/standby-trial-worker-idc.yaml
+    with:
+      group: ${{ fromJSON(inputs.ticket || '{}').group }}
+      source: ${{ fromJSON(inputs.ticket || '{}').source }}
+      head: ${{ fromJSON(inputs.ticket || '{}').head }}
+      ticket: ${{ inputs.ticket }}
+    secrets:
+      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
+      S3REGION: ${{ secrets.S3REGION }}
+      S3BUCKET: ${{ secrets.S3BUCKET }}
+      S3APIKEY: ${{ secrets.S3APIKEY }}
+      S3APISECRET: ${{ secrets.S3APISECRET }}
