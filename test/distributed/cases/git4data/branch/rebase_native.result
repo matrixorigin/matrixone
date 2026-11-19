@@ -1,0 +1,33 @@
+drop snapshot if exists issue32480_rebase_bf;
+drop snapshot if exists issue32480_rebase_bu;
+drop snapshot if exists issue32480_rebase_fh;
+drop snapshot if exists issue32480_rebase_uh;
+drop database if exists issue32480_rebase_result;
+drop database if exists issue32480_rebase_feature;
+drop database if exists issue32480_rebase_upstream;
+create database issue32480_rebase_upstream;
+create table issue32480_rebase_upstream.t(id int primary key, v int);
+insert into issue32480_rebase_upstream.t values (1, 10);
+create snapshot issue32480_rebase_bu for database issue32480_rebase_upstream;
+data branch create database issue32480_rebase_feature from issue32480_rebase_upstream{snapshot='issue32480_rebase_bu'};
+create snapshot issue32480_rebase_bf for database issue32480_rebase_feature;
+update issue32480_rebase_feature.t set v = 11 where id = 1;
+insert into issue32480_rebase_feature.t values (3, 30);
+insert into issue32480_rebase_upstream.t values (2, 20);
+create snapshot issue32480_rebase_fh for database issue32480_rebase_feature;
+create snapshot issue32480_rebase_uh for database issue32480_rebase_upstream;
+data branch rebase database issue32480_rebase_result from issue32480_rebase_feature{snapshot='issue32480_rebase_fh'} against issue32480_rebase_upstream{snapshot='issue32480_rebase_uh'} between issue32480_rebase_feature{snapshot='issue32480_rebase_bf'} and issue32480_rebase_upstream{snapshot='issue32480_rebase_bu'} when conflict fail;
+➤ database[12,0,0]  ¦  database_id[-5,64,0]  ¦  base_database[12,0,0]  ¦  base_ts[-5,64,0]  ¦  tables[-5,64,0]  ¦  feature_changed_keys[-5,64,0]  ¦  upstream_changed_keys[-5,64,0]  ¦  conflict_keys[-5,64,0]  ¦  applied_insert_rows[-5,64,0]  ¦  applied_update_rows[-5,64,0]  ¦  applied_delete_rows[-5,64,0]  𝄀
+issue32480_rebase_result  ¦  0  ¦  issue32480_rebase_upstream  ¦  0  ¦  1  ¦  2  ¦  1  ¦  0  ¦  1  ¦  1  ¦  0
+select id, v from issue32480_rebase_result.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+drop snapshot issue32480_rebase_bf;
+drop snapshot issue32480_rebase_bu;
+drop snapshot issue32480_rebase_fh;
+drop snapshot issue32480_rebase_uh;
+drop database issue32480_rebase_result;
+drop database issue32480_rebase_feature;
+drop database issue32480_rebase_upstream;

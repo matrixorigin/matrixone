@@ -374,8 +374,8 @@ func TestNativeRebaseBorrowedOwnerRollbackDisabled(t *testing.T) {
 		f := rebaseSQLFixture{t, ctx, db, "nr_errmode_"}
 		f.exec("create database nr_errmode_u")
 		for _, table := range []string{"a", "b"} {
-			f.exec("create table nr_errmode_u." + table + "(id int primary key,v int)")
-			f.exec("insert into nr_errmode_u." + table + " values(1,10)")
+			f.exec("create table nr_errmode_u." + table + "(id varchar(16) primary key,v int)")
+			f.exec("insert into nr_errmode_u." + table + " values('1',10)")
 		}
 		f.exec("create database nr_errmode_meta")
 		f.exec("create table nr_errmode_meta.registry(id int primary key,gen int)")
@@ -383,9 +383,9 @@ func TestNativeRebaseBorrowedOwnerRollbackDisabled(t *testing.T) {
 		bu := f.snapshot("nr_errmode_u", "bu")
 		f.exec("data branch create database nr_errmode_f from " + bu)
 		bf := f.snapshot("nr_errmode_f", "bf")
-		f.exec("update nr_errmode_f.a set v=11 where id=1")
-		f.exec("update nr_errmode_f.b set v=11 where id=1")
-		f.exec("update nr_errmode_u.b set v=12 where id=1")
+		f.exec("update nr_errmode_f.a set v=11 where id='1'")
+		f.exec("update nr_errmode_f.b set v=11 where id='1'")
+		f.exec("update nr_errmode_u.b set v=12 where id='1'")
 		fh, uh := f.snapshot("nr_errmode_f", "fh"), f.snapshot("nr_errmode_u", "uh")
 		pins := f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch'")
 		edges := f.scalar("select count(*) from mo_catalog.mo_branch_metadata")
@@ -402,6 +402,9 @@ func TestNativeRebaseBorrowedOwnerRollbackDisabled(t *testing.T) {
 			_, err = owner.ExecContext(ctx, query)
 			require.NoError(t, err, query)
 		}
+		// VARCHAR primary keys use the exact SQL fallback. Tables are sorted, so
+		// the later conflict in b follows the application of a. The caller may
+		// commit after the statement error, but must not publish a partial target.
 		applied := make(chan struct{}, 1)
 		restoreApplied := frontend.SetRebaseTableAppliedHookForTest(func(_ context.Context, database, table string) {
 			if database == "nr_errmode_result" && table == "a" {
