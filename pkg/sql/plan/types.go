@@ -763,7 +763,44 @@ type OptimizerHints struct {
 	rollupSort int
 }
 
+// cteOwnerNode keeps one immutable snapshot of the CTE whose body region a
+// lookup runs inside. Nodes are appended at region entry and never rewritten
+// in place, so nested CTE body regions compose their restrictions instead of
+// overwriting each other (PR 32906 reviews 5985861342/5985871552/5985967332,
+// root19 C2/C3).
+type cteOwnerNode struct {
+	cte  *CTERef
+	next *cteOwnerNode
+}
+
+// pendingCTE reports whether cte is the later same-WITH declaration of any
+// region owner on the chain: a name is withheld only when it belongs to that
+// owner's maskedCTEs (its true not-yet-in-scope set) and the candidate entry
+// carries the same WITH identity, so legal earlier siblings stay visible
+// (root19 C1).
+func (n *cteOwnerNode) pendingCTE(name string, cte *CTERef) bool {
+	for node := n; node != nil; node = node.next {
+		if node.cte == nil || cte == nil || cte.withClause == nil {
+			continue
+		}
+		if node.cte.maskedCTEs[name] && cte.withClause == node.cte.withClause {
+			return true
+		}
+	}
+	return false
+}
+
 type CTERef struct {
+	// shadowedOuter keeps the enclosing definition that a same-name later
+	// declaration displaced while merging scopes, so lookups during the
+	// not-yet-in-scope window resolve to it instead of failing (PR 32906
+	// review 5985871552).
+	shadowedOuter *CTERef
+	// withClause keeps the WITH clause this ref was declared by: comparing it
+	// identifies same-WITH siblings (a pending later declaration) robustly,
+	// because every binding pass derives refs from the same parsed AST
+	// (PR 32906 review 5985871552).
+	withClause     *tree.With
 	isRecursive    bool
 	ast            *tree.CTE
 	maskedCTEs     map[string]bool
@@ -982,6 +1019,7 @@ type BindContext struct {
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
 	cteState                     CteBindState
+	cteOwnerChain                *cteOwnerNode
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool

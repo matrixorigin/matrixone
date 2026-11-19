@@ -2809,8 +2809,18 @@ type TableOptionEngine struct {
 }
 
 func (node *TableOptionEngine) Format(ctx *FmtCtx) {
+	if node.Engine == "" {
+		// The grammar needs a value; an empty engine only replays as a STRING
+		// literal (PR 32906 reviews 5985861342/5985871552).
+		ctx.WriteString("engine = ''")
+		return
+	}
 	ctx.WriteString("engine = ")
-	ctx.WriteString(node.Engine)
+	// Emit through the identifier writer: the canonical catalog context
+	// quotes identifiers, so reserved words and spaced names replay as quoted
+	// idents under the table_alias production while plain printouts keep the
+	// historical bare form.
+	ctx.WriteIdentifier(Identifier(node.Engine))
 }
 
 func (node TableOptionEngine) TypeName() string { return "tree.TableOptionEngine" }
@@ -3569,7 +3579,10 @@ func (node *TableOptionTablespace) Format(ctx *FmtCtx) {
 	// both halves into an unparsable hybrid.
 	if node.Name != "" {
 		ctx.WriteString("tablespace = ")
-		ctx.WriteString(node.Name)
+		// The canonical catalog context quotes identifiers, so reserved words
+		// and spaced names replay through the ident production; plain contexts
+		// keep the historical bare form (PR 32906 reviews 5985861342/5985871552).
+		ctx.WriteIdentifier(Identifier(node.Name))
 		return
 	}
 	ctx.WriteString(strings.TrimSpace(node.StorageOpt))

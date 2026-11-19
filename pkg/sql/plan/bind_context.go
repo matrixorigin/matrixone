@@ -90,6 +90,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.cteName = parent.cteName
 		bc.queryBlockOwner = parent.queryBlockOwner
+		bc.cteOwnerChain = parent.cteOwnerChain
 		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
 			bc.cteState = parent.cteState
@@ -215,10 +216,59 @@ func (bc *BindContext) topTag() int32 {
 func (bc *BindContext) findCTE(name string) *CTERef {
 	// the cte is masked already, we don't go further
 	if bc.cteState.masked(name) {
+		// A later same-WITH declaration is not yet in scope at this binding
+		// frame. MySQL CTE name resolution keeps the enclosing definition
+		// visible instead of failing the lookup: walk the frame chain — a map
+		// entry declared by the same WITH clause as the CTE currently being
+		// bound is the pending later declaration, so serve the enclosing
+		// definition it displaced; any other entry is an enclosing-scope
+		// definition that is already visible here. (PR 32906 reviews
+		// 5985861342/5985871552)
+		cur := bc.cteState.cte
+		for frame := bc; frame != nil; frame = frame.parent {
+			if frame != bc && frame.cteState.masked(name) && frame.cteState.cte != cur {
+				// Only a different region's pending declaration is a lexical
+				// boundary: frames sharing the current mask owner belong to
+				// the same region (the subquery/derived children of the body
+				// being bound), so the walk continues to the declaration
+				// frame and serves the displaced definition there. Before
+				// stopping at a genuine outer boundary, consult that frame
+				// for the displaced sibling once (PR 32906 reviews
+				// 5985861342/5985871552, root19 Fix-2).
+				if cte, ok := frame.cteByName[name]; ok && cur != nil && cte != cur &&
+					cte.withClause != nil && cte.withClause == cur.withClause {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+						return outer
+					}
+				}
+				break
+			}
+			if cte, ok := frame.cteByName[name]; ok {
+				if cur != nil && cte != cur && cte.withClause != nil && cte.withClause == cur.withClause {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+						return outer
+					}
+					return nil
+				}
+				return cte
+			}
+		}
 		return nil
 	}
 	if cte, ok := bc.cteByName[name]; ok {
 		if !bc.cteState.masked(name) {
+			// Machinery frames can reach a declaration map without the
+			// region state; the immutable owner chain still knows the regions
+			// this lookup runs inside, so a later same-WITH declaration is
+			// withheld (or resolves to the definition it displaced) while
+			// earlier siblings keep serving normally (PR 32906 reviews
+			// 5985861342/5985871552, root19 C1).
+			if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
+				if outer := cte.shadowedOuter; outer != nil && outer != cte {
+					return outer
+				}
+				return nil
+			}
 			return cte
 		}
 	}
@@ -227,10 +277,24 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	for parent != nil {
 		// the cte is masked already, we don't go further
 		if parent.cteState.masked(name) {
+			// Before stopping at this boundary, serve the displaced
+			// definition of a chain-pending sibling that this frame can
+			// reach (PR 32906 reviews 5985861342/5985871552, Fix-2).
+			if cte, ok := parent.cteByName[name]; ok && bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
+				if outer := cte.shadowedOuter; outer != nil && outer != cte {
+					return outer
+				}
+			}
 			break
 		}
 		if cte, ok := parent.cteByName[name]; ok {
 			if !parent.cteState.masked(name) {
+				if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+						return outer
+					}
+					return nil
+				}
 				return cte
 			}
 		}
