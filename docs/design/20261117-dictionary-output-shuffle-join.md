@@ -154,3 +154,12 @@ Use one proven charge policy for the comparison, and prefer an available owned
 recycle buffer. The copy estimate ignores constant and out-of-line bytes, so
 admission is conservative. Unpublished refusal releases its selection and
 workspace before ordinary copying; routing and queue-credit rules stay unchanged.
+
+For accounted input, the admission bound also includes the complete backing
+which remains pinned after producer reset/refill. Its current source charge is
+not a credit: the producer may need replacement storage while the queued view is
+still live. Decline owned backing before creating view state when this lower
+bound already exceeds the ordinary copy. Include an existing dictionary's base
+in the final retained bound as well. Unaccounted inputs keep their existing
+admission policy. The queue, producer reuse and lease-release protocols do not
+change.

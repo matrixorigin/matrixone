@@ -29,7 +29,7 @@ import (
 )
 
 func TestShuffleDictionaryPartitionsOwnBacking(t *testing.T) {
-	testShuffleDictionaryPartitions(t, 8<<20, true)
+	testShuffleDictionaryPartitions(t, 0, true)
 }
 
 func TestShuffleDictionaryCapacityRefusalReleasesScratch(t *testing.T) {
@@ -38,20 +38,24 @@ func TestShuffleDictionaryCapacityRefusalReleasesScratch(t *testing.T) {
 	testShuffleDictionaryPartitions(t, 4*objectio.BlockMaxRows*8, false)
 }
 
-func testShuffleDictionaryPartitions(t *testing.T, capacity uint64, secondView bool) {
+func testShuffleDictionaryPartitions(t *testing.T, capacity uint64, expectViews bool) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(proc.Free)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
-	require.NoError(t, err)
-	account, err := registry.Open(capacity)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.Zero(t, account.Snapshot().Used)
-		_, _, err := registry.CompleteTerminal(account)
+	var allocation *vector.AllocationAccountSelection
+	var err error
+	if capacity > 0 {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 		require.NoError(t, err)
-	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-	require.NoError(t, err)
+		account, err := registry.Open(capacity)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+	}
 	input := batch.NewOffHeapWithSize(1)
 	require.NoError(t, input.SetAllocationAccount(allocation))
 	input.Vecs[0], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), allocation)
@@ -77,19 +81,21 @@ func testShuffleDictionaryPartitions(t *testing.T, capacity uint64, secondView b
 	_, _, _, done, err := sp.tryWriteModeWithViews(input, selections, 0, 0, 0, false, &views, proc)
 	require.NoError(t, err)
 	require.True(t, done)
-	require.NotNil(t, views)
-	views.free(proc.Mp())
-	views = nil
-	if secondView {
-		input.CleanOnlyData()
-		// Reusing the producer must not mutate the queued immutable snapshot.
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(-1), false, proc.Mp()))
+	if expectViews {
+		require.NotNil(t, views)
+		views.free(proc.Mp())
+		views = nil
+	} else {
+		require.Nil(t, views, "the pinned backing bound must decline before allocating view state")
 	}
+	input.CleanOnlyData()
+	// Reusing the producer must not mutate queued rows.
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(-1), false, proc.Mp()))
 	for bucket := range 2 {
 		output := sp.getAnyFullBatch()
 		require.NotNil(t, output)
 		t.Cleanup(func() { sp.discardBatch(output, proc.Mp()) })
-		require.Equal(t, bucket == 0 || secondView, output.HasDictionary())
+		require.Equal(t, expectViews, output.HasDictionary())
 		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
 		for row := range output.RowCount() {
 			require.Equal(t, int64(2*row+bucket), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], row))
@@ -134,10 +140,9 @@ func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 		typ      types.Type
 		holders  int
 		capacity uint64
-		retain   bool
 		recycle  bool
 	}{
-		{name: "int64", typ: types.T_int64.ToType(), holders: 8, capacity: 128 << 10, retain: true},
+		{name: "int64", typ: types.T_int64.ToType(), holders: 8, capacity: 128 << 10},
 		{name: "narrow int32", typ: types.T_int32.ToType(), holders: 16, capacity: 68 << 10},
 		{name: "recycled int64", typ: types.T_int64.ToType(), holders: 8, capacity: 128 << 10, recycle: true},
 	} {
@@ -208,14 +213,30 @@ func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 				_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
 				require.NoError(t, err)
 				require.True(t, done)
-				if useViews && !shape.retain {
+				if useViews {
 					require.Nil(t, views)
+				}
+				require.EqualValues(t, 2*objectio.BlockMaxRows*shape.typ.TypeSize(), account.Snapshot().Used)
+				// Keep the queue live while the upstream producer resets and
+				// refills its input. A retained partition must not pin capacity
+				// which the ordinary path would reuse for the next generation.
+				if views != nil {
+					views.free(proc.Mp())
+					views = nil
+				}
+				input.CleanOnlyData()
+				for row := range objectio.BlockMaxRows {
+					if shape.typ.Oid == types.T_int32 {
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], -int32(row+1), false, proc.Mp()))
+					} else {
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], -int64(row+1), false, proc.Mp()))
+					}
 				}
 				require.EqualValues(t, 2*objectio.BlockMaxRows*shape.typ.TypeSize(), account.Snapshot().Used)
 				full := sp.getAnyFullBatch()
 				require.NotNil(t, full)
 				t.Cleanup(func() { sp.discardBatch(full, proc.Mp()) })
-				require.Equal(t, useViews && shape.retain, full.HasDictionary())
+				require.False(t, full.HasDictionary())
 				valueAt := func(v *vector.Vector, row int) int64 {
 					if shape.typ.Oid == types.T_int32 {
 						return int64(vector.GetFixedAtNoTypeCheck[int32](v, row))
@@ -280,11 +301,12 @@ func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
 			input.SetRowCount(4)
 			if tc.dictionary {
 				selected := make([]*vector.Vector, 1)
-				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, []int64{3, 1, 2, 0}, 4, proc.Mp(), allocation)
+				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, []int64{3, 1, 2, 0, 3, 1, 2, 0, 3, 1, 2, 0, 3, 1, 2, 0}, 4, proc.Mp(), allocation)
 				require.NoError(t, err)
 				require.True(t, admitted)
 				input.Vecs[0].Free(proc.Mp())
 				input.Vecs = selected
+				input.SetRowCount(16)
 			}
 			var views *shufflePartitionViews
 			t.Cleanup(func() {
@@ -294,9 +316,13 @@ func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
 			})
 			before := account.Snapshot().Used
 			sp := NewShufflePool(1, 1, true)
-			output, err := sp.selectPartition(input, []int32{0, 2}, &views, proc)
+			rows := []int32{0, 2}
+			if tc.dictionary {
+				rows = []int32{0, 2, 4, 6, 8, 10, 12, 14}
+			}
+			output, err := sp.selectPartition(input, rows, &views, proc)
 			require.NoError(t, err)
-			if tc.nullable {
+			if !tc.dictionary {
 				require.Nil(t, output)
 				require.Equal(t, before, account.Snapshot().Used, "rejected metadata must release all unpublished capacity")
 				return

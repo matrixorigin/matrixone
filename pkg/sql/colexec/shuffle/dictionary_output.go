@@ -61,7 +61,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 	if copyAllocation != nil && !vector.AllocationAccountSelectionsEqual(copyAllocation, allocation) {
 		return nil, nil
 	}
-	var copyBytes, selectors int64
+	var copyBytes, selectors, pinnedBytes int64
 	// Ignore constant payload and out-of-line bytes in the owned-copy bound:
 	// both make this sufficient admission test conservative.
 	sharedSelection := false
@@ -74,6 +74,16 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		if !source.IsConst() {
 			copyBytes += int64(len(rows)) * int64(source.GetType().TypeSize())
 		}
+		if allocation != nil && !source.IsDictionary() {
+			// Queued views can outlive producer reuse. Owned backing then
+			// remains charged while the producer allocates its replacement.
+			if source.DataBackingKind() == vector.OwnedMPoolUnique {
+				pinnedBytes += int64(cap(source.GetData()))
+			}
+			if source.AreaBackingKind() == vector.OwnedMPoolUnique {
+				pinnedBytes += int64(cap(source.GetArea()))
+			}
+		}
 		if source.IsDictionary() {
 			selectors++
 		} else {
@@ -83,7 +93,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 	if sharedSelection {
 		selectors++
 	}
-	if selectors*int64(len(rows))*8 > copyBytes {
+	if pinnedBytes+selectors*int64(len(rows))*8 > copyBytes {
 		return nil, nil
 	}
 	if *workspace == nil {
@@ -167,9 +177,9 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 					return nil, nil
 				}
 				added := s.bases[i].RetainedBytes()
-				// Known source-owned allocations are already charged. Borrowed
-				// backing whose shared charge cannot be proved keeps its full bound.
-				if !borrowed {
+				// An accounted source can refill before its queued borrowers
+				// release. Include its backing even though it is charged now.
+				if allocation == nil && !borrowed {
 					added -= ownedPayload
 				}
 				retainedBytes += max(0, added)
@@ -179,14 +189,16 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		if err != nil {
 			return nil, err
 		}
-		// Allocated includes referenced backing. Only the new selector and
-		// metadata are additional when that backing already belongs to input.
+		// Allocated includes referenced backing; count header metadata separately.
 		ownedMetadata := int64(output.Vecs[i].Allocated()) - output.Vecs[i].DictionaryRetainedBytes()
 		retainedBytes += ownedMetadata
 		if source.IsDictionary() {
-			oldSelection := int64(cap(vector.ResolveFixedBytesReadView(source).Selection)) * 8
-			baseBytes := source.DictionaryRetainedBytes() - oldSelection
-			retainedBytes += output.Vecs[i].DictionaryRetainedBytes() - baseBytes
+			retained := output.Vecs[i].DictionaryRetainedBytes()
+			if allocation == nil {
+				oldSelection := int64(cap(vector.ResolveFixedBytesReadView(source).Selection)) * 8
+				retained -= source.DictionaryRetainedBytes() - oldSelection
+			}
+			retainedBytes += retained
 		}
 	}
 	if retainedBytes > copyBytes {
