@@ -137,16 +137,18 @@ func TestChangeWatchProxy(t *testing.T) {
 		select observer_account_id, source_account_id, database_name, 'partitioned_parent', uuid()
 		from mo_change_watch.watch where database_name='watched_db' and table_name='t'`)
 	for _, input := range []any{nil, firstMarker} {
-		rows, err := observer.QueryContext(ctx, "select * from mo_changed_tables(?)", input)
-		if rows != nil {
-			require.False(t, rows.Next(), "unsupported grants must publish no table rows or END")
-			err = rows.Err()
-			require.NoError(t, rows.Close())
-		}
-		var serverErr *mysql.MySQLError
-		require.ErrorAs(t, err, &serverErr)
-		require.Equal(t, moerr.ErrNotSupported, serverErr.Number)
-		require.Contains(t, serverErr.Message, `granted "watched_db"."partitioned_parent"`)
+		func() {
+			rows, err := observer.QueryContext(ctx, "select * from mo_changed_tables(?)", input)
+			if rows != nil {
+				defer rows.Close()
+				require.False(t, rows.Next(), "unsupported grants must publish no table rows or END")
+				err = rows.Err()
+			}
+			var serverErr *mysql.MySQLError
+			require.ErrorAs(t, err, &serverErr)
+			require.Equal(t, moerr.ErrNotSupported, serverErr.Number)
+			require.Contains(t, serverErr.Message, `granted "watched_db"."partitioned_parent"`)
+		}()
 	}
 	exec(sys, "delete from mo_change_watch.watch where database_name='watched_db' and table_name='partitioned_parent'")
 	readProjectedWatch(t, ctx, observer, firstMarker, "CHANGED", tableID)
