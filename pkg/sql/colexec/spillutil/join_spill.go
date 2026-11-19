@@ -1488,6 +1488,7 @@ type SpillEngineConfig struct {
 	DedupColName              string
 	DedupColTypes             []plan.Type
 	DedupKeyExprs             []*plan.Expr
+	AuxiliaryRowIdColIdx      int32
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
@@ -1992,6 +1993,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	builder.DedupColName = e.cfg.DedupColName
 	builder.DedupColTypes = e.cfg.DedupColTypes
 	builder.DedupKeyExprs = e.cfg.DedupKeyExprs
+	builder.AuxiliaryRowIdColIdx = e.cfg.AuxiliaryRowIdColIdx
 	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
 		builder.Free(proc)
 		return nil, BucketSkip, err

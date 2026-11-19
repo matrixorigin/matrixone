@@ -217,7 +217,7 @@ func TestScanCutoffRemoteReaderPrunesThenWitnessFails(t *testing.T) {
 	operators = append(operators, witnessOrder)
 	require.Equal(t, uint64(k), witnessOrder.ScanCutoffLimit)
 	require.Equal(t, int32(42), witnessOrder.ScanCutoffTag)
-	witnessOrder.ScanCutoff = order.NewScanCutoff(k, types.T_int64.ToType(), false)
+	witnessOrder.ScanCutoff = order.NewScanCutoff(k, types.T_int64.ToType(), false, true)
 	readerOrder := dupOperator(witnessOrder, 1, 2).(*order.Order)
 	operators = append(operators, readerOrder)
 	require.Same(t, witnessOrder.ScanCutoff, readerOrder.ScanCutoff)
