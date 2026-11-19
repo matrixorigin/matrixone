@@ -166,7 +166,7 @@ func deriveSnapshotPublicationSource(
 	if !row.databaseScoped() {
 		return row.accountID, nil
 	}
-	physID, _, err = getDbAccountIdAndTypeById(ctx, bh, row.databaseName, row.databaseID)
+	physID, _, err = getDbAccountIdAndTypeById(ctx, bh, row.databaseName, row.databaseID, row.accountID, row.accountList)
 	if err != nil {
 		return 0, err
 	}

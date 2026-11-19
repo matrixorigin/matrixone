@@ -1041,6 +1041,9 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 				)
 			}
 			if test.targetLookupDB != "" {
+				publisherSQL, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				bh.sql2result[publisherSQL] = newMrsForRestoreStringRows([]string{"dat_id", "dat_type"}, nil)
 				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, 1)
 				require.NoError(t, err)
 				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
@@ -2270,6 +2273,13 @@ func Test_doShowPublicationCoverage(t *testing.T) {
 			wantDbs:     []string{"db1", "db1", "db1"},
 			wantTables:  []string{pubsub.TableAll, "ta", "tb"},
 		},
+		{
+			name:       "sys enumerates a cold publication owner's tables",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs:        []pubRow{{accountID: 1, accountName: "acc1", dbName: "db1", tables: pubsub.TableAll, subs: "acc2"}},
+			tablesQuery: true, tables: []string{"ta"},
+			wantDbs: []string{"db1", "db1"}, wantTables: []string{pubsub.TableAll, "ta"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -2315,7 +2325,17 @@ func Test_doShowPublicationCoverage(t *testing.T) {
 			}
 
 			spc := &tree.ShowPublicationCoverage{Name: "pub1"}
+			var activated []uint32
+			ses.txnHandler.storage = &featureLimitCatalogEngine{activate: func(_ context.Context, id uint32) error {
+				activated = append(activated, id)
+				return nil
+			}}
 			err := doShowPublicationCoverage(ctx, ses, spc)
+			if tc.tablesQuery && tc.tenantID != uint32(tc.pubs[0].accountID) {
+				require.Equal(t, []uint32{uint32(tc.pubs[0].accountID)}, activated)
+			} else {
+				require.Empty(t, activated)
+			}
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tc.wantErr)

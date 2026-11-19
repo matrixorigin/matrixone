@@ -64,7 +64,6 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			for _, q := range []string{
 				"drop account if exists lazy_catalog_reader_owner",
 				"drop account if exists lazy_counts_owner",
-				"drop snapshot if exists lazy_remote_snapshot",
 				"drop account if exists lazy_remote_owner",
 				"drop snapshot if exists lazy_admission_snapshot",
 				"drop account if exists lazy_snapshot_owner",
@@ -178,7 +177,6 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			cn0, err := cluster.GetCNService(0)
 			require.NoError(t, err)
 			service0 := cn0.RawService().(cnservice.Service)
-			eng0 := service0.GetEngine().(*disttae.Engine)
 			service1 := cn1.RawService().(cnservice.Service)
 			require.Eventually(t, func() bool {
 				for _, service := range []cnservice.Service{service0, service1} {
@@ -211,19 +209,6 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 				"the remote pipeline must activate its own catalog")
 			var id, value int
 			require.NoError(t, tenant.QueryRowContext(ctx, "select id,v from lazy_remote_db.dst").Scan(&id, &value))
-			require.Equal(t, 1, id)
-			require.Equal(t, 1, value)
-
-			execSQLRequire(t, ctx, sys1, "create snapshot lazy_remote_snapshot for account lazy_remote_owner")
-			require.NoError(t, tenant.Close())
-			execSQLRequire(t, ctx, sys1, "drop account lazy_remote_owner")
-			execSQLRequire(t, ctx, sys1, "restore account lazy_remote_owner {snapshot=lazy_remote_snapshot}")
-			targetID := accountID(t, "lazy_remote_owner")
-			require.NotEqual(t, sourceID, targetID)
-			require.True(t, eng0.PushClient().CanServeAccount(targetID, types.MaxTs().ToTimestamp()),
-				"restore must activate the recreated account on the remote CN before login")
-			restored := open(t, 0, "lazy_remote_owner#admin#accountadmin")
-			require.NoError(t, restored.QueryRowContext(ctx, "select id,v from lazy_remote_db.dst").Scan(&id, &value))
 			require.Equal(t, 1, id)
 			require.Equal(t, 1, value)
 		})

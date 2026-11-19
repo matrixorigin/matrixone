@@ -1233,6 +1233,8 @@ drop database if exists test14_new;
 drop database if exists test15_new;
 create database test12_new clone test12;
 create database test13_new clone test13;
+set @acc_id = (select account_id from mo_catalog.mo_account where account_name = 'acc05');
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
 select count(distinct t.rel_id) = 2 as clone_indexes_ready
 from mo_catalog.mo_iscp_log j
 join mo_catalog.mo_tables t on t.account_id = j.account_id and t.rel_id = j.table_id

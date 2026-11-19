@@ -1663,6 +1663,41 @@ func TestDoAlterPublicationAccountChangeValidatesInheritedScope(t *testing.T) {
 	})
 }
 
+func TestPublicationColdForeignOwnerLookup(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 0)
+	const db = "fsrc"
+	exact := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, uint64(7), db)
+	target := subscriptionPublisherAccountLookupSQL([]string{"owner"})
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[exact] = newMrsForPublicationColumns([]string{"account_id", "dat_type"}, nil)
+	bh.sql2result[target] = newMrsForPublicationColumns(
+		[]string{"account_id", "account_name"}, [][]interface{}{{uint64(2), "owner"}})
+
+	_, _, err := getDbAccountIdAndTypeById(ctx, bh, db, 7, 0, pubsub.AccountAll)
+	require.ErrorContains(t, err, "does not exist")
+	require.Equal(t, []string{exact}, bh.executedSQLs)
+
+	bh.executedSQLs = nil
+	bh.sql2err[exact] = context.Canceled
+	_, _, err = getDbAccountIdAndTypeById(ctx, bh, db, 7, 0, "owner,reader")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{exact}, bh.executedSQLs)
+
+	delete(bh.sql2err, exact)
+	bh.executedSQLs = nil
+	bh.beforeExec = func(sql string) {
+		if sql == target {
+			bh.sql2result[exact] = newMrsForPublicationColumns(
+				[]string{"account_id", "dat_type"}, [][]interface{}{{uint64(2), ""}})
+		}
+	}
+	id, _, err := getDbAccountIdAndTypeById(ctx, bh, db, 7, 0, "owner,reader")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), id)
+	require.Equal(t, []string{exact, target, exact}, bh.executedSQLs)
+}
+
 // TestCheckSubscriptionValidCommonResolvesPhysicalSource proves the
 // subscription metadata itself carries the account that physically owns the
 // published database: admission validates the physical catalog, and every
@@ -1976,6 +2011,7 @@ func TestResolvePublicationDatabaseByNameAuthorizesForeignSource(t *testing.T) {
 	t.Run("sys may source a database owned by a target account", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[dbIDSQL(0)] = newMrsForPublicationColumns([]string{"dat_id", "dat_type"}, nil)
 		bh.sql2result[dbIDSQL(2)] = dbRows(7)
 		ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
 
@@ -1993,6 +2029,7 @@ func TestResolvePublicationDatabaseByNameAuthorizesForeignSource(t *testing.T) {
 		// The database exists only in the account that owns it, and that
 		// owner is the publication's sole target: the publication grants no
 		// account visibility the owner lacks.
+		bh.sql2result[dbIDSQL(1)] = newMrsForPublicationColumns([]string{"dat_id", "dat_type"}, nil)
 		bh.sql2result[dbIDSQL(2)] = dbRows(7)
 		ctx := defines.AttachAccount(context.Background(), 1, rootID, moAdminRoleID)
 
@@ -2007,6 +2044,7 @@ func TestResolvePublicationDatabaseByNameAuthorizesForeignSource(t *testing.T) {
 	t.Run("a general publisher cannot expose another account's database to a third account", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[dbIDSQL(1)] = newMrsForPublicationColumns([]string{"dat_id", "dat_type"}, nil)
 		bh.sql2result[dbIDSQL(2)] = dbRows(7)
 		ctx := defines.AttachAccount(context.Background(), 1, rootID, moAdminRoleID)
 
@@ -2030,6 +2068,16 @@ func TestResolvePublicationDatabaseByNameAuthorizesForeignSource(t *testing.T) {
 		_, _, _, err := resolvePublicationDatabaseByName(ctx, bh, "fs9db", []uint32{2})
 		require.Error(t, err)
 		require.ErrorContains(t, err, "database 'fs9db' does not exist")
+	})
+
+	t.Run("publisher read errors stop the owner search", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2err[dbIDSQL(1)] = context.Canceled
+		ctx := defines.AttachAccountId(context.Background(), 1)
+		_, _, _, err := resolvePublicationDatabaseByName(ctx, bh, "fs9db", []uint32{2})
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, []string{dbIDSQL(1)}, bh.executedSQLs)
 	})
 }
 

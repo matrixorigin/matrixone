@@ -203,6 +203,15 @@ func resolveTableStatsKey(e engine.Engine, proc *process.Process, tablePath stri
 
 func resolveTableStatsKeyParts(e engine.Engine, proc *process.Process, dbname, tablename string, accountID uint32) (pb.StatsInfoKey, context.Context, error) {
 	targetCtx := defines.AttachAccountId(proc.Ctx, accountID)
+	if caller, err := defines.GetAccountId(proc.Ctx); err != nil {
+		return pb.StatsInfoKey{}, nil, err
+	} else if caller != accountID {
+		if activator, ok := e.(engine.TenantCatalogActivator); ok {
+			if err := activator.ActivateTenantCatalog(targetCtx, accountID); err != nil {
+				return pb.StatsInfoKey{}, nil, err
+			}
+		}
+	}
 	rel, err := getRelation(e, targetCtx, proc.GetTxnOperator(), dbname, tablename)
 	if err != nil {
 		return pb.StatsInfoKey{}, nil, err
