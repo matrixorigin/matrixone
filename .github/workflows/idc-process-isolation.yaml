@@ -1,0 +1,49 @@
+name: Shanghai IDC test-process isolation probe
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/idc-process-isolation.yaml]
+permissions: {}
+jobs:
+  isolate:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '8c197b0ea428dd3c140481622f0b4e9ede9b96e6' && github.run_attempt == 1
+    runs-on: amd64-mo-shanghai-8c16g
+    timeout-minutes: 3
+    steps:
+      - name: Verify an unprivileged isolated process (no PR checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=/usr/bin:/bin
+          for t in bwrap unshare podman; do
+            if command -v "$t" >/dev/null; then echo "available $t=yes"; else echo "available $t=no"; fi
+          done
+          if test "$(id -u)" = 0; then echo 'probe stopped: outer runner is root'; exit 1; fi
+          if unshare --user --map-root-user -- /bin/true; then echo 'unprivileged user namespace=yes'; else echo 'unprivileged user namespace=no'; fi
+          b=/usr/bin/bwrap
+          if ! test -x "$b" || test -u "$b" || test "$(stat -Lc %u "$b")" != 0; then
+            echo 'probe stopped: approved non-setuid bubblewrap not available'; exit 1
+          fi
+          marker=$(mktemp /tmp/idc-isolation-marker.XXXXXXXX)
+          trap 'unlink -- "$marker"' EXIT
+          binds=(--ro-bind /usr /usr)
+          for path in /bin /lib /lib64 /sbin; do
+            if test -L "$path"; then binds+=(--symlink "$(readlink "$path")" "$path")
+            elif test -d "$path"; then binds+=(--ro-bind "$path" "$path"); fi
+          done
+          "$b" --unshare-all --disable-userns --cap-drop ALL --new-session --die-with-parent \
+            "${binds[@]}" --proc /proc --dev /dev --tmpfs /tmp --dir /run --dir /var --symlink /run /var/run \
+            --clearenv --setenv PATH /usr/bin:/bin --chdir /tmp -- /bin/bash -eu -o pipefail -c '
+              for spec in "serviceaccount_token:/var/run/secrets/kubernetes.io/serviceaccount/token" "docker_socket:/var/run/docker.sock" "containerd_socket:/run/containerd/containerd.sock" "host_canary:$1"; do
+                p=${spec#*:}
+                if test -e "$p" || test -L "$p"; then echo "isolated ${spec%%:*}=visible"; exit 1; fi
+                echo "isolated ${spec%%:*}=not_visible"
+              done
+              for ns in mnt pid net; do
+                case $ns in mnt) outer=$2;; pid) outer=$3;; net) outer=$4;; esac
+                test "$(readlink "/proc/self/ns/$ns")" != "$outer"
+              done
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
+              echo "readonly defensive probe PASS; no PR code executed"
+            ' probe "$marker" "$(readlink /proc/self/ns/mnt)" "$(readlink /proc/self/ns/pid)" "$(readlink /proc/self/ns/net)"
