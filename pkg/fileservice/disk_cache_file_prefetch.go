@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 // filePrefetchObject is a FilePrefetchObject of the bytes [start, end) of an object: they
@@ -128,13 +129,19 @@ func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, en
 	defer func() { done(err) }()
 	readDeletes := d.readDeletes()
 	diskPath := d.pathForIOEntry(filePath, IOEntry{Offset: start, Size: end - start})
+	// objectEnd is where a source ended before its range did: the object's size.
+	var objectEnd atomic.Int64
 	openReader := func(ctx context.Context) (io.ReadCloser, error) {
 		return &lazyObjectReader{ctx: ctx, read: func(ctx context.Context, min, max *int64) (io.ReadCloser, error) {
 			from, to := start+*min, end
 			if max != nil {
 				to = start + *max
 			}
-			return open(ctx, from, to)
+			r, err := open(ctx, from, to)
+			if err != nil {
+				return nil, err
+			}
+			return &objectEndReader{ReadCloser: r, at: from, end: to, objectEnd: &objectEnd}, nil
 		}}, nil
 	}
 	layout := func(context.Context) (int64, int64, error) { return end - start, 0, nil }
@@ -142,6 +149,10 @@ func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, en
 		return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, claim, rangeFill, layout)
 	})
 	if err != nil {
+		if size := objectEnd.Load(); size > start {
+			// A later run of the object ends at its size.
+			d.storePrefetchedSize(d.pathForFile(filePath), size, readDeletes-1)
+		}
 		err = d.observeWriteResult(diskPath, err)
 		return false, err
 	}
@@ -149,6 +160,24 @@ func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, en
 		err = d.observeWriteResult(diskPath, nil)
 	}
 	return written, err
+}
+
+// objectEndReader reads a source of the bytes [at, end) of an object. A source that ends
+// before end fails the read, and objectEnd holds where it ended.
+type objectEndReader struct {
+	io.ReadCloser
+	at, end   int64
+	objectEnd *atomic.Int64
+}
+
+func (r *objectEndReader) Read(b []byte) (int, error) {
+	n, err := r.ReadCloser.Read(b)
+	r.at += int64(n)
+	if err == io.EOF && r.at < r.end {
+		r.objectEnd.Store(r.at)
+		err = io.ErrUnexpectedEOF
+	}
+	return n, err
 }
 
 // fileDownload returns the download of a FilePrefetchObject of the object at objectPath

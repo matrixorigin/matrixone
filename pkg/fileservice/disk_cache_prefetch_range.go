@@ -21,7 +21,6 @@ import (
 	"io"
 	"math"
 	"math/bits"
-	"os"
 	pathpkg "path"
 	"slices"
 	"strings"
@@ -353,6 +352,10 @@ func (d *DiskCache) prefetchRead(
 	var started []*filePrefetchObject
 	for _, p := range files {
 		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
+		if size, ok := d.prefetched.size(diskPath); ok && start < size && size < end {
+			// A run downloads to the object's end, not past it.
+			end = size
+		}
 		o, created := f.fileObjectLocked(context.WithoutCancel(ctx), diskPath, start, end)
 		o.hold()
 		held = append(held, o)
@@ -721,13 +724,13 @@ func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset i
 		return false
 	}
 	defer d.finishPathRead(r.diskPath, generation)
-	file, err := os.Open(r.diskPath)
-	if err != nil {
+	opened, ok := d.openReadFile(ctx, r.diskPath, generation)
+	if !ok {
 		d.ranges.remove(r.diskPath)
 		return false
 	}
-	defer file.Close()
-	if _, err := file.ReadAt(dst, offset-r.offset); err != nil {
+	defer d.closeReadFile(opened)
+	if _, err := opened.file.ReadAt(dst, offset-r.offset); err != nil {
 		return false
 	}
 	d.cache.Get(ctx, r.diskPath)

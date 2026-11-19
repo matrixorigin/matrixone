@@ -18,6 +18,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -560,6 +561,28 @@ func TestPrefetcherDeferredRequestsBounded(t *testing.T) {
 	e := p.entries["a"]
 	require.LessOrEqual(t, len(e.nextScans), 2, "ended scans are pruned")
 	require.Equal(t, int64(10), e.next.Size, "a request past the queues' bytes is not kept")
+}
+
+// A delete of an object being downloaded drops what later requests asked for beyond the
+// download: nothing is downloaded after it.
+func TestPrefetcherRemoveDropsDeferredRequest(t *testing.T) {
+	var runs atomic.Int32
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		runs.Add(1)
+		started <- struct{}{}
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+	<-started
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}})
+	require.False(t, p.remove("a"), "the running download is not queued")
+	close(release)
+	p.wg.Wait()
+	require.Equal(t, int32(1), runs.Load())
+	p.close(context.Background())
 }
 
 func TestObjectPrefetchCovers(t *testing.T) {

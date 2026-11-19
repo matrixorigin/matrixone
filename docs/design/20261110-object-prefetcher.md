@@ -68,7 +68,8 @@ Every prefetch the prefetcher runs is one of two kinds of prefetch object:
 - A **FilePrefetchObject** downloads to a file: an object read whole, or each run of
   ranges of more than `disk-prefetch-memory-max` bytes. Its bytes are written to the
   temporary file that becomes its cache file, which readers read as the bytes arrive; it
-  holds no memory buffer.
+  holds no memory buffer. A run that reaches past the object's end caches nothing and
+  records the object's size, so later runs of the object end there and are cached.
 
 The choice is made from the request, before any byte is downloaded. Every range read
 that misses the cache takes its bytes from a prefetch object under way, or starts a

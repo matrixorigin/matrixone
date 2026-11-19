@@ -437,15 +437,21 @@ func (p *prefetcher) isRunning(filePath string) bool {
 	return ok && e.queue == nil
 }
 
-// remove drops the queued download of filePath, and reports whether it was queued.
+// remove drops the queued download of filePath, or the request deferred behind its running
+// download, and reports whether a download was queued.
 func (p *prefetcher) remove(filePath string) bool {
-	if p.queued.Load() == 0 {
+	if p.known.Load() == 0 {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
-	if !ok || e.queue == nil {
+	if !ok {
+		return false
+	}
+	if e.queue == nil {
+		// The running download's deferred request is not queued after it ends.
+		e.next, e.nextScans = nil, nil
 		return false
 	}
 	p.removeLocked(e)

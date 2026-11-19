@@ -154,6 +154,27 @@ func TestS3FSPrefetchRangeAtObjectEnd(t *testing.T) {
 	require.Equal(t, int64(1), storage.reads.Load())
 }
 
+// A run of a FilePrefetchObject past the object's end caches nothing and learns the
+// object's size; with the size known, a run ends there and is cached.
+func TestS3FSFileRunPastObjectEnd(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 4096, 10000)
+	fs.diskCache.memoryPrefetchMax = 4096
+	require.Equal(t, data[5000:9990], readRangeOf(t, fs, 0, 5000, 4990))
+	_, err := os.Stat(fs.diskCache.pathForIOEntry("object", IOEntry{Offset: 4096, Size: 8192}))
+	require.True(t, os.IsNotExist(err), "a run past the end publishes no file")
+	size, ok := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	require.True(t, ok)
+	require.Equal(t, int64(10000), size)
+
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 10000)
+	fs.diskCache.memoryPrefetchMax = 4096
+	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), 10000)
+	require.Equal(t, data[5000:9990], readRangeOf(t, fs, 0, 5000, 4990))
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Equal(t, data[4096:10000], readRangeOf(t, fs, 0, 4096, 10000-4096))
+	require.Equal(t, int64(1), storage.reads.Load(), "the run ending at the object's end is cached")
+}
+
 // A read crossing a unit boundary reads the units it spans as one range.
 func TestS3FSPrefetchRangeAcrossUnits(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
@@ -254,6 +275,21 @@ func TestS3FSCacheBypassReadSkipsActiveRange(t *testing.T) {
 
 	release()
 	require.Equal(t, data[5000:5002], <-first)
+}
+
+// A read that takes bytes from a cached range keeps the range file open for later reads.
+func TestS3FSPrefetchRangeKeepsCachedRangeOpen(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
+	readRangeOf(t, fs, 0, 5000, 2)
+	ranges := fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object"))
+	require.Len(t, ranges, 1)
+	require.Equal(t, data[6000:9000], readRangeOf(t, fs, 0, 6000, 3000))
+	require.Equal(t, int64(2), storage.reads.Load(), "the cached range is not read again")
+	fs.diskCache.updatingPaths.L.Lock()
+	defer fs.diskCache.updatingPaths.L.Unlock()
+	kept := fs.diskCache.updatingPaths.openFiles.m[ranges[0].diskPath]
+	require.NotNil(t, kept, "the cached range's file is kept open")
+	require.Zero(t, kept.refs)
 }
 
 // addFlight registers a prefetch range of diskPath being read.
