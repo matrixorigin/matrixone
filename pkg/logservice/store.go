@@ -698,6 +698,7 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
 		return err
 	}
+	l.snapshotMgr.MarkPreviousReplicaStopped(shardID, replicaID)
 	l.addMetadata(shardID, replicaID, false)
 	if l.onReplicaChanged != nil {
 		l.onReplicaChanged(shardID, replicaID, AddReplica)
@@ -721,6 +722,7 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
 		return err
 	}
+	l.snapshotMgr.MarkPreviousReplicaStopped(shardID, replicaID)
 	l.addMetadata(shardID, replicaID, true)
 	if l.onReplicaChanged != nil {
 		l.onReplicaChanged(shardID, replicaID, AddReplica)

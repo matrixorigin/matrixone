@@ -520,6 +520,87 @@ func TestRetiringReplicaWaitsForStoppedExport(t *testing.T) {
 	testRetiringReplicaWaitsForLateExport(t, true)
 }
 
+func TestStoppedExportReconcilesAfterReplicaRestart(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &pausedExportRenameFS{
+		FS: cfg.FS, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fs.resume()
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	for range 10 {
+		_, err = l.append(ctx, shardID, getTestUserEntry())
+		require.NoError(t, err)
+	}
+	require.NoError(t, l.truncateLog(ctx, shardID, 4, 100))
+
+	exportCtx := &controlledDeadlineContext{
+		Context: context.Background(), deadline: time.Now().Add(30 * time.Second),
+		done: make(chan struct{}),
+	}
+	t.Cleanup(exportCtx.expire)
+	result := make(chan error, 1)
+	go func() { result <- l.exportSnapshot(exportCtx, shardID, replicaID) }()
+	select {
+	case <-fs.entered:
+	case err := <-result:
+		t.Fatalf("export returned before finalization: %v", err)
+	case <-ctx.Done():
+		t.Fatal("export did not reach finalization")
+	}
+	require.NoError(t, l.stopReplica(shardID, replicaID))
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, dragonboat.ErrShardClosed)
+	case <-ctx.Done():
+		t.Fatal("stopped export request did not return")
+	}
+	require.True(t, l.snapshotMgr.HasUnresolvedExport(shardID, replicaID))
+	require.ErrorIs(t, l.startReplica(shardID, replicaID, nil, false), dragonboat.ErrShardAlreadyExist)
+	fs.resume()
+	require.Eventually(t, func() bool {
+		err := l.startReplica(shardID, replicaID, nil, false)
+		return err == nil
+	}, testIOTimeout, 10*time.Millisecond)
+	restartCtx, restartCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer restartCancel()
+
+	// A successful StartReplica means Dragonboat has unloaded the old worker.
+	// The next normal tick can now reconcile its export and release the fence.
+	require.Eventually(t, func() bool {
+		if err := l.processShardTruncateLogWithReplica(restartCtx, shardID, replicaID); err != nil {
+			return false
+		}
+		return !l.snapshotMgr.HasUnresolvedExport(shardID, replicaID) &&
+			l.snapshotMgr.Count(shardID, replicaID) == 1
+	}, testIOTimeout, 10*time.Millisecond)
+	oldIndex := l.snapshotMgr.NewestIndex(shardID, replicaID)
+	require.NotZero(t, oldIndex)
+	require.Eventually(t, func() bool {
+		_, err := l.append(restartCtx, shardID, getTestUserEntry())
+		return err == nil
+	}, testIOTimeout, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		if err := l.processShardTruncateLogWithReplica(restartCtx, shardID, replicaID); err != nil {
+			return false
+		}
+		return l.snapshotMgr.NewestIndex(shardID, replicaID) > oldIndex
+	}, testIOTimeout, 10*time.Millisecond)
+}
+
 func testRetiringReplicaWaitsForLateExport(t *testing.T, stopBeforeTimeout bool) {
 	cfg := getStoreTestConfig()
 	cfg.TruncateInterval.Duration = time.Hour

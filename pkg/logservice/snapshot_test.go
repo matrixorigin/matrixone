@@ -203,6 +203,58 @@ type partialSnapshotRemovalFS struct {
 	failed bool
 }
 
+type retryParentSyncFS struct {
+	vfs.FS
+	syncCalls int
+}
+
+type retryParentSyncDir struct {
+	vfs.File
+	fs *retryParentSyncFS
+}
+
+func (dir *retryParentSyncDir) Sync() error {
+	dir.fs.syncCalls++
+	if dir.fs.syncCalls == 1 {
+		return os.ErrPermission
+	}
+	return dir.File.Sync()
+}
+
+func (fs *retryParentSyncFS) OpenDir(path string) (vfs.File, error) {
+	dir, err := fs.FS.OpenDir(path)
+	if err != nil {
+		return nil, err
+	}
+	return &retryParentSyncDir{File: dir, fs: fs}, nil
+}
+
+func (fs *retryParentSyncFS) RemoveAll(path string) error {
+	if strings.HasSuffix(path, ".removing") && fs.syncCalls < 2 {
+		return os.ErrInvalid
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestReconcileInterruptedExportSyncsTombstoneOnRetry(t *testing.T) {
+	fs := &retryParentSyncFS{FS: vfs.NewStrictMem()}
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	final := mgr.snapshotPath(nid, 100)
+	flag, err := fs.Create(fs.PathJoin(final, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, flag.Close())
+
+	require.ErrorIs(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID), os.ErrPermission)
+	_, err = fs.Stat(final + "-2.removing")
+	require.NoError(t, err)
+	require.NoError(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+	require.Equal(t, 2, fs.syncCalls)
+	_, err = fs.Stat(final + "-2.removing")
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func (fs *partialSnapshotRemovalFS) RemoveAll(path string) error {
 	if strings.HasSuffix(path, ".removing") && !fs.failed {
 		fs.failed = true
