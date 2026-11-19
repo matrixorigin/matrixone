@@ -87,7 +87,11 @@ func (e *guardedRetryExecutor) ExecWithStatus(ctx context.Context, statement str
 }
 
 func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// One budget covers cluster start plus every phase below. Under full-lane
+	// CI contention cluster start alone can take ~30s and the phases ~2m, so a
+	// tighter budget expires mid-test and turns later polls into silent
+	// "condition never satisfied" failures.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithTestAdmissionContext(ctx))
 	if cluster != nil {
@@ -544,11 +548,12 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.Zero(t, counter, "the first firing must remain behind the gate")
 	require.NoError(t, gate.QueryRowContext(ctx, "select release_lock('scheduled_retry_gate')").Scan(&locked))
 	require.Equal(t, 1, locked)
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		var n int
 		err := db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_name='scheduled_retry' and status='SUCCESS' and attempt_number=2").Scan(&n)
-		return err == nil && n == 1
-	}, 30*time.Second, 50*time.Millisecond, "the scheduled retry must complete")
+		require.NoError(c, err, "poll the scheduled retry")
+		require.Equal(c, 1, n, "the scheduled retry must complete")
+	}, 30*time.Second, 50*time.Millisecond)
 	result, err := db.QueryContext(ctx, "select run_id, status, attempt_number from mo_task.sql_task_run where task_name='scheduled_retry' order by attempt_number")
 	require.NoError(t, err)
 	defer result.Close()
