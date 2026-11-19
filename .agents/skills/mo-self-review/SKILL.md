@@ -110,9 +110,9 @@ deep tracing, not awareness of in-scope changes that can interact with it.
    nodes. Apply the lenses below. R0/R1 does not pay R3 modeling cost; any small
    R3 closure does.
 5. **Audit evidence.** Check selection, mode, revision, terminal status, and
-   semantic freshness. Reuse valid exact-head author/CI evidence. In self mode,
-   produce missing proof; in external mode, run only gaps or checks needed to
-   resolve a concrete uncertainty.
+   relevant inputs. Reuse author/CI evidence that meets the shared rules.
+   In self mode, produce missing proof. In external mode, run checks needed
+   to fill a gap or resolve a concrete uncertainty.
 6. **Converge once.** Verify every candidate against source and full closure,
    discard speculation, respect recorded decisions, then return one ranked
    finding/fix-or-decision list and final decision. Do not request another broad
