@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
@@ -40,6 +41,7 @@ type container struct {
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
+	jsonState                 *jsonScanState
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
 	allFilterExecutors        []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
@@ -47,8 +49,6 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
-	filterReadMetrics         bool
-	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
 	readerWorkspace           []*vector.Vector
@@ -59,6 +59,8 @@ type container struct {
 	columnUsesReady           bool
 	columnUsesOwned           bool
 	metricView                *batch.Batch
+	filterReadMetrics         bool
+	filterLateMaterialized    bool
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
 	domainSources             []localDomainSourceState
@@ -66,6 +68,32 @@ type container struct {
 	domainRows                []int64
 	domainsReady              bool
 	domainEmpty               bool
+}
+
+// jsonScanState is allocated and charged only when this scan has JSON_VALUE
+// demand. Its publication has a shorter, individual Read lifetime.
+type jsonScanState struct {
+	columns     []int
+	delivery    map[int]int
+	publication *objectio.JSONReadSet
+	metadata    *colexec.JSONMetadataScope
+}
+
+func (state *jsonScanState) closePublication() {
+	if state != nil && state.publication != nil {
+		state.publication.Close()
+		state.publication = nil
+	}
+}
+
+func (state *jsonScanState) close() {
+	if state != nil {
+		state.closePublication()
+		state.columns = nil
+		state.delivery = nil
+		state.metadata.Close()
+		state.metadata = nil
+	}
 }
 
 type TableScan struct {
@@ -200,6 +228,9 @@ func (tableScan *TableScan) Release() {
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	tableScan.releaseLocalDomains()
+	tableScan.ctr.jsonState.close()
+	tableScan.ctr.jsonState = nil
+
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ProjectList != nil {
@@ -266,6 +297,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 
 	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
+	tableScan.ctr.jsonState.close()
+	tableScan.ctr.jsonState = nil
+
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
@@ -318,14 +352,24 @@ func (tableScan *TableScan) closeReader() {
 
 func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	var err error
-	batch := input
-	if tableScan.ProjectList != nil {
-		batch, err = tableScan.EvalProjection(input, proc)
+	output := input
+	state := tableScan.ctr.jsonState
+	if len(tableScan.ProjectList) != 0 {
+		if state != nil && state.publication != nil {
+			output, err = tableScan.EvalProjectionWithJSONReaders(input, proc, state.publication.Readers())
+		} else {
+			output, err = tableScan.EvalProjection(input, proc)
+		}
 		tableScan.ObserveDictionaryInputs(tableScan.OpAnalyzer)
 	}
-
+	if err == nil {
+		output, err = tableScan.ctr.dictionaryBoundary.Normalize(output, proc.Mp())
+	}
+	if state != nil && (err != nil || len(state.delivery) == 0) {
+		state.closePublication()
+	}
 	if err != nil {
 		return nil, err
 	}
-	return tableScan.ctr.dictionaryBoundary.Normalize(batch, proc.Mp())
+	return output, nil
 }

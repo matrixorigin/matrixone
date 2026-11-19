@@ -200,7 +200,7 @@ func TestCTASPopulationScalarAdmission(t *testing.T) {
 		{"rollback", int64(121), 122, "version 122"},
 		{"missing", nil, 122, "version 122"},
 		{"invalid_capability", "122", 122, "version 122"},
-		{"future", int64(122), 123, "version 123"},
+		{"future", int64(123), 124, "version 124"},
 		{"invalid_requirement", int64(122), -1, "requires rebinding"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

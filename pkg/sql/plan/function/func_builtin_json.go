@@ -2262,7 +2262,11 @@ func newOpBuiltInJsonArray() *opBuiltInJsonArray {
 
 func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
+	return op.jsonArrayRows(params, vector.MustFunctionResult[types.Varlena](result), proc, length, selectList)
+}
+
+func (op *opBuiltInJsonArray) jsonArrayRows(params []*vector.Vector, rs jsonConstructorSink,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for j := 0; j < length; j++ {
@@ -2428,7 +2432,11 @@ func newOpBuiltInJsonObject() *opBuiltInJsonObject {
 
 func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
+	return op.jsonObjectRows(params, vector.MustFunctionResult[types.Varlena](result), proc, length, selectList)
+}
+
+func (op *opBuiltInJsonObject) jsonObjectRows(params []*vector.Vector, rs jsonConstructorSink,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	arrayOp := &opBuiltInJsonArray{}
 
 	if selectList != nil && selectList.IgnoreAllRow() {
@@ -3524,33 +3532,43 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 	return "#/" + keyword
 }
 
-// JSON_VALUE(json_doc, path) → VARCHAR
-// Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
-func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(2)
+// jsonValueLegacy evaluates the two-argument form retained in persisted plans
+// created before RETURNING/ON EMPTY/ON ERROR were lowered to the internal
+// seven-argument overload.
+func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
 
 	isStr := ivecs[0].GetType().Oid.IsMySQLString()
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
-		jsonBytes, null1 := p1.GetStrValue(i)
-		pathBytes, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			rs.AppendMustNullForBytesResult()
+		if ivecs[0].IsNull(i) || ivecs[1].IsNull(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
+		}
+		jsonBytes, err := ivecs[0].GetBytesAtChecked(int(i))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
+		}
+		pathBytes, err := ivecs[1].GetBytesAtChecked(int(i))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
 		}
 		// Parse path.
 		pathStr := string(pathBytes)
@@ -3563,14 +3581,16 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if isStr {
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		} else {
-			bj = types.DecodeJson(jsonBytes)
+			bj, err = decodeJSONValueStoredAdmitted(jsonBytes)
 		}
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
 		}
 		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
 		if !exists {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 		if !path.IsSimple() {
@@ -3578,13 +3598,17 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			// path in an array. JSON_VALUE accepts a non-simple path only when
 			// it selects exactly one value; zero or multiple matches are NULL.
 			if val.Type != bytejson.TpCodeArray || val.GetElemCnt() != 1 {
-				rs.AppendMustNullForBytesResult()
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
 				continue
 			}
 			val = val.GetArrayElem(0)
 		}
 		if val.IsNull() {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 		// Unquote → extract text value (strip JSON string quotes).
@@ -3592,7 +3616,13 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return err
 		}
-		rs.AppendMustBytesValue([]byte(s))
+		// Keep the legacy two-argument executor's historical unbounded text
+		// result. The clause-bearing seven-argument overload owns the new
+		// VARCHAR(512) default; applying it here changes existing persisted
+		// plans and bare-call results.
+		if err := rs.AppendBytes([]byte(s), false); err != nil {
+			return err
+		}
 	}
 	return nil
 }

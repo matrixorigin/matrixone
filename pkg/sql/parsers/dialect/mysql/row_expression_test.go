@@ -27,6 +27,7 @@ func TestRowExpression(t *testing.T) {
 		{"strings", "select row('a', 'b', 'c') = row('a', 'b', 'c')", "select ('a', 'b', 'c') = ('a', 'b', 'c')"},
 		{"null and parameter", "select row(?, null) = row(1, null)", "select (?, null) = (1, null)"},
 		{"nested", "select row((1 + 2), row(3, 4)) = row(3, (3, 4))", "select ((1 + 2), (3, 4)) = (3, (3, 4))"},
+		{"json value", "select row(json_value(doc, ? returning char null on empty error on error), 1) = row(?, 2)", "select (json_value(doc, ? returning char null on empty error on error), 1) = (?, 2)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			control, err := ParseOne(t.Context(), tc.tuple, 1)

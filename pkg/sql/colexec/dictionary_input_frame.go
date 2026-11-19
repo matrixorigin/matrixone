@@ -162,6 +162,12 @@ func (f *DictionaryInputFrame) Bind(executors []ExpressionExecutor) {
 func (f *DictionaryInputFrame) bind(executors []ExpressionExecutor, hasDictionary bool) {
 	for _, executor := range executors {
 		switch e := executor.(type) {
+		case *jsonProjectionRoot:
+			f.bind([]ExpressionExecutor{e.ExpressionExecutor}, hasDictionary)
+		case *jsonConstructorExpressionExecutor:
+			if e.FunctionExpressionExecutor != nil {
+				f.bind([]ExpressionExecutor{e.FunctionExpressionExecutor}, hasDictionary)
+			}
 		case *FunctionExpressionExecutor:
 			if e.dictionaryState != nil {
 				e.dictionaryState.frame = f

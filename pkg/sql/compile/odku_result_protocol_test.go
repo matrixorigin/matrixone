@@ -292,3 +292,40 @@ func TestProtocol132FloatComposesWithJSON133AndODKU134(t *testing.T) {
 		})
 	}
 }
+
+// JSON_VALUE does not change independent JSON MIN/MAX and ODKU floors.
+func TestJSONValueComposesWithJSONMinMax133AndODKU134(t *testing.T) {
+	args := make([]*plan.Expr, 7)
+	for i := range args {
+		args[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	}
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: args,
+	}}}
+	minNode := &plan.Node{AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}
+	trackingNode := &plan.Node{PreInsertCtx: &plan.PreInsertCtx{TrackOdkuResult: true}}
+	valueNode := &plan.Node{ProjectList: []*plan.Expr{value}}
+	for _, tc := range []struct {
+		name         string
+		nodes        []*plan.Node
+		floor        int64
+		minmax, odku bool
+	}{
+		{"all", []*plan.Node{minNode, trackingNode, valueNode}, defines.MORPCVersion134, true, true},
+		{"all reversed", []*plan.Node{valueNode, trackingNode, minNode}, defines.MORPCVersion134, true, true},
+		{"main only", []*plan.Node{minNode, trackingNode}, defines.MORPCVersion134, true, true},
+		{"minmax only", []*plan.Node{minNode}, defines.MORPCVersion133, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: tc.nodes}}}
+			features, err := plan.RequiredRemoteExpressionFeatures(owner)
+			require.NoError(t, err)
+			require.Equal(t, tc.minmax, features.JSONMinMaxTypedComparison)
+			require.Equal(t, tc.odku, features.ODKUStatementResult)
+			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))
+			floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(owner)
+			require.NoError(t, err)
+			require.Equal(t, tc.floor, floor)
+		})
+	}
+}

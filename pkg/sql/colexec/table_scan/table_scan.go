@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -92,6 +94,13 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
+	if columns := tableScan.JSONInputColumns(); len(columns) != 0 {
+		state, stateErr := tableScan.ensureJSONState(proc, len(columns)+1)
+		if stateErr != nil {
+			return stateErr
+		}
+		state.columns = columns
+	}
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
@@ -108,8 +117,14 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	return
 }
 
-func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
+func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResult, callErr error) {
 	tableScan.ctr.dictionaryBoundary.BeginCall()
+	state := tableScan.ctr.jsonState
+	defer func() {
+		if callErr != nil {
+			state.closePublication()
+		}
+	}()
 	start := time.Now()
 
 	analyzer := tableScan.OpAnalyzer
@@ -120,6 +135,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		state.closePublication()
 		return vm.CancelResult, err
 	}
 	if len(tableScan.ctr.domainProbes) > 0 {
@@ -173,6 +189,18 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
 			newCtx = fileservice.WithPreloadGroup(newCtx, tableScan.TableID)
 		}
+		state.closePublication()
+		if state != nil && len(state.columns) != 0 {
+			admission, err := function.JSONReaderMemoryAdmission(proc)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			state.publication, err = objectio.NewJSONReadSetWithAdmission(state.columns, tableScan.OutputAllocation, admission)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			newCtx = objectio.WithJSONReadSet(newCtx, state.publication)
+		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
 			return vm.CancelResult, err
@@ -214,6 +242,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 					return vm.CancelResult, selectErr
 				}
 				if !selection.All {
+					if err := tableScan.jsonPublication().SelectRows(selection.Sels, proc.Mp()); err != nil {
+						return vm.CancelResult, err
+					}
 					next, retained, selectErr := colexec.SelectBatchColumns(tableScan.ctr.buf, nil, selection.Sels, proc.Mp(), tableScan.OutputAllocation, true)
 					if selectErr != nil {
 						return vm.CancelResult, selectErr
@@ -464,6 +495,9 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
+					if err := tableScan.jsonPublication().SelectRows(sels, proc.Mp()); err != nil {
+						return engine.ReaderFilterResult{}, err
+					}
 					if err := shrinkPopulatedVecs(bat, sels, proc.Mp()); err != nil {
 						return engine.ReaderFilterResult{}, err
 					}

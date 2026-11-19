@@ -204,6 +204,9 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	if len(tableScan.ctr.domainRows) == bat.RowCount() {
 		return nil
 	}
+	if err := tableScan.jsonPublication().SelectRows(tableScan.ctr.domainRows, proc.Mp()); err != nil {
+		return err
+	}
 	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
 		next, _, err := colexec.SelectBatchColumns(bat, nil, tableScan.ctr.domainRows, proc.Mp(), tableScan.OutputAllocation, true)
 		if err != nil {
