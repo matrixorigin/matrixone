@@ -1,5 +1,5 @@
 name: Race seed canary
-run-name: ${{ inputs.coverage_comparison == 'mty-real-pr-2' && format('MTY real PR {0} - two groups', fromJSON(inputs.matrixone_sha).pr_number) || inputs.coverage_comparison == 'mty-native-refresh' && 'MTY exact-input native-only preparation - no UT' || inputs.coverage_comparison == 'tke' && 'TKE skip baseline - PR 32590 - no COS OSS' || contains(fromJSON('["mty","mnl2","jed","ruh"]'), inputs.coverage_comparison) && format('{0} S3 UT Coverage - PR 32590', inputs.coverage_comparison) || 'Race seed canary' }}
+run-name: ${{ inputs.coverage_comparison == 'all-env-real-pr-2' && format('{0} real PR {1} - two groups - nodes {2}', fromJSON(inputs.matrixone_sha).environment, fromJSON(inputs.matrixone_sha).pr_number, fromJSON(inputs.matrixone_sha).node_pair) || inputs.coverage_comparison == 'mty-real-pr-2' && format('MTY real PR {0} - two groups', fromJSON(inputs.matrixone_sha).pr_number) || inputs.coverage_comparison == 'mty-native-refresh' && 'MTY exact-input native-only preparation - no UT' || inputs.coverage_comparison == 'tke' && 'TKE skip baseline - PR 32590 - no COS OSS' || contains(fromJSON('["mty","mnl2","jed","ruh"]'), inputs.coverage_comparison) && format('{0} S3 UT Coverage - PR 32590', inputs.coverage_comparison) || 'Race seed canary' }}
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh', 'all-env-real-pr-2']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,22 @@ permissions:
   contents: read
 
 jobs:
+  all-env-real-pr-validation:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && inputs.coverage_comparison == 'all-env-real-pr-2' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-real-pr-${{ fromJSON(inputs.matrixone_sha).environment }}-${{ fromJSON(inputs.matrixone_sha).pr_number }}-${{ fromJSON(inputs.matrixone_sha).head_sha }}-${{ fromJSON(inputs.matrixone_sha).node_pair }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: matrixorigin/CI/.github/workflows/node-cache-all-env-real-pr-validation.yaml@7c86dc3ddd30d05943eb113ee350915fbb43dd59
+    with:
+      pr_number: ${{ fromJSON(inputs.matrixone_sha).pr_number }}
+      expected_head_sha: ${{ fromJSON(inputs.matrixone_sha).head_sha }}
+      environment: ${{ fromJSON(inputs.matrixone_sha).environment }}
+      node_pair: ${{ fromJSON(inputs.matrixone_sha).node_pair }}
+    secrets: inherit
   mty-native-refresh:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && inputs.coverage_comparison == 'mty-native-refresh' && inputs.matrixone_sha == '87c44445f83e308ef12dd7ca0e570cec1e6690d9' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
