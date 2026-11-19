@@ -1,8 +1,8 @@
 # Proportional Race And Timing Validation
 
-Use this protocol only for a credible shared-state, lifecycle, synchronization,
-background-work, or timing failure mode. Ordinary sequential logic uses focused
-normal tests plus its owning package.
+Use this protocol for a credible shared-state, lifecycle, synchronization,
+background-work, or timing failure mode. For normal test scope, use
+[validation-evidence.md](validation-evidence.md#2-assign-risk-per-closure-not-per-pr).
 
 ## Focused adaptive stress
 

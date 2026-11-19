@@ -121,28 +121,15 @@ when a remembered list of test names is present.
 - Assert fail-fast latency with a short outer deadline and verify it did not fire.
 - Count irreversible side effects and require exactly once, not merely non-zero.
 - Make test cleanup release blockers even after an assertion fails.
-- Run the minimal, explicitly named set of new, modified, or directly affected
-  concurrency tests with the adaptive `-race -count=N` budget in
-  [race-validation.md](../../mo-dev/references/race-validation.md);
-  never apply repeated stress to the package. Run the owning package once only
-  when that contract's production/shared-fixture risk triggers it.
+- Apply the [shared race protocol](../../mo-dev/references/race-validation.md)
+  for focused stress and owning-package coverage.
 
 ## 6. Validate The Closure
 
-Use the smallest complete layered evidence set, reusing semantically valid
-author/CI results under
-[validation-evidence.md](../../mo-dev/references/validation-evidence.md):
-
-1. Focused regression proving the original invariant violation.
-2. Focused race stress across transition boundaries.
-3. Full owning-package tests and race tests.
-4. Tests for every package changed by the complete diff.
-5. Static analysis and a dependent build.
-6. Benchmarks only for changed hot paths; report allocations and contention.
-
-No PASS/FAIL result or a surviving test process is valid evidence. Invalidate
-prior output only when a relevant semantic input, oracle, fixture, dependency,
-mode, topology, or base-side contract changed; ambiguity means stale.
+Use the [shared validation and evidence rules](../../mo-dev/references/validation-evidence.md)
+to pick and reuse proof for the affected state transitions. Include a focused
+test of the invariant and race stress across affected transitions as required
+by the shared race protocol.
 
 Also validate the delivery boundary, not only the working directory:
 
