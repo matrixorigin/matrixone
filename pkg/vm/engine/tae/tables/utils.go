@@ -57,6 +57,10 @@ func LoadPersistedColumnData(
 	tsForAppendable *types.TS,
 	needCopy bool,
 ) ([]containers.Vector, *nulls.Nulls, func(), error) {
+	spec, err := schema.ColumnReadSpec()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
@@ -116,9 +120,8 @@ func LoadPersistedColumnData(
 	}
 	var vecs []containers.Vector
 	var release func()
-	var err error
 	vecs, release, err = ioutil.LoadColumns2(
-		ctx, cols,
+		objectio.WithColumnReadSpec(ctx, spec), cols,
 		typs,
 		rt.Fs,
 		location,

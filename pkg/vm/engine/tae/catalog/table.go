@@ -982,29 +982,11 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		checks := apipb.CloneExtra(newSchema.Extra).Checks
-		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
-		// reset in new Schema
-		var hints []apipb.MergeHint
-		copy(hints, newSchema.Extra.Hints)
-		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum:     newSchema.Extra.NextColSeqnum,
-			MinOsizeQuailifed: newSchema.Extra.MinOsizeQuailifed,
-			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
-			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
-			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
-			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
-			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
-			Hints:             hints,
-			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
-			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
-			AutoIdCache:       newSchema.Extra.AutoIdCache,
-			DefaultCharset:    newSchema.Extra.DefaultCharset,
-			CollationVersion:  newSchema.Extra.CollationVersion,
-			KeyFormat:         newSchema.Extra.KeyFormat,
-			Checks:            checks,
-		}
-
+		extra := apipb.CloneExtra(newSchema.Extra)
+		extra.ColumnChanged = false
+		extra.DroppedAttrs = nil
+		extra.OldName = ""
+		newSchema.Extra = extra
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return

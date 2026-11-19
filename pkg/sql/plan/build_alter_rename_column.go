@@ -485,6 +485,7 @@ func AlterColumn(
 					return false, err
 				}
 				defaultValue.NullAbility = colDef.Default.NullAbility
+				preserveOriginDefault(defaultValue, colDef.Default)
 				colDef.Default = defaultValue
 			} else if spec.OptionType == tree.AlterColumnOptionDropDefault {
 				colDef.Default.Expr = nil

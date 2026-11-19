@@ -289,7 +289,8 @@ type withFilterMixin struct {
 type reader struct {
 	withFilterMixin
 
-	source engine.DataSource
+	source   engine.DataSource
+	readSpec *objectio.ColumnReadSpec
 
 	readBlockCnt uint64 // count of blocks this reader has read
 	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
@@ -583,7 +584,11 @@ func NewReader(
 			name:       tableDef.Name,
 			filterHint: filterHint,
 		},
-		source: source,
+		source:   source,
+		readSpec: objectio.NewColumnReadSpecFromTableDef(tableDef),
+	}
+	if remote, ok := source.(*RemoteDataSource); ok {
+		remote.readSpec = r.readSpec
 	}
 	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
@@ -1052,6 +1057,7 @@ func (r *reader) read(
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
+	statsCtx = objectio.WithColumnReadSpec(statsCtx, r.readSpec)
 
 	policy := fileservice.GetFileServicePolicy(ctx)
 

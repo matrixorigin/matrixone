@@ -151,7 +151,9 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.appendMVCC.LockForAppend()
 	defer appender.obj.appendMVCC.UnlockForAppend()
-	from, err = node.ApplyAppendLocked(bat)
+	if from, err = node.ApplyAppendLocked(bat); err != nil {
+		return
+	}
 
 	schema := node.writeSchema
 	for _, colDef := range schema.ColDefs {

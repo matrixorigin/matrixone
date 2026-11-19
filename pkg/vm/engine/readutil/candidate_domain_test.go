@@ -185,7 +185,7 @@ func TestByteCandidateReaderAndPKResults(t *testing.T) {
 					require.True(t, match, "reader must retain matching block %d", row)
 				}
 				if seek != nil {
-					require.LessOrEqual(t, seek(meta), int(tc.want[0]))
+					require.LessOrEqual(t, mustSeekBlock(t, seek, meta), int(tc.want[0]))
 				}
 				base, err := ConstructBasePKFilter(expr, table, proc.Mp())
 				require.NoError(t, err)

@@ -735,6 +735,9 @@ func (v *legacyCollationVisitor) walkDefault(p *Default) error {
 	if err := v.walkExpr(p.Expr); err != nil {
 		return err
 	}
+	if err := v.walkLiteral(p.OriginDefault); err != nil {
+		return err
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkDeleteCtx(p *DeleteCtx) error {

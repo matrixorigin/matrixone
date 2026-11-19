@@ -53,7 +53,8 @@ type RemoteDataSource struct {
 	cursor              int
 	data                engine.RelData
 
-	orderBy []*plan.OrderBySpec
+	orderBy  []*plan.OrderBySpec
+	readSpec *objectio.ColumnReadSpec
 	// The permutation belongs to this reader; never reorder shared RelData.
 	orderedBlocks []orderedRemoteBlock
 	filterZM      objectio.ZoneMap
@@ -333,11 +334,16 @@ func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colT
 			meta = loaded.MustDataMeta()
 		}
 		blockMeta := meta.GetBlockMeta(uint32(location.ID()))
-		if seqNums[col] <= blockMeta.GetMaxSeqnum() {
-			zm := blockMeta.ColumnMeta(seqNums[col]).ZoneMap()
-			if UsableOrderZoneMap(zm, orderExpr.Typ, rs.descending()) {
-				blocks[i].zm = zm
-			}
+		if rs.readSpec == nil && seqNums[col] > blockMeta.GetMaxSeqnum() {
+			continue
+		}
+		colMeta, err := objectio.ResolveColumnMeta(rs.readSpec, blockMeta, seqNums[col])
+		if err != nil {
+			return err
+		}
+		zm := colMeta.ZoneMap()
+		if UsableOrderZoneMap(zm, orderExpr.Typ, rs.descending()) {
+			blocks[i].zm = zm
 		}
 	}
 	slices.SortFunc(blocks, func(a, b orderedRemoteBlock) int {

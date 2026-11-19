@@ -573,14 +573,89 @@ func DeepCopyIndexSearchScan(old *plan.IndexSearchScan) *plan.IndexSearchScan {
 	}
 }
 
+func DeepCopyLiteral(lit *plan.Literal) *plan.Literal {
+	if lit == nil {
+		return nil
+	}
+	pc := &plan.Literal{
+		Isnull:                    lit.GetIsnull(),
+		IsBin:                     lit.GetIsBin(),
+		Src:                       DeepCopyExpr(lit.Src),
+		IsSerialized:              lit.GetIsSerialized(),
+		LiteralForm:               lit.GetLiteralForm(),
+		StringSource:              lit.GetStringSource(),
+		DecimalLiteralRequiresV82: lit.GetDecimalLiteralRequiresV82(),
+	}
+
+	switch c := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		pc.Value = &plan.Literal_I8Val{I8Val: c.I8Val}
+	case *plan.Literal_I16Val:
+		pc.Value = &plan.Literal_I16Val{I16Val: c.I16Val}
+	case *plan.Literal_I32Val:
+		pc.Value = &plan.Literal_I32Val{I32Val: c.I32Val}
+	case *plan.Literal_I64Val:
+		pc.Value = &plan.Literal_I64Val{I64Val: c.I64Val}
+	case *plan.Literal_Dval:
+		pc.Value = &plan.Literal_Dval{Dval: c.Dval}
+	case *plan.Literal_Sval:
+		pc.Value = &plan.Literal_Sval{Sval: c.Sval}
+	case *plan.Literal_Bval:
+		pc.Value = &plan.Literal_Bval{Bval: c.Bval}
+	case *plan.Literal_U8Val:
+		pc.Value = &plan.Literal_U8Val{U8Val: c.U8Val}
+	case *plan.Literal_U16Val:
+		pc.Value = &plan.Literal_U16Val{U16Val: c.U16Val}
+	case *plan.Literal_U32Val:
+		pc.Value = &plan.Literal_U32Val{U32Val: c.U32Val}
+	case *plan.Literal_U64Val:
+		pc.Value = &plan.Literal_U64Val{U64Val: c.U64Val}
+	case *plan.Literal_Fval:
+		pc.Value = &plan.Literal_Fval{Fval: c.Fval}
+	case *plan.Literal_Dateval:
+		pc.Value = &plan.Literal_Dateval{Dateval: c.Dateval}
+	case *plan.Literal_Timeval:
+		pc.Value = &plan.Literal_Timeval{Timeval: c.Timeval}
+	case *plan.Literal_Datetimeval:
+		pc.Value = &plan.Literal_Datetimeval{Datetimeval: c.Datetimeval}
+	case *plan.Literal_Decimal64Val:
+		pc.Value = &plan.Literal_Decimal64Val{Decimal64Val: proto.Clone(c.Decimal64Val).(*plan.Decimal64)}
+	case *plan.Literal_Decimal128Val:
+		pc.Value = &plan.Literal_Decimal128Val{Decimal128Val: proto.Clone(c.Decimal128Val).(*plan.Decimal128)}
+	case *plan.Literal_Timestampval:
+		pc.Value = &plan.Literal_Timestampval{Timestampval: c.Timestampval}
+	case *plan.Literal_Jsonval:
+		pc.Value = &plan.Literal_Jsonval{Jsonval: c.Jsonval}
+	case *plan.Literal_Defaultval:
+		pc.Value = &plan.Literal_Defaultval{Defaultval: c.Defaultval}
+	case *plan.Literal_UpdateVal:
+		pc.Value = &plan.Literal_UpdateVal{UpdateVal: c.UpdateVal}
+	case *plan.Literal_EnumVal:
+		pc.Value = &plan.Literal_EnumVal{EnumVal: c.EnumVal}
+	case *plan.Literal_VecVal:
+		pc.Value = &plan.Literal_VecVal{VecVal: c.VecVal}
+	}
+	pc.XXX_unrecognized = slices.Clone(lit.XXX_unrecognized)
+	return pc
+}
+
+func preserveOriginDefault(dst, src *plan.Default) {
+	if dst != nil && src.GetHasOriginDefault() {
+		dst.HasOriginDefault = true
+		dst.OriginDefault = DeepCopyLiteral(src.OriginDefault)
+	}
+}
+
 func DeepCopyDefault(def *plan.Default) *plan.Default {
 	if def == nil {
 		return nil
 	}
 	return &plan.Default{
-		NullAbility:  def.NullAbility,
-		Expr:         DeepCopyExpr(def.Expr),
-		OriginString: def.OriginString,
+		NullAbility:      def.NullAbility,
+		Expr:             DeepCopyExpr(def.Expr),
+		OriginString:     def.OriginString,
+		HasOriginDefault: def.HasOriginDefault,
+		OriginDefault:    DeepCopyLiteral(def.OriginDefault),
 	}
 }
 
@@ -1272,68 +1347,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
-		pc := &plan.Literal{
-			Isnull:                    item.Lit.GetIsnull(),
-			IsBin:                     item.Lit.GetIsBin(),
-			Src:                       DeepCopyExpr(item.Lit.Src),
-			IsSerialized:              item.Lit.GetIsSerialized(),
-			LiteralForm:               item.Lit.GetLiteralForm(),
-			StringSource:              item.Lit.GetStringSource(),
-			DecimalLiteralRequiresV82: item.Lit.GetDecimalLiteralRequiresV82(),
-		}
-
-		switch c := item.Lit.Value.(type) {
-		case *plan.Literal_I8Val:
-			pc.Value = &plan.Literal_I8Val{I8Val: c.I8Val}
-		case *plan.Literal_I16Val:
-			pc.Value = &plan.Literal_I16Val{I16Val: c.I16Val}
-		case *plan.Literal_I32Val:
-			pc.Value = &plan.Literal_I32Val{I32Val: c.I32Val}
-		case *plan.Literal_I64Val:
-			pc.Value = &plan.Literal_I64Val{I64Val: c.I64Val}
-		case *plan.Literal_Dval:
-			pc.Value = &plan.Literal_Dval{Dval: c.Dval}
-		case *plan.Literal_Sval:
-			pc.Value = &plan.Literal_Sval{Sval: c.Sval}
-		case *plan.Literal_Bval:
-			pc.Value = &plan.Literal_Bval{Bval: c.Bval}
-		case *plan.Literal_U8Val:
-			pc.Value = &plan.Literal_U8Val{U8Val: c.U8Val}
-		case *plan.Literal_U16Val:
-			pc.Value = &plan.Literal_U16Val{U16Val: c.U16Val}
-		case *plan.Literal_U32Val:
-			pc.Value = &plan.Literal_U32Val{U32Val: c.U32Val}
-		case *plan.Literal_U64Val:
-			pc.Value = &plan.Literal_U64Val{U64Val: c.U64Val}
-		case *plan.Literal_Fval:
-			pc.Value = &plan.Literal_Fval{Fval: c.Fval}
-		case *plan.Literal_Dateval:
-			pc.Value = &plan.Literal_Dateval{Dateval: c.Dateval}
-		case *plan.Literal_Timeval:
-			pc.Value = &plan.Literal_Timeval{Timeval: c.Timeval}
-		case *plan.Literal_Datetimeval:
-			pc.Value = &plan.Literal_Datetimeval{Datetimeval: c.Datetimeval}
-		case *plan.Literal_Decimal64Val:
-			pc.Value = &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: c.Decimal64Val.A}}
-		case *plan.Literal_Decimal128Val:
-			pc.Value = &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: c.Decimal128Val.A, B: c.Decimal128Val.B}}
-		case *plan.Literal_Timestampval:
-			pc.Value = &plan.Literal_Timestampval{Timestampval: c.Timestampval}
-		case *plan.Literal_Jsonval:
-			pc.Value = &plan.Literal_Jsonval{Jsonval: c.Jsonval}
-		case *plan.Literal_Defaultval:
-			pc.Value = &plan.Literal_Defaultval{Defaultval: c.Defaultval}
-		case *plan.Literal_UpdateVal:
-			pc.Value = &plan.Literal_UpdateVal{UpdateVal: c.UpdateVal}
-		case *plan.Literal_EnumVal:
-			pc.Value = &plan.Literal_EnumVal{EnumVal: c.EnumVal}
-		case *plan.Literal_VecVal:
-			pc.Value = &plan.Literal_VecVal{VecVal: c.VecVal}
-		}
-
-		newExpr.Expr = &plan.Expr_Lit{
-			Lit: pc,
-		}
+		newExpr.Expr = &plan.Expr_Lit{Lit: DeepCopyLiteral(item.Lit)}
 
 	case *plan.Expr_P:
 		newExpr.Expr = &plan.Expr_P{

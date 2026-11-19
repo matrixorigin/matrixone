@@ -79,6 +79,7 @@ func NewLocalDataSource(
 	}
 
 	source.table = table
+	source.readSpec = objectio.NewColumnReadSpecFromTableDef(table.GetTableDef(ctx))
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
@@ -105,7 +106,8 @@ type LocalDisttaeDataSource struct {
 		insIter logtailreplay.RowsIter
 	}
 
-	table *txnTable
+	table    *txnTable
+	readSpec *objectio.ColumnReadSpec
 
 	wsCursor  int
 	cachedBat *batch.Batch
@@ -379,13 +381,17 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
-			colMeta := blkMeta.ColumnMeta(uint16(orderByColIDX))
-			zm := colMeta.ZoneMap()
-			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
-				blockZMS[i] = zm
-				blockNulls[i] = colMeta.NullCnt()
-			}
+		if ls.readSpec == nil && orderByColIDX > int(blkMeta.GetMaxSeqnum()) {
+			continue
+		}
+		colMeta, err := objectio.ResolveColumnMeta(ls.readSpec, blkMeta, uint16(orderByColIDX))
+		if err != nil {
+			return nil, nil, err
+		}
+		zm := colMeta.ZoneMap()
+		if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+			blockZMS[i] = zm
+			blockNulls[i] = colMeta.NullCnt()
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -996,12 +1002,27 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 			// apply bf filter on committed entries
 			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-				bfColVec := entry.Batch.Vecs[2+ls.memPKFilter.BFSeqNum] // 2 for rowid and commits
-				if bfColVec.IsNull(uint64(entry.Offset)) {
-					bfSkipped++
-					continue
+				bfSeq := uint16(ls.memPKFilter.BFSeqNum)
+				bfColIdx := 2 + int(bfSeq) // 2 for rowid and commits
+				var raw []byte
+				isNull := true
+				if bfColIdx >= len(entry.Batch.Vecs) {
+					raw, isNull, err = ls.readSpec.MissingDefaultRawBytes(bfSeq)
+					if err != nil {
+						return err
+					}
+				} else if bfColIdx >= len(entry.Batch.Attrs) || entry.Batch.Attrs[bfColIdx] == "" {
+					if ls.readSpec != nil {
+						return moerr.NewInternalErrorNoCtxf("column sequence %d is missing within logtail batch layout", bfSeq)
+					}
+				} else {
+					bfColVec := entry.Batch.Vecs[bfColIdx]
+					isNull = bfColVec.IsNull(uint64(entry.Offset))
+					if !isNull {
+						raw = bfColVec.GetRawBytesAt(int(entry.Offset))
+					}
 				}
-				if !ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
+				if isNull || !ls.memPKFilter.FilterHint.BF.Test(raw) {
 					bfSkipped++
 					continue
 				}
@@ -1034,13 +1055,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 				idx := 2 /*rowid and commits*/ + seqNums[i]
 
-				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
-					entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					err = vector.AppendAny(
-						outBatch.Vecs[i],
-						nil,
-						true,
-						mp)
+				if int(idx) >= len(entry.Batch.Vecs) {
+					err = ls.readSpec.AppendMissingRows(seqNums[i], outBatch.Vecs[i], 1, mp)
+				} else if int(idx) >= len(entry.Batch.Attrs) || entry.Batch.Attrs[idx] == "" {
+					if ls.readSpec != nil {
+						return moerr.NewInternalErrorNoCtxf("column sequence %d is missing within logtail batch layout", seqNums[i])
+					}
+					err = vector.AppendMultiFixed(outBatch.Vecs[i], byte(0), true, 1, mp)
 				} else {
 					err = outBatch.Vecs[i].UnionOne(
 						entry.Batch.Vecs[int(idx)],
