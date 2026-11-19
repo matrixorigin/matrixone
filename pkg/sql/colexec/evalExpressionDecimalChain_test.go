@@ -155,7 +155,7 @@ func TestDecimalChainAllocationFailureAndRetry(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			})
-			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 			require.NoError(t, err)
 			ex, err := newTestDecimalAggregateExecutorWithAllocation(proc, decimalChargeTestPlan(t, proc), selection)
 			require.NoError(t, err)

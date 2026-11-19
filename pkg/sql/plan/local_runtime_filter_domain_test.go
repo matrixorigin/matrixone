@@ -20,7 +20,11 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,8 +73,14 @@ func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
 		{name: "source wait", change: func(q *planpb.Query) {
 			q.Nodes[1].RuntimeFilterProbeList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
 		}},
-		{name: "already filtered target keeps its reader path", targets: []int32{0}, change: func(q *planpb.Query) {
+		{name: "safe filtered target composes in the reader", targets: []int32{0, 3}, change: func(q *planpb.Query) {
 			q.Nodes[3].FilterList = []*planpb.Expr{makePlan2BoolConstExprWithType(true)}
+		}},
+		{name: "fallible filtered target cannot be skipped", change: func(q *planpb.Query) {
+			q.Nodes[3].FilterList = []*planpb.Expr{DeepCopyExpr(fallible)}
+		}},
+		{name: "native block filter can compose", targets: []int32{0, 3}, change: func(q *planpb.Query) {
+			q.Nodes[3].BlockFilterList = []*planpb.Expr{makePlan2BoolConstExprWithType(true)}
 		}},
 		{name: "source unselective", change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 1000 }},
 		{name: "computed scan projection cannot be skipped", change: func(q *planpb.Query) {
@@ -194,6 +204,141 @@ func TestLocalRuntimeFilterDomainCompactionIdentity(t *testing.T) {
 				require.Same(t, source, q.Nodes[id])
 				require.NotEqual(t, int32(1), id, "fixture must exercise an actual numbering change")
 				require.Len(t, ValidLocalRuntimeFilterDomains(q), 1)
+			}
+		})
+	}
+}
+
+// Carry the real compiler-context cache and hint resolution through the
+// existing fold/compaction pipeline rather than testing the proof in isolation.
+type localDomainFoldContext struct {
+	CompilerContext
+	cache          *StatsCache
+	hints          string
+	statementHints string
+	hintReads      int
+}
+
+func (c *localDomainFoldContext) GetStatsCache() *StatsCache { return c.cache }
+func (c *localDomainFoldContext) ResolveVariable(name string, system, global bool) (interface{}, error) {
+	if name == "optimizer_hints" {
+		c.hintReads++
+		return c.hints, nil
+	}
+	return c.CompilerContext.ResolveVariable(name, system, global)
+}
+
+func TestLocalDomainBoundPreparedPlanningSkipsPostFoldPass(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		reads := make([]int, 2)
+		for join := range 2 {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := &localDomainFoldContext{CompilerContext: mock.CurrentContext(), cache: NewStatsCache()}
+			sql := "select l.l_orderkey from lineitem l"
+			if join != 0 {
+				sql += " join part p on l.l_partkey = p.p_partkey"
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			if bound {
+				plan, err := BuildPreparedExecutionPlan(ctx, stmt, nil, nil)
+				require.NoError(t, err)
+				require.NotNil(t, plan.Plan.GetQuery())
+			} else {
+				_, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+				require.NoError(t, err)
+			}
+			reads[join] = ctx.hintReads
+		}
+		// Both SQL shapes resolve builder hints. Only the ordinary joined
+		// SELECT may resolve them again for post-fold domain derivation.
+		if bound {
+			require.Equal(t, reads[0], reads[1], "bound planning must not enter the ordinary post-fold pass")
+		} else {
+			require.Equal(t, reads[0]+1, reads[1], "ordinary joined SELECT must still enter post-fold analysis")
+		}
+	}
+}
+func (c *localDomainFoldContext) GetContext() context.Context {
+	ctx := c.CompilerContext.GetContext()
+	if c.statementHints != "" {
+		ctx = context.WithValue(ctx, defines.OptimizerHints{}, c.statementHints)
+	}
+	return ctx
+}
+func TestLocalRuntimeFilterDomainOptimizedQ19(t *testing.T) {
+	for _, tc := range []struct {
+		name, hints, statementHints string
+		missing, prepare            bool
+		want                        bool
+	}{
+		{name: "folded n-ary predicates", want: true},
+		{name: "session disabled", hints: "runtimeFilter=1"},
+		{name: "statement disabled", statementHints: "runtimeFilter=2"},
+		{name: "statement overrides session", hints: "runtimeFilter=1", statementHints: "runtimeFilter=0", want: true},
+		{name: "missing NDV", missing: true},
+		{name: "prepared stays conservative", prepare: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := runOneStmt(mock, t, "select\n\tsum(l_extendedprice* (1 - l_discount)) as revenue\nfrom\n\tlineitem,\n\tpart\nwhere\n\t(\n\t\tp_partkey = l_partkey\n\t\tand p_brand = 'Brand#12'\n\t\tand p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')\n\t\tand l_quantity >= 1 and l_quantity <= 1 + 10\n\t\tand p_size between 1 and 5\n\t\tand l_shipmode in ('AIR', 'AIR REG')\n\t\tand l_shipinstruct = 'DELIVER IN PERSON'\n\t)\n\tor\n\t(\n\t\tp_partkey = l_partkey\n\t\tand p_brand = 'Brand#23'\n\t\tand p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')\n\t\tand l_quantity >= 10 and l_quantity <= 10 + 10\n\t\tand p_size between 1 and 10\n\t\tand l_shipmode in ('AIR', 'AIR REG')\n\t\tand l_shipinstruct = 'DELIVER IN PERSON'\n\t)\n\tor\n\t(\n\t\tp_partkey = l_partkey\n\t\tand p_brand = 'Brand#34'\n\t\tand p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')\n\t\tand l_quantity >= 20 and l_quantity <= 20 + 10\n\t\tand p_size between 1 and 15\n\t\tand l_shipmode in ('AIR', 'AIR REG')\n\t\tand l_shipinstruct = 'DELIVER IN PERSON'\n\t)")
+			require.NoError(t, err)
+			q := stmt.GetQuery()
+			cache := NewStatsCache()
+			for _, n := range q.Nodes {
+				if n.NodeType == planpb.Node_TABLE_SCAN {
+					switch n.TableDef.Name {
+					case "part":
+						n.Stats.TableCnt = 2000000
+						n.Stats.Outcnt = 33908
+					case "lineitem":
+						n.Stats.TableCnt = 59986052
+						n.Stats.Outcnt = 2164219
+					}
+					ndv := map[string]float64{}
+					if !tc.missing {
+						for _, col := range n.TableDef.Cols {
+							ndv[col.Name] = 2000000
+						}
+					}
+					cache.Set(n.TableDef.TblId, &statspb.StatsInfo{TableCnt: n.Stats.TableCnt, NdvMap: ndv})
+				}
+			}
+			ctx := &localDomainFoldContext{CompilerContext: mock.CurrentContext(), cache: cache, hints: tc.hints, statementHints: tc.statementHints}
+			opt := NewBaseOptimizer(ctx)
+			if tc.prepare {
+				opt = NewPrepareOptimizer(ctx)
+			}
+			opt.qry = q
+			folded, err := opt.optimize()
+			require.NoError(t, err)
+			if !tc.want {
+				require.Empty(t, folded.LocalRuntimeFilterDomains)
+				return
+			}
+			require.NotEmpty(t, folded.LocalRuntimeFilterDomains, "real optimized Q19 must reach reader-domain admission")
+			require.Equal(t, folded.LocalRuntimeFilterDomains, ValidLocalRuntimeFilterDomains(folded))
+			found := false
+			for _, d := range folded.LocalRuntimeFilterDomains {
+				if d.SourceColumnName == "p_partkey" {
+					for _, target := range d.Targets {
+						if target.ColumnName == "l_partkey" {
+							found = true
+						}
+					}
+				}
+			}
+			require.True(t, found)
+			// This proof extension is local to domains; no Aggregate/LIMIT
+			// truncation contract or original Boolean expression is rewritten.
+			for _, n := range folded.Nodes {
+				for _, e := range n.FilterList {
+					if fn := e.GetF(); fn != nil && fn.Func.ObjName == "or" && len(fn.Args) > 2 {
+						require.True(t, localDomainPredicateIsTotal(e))
+						require.False(t, isTruncationSafePredicateExpr(e))
+					}
+				}
 			}
 		})
 	}

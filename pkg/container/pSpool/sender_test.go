@@ -217,7 +217,7 @@ func TestCachedBatchHeterogeneousPrepareParamKindSingleCopy(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 
 	source := batch.NewOffHeapWithSize(1)
@@ -331,8 +331,6 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	equivalentSelection, err := vector.NewAllocationAccountSelection(
@@ -340,8 +338,6 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	require.NotSame(t, selection, equivalentSelection)
@@ -352,8 +348,6 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	newSource := func(
@@ -447,8 +441,6 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	source := batch.NewOffHeapWithSize(1)

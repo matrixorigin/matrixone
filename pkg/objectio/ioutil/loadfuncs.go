@@ -828,6 +828,18 @@ func LoadOneBlockWithIndex(
 // the original owned destinations. The callback must publish only owned data
 // and consume any cache aliases before returning, including on error.
 func WithColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	return withColumnsDataInto(ctx, columns, typs, fs, location, destinations, scope, m, policy, false, consume)
+}
+
+// WithColumnsDataIntoBorrowedFixed lends fully validated fixed-width and private
+// variable-width inputs. Unmarked columns remain unloaded so a caller can
+// decline before copying unsupported formats. Every alias is synchronous;
+// ordinary WithColumnsDataInto callers keep their existing policy.
+func WithColumnsDataIntoBorrowedFixed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	return withColumnsDataInto(ctx, columns, typs, fs, location, destinations, scope, m, policy, true, consume)
+}
+
+func withColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, fixed bool, consume func([]*vector.Vector, []bool) error) (bool, error) {
 	if scope == nil || consume == nil || len(columns) != len(typs) || len(columns) != len(destinations) || m == nil {
 		return false, moerr.NewInvalidInputNoCtx("invalid scoped column read")
 	}
@@ -836,15 +848,20 @@ func WithColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Typ
 		return false, err
 	}
 	defer objectio.ReleaseIOVector(&ioVector)
-	err = scope.With(ioVector.Entries, destinations, func(inputs []*vector.Vector, marked []bool) error {
+	consumeInputs := func(inputs []*vector.Vector, marked []bool) error {
 		for i := range columns {
-			if !marked[i] {
+			if !marked[i] && !fixed {
 				if err := objectio.CopyCachedVectorAll(destinations[i], ioVector.Entries[i].CachedData, m); err != nil {
 					return err
 				}
 			}
 		}
 		return consume(inputs, marked)
-	})
+	}
+	if fixed {
+		err = scope.WithFixed(ioVector.Entries, destinations, consumeInputs)
+	} else {
+		err = scope.With(ioVector.Entries, destinations, consumeInputs)
+	}
 	return hit, err
 }

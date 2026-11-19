@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -638,9 +637,4 @@ func FastApplyDeletesByRowOffsets(
 			deletedMask.Add(uint64(offsets[i]))
 		}
 	}
-}
-
-// RemoveIf removes the elements that pred is true.
-func RemoveIf[T any](data []T, pred func(t T) bool) []T {
-	return commonutil.RemoveIf(data, pred)
 }

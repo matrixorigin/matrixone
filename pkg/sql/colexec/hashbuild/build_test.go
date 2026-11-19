@@ -3253,7 +3253,7 @@ func TestObserveExecutionResourceBudgetUsesGenerationSnapshot(t *testing.T) {
 
 func TestHashBuildExpressionAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(98), uint8(executionResourceAllocationSiteExpressionData))
-	require.Equal(t, uint8(101), uint8(executionResourceAllocationSiteExpressionGrouping))
+	require.Equal(t, uint8(99), uint8(executionResourceAllocationSiteExpressionArea))
 }
 
 func TestHashBuildConsumesDictionaryColumn(t *testing.T) {

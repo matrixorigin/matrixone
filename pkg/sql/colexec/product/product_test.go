@@ -33,7 +33,7 @@ import (
 
 func TestProductAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(94), uint8(productAllocationSiteResultData))
-	require.Equal(t, uint8(97), uint8(productAllocationSiteResultGrouping))
+	require.Equal(t, uint8(95), uint8(productAllocationSiteResultArea))
 }
 
 // add unit tests for cases

@@ -62,7 +62,7 @@ func TestDependentValueSourceAllocation(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_int32.ToType().PlanType()
 	n := &plan.Node{NodeType: plan.Node_VALUE_SCAN,
@@ -310,7 +310,7 @@ func TestDependentNativeStages(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 			require.NoError(t, err)
 			compiled, opened, closed := 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
@@ -486,7 +486,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 	require.NoError(t, err)
 	for range 2 {
 		func() {
@@ -594,7 +594,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 					_, err := registry.Finalize(account)
 					require.NoError(t, err)
 				}()
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 				require.NoError(t, err)
 				for range 2 {
 					func() {

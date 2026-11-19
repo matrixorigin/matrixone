@@ -24,11 +24,6 @@
 void Bitmap_Add(uint64_t *p, uint64_t pos);
 void Bitmap_Remove(uint64_t *p, uint64_t pos);
 bool Bitmap_Contains(uint64_t *p, uint64_t pos);
-bool Bitmap_IsEmpty(uint64_t *p, uint64_t nbits);
-uint64_t Bitmap_Count(uint64_t *p, uint64_t nbits);
-void Bitmap_And(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits);
-void Bitmap_Or(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits);
-void Bitmap_Not(uint64_t *dst, uint64_t *a, uint64_t nbits);
 
 /* vector arithmatics */
 int32_t SignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
