@@ -550,6 +550,8 @@ func TestPrefetcherDeferredRequestsBounded(t *testing.T) {
 	defer close(release)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
 	<-started
+	live := &PrefetchScan{}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}, Scan: live})
 	for i := 0; i < 4096; i++ {
 		s := &PrefetchScan{}
 		p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}, Scan: s})
@@ -596,6 +598,32 @@ func TestPrefetcherDeferredRequestsShareQueueBytes(t *testing.T) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	require.Equal(t, int64(0), p.deferred, "a queued deferred request moves its bytes to the queue")
+}
+
+// A request deferred behind a running download whose scans ended leaves the queues' bytes
+// to a live request.
+func TestPrefetcherEndedDeferredRequestYieldsBytes(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release
+	}
+	p := newPrefetcher(2, func() int64 { return 100 }, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	defer close(release)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+	require.Equal(t, "a", <-started)
+	ended := &PrefetchScan{}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 100, Ranges: []PrefetchRange{{Offset: 100, Size: 100}}, Scan: ended})
+	ended.End()
+	p.add(ObjectPrefetch{FilePath: "b", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}, Scan: &PrefetchScan{}})
+	require.Equal(t, "b", <-started, "the live request is downloaded")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Nil(t, p.entries["a"].next)
+	require.Zero(t, p.deferred)
+	require.Empty(t, p.deferredOf)
 }
 
 // A delete of an object being downloaded drops what later requests asked for beyond the

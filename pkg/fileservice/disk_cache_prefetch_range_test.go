@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -833,7 +834,7 @@ func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
 }
 
 // A prefetch of ranges past the in-memory bound downloads at most prefetchFilesAtOnce of
-// them at once, and downloads them all.
+// them at once, with no goroutine for each range waiting, and downloads them all.
 func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	var mu sync.Mutex
@@ -854,10 +855,11 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 		mu.Unlock()
 		return io.NopCloser(bytes.NewReader(data[start:end])), nil
 	}
-	ranges := make([]PrefetchRange, 0, 10)
-	for i := range 10 {
+	ranges := make([]PrefetchRange, 0, 14)
+	for i := range 14 {
 		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
 	}
+	goroutines := runtime.NumGoroutine()
 	done := make(chan error, 1)
 	go func() { done <- fs.prefetchFiles(context.Background(), "object", ranges, open) }()
 	release := sync.OnceFunc(func() { close(gate) })
@@ -869,6 +871,7 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return inFlight() == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
 	require.Never(t, func() bool { return inFlight() > prefetchFilesAtOnce }, 100*time.Millisecond, time.Millisecond)
+	require.Less(t, runtime.NumGoroutine()-goroutines, len(ranges), "no goroutine waits for each range")
 	release()
 	require.NoError(t, <-done)
 	mu.Lock()

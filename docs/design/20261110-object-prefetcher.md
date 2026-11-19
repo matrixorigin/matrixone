@@ -148,7 +148,7 @@ download of its object does not download is queued once that download ends (deci
 2026-11-18, v9): before, it was counted as merged and lost, and its scan read those
 columns block by block. Such a request is kept only within the queue's bytes, which the
 requests deferred behind all running downloads count toward, and only for scans that have
-not ended.
+not ended; one whose scans all ended gives up its bytes to a request that needs them.
 
 Share comes before due time because a download of an object read only in part
 displaces more useful bytes from the cache. A read that reaches such an object first

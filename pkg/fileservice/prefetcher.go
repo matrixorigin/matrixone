@@ -253,18 +253,21 @@ type prefetcher struct {
 	live     fetchQueue // downloads a read waits for
 	entries  map[string]*prefetchEntry
 	deferred int64 // bytes of the requests deferred behind running downloads
-	seq      uint64
-	closed   bool
-	wg       sync.WaitGroup
+	// deferredOf holds the running downloads with a request deferred behind them.
+	deferredOf map[*prefetchEntry]struct{}
+	seq        uint64
+	closed     bool
+	wg         sync.WaitGroup
 }
 
 func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{
 		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
-		prefetch: fetchQueue{max: workers},
-		live:     fetchQueue{max: workers},
-		entries:  make(map[string]*prefetchEntry),
+		prefetch:   fetchQueue{max: workers},
+		live:       fetchQueue{max: workers},
+		entries:    make(map[string]*prefetchEntry),
+		deferredOf: make(map[*prefetchEntry]struct{}),
 	}
 }
 
@@ -288,16 +291,26 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		if e.queue == nil && !e.req.covers(req) {
 			// The running download does not download what req asks for: it is queued once
 			// the download ends. Past the queues' bytes, what it asks for is not kept.
-			next, kept := req, int64(0)
-			if e.next != nil {
-				next, kept = e.next.merge(req), e.next.Size
+			deferred := func() (ObjectPrefetch, int64) {
+				if e.next == nil {
+					return req, 0
+				}
+				return e.next.merge(req), e.next.Size
 			}
+			next, kept := deferred()
 			grow := next.Size - kept
 			if grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
-				metric.FSPrefetchDroppedCounter.Inc()
-				return
+				if p.reclaimEndedDeferredLocked() {
+					next, kept = deferred()
+					grow = next.Size - kept
+				}
+				if grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
+					metric.FSPrefetchDroppedCounter.Inc()
+					return
+				}
 			}
 			p.deferred += grow
+			p.deferredOf[e] = struct{}{}
 			e.next = &next
 			e.nextScans = slices.DeleteFunc(e.nextScans, func(s *PrefetchScan) bool { return !s.live() })
 			if !slices.Contains(e.nextScans, req.Scan) {
@@ -308,7 +321,8 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		e.addScan(req.Scan)
 		if q := e.queue; q != nil {
 			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
+			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() &&
+				(!p.reclaimEndedDeferredLocked() || p.queuedBytesLocked()+grow > p.limit()) {
 				// Past the queues' bytes, the queued download keeps what it downloads.
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
@@ -345,6 +359,9 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			}
 		}
 		if last < 0 || q[last].live() && !e.before(q[last]) {
+			if p.reclaimEndedDeferredLocked() {
+				continue
+			}
 			metric.FSPrefetchDroppedCounter.Inc()
 			return
 		}
@@ -364,12 +381,31 @@ func (p *prefetcher) queuedBytesLocked() int64 {
 	return p.prefetch.bytes + p.live.bytes + p.deferred
 }
 
+// reclaimEndedDeferredLocked drops the requests deferred behind running downloads whose
+// scans all ended, and reports whether it dropped any.
+func (p *prefetcher) reclaimEndedDeferredLocked() bool {
+	if p.deferred == 0 {
+		return false
+	}
+	reclaimed := false
+	for e := range p.deferredOf {
+		if slices.ContainsFunc(e.nextScans, (*PrefetchScan).live) {
+			continue
+		}
+		p.takeDeferredLocked(e)
+		metric.FSPrefetchEndedCounter.Inc()
+		reclaimed = true
+	}
+	return reclaimed
+}
+
 // takeDeferredLocked returns the request deferred behind e and its scans, and clears them.
 func (p *prefetcher) takeDeferredLocked(e *prefetchEntry) (*ObjectPrefetch, []*PrefetchScan) {
 	next, scans := e.next, e.nextScans
 	if next != nil {
 		p.deferred -= next.Size
 	}
+	delete(p.deferredOf, e)
 	e.next, e.nextScans = nil, nil
 	return next, scans
 }
@@ -697,23 +733,23 @@ const prefetchFilesAtOnce = 4
 func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, ranges []PrefetchRange, open rangeOpener) error {
 	var running, started sync.WaitGroup
 	errs := make([]error, len(ranges))
-	slots := make(chan struct{}, prefetchFilesAtOnce)
-	first := min(len(ranges), prefetchFilesAtOnce)
-	started.Add(first)
-	var under atomic.Int32
-	for i, r := range ranges {
+	workers := min(len(ranges), prefetchFilesAtOnce)
+	started.Add(workers)
+	var next atomic.Int64
+	for range workers {
 		running.Add(1)
 		go func() {
 			defer running.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			mark := sync.OnceFunc(func() {
-				if under.Add(1) <= int32(first) {
-					started.Done()
-				}
-			})
+			mark := sync.OnceFunc(started.Done)
 			defer mark()
-			_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, mark), filePath, r.Offset, r.Offset+r.Size, open)
+			for i := int(next.Add(1) - 1); i < len(ranges); i = int(next.Add(1) - 1) {
+				if err := ctx.Err(); err != nil {
+					errs[i] = err
+					continue
+				}
+				r := ranges[i]
+				_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, mark), filePath, r.Offset, r.Offset+r.Size, open)
+			}
 		}()
 	}
 	started.Wait()
