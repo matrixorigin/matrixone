@@ -683,6 +683,16 @@ out_o = run()
 `, procedures[0].body)
 }
 
+func TestRewriteCloneStarlarkProcedureBodiesParenthesizedLiteralWithCR(t *testing.T) {
+	for _, newline := range []string{"\r", "\r\n"} {
+		body := `marker = "α"` + newline + `rows, err = mo.sql((("select v from source_db.clone_probe")))` + newline
+		rewritten, err := rewriteCloneStarlarkProcedureBody(context.Background(), body, "source_db", "target_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, `marker = "α"`+newline+
+			"rows, err = mo.sql(((\"select `v` from `target_db`.`clone_probe`\")))"+newline, rewritten)
+	}
+}
+
 func TestRewriteCloneStarlarkProcedureBodiesPreservesNoSQLBody(t *testing.T) {
 	const body = `label = "source_db"
 out_o = mo.quote(label) + "-ok"
@@ -757,7 +767,7 @@ func TestRewriteCloneStarlarkProcedureBodiesCoversForTargets(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := rewriteCloneStarlarkProcedureBody(context.Background(), tt.body, "", "source_db", "target_db", 1)
+			got, err := rewriteCloneStarlarkProcedureBody(context.Background(), tt.body, "source_db", "target_db", 1)
 			if tt.wantError != "" {
 				require.ErrorContains(t, err, tt.wantError)
 				return
@@ -809,6 +819,16 @@ rows, err = run_sql("select 1")
 			body: `rows, err = mo.sql("select 1", "extra")
 `,
 			want: "exactly one argument",
+		},
+		{
+			name: "prepared statement body is unknown during clone",
+			body: `rows, err = mo.sql("execute prepared_probe")`,
+			want: "cannot be safely remapped",
+		},
+		{
+			name: "multiple SQL statements",
+			body: `rows, err = mo.sql("select 1; select 2")`,
+			want: "requires a single SQL statement",
 		},
 		{
 			name: "invalid SQL literal",

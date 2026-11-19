@@ -30,13 +30,21 @@ create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'st
 $$
 values = {}
 values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
-out_answer = "BAD" if "source-v2" in values else "GOOD"
+out_answer = list(values)[0]
 $$;
 create procedure db0.p_clone_probe_starlark_for() language 'starlark'
 $$
 values = {}
 for values[mo.sql("update db0.clone_probe set v = 'clone-for' where id = 1")[1]] in [1]: pass
 $$;
+
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure db0.p_clone_probe_starlark_literal(out answer varchar) language 'starlark'
+$$
+rows, err = mo.sql("""select concat(v, ':"x"'), 1 || 0 from db0.clone_probe where id = 1""")
+out_answer = "ERR" if err != None else rows[0][0] + ":" + rows[0][1]
+$$;
+set sql_mode = default;
 
 -- Functions are catalog metadata too. They must be restored before a view that
 -- binds them, and source-qualified routine queries must bind the clone.
@@ -63,6 +71,10 @@ call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
 select @db0_clone_starlark;
 call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
 select @db0_clone_starlark_lhs;
+call db0.p_clone_probe_starlark_literal(@src_literal);
+select @src_literal;
+call db0_copy_0.p_clone_probe_starlark_literal(@clone_literal);
+select @clone_literal;
 call db0_copy_0.p_clone_probe_starlark_for();
 select v from db0.clone_probe where id = 1;
 select v from db0_copy_0.clone_probe where id = 1;
@@ -92,6 +104,19 @@ create database db_alter_clone_copy clone db_alter_clone_source;
 drop database db_alter_clone_source;
 call db_alter_clone_copy.p_add_fk();
 drop database db_alter_clone_copy;
+
+-- Rejected SQL must roll back the cloned database and all copied metadata.
+create database db_clone_unaudited;
+create table db_clone_unaudited.probe(id int);
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("execute prepared_probe")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
+select count(*) as target_tables from mo_catalog.mo_tables where reldatabase = 'db_clone_unaudited_copy';
+select count(*) as target_procedures from mo_catalog.mo_stored_procedure where db = 'db_clone_unaudited_copy';
+drop database db_clone_unaudited;
 
 -- View dependency sorting runs before the restore loop. Its UDF lookup must
 -- therefore use the source snapshot, even after the live source is gone.

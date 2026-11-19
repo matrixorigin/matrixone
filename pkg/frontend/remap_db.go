@@ -34,6 +34,7 @@ type remapDbContext struct {
 	// control-flow branches, and assigning one database to every unqualified
 	// reference would risk both false omission and an unsafe persisted body.
 	rejectUseStateChanges bool
+	rejectExecute         bool
 	// cteNames is populated while dependency collection/remapping walks a
 	// WITH-bearing statement. It prevents an unqualified CTE reference from being collected as
 	// a source table while preserving qualified references such as db.cte.
@@ -162,6 +163,7 @@ func remapCloneRoutineStatements(
 	stmts []tree.Statement,
 	remap map[string]string,
 	lowerCaseTableNames int64,
+	rejectExecute bool,
 ) error {
 	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
 	if err != nil {
@@ -170,7 +172,7 @@ func remapCloneRoutineStatements(
 	unsupported := false
 	if !remapDbInStatements(stmts, remapDbContext{
 		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
-		remapUseDatabase: true, unsupported: &unsupported,
+		remapUseDatabase: true, rejectExecute: rejectExecute, unsupported: &unsupported,
 	}) || unsupported {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
@@ -454,9 +456,14 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		*tree.ShowPublicationCoverage, *tree.ShowCcprSubscriptions,
 		*tree.ShowBackendServers, *tree.ShowLogserviceReplicas,
 		*tree.ShowLogserviceStores, *tree.ShowLogserviceSettings,
-		*tree.ShowRules, *tree.Deallocate, *tree.Reset, *tree.Execute:
+		*tree.ShowRules, *tree.Deallocate, *tree.Reset:
 		// These forms carry no database or table identity. Their nested expression
 		// fields, where present, are handled by their dedicated cases above.
+	case *tree.Execute:
+		// A session's prepared SQL is not available to the clone-time walker.
+		if remap.rejectExecute {
+			remap.markUnsupported()
+		}
 	case *tree.Use:
 		if remap.rejectUseStateChanges && !s.IsUseRole() {
 			remap.markUnsupported()

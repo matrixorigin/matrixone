@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -34,7 +33,6 @@ type cloneStarlarkEdit struct {
 type cloneStarlarkBodyRewriter struct {
 	ctx                 context.Context
 	body                string
-	sqlMode             string
 	srcDBName           string
 	dstDBName           string
 	lowerCaseTableNames int64
@@ -44,7 +42,6 @@ type cloneStarlarkBodyRewriter struct {
 func rewriteCloneStarlarkProcedureBody(
 	ctx context.Context,
 	body string,
-	sqlMode string,
 	srcDBName string,
 	dstDBName string,
 	lowerCaseTableNames int64,
@@ -60,7 +57,6 @@ func rewriteCloneStarlarkProcedureBody(
 	rewriter := cloneStarlarkBodyRewriter{
 		ctx:                 ctx,
 		body:                body,
-		sqlMode:             sqlMode,
 		srcDBName:           srcDBName,
 		dstDBName:           dstDBName,
 		lowerCaseTableNames: lowerCaseTableNames,
@@ -287,7 +283,15 @@ func (r *cloneStarlarkBodyRewriter) rewriteMoSQLCall(call *syntax.CallExpr) erro
 	if len(call.Args) != 1 {
 		return r.unsupportedMoSQL(call, "requires exactly one argument")
 	}
-	literal, ok := call.Args[0].(*syntax.Literal)
+	arg := call.Args[0]
+	for {
+		parenthesized, ok := arg.(*syntax.ParenExpr)
+		if !ok {
+			break
+		}
+		arg = parenthesized.X
+	}
+	literal, ok := arg.(*syntax.Literal)
 	if !ok || literal.Token != syntax.STRING {
 		return r.unsupportedMoSQL(call, "requires a string literal")
 	}
@@ -295,13 +299,16 @@ func (r *cloneStarlarkBodyRewriter) rewriteMoSQLCall(call *syntax.CallExpr) erro
 	if !ok {
 		return r.unsupportedMoSQL(call, "requires a string literal")
 	}
-	rewritten, err := rewriteCloneSQLRoutineBody(
+	// mo.sql calls BackgroundExec.Exec, which parses with the default
+	// SQL mode and permits a single statement.
+	rewritten, err := rewriteCloneSQLBody(
 		r.ctx,
 		query,
-		r.sqlMode,
+		"",
 		r.srcDBName,
 		r.dstDBName,
 		r.lowerCaseTableNames,
+		true,
 	)
 	if err != nil {
 		return moerr.NewNotSupportedf(
@@ -325,7 +332,7 @@ func (r *cloneStarlarkBodyRewriter) rewriteMoSQLCall(call *syntax.CallExpr) erro
 	r.edits = append(r.edits, cloneStarlarkEdit{
 		start:       start,
 		end:         end,
-		replacement: strconv.Quote(rewritten),
+		replacement: syntax.Quote(rewritten, false),
 	})
 	return nil
 }
@@ -356,11 +363,14 @@ func cloneStarlarkByteOffset(src string, pos syntax.Position) (int, error) {
 	line := int32(1)
 	offset := 0
 	for line < pos.Line {
-		next := strings.IndexByte(src[offset:], '\n')
+		next := strings.IndexAny(src[offset:], "\r\n")
 		if next < 0 {
 			return 0, moerr.NewInternalErrorNoCtxf("invalid Starlark source position at line %d", pos.Line)
 		}
 		offset += next + 1
+		if src[offset-1] == '\r' && offset < len(src) && src[offset] == '\n' {
+			offset++
+		}
 		line++
 	}
 	for col := int32(1); col < pos.Col; col++ {

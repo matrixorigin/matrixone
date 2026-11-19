@@ -691,7 +691,7 @@ func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T)
 		require.NoError(t, err)
 		defer freeStatements(stmts)
 		require.NoError(t, remapCloneRoutineStatements(
-			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1, false,
 		))
 		return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
 	}
@@ -743,7 +743,7 @@ func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T)
 		require.NoError(t, err)
 		defer freeStatements(stmts)
 		err = remapCloneRoutineStatements(
-			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1, false,
 		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot be safely remapped")

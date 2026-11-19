@@ -23,13 +23,21 @@ create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'st
 $$
 values = {}
 values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
-out_answer = "BAD" if "source-v2" in values else "GOOD"
+out_answer = list(values)[0]
 $$;
 create procedure db0.p_clone_probe_starlark_for() language 'starlark'
 $$
 values = {}
 for values[mo.sql("update db0.clone_probe set v = 'clone-for' where id = 1")[1]] in [1]: pass
 $$;
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure db0.p_clone_probe_starlark_literal(out answer varchar) language 'starlark'
+$$
+rows, err = mo.sql("""select concat(v, ':"x"'), 1 || 0 from db0.clone_probe where id = 1""")
+out_answer = "ERR" if err != None else rows[0][0] + ":" + rows[0][1]
+$$;
+set sql_mode = default;
+
 create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 create database db0_copy_0 clone db0;
@@ -56,6 +64,7 @@ p_clone_probe_sql
 p_clone_probe_starlark
 p_clone_probe_starlark_for
 p_clone_probe_starlark_lhs
+p_clone_probe_starlark_literal
 p_double
 p_labeled_loop
 p_labeled_repeat
@@ -86,7 +95,15 @@ clone-v2
 call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
 select @db0_clone_starlark_lhs;
 @db0_clone_starlark_lhs
-GOOD
+clone-v2
+call db0.p_clone_probe_starlark_literal(@src_literal);
+select @src_literal;
+@src_literal
+source-v2:"x":true
+call db0_copy_0.p_clone_probe_starlark_literal(@clone_literal);
+select @clone_literal;
+@clone_literal
+clone-v2:"x":true
 call db0_copy_0.p_clone_probe_starlark_for();
 select v from db0.clone_probe where id = 1;
 v
@@ -137,6 +154,25 @@ create database db_alter_clone_copy clone db_alter_clone_source;
 drop database db_alter_clone_source;
 call db_alter_clone_copy.p_add_fk();
 drop database db_alter_clone_copy;
+
+create database db_clone_unaudited;
+create table db_clone_unaudited.probe(id int);
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("execute prepared_probe")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+not supported: cannot safely rewrite SQL passed to mo.sql in cloned Starlark routine at line 2: not supported: cloned SQL routine contains a statement whose database references cannot be safely remapped
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
+target_databases
+0
+select count(*) as target_tables from mo_catalog.mo_tables where reldatabase = 'db_clone_unaudited_copy';
+target_tables
+0
+select count(*) as target_procedures from mo_catalog.mo_stored_procedure where db = 'db_clone_unaudited_copy';
+target_procedures
+0
+drop database db_clone_unaudited;
 drop database if exists db_snapshot_udf;
 drop database if exists db_snapshot_udf_copy;
 drop snapshot if exists sp_snapshot_udf;

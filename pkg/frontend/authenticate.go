@@ -1198,13 +1198,13 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s',%s,'%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
 			    args = '%s',
 				lang = '%s',
-			    body = '%s',
+			    body = %s,
 				sql_mode = '%s',
 				db = '%s',
 			    definer = '%s',
@@ -12706,14 +12706,14 @@ func persistStoredProcedure(
 		}
 		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
 			definition.args,
-			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
+			definition.lang, escapeSQLString(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
 			definition.name,
 			definition.args,
-			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
+			definition.lang, escapeSQLString(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	return bh.Exec(ctx, persistSQL)

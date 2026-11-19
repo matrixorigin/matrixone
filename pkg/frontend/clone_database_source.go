@@ -899,7 +899,6 @@ func rewriteCloneStoredProcedureBodies(
 			body, err := rewriteCloneStarlarkProcedureBody(
 				ctx,
 				rewritten[i].body,
-				rewritten[i].sqlMode,
 				srcDBName,
 				dstDBName,
 				lowerCaseTableNames,
@@ -979,6 +978,18 @@ func rewriteCloneSQLRoutineBody(
 	dstDBName string,
 	lowerCaseTableNames int64,
 ) (string, error) {
+	return rewriteCloneSQLBody(ctx, body, sqlMode, srcDBName, dstDBName, lowerCaseTableNames, false)
+}
+
+func rewriteCloneSQLBody(
+	ctx context.Context,
+	body string,
+	sqlMode string,
+	srcDBName string,
+	dstDBName string,
+	lowerCaseTableNames int64,
+	starlarkSQL bool,
+) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return body, nil
 	}
@@ -988,6 +999,9 @@ func rewriteCloneSQLRoutineBody(
 		return "", err
 	}
 	defer freeStatements(stmts)
+	if starlarkSQL && len(stmts) != 1 {
+		return "", moerr.NewNotSupported(ctx, "mo.sql requires a single SQL statement")
+	}
 
 	options := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
@@ -995,7 +1009,7 @@ func rewriteCloneSQLRoutineBody(
 	}
 	original := formatCloneRoutineStatements(stmts, options...)
 	if err := remapCloneRoutineStatements(
-		ctx, stmts, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames,
+		ctx, stmts, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames, starlarkSQL,
 	); err != nil {
 		return "", err
 	}
