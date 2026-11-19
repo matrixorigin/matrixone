@@ -754,49 +754,81 @@ func TestPartitionStateRangeReleasesEarlierSpillOnLaterReservationError(t *testi
 	defer mpool.DeleteMPool(mp)
 	state, src, start, end := newPartitionStateRangeRows(t, mp, 20, true)
 	defer src.Clean(mp)
+	// The constructor builds the tombstone base handle first. Make it own a
+	// completed spill before the data base handle hits the injected failure.
+	var tombstoneBlock types.Blockid
+	tombstoneBlock[0] = 1
+	for row := 0; row < 2; row++ {
+		offset := uint32(row)
+		rowID := types.NewRowid(&tombstoneBlock, offset)
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], start, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(20+row), false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: tombstoneBlock, RowID: rowID, Offset: int64(20 + row),
+			Time: start, ID: int64(20 + row), Batch: src, Deleted: true,
+		})
+	}
+	src.SetRowCount(22)
 	baseline := mp.CurrNB()
-	config, tracker := newTestChangeRangeSpillConfig(t)
-	reserveFiles := config.ReserveFiles
-	fileFactory := config.FileFactory
-	var files []*os.File
-	config.FileFactory = func(ctx context.Context, name string) (*os.File, error) {
-		file, err := fileFactory(ctx, name)
-		if file != nil {
-			files = append(files, file)
-		}
-		return file, err
-	}
 	reserveErr := moerr.NewInternalErrorNoCtx("later change range spill reservation failed")
-	reservations := 0
-	config.ReserveFiles = func(size uint64) (engine.ChangeRangeSpillReservation, error) {
-		reservations++
-		if reservations == 2 {
-			return nil, reserveErr
+	for failAt := 2; failAt <= 20; failAt++ {
+		completed := false
+		t.Run(fmt.Sprintf("reservation-%d", failAt), func(t *testing.T) {
+			config, tracker := newTestChangeRangeSpillConfig(t)
+			reserveFiles := config.ReserveFiles
+			fileFactory := config.FileFactory
+			var files []*os.File
+			config.FileFactory = func(ctx context.Context, name string) (*os.File, error) {
+				file, err := fileFactory(ctx, name)
+				if file != nil {
+					files = append(files, file)
+				}
+				return file, err
+			}
+			reservations := 0
+			config.ReserveFiles = func(size uint64) (engine.ChangeRangeSpillReservation, error) {
+				reservations++
+				if reservations == failAt {
+					return nil, reserveErr
+				}
+				return reserveFiles(size)
+			}
+			ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+				MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20,
+			})
+			ctx = engine.WithChangeRangeSpill(ctx, config)
+			handle, err := NewChangesHandlerWithPartitionStateRange(
+				ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+			)
+			if err == nil {
+				completed = true
+				require.NotNil(t, handle)
+				require.NoError(t, handle.Close())
+			} else {
+				require.Nil(t, handle)
+				require.ErrorIs(t, err, reserveErr)
+				require.Equal(t, failAt, reservations)
+			}
+			require.NotEmpty(t, files)
+			for _, file := range files {
+				_, err := file.Stat()
+				require.ErrorIs(t, err, os.ErrClosed)
+			}
+			for _, reservation := range tracker.diskReservations {
+				require.True(t, reservation.released)
+			}
+			for _, reservation := range tracker.fileReservations {
+				require.True(t, reservation.released)
+			}
+			require.Equal(t, baseline, mp.CurrNB())
+		})
+		if completed {
+			require.Greater(t, failAt, 3)
+			return
 		}
-		return reserveFiles(size)
 	}
-	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
-		MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20,
-	})
-	ctx = engine.WithChangeRangeSpill(ctx, config)
-	handle, err := NewChangesHandlerWithPartitionStateRange(
-		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
-	)
-	require.Nil(t, handle)
-	require.ErrorIs(t, err, reserveErr)
-	require.Equal(t, 2, reservations)
-	require.NotEmpty(t, files)
-	for _, file := range files {
-		_, err := file.Stat()
-		require.ErrorIs(t, err, os.ErrClosed)
-	}
-	for _, reservation := range tracker.diskReservations {
-		require.True(t, reservation.released)
-	}
-	for _, reservation := range tracker.fileReservations {
-		require.True(t, reservation.released)
-	}
-	require.Equal(t, baseline, mp.CurrNB())
+	t.Fatal("bounded replay never completed after all reservation failure points")
 }
 
 func TestPartitionStateRangeReleasesSpillOnCancellation(t *testing.T) {
