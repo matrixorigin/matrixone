@@ -61,7 +61,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-uniform-native-refresh.yaml@3a8fbd449a3e242f951affd0f1a6843426748ed6
+    uses: matrixorigin/CI/.github/workflows/node-cache-uniform-native-refresh.yaml@586b3c46ac63a3bcae05902679fad64d64ed8ecb
     with:
       environment: ${{ fromJSON('{"uniform-native-jed":"jed","uniform-native-mnl2":"mnl2","uniform-native-ruh":"ruh"}')[inputs.coverage_comparison] }}
     secrets: inherit
