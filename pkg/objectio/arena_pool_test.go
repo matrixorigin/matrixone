@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -102,36 +103,136 @@ func TestArenaFreedAfterIdleTTL(t *testing.T) {
 // After a burst, a workload that keeps reusing one arena keeps exactly that
 // one warm; the rest of the burst ages out although the pool stays busy.
 // The global idle timer this replaces never fired while anything was active.
+//
+// Every assertion and the reaper schedule run under testing/synctest's
+// controlled clock: bubble time only advances after every bubble goroutine
+// is durably blocked, so the workload cannot be preempted while it holds
+// the working arena and both schedules below are deterministic in virtual
+// time. One case lets the initial reaper fire normally; the other holds the
+// first fire until well after the old fixed warmup plus the TTL while the
+// workload stays busy. The previous real-time form could not prove either
+// guarantee, because time.Sleep bounds the minimum, not the maximum, pause.
 func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
-	ttl := 150 * time.Millisecond
-	withArenaIdleTTL(t, ttl)
-	base := arenaMPool.CurrNB()
+	// Go 1.27 forbids t.Run inside a synctest bubble, so each schedule
+	// subtest owns its own bubble below.
+	for _, schedule := range []string{"normal first fire", "delayed first fire"} {
+		t.Run(schedule, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Drain the reaper on every exit path, including failed
+				// assertions: this defer runs during Goexit while still
+				// inside the bubble, so the bubble-owned reaper timer is
+				// always stopped in-bubble and the outer cleanup, which
+				// runs outside the bubble, only ever sees reaper == nil.
+				defer drainArenaReaper(ArenaLarge)
+				const ttl = 150 * time.Millisecond
+				withArenaIdleTTL(t, ttl)
+				base := arenaMPool.CurrNB()
 
-	// Within capacity, so perArena below divides by what is actually parked.
-	burst := make([]*WriteArena, min(8, arenaPools[ArenaLarge].maxCount))
-	for i := range burst {
-		burst[i] = GetArena(ArenaLarge)
-	}
-	for _, a := range burst {
-		PutArena(a)
-	}
-	perArena := (arenaMPool.CurrNB() - base) / int64(len(burst))
+				// Within capacity, so perArena below divides by what is actually parked.
+				burst := make([]*WriteArena, min(8, arenaPools[ArenaLarge].maxCount))
+				for i := range burst {
+					burst[i] = GetArena(ArenaLarge)
+				}
+				for _, a := range burst {
+					PutArena(a)
+				}
+				perArena := (arenaMPool.CurrNB() - base) / int64(len(burst))
 
-	deadline := time.Now().Add(4 * ttl)
-	var steady *WriteArena
-	for time.Now().Before(deadline) {
-		a := GetArena(ArenaLarge)
-		if steady == nil {
-			steady = a
-		}
-		require.Same(t, steady, a, "the working arena stays on top of the stack")
-		PutArena(a)
-		time.Sleep(5 * time.Millisecond)
+				pool := &arenaPools[ArenaLarge]
+				holdFirstReaper := schedule != "normal first fire"
+				if holdFirstReaper {
+					// Stop the initial timer but keep its non-nil handle, so
+					// the workload's PutArena (which arms only when the
+					// reaper is nil) cannot re-arm it while the delayed
+					// first fire is held back.
+					pool.mu.Lock()
+					pool.reaper.Stop()
+					pool.mu.Unlock()
+				}
+
+				// borrowed tracks the arena the workload holds out of the
+				// pool. Pool-owned arenas are released by withArenaIdleTTL's
+				// cleanup; releasing the borrowed one here covers a failed
+				// assertion mid-borrow without leaking or double-freeing
+				// off-heap buffers.
+				var borrowed *WriteArena
+				t.Cleanup(func() {
+					if borrowed != nil {
+						borrowed.FreeBuffers()
+					}
+				})
+
+				var steady *WriteArena
+				start := time.Now()
+				deadline := start.Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					n, _ := parkedLargeSnapshot()
+					if n == 1 {
+						break
+					}
+					if holdFirstReaper && time.Since(start) >= 6*ttl {
+						// Re-arm the held reaper after the old fixed warmup
+						// (4*ttl) plus the TTL has elapsed in bubble time,
+						// with the workload still busy.
+						pool.mu.Lock()
+						pool.reaper = time.AfterFunc(arenaIdleTTL, pool.reap)
+						pool.mu.Unlock()
+						holdFirstReaper = false
+					}
+					borrowed = GetArena(ArenaLarge)
+					if steady == nil {
+						steady = borrowed
+					}
+					require.Same(t, steady, borrowed, "the working arena stays on top of the stack")
+					PutArena(borrowed)
+					borrowed = nil
+					time.Sleep(5 * time.Millisecond)
+				}
+
+				// Join any in-flight reaper callback before observing its
+				// effects: the reap frees the aged arenas' buffers after it
+				// releases the pool lock, so the parked count may already read
+				// one while those frees are still running. synctest.Wait
+				// returns only after every other bubble goroutine is
+				// durably blocked or has exited, which makes this barrier
+				// deterministic for the callback's ownership.
+				synctest.Wait()
+
+				n, survivor := parkedLargeSnapshot()
+				require.Equal(t, 1, n, "the cold burst arenas age out while the pool stays busy")
+				require.Same(t, steady, survivor, "the surviving parked arena is the one the workload kept reusing")
+				require.Equal(t, base+perArena, arenaMPool.CurrNB(), "only the working arena's memory is kept")
+			})
+		})
 	}
-	require.Eventually(t, func() bool {
-		return parkedCount(ArenaLarge) == 1
-	}, 5*time.Second, 10*time.Millisecond)
-	require.Equal(t, base+perArena, arenaMPool.CurrNB(), "only the working arena's memory is kept")
+}
+
+// parkedLargeSnapshot reads the large-tier pool without holding its mutex
+// across a fatal assertion: the count and the newest parked arena are copied
+// out under the lock and inspected after it is released.
+func parkedLargeSnapshot() (int, *WriteArena) {
+	pool := &arenaPools[ArenaLarge]
+	pool.mu.Lock()
+	n := len(pool.parked)
+	var newest *WriteArena
+	if n > 0 {
+		newest = pool.parked[n-1].arena
+	}
+	pool.mu.Unlock()
+	return n, newest
+}
+
+// drainArenaReaper stops and clears a pool's reaper timer. It must run
+// inside the owning bubble: bubble timer handles must not be operated on
+// from outside the bubble.
+func drainArenaReaper(tier int) {
+	pool := &arenaPools[tier]
+	pool.mu.Lock()
+	if pool.reaper != nil {
+		pool.reaper.Stop()
+		pool.reaper = nil
+	}
+	pool.mu.Unlock()
 }
 
 func TestArenaPoolCountCap(t *testing.T) {

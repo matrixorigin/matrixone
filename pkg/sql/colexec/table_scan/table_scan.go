@@ -144,9 +144,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
-		if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(tableScan.ctr.allFilterExecutors) > 0 {
-			tableScan.prepareSelectionWorkspace()
-		}
 		// read data from storage engine
 		for col, workspace := range tableScan.ctr.readerWorkspace {
 			if workspace != nil {
