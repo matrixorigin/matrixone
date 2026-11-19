@@ -46,15 +46,32 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 		inlineValue  = "inline"
 	)
 	for _, tc := range []struct {
-		name        string
-		joinType    plan.Node_JoinType
-		probeKeys   []int64
-		usePK       bool
-		useResidual bool
+		name             string
+		joinType         plan.Node_JoinType
+		probeKeys        []int64
+		buildRows        int
+		usePK            bool
+		useResidual      bool
+		unmatchedOutlier bool
+		wantBatchRows    []int
 	}{
-		{name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2}},
-		{name: "right-unique-gather-and-finalize", joinType: plan.Node_RIGHT, probeKeys: []int64{11, 0, 1, 2, 3, 4, 5, 6}, usePK: true},
-		{name: "left-residual-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2, 3, 4}, useResidual: true},
+		{
+			name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2},
+			wantBatchRows: []int{11, 3},
+		},
+		{
+			name: "right-unique-gather-and-finalize", joinType: plan.Node_RIGHT,
+			probeKeys: []int64{11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12}, buildRows: 26, usePK: true,
+			wantBatchRows: []int{12, 1, 12, 1},
+		},
+		{
+			name: "left-residual-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2, 3, 4},
+			useResidual: true, wantBatchRows: []int{11, 5},
+		},
+		{
+			name: "left-unmatched-build-outlier", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2},
+			unmatchedOutlier: true, wantBatchRows: []int{13},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -92,7 +109,8 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}},
 				EqConds:    [][]*plan.Expr{{key}, {key}},
 			}
-			buildRows, wideRows := defaultRows, defaultRows
+			buildRows := max(defaultRows, tc.buildRows)
+			wideRows := buildRows
 			if tc.useResidual {
 				// ON p.k = b.k AND p.k <= b.bound
 				bound := newExpr(3, keyType)
@@ -144,6 +162,18 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 					default:
 						payload = bytes.Repeat([]byte{byte(row + 1)}, valueBytes)
 					}
+					// Put a short value near the start of both the probe and
+					// finalize output. Each batch can fit one extra row.
+					if tc.usePK && (row == 0 || row == 13) {
+						payload = []byte(inlineValue)
+					}
+					if tc.unmatchedOutlier {
+						if row == 0 {
+							buildKey = 9
+						} else {
+							payload = []byte(inlineValue)
+						}
+					}
 					require.NoError(t, vector.AppendFixed(input.Vecs[0], buildKey, false, mp))
 					require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(row), false, mp))
 					require.NoError(t, vector.AppendBytes(input.Vecs[2], payload, payloadNull, mp))
@@ -192,6 +222,9 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				}
 				want[joinedRow{key, int64(row)}] = true
 			}
+			if tc.unmatchedOutlier {
+				delete(want, joinedRow{1, 0})
+			}
 			if tc.useResidual {
 				// The first probe has more qualifying wide rows than one result
 				// batch can hold. Its final candidates are false and NULL.
@@ -206,7 +239,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				want[joinedRow{2, -1}] = true
 			}
 
-			var outputBatches int
+			var batchRows []int
 			for calls := 0; ; calls++ {
 				require.LessOrEqual(t, calls, buildRows+2)
 				result, err := vm.Exec(arg, proc)
@@ -217,8 +250,9 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				if result.Batch == nil || result.Batch.IsEmpty() {
 					continue
 				}
-				outputBatches++
 				out := result.Batch
+				batchRows = append(batchRows, out.RowCount())
+				require.LessOrEqual(t, int64(len(out.Vecs[2].GetArea())), mpool.MaxAllocationSize())
 				keys := vector.MustFixedColNoTypeCheck[int64](out.Vecs[0])
 				ids := vector.MustFixedColNoTypeCheck[int64](out.Vecs[1])
 				for row := range out.RowCount() {
@@ -234,7 +268,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 					delete(want, got)
 					isNull := id == -1 || id == nullID
 					require.Equal(t, isNull, out.Vecs[2].IsNull(uint64(row)))
-					if id == inlineID {
+					if id == inlineID || (tc.unmatchedOutlier && !isNull) || (tc.usePK && (id == 0 || id == 13)) {
 						require.Equal(t, inlineValue, string(out.Vecs[2].GetBytesAt(row)))
 					} else if !isNull {
 						payload := out.Vecs[2].GetBytesAt(row)
@@ -244,7 +278,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				}
 			}
 			require.Empty(t, want)
-			require.GreaterOrEqual(t, outputBatches, 2)
+			require.Equal(t, tc.wantBatchRows, batchRows)
 		})
 	}
 }
