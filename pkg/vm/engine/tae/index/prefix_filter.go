@@ -131,7 +131,7 @@ func (bf *prefixBloomFilter) MayContainsKey(key []byte) (bool, error) {
 
 func (bf *prefixBloomFilter) MayContainsAnyKeys(
 	keys containers.Vector,
-) (bool, *nulls.Bitmap, error) {
+) (bool, *nulls.Nulls, error) {
 	panic("not supported")
 }
 

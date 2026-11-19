@@ -470,11 +470,11 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
+func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Nulls) error {
 	return vec.ForeachWindow(0, vec.wrapped.Length(), op, sels)
 }
 
-func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
+func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Nulls) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
@@ -581,7 +581,7 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 	return
 }
 
-func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Nulls) {
 	if mask.IsEmpty() {
 		return
 	}

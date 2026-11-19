@@ -45,7 +45,7 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Nulls) {
 	if bat == nil || invisibleRows.IsEmpty() {
 		return
 	}
@@ -89,7 +89,7 @@ func HybridScanByBlock(
 	}
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
-	var deletesBeforeScan *nulls.Bitmap
+	var deletesBeforeScan *nulls.Nulls
 	filterInvisibleAppendRows := dataObject.IsAppendable() && !preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
@@ -105,7 +105,7 @@ func HybridScanByBlock(
 	if *bat == nil {
 		return nil
 	}
-	var invisibleAppendRows *nulls.Bitmap
+	var invisibleAppendRows *nulls.Nulls
 	if filterInvisibleAppendRows {
 		invisibleAppendRows = (*bat).Deletes.Clone()
 		if deletesBeforeScan != nil {

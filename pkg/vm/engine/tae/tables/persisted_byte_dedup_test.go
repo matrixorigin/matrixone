@@ -69,7 +69,7 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					loader.commitTS.Append(types.BuildTS(timestamps[i], 0), false)
 					loader.abort.Append(aborted[i], false)
 				}
-				var selected nulls.Bitmap
+				var selected nulls.Nulls
 				want := make([]int, 160)
 				var wantErr error
 				for i := range want {

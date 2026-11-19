@@ -67,14 +67,14 @@ type Vector interface {
 
 	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
-	CompactByBitmap(*nulls.Bitmap)
+	CompactByBitmap(*nulls.Nulls)
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	ExtendVec(o *cnVector.Vector) error
 
-	Foreach(op ItOp, sels *nulls.Bitmap) error
-	ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) error
+	Foreach(op ItOp, sels *nulls.Nulls) error
+	ForeachWindow(offset, length int, op ItOp, sels *nulls.Nulls) error
 
 	Length() int
 	ApproxSize() int
@@ -100,7 +100,7 @@ type Vector interface {
 type Batch struct {
 	Attrs   []string
 	Vecs    []Vector
-	Deletes *nulls.Bitmap
+	Deletes *nulls.Nulls
 	Nameidx map[string]int
 	Pool    *VectorPool
 	// DataRelease is called to free external data buffers (e.g. fileservice IOVectors)

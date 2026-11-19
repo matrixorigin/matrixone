@@ -33,7 +33,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
-	var positive *nulls.Bitmap
+	var positive *nulls.Nulls
 	var res bool
 	var exist bool
 
@@ -267,7 +267,7 @@ func TestStaticFilterString(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
-	var positive *nulls.Bitmap
+	var positive *nulls.Nulls
 	var res bool
 	var exist bool
 

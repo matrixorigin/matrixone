@@ -27,8 +27,6 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-type Bitmap = Nulls
-
 type Nulls struct {
 	np bitmap.Bitmap
 }

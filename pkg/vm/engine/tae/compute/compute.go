@@ -51,7 +51,7 @@ func SortAndDedup[T any](
 	return vals[:pos]
 }
 
-func ShuffleByDeletes(inputDeletes, deletes *nulls.Bitmap) (outDeletes *nulls.Bitmap) {
+func ShuffleByDeletes(inputDeletes, deletes *nulls.Nulls) (outDeletes *nulls.Nulls) {
 	if deletes.IsEmpty() || inputDeletes.IsEmpty() {
 		return inputDeletes
 	}
@@ -85,7 +85,7 @@ func ShuffleByDeletes(inputDeletes, deletes *nulls.Bitmap) (outDeletes *nulls.Bi
 func GetOffsetOfBytes(
 	data *vector.Vector,
 	val []byte,
-	skipmask *nulls.Bitmap,
+	skipmask *nulls.Nulls,
 ) (offset int, exist bool) {
 	start, end := 0, data.Length()-1
 	var mid int
@@ -113,7 +113,7 @@ func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,
 	compare func(a, b T) int,
-	skipmask *nulls.Bitmap,
+	skipmask *nulls.Nulls,
 ) (offset int, exist bool) {
 	start, end := 0, len(vals)-1
 	var mid int
@@ -136,7 +136,7 @@ func GetOffsetWithFunc[T any](
 	return
 }
 
-func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Bitmap) (offset int, exist bool) {
+func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Nulls) (offset int, exist bool) {
 	start, end := 0, len(column)-1
 	var mid int
 	for start <= end {
@@ -157,7 +157,7 @@ func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Bit
 	return
 }
 
-func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offset int, exist bool) {
+func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offset int, exist bool) {
 	vec := data.GetDownstreamVector()
 	switch data.GetType().Oid {
 	case types.T_bool:

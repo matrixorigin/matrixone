@@ -615,7 +615,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
 	return bat
 }
 
-func ForeachVector(vec Vector, op any, sel *nulls.Bitmap) (err error) {
+func ForeachVector(vec Vector, op any, sel *nulls.Nulls) (err error) {
 	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
@@ -624,7 +624,7 @@ func ForeachVectorWindow(
 	start, length int,
 	op1 any,
 	op2 ItOp,
-	sel *nulls.Bitmap,
+	sel *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
 	col := vec.GetDownstreamVector()
@@ -965,7 +965,7 @@ func ForeachWindowBytes(
 	vec *vector.Vector,
 	start, length int,
 	op ItOpT[[]byte],
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
@@ -1005,7 +1005,7 @@ func ForeachWindowFixed[T any](
 	reverse bool,
 	op ItOpT[T],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	if vec.IsConst() {
 		var v T
@@ -1136,7 +1136,7 @@ func ForeachWindowVarlen(
 	reverse bool,
 	op ItOpT[[]byte],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	if vec.IsConst() {
 		var v []byte

@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
-func BitmapEqual(v1, v2 *nulls.Bitmap) bool {
+func BitmapEqual(v1, v2 *nulls.Nulls) bool {
 	if v1 == nil || v2 == nil {
 		return v1 == v2
 	}
@@ -36,7 +36,7 @@ func BitmapEqual(v1, v2 *nulls.Bitmap) bool {
 	return true
 }
 
-func RoaringToMOBitmap(bm *roaring.Bitmap) *nulls.Bitmap {
+func RoaringToMOBitmap(bm *roaring.Bitmap) *nulls.Nulls {
 	if bm == nil {
 		return nil
 	}
