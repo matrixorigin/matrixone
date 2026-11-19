@@ -149,3 +149,154 @@ func TestUnionIdenticalCorrelatedUNIONAttributionControls(t *testing.T) {
 		})
 	}
 }
+
+// Review-regression shapes for the correlated-UNION predicate fold: an EXISTS
+// subquery over two identical SELECTs whose WHERE clauses carry two outer
+// equalities, or one outer inequality, planned fine on the merge base through
+// the then-collapsed single operand and must keep planning now that both
+// operands stay: each arm export slot leaves the union and each identical arm
+// predicate pair folds onto its own output column for the supported
+// correlated join above the union.
+const unionIdenticalCorrelatedTwoEqualitiesSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey AND t1.n_nationkey = t2.n_nationkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey AND t1.n_nationkey = t2.n_nationkey));`
+
+const unionIdenticalCorrelatedInequalitySQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t2.n_nationkey > t1.n_nationkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t2.n_nationkey > t1.n_nationkey));`
+
+const unionIdenticalCorrelatedMixedComparisonSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey AND t2.n_nationkey > t1.n_nationkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey AND t2.n_nationkey > t1.n_nationkey));`
+
+// Neighboring broken shapes keep the explicit correlated-UNION boundary: an
+// arm exporting a different number of slots than its sibling can never pair
+// predicates one-to-one, and a range-exposing fold under a scalar consumer
+// would surface duplicate user tuples its semantics can observe.
+const unionCorrelatedUnpairedExportsControlSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey AND t1.n_nationkey = t2.n_nationkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey));`
+
+const unionCorrelatedRangeScalarControlSQL = `SELECT t1.n_nationkey + ` +
+	`(SELECT 9 FROM tpch.nation t3 WHERE t3.n_regionkey > t1.n_regionkey ` +
+	`UNION SELECT 9 FROM tpch.nation t3 WHERE t3.n_regionkey > t1.n_regionkey) ` +
+	`FROM tpch.nation t1;`
+
+// TestUnionIdenticalCorrelatedUNIONFoldsPairedPredicates is the review's
+// two-equality and one-inequality regression: the correlated distinct UNION
+// must stay a real UNION with both operands while every pulled arm predicate
+// pair folds onto its own union output slot.
+func TestUnionIdenticalCorrelatedUNIONFoldsPairedPredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	cases := []struct {
+		name  string
+		sql   string
+		width int
+	}{
+		{"two outer equalities", unionIdenticalCorrelatedTwoEqualitiesSQL, 3},
+		{"one outer inequality", unionIdenticalCorrelatedInequalitySQL, 2},
+		{"equality and inequality mix", unionIdenticalCorrelatedMixedComparisonSQL, 3},
+	}
+	for _, want := range cases {
+		t.Run(want.name, func(t *testing.T) {
+			q := buildSetOpChainQuery(t, ctx, want.sql)
+			facts := analyzeSetOpChain(t, q)
+			require.GreaterOrEqualf(t, facts.unionFamily, 1,
+				"the paired-predicate correlated UNION must remain a real set-op node")
+			require.GreaterOrEqualf(t, facts.operandLeaves, 2*facts.unionFamily,
+				"every retained UNION must keep both operands as inputs")
+			node := firstSetOpNodeOfFamily(q, isUnionFamilyNodeType)
+			require.NotNil(t, node)
+			require.Equalf(t, planpb.Node_UNION, node.NodeType,
+				"the fold must not degrade distinct-UNION semantics")
+			require.Len(t, node.Children, 2)
+			require.Lenf(t, node.ProjectList, want.width,
+				"user column plus every folded arm export slot")
+			for _, childID := range node.Children {
+				input := setOpInputNodeOfPlanQuery(q, childID)
+				require.Lenf(t, input.ProjectList, want.width,
+					"each arm must export its own copy of every folded slot")
+			}
+		})
+	}
+}
+
+// TestUnionIdenticalCorrelatedUNIONUnfoldableShapesKeepBoundary pins the
+// negative space of the fold: unpaired exports never plan through a partial
+// fold, and consumers that can observe the duplicates a range export keeps
+// never receive one silently. The unpaired shape must keep reporting the
+// explicit correlated-UNION boundary; the scalar shape must keep failing
+// closed (either explicit boundary is acceptable, wrong rows are not).
+func TestUnionIdenticalCorrelatedUNIONUnfoldableShapesKeepBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+
+	err := buildSetOpChainQueryAllowError(t, ctx, unionCorrelatedUnpairedExportsControlSQL)
+	require.Error(t, err,
+		"arms exporting different numbers of slots must never fold partially")
+	require.Containsf(t, err.Error(), "correlated local CTE: UNION",
+		"unpaired exports must keep the explicit correlated-UNION boundary, got: %v", err)
+
+	require.Error(t,
+		buildSetOpChainQueryAllowError(t, ctx, unionCorrelatedRangeScalarControlSQL),
+		"a range-exposing correlated UNION under a scalar consumer must keep failing closed")
+}
+
+// Mixed-comparison arms: each arm pulls a comparison on the same inner slot,
+// but the two ops differ. The pulled predicates no longer run inside the arms,
+// so a fold may never adopt the left arm's condition and drop the right arm's
+// own semantics; the pair must keep the explicit correlated-UNION boundary.
+// The reversed variant (range arm left, equality arm right) pins that the
+// rejection is symmetric, not an artifact of which arm was visited first.
+const unionCorrelatedMixedEqGreaterControlSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey = t1.n_regionkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey > t1.n_regionkey));`
+
+const unionCorrelatedMixedEqNeqControlSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey = t1.n_regionkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey <> t1.n_regionkey));`
+
+const unionCorrelatedMixedGreaterEqControlSQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey > t1.n_regionkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey = t1.n_regionkey));`
+
+// Commutative equality control: mirrored argument order across the two arms
+// is the same equality on the same slot and must keep folding.
+const unionCorrelatedCommutativeEqualitySQL = `SELECT 3 FROM tpch.nation t1 WHERE ` +
+	`EXISTS ((SELECT 1 FROM tpch.nation t2 WHERE t1.n_regionkey = t2.n_regionkey)` +
+	` UNION (SELECT 1 FROM tpch.nation t2 WHERE t2.n_regionkey = t1.n_regionkey));`
+
+// TestUnionIdenticalCorrelatedUNIONMixedArmComparisonsKeepBoundary rejects
+// every mixed-op pairing: each arm's own pulled condition would be silently
+// lost if the fold adopted the other arm's comparison on the shared slot.
+func TestUnionIdenticalCorrelatedUNIONMixedArmComparisonsKeepBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	for name, sql := range map[string]string{
+		"left equality, right greater": unionCorrelatedMixedEqGreaterControlSQL,
+		"left equality, right neq":     unionCorrelatedMixedEqNeqControlSQL,
+		"left greater, right equality": unionCorrelatedMixedGreaterEqControlSQL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := buildSetOpChainQueryAllowError(t, ctx, sql)
+			require.Error(t, err,
+				"arms with different comparison ops must never fold: the "+
+					"dropped arm's predicate has no remaining in-arm evaluation")
+			require.Containsf(t, err.Error(), "correlated local CTE: UNION",
+				"mixed arm comparisons must keep the explicit correlated-UNION boundary, got: %v", err)
+		})
+	}
+}
+
+// TestUnionIdenticalCorrelatedUNIONCommutativeEqualityStillFolds proves the
+// rejection of mixed ops is not a blanket textual rule: mirrored equality
+// argument order across arms plans and keeps both operands.
+func TestUnionIdenticalCorrelatedUNIONCommutativeEqualityStillFolds(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	q := buildSetOpChainQuery(t, ctx, unionCorrelatedCommutativeEqualitySQL)
+	node := firstSetOpNodeOfFamily(q, isUnionFamilyNodeType)
+	require.NotNil(t, node)
+	require.Equalf(t, planpb.Node_UNION, node.NodeType,
+		"mirrored equality must keep a distinct UNION")
+	require.Len(t, node.Children, 2)
+	require.Lenf(t, node.ProjectList, 2,
+		"user column plus the shared hidden identity slot")
+}

@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"math"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -4387,6 +4388,142 @@ func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	return nil, false
 }
 
+// isUnionFoldComparison limits correlated-UNION arm-predicate folds to plain
+// row comparisons. More expressive predicates (function trees, conjunctions,
+// matches) keep the explicit correlated-UNION boundary instead of risking a
+// fold that cannot restore each arm's own semantics above the union.
+func isUnionFoldComparison(op string) bool {
+	switch op {
+	case "=", "<", "<=", ">", ">=", "<>":
+		return true
+	}
+	return false
+}
+
+// unionArmPredShape pins the arm-predicate shape the correlated-UNION fold
+// can represent: a two-argument top-level comparison whose direct arguments
+// are exactly one bare own-arm export slot at the expected position and one
+// outer-value side that is either a bare depth-1 outer reference or the
+// pad-space cast MO binds around a CHAR outer reference. A correlated CHAR
+// equality compares through cast(char as varchar) on the outer side while
+// pullup materializes the wrapped inner value as the export slot, which is
+// exactly the shape the supported single-arm path executes (audit probe:
+// the CHAR identity predicate reaches its semi-join as
+// "=" (cast(outer) , hidden cast-slot)). Predicates pulling their
+// correlation through any other function tree, referencing several columns,
+// or leaking other column scopes keep their explicit rejection.
+func unionArmPredShape(pred *plan.Expr, armTag, slotPos int32) (*plan.Expr, *plan.Expr, *plan.CorrColRef, bool) {
+	f := pred.GetF()
+	if f == nil || f.Func == nil || len(f.Args) != 2 ||
+		!isUnionFoldComparison(f.Func.ObjName) || isJSONNumericComparisonArgs(f.Args) {
+		return nil, nil, nil, false
+	}
+	var slotExpr *plan.Expr
+	var corrSide *plan.Expr
+	var corrRef *plan.CorrColRef
+	for _, arg := range f.Args {
+		if corr := arg.GetCorr(); corr != nil && corr.Depth == 1 {
+			if corrSide != nil {
+				return nil, nil, nil, false
+			}
+			corrSide = arg
+			corrRef = corr
+			continue
+		}
+		// The audited CHAR comparison wrapper is the two-argument cast
+		// (value, target type): cast(char as varchar) carries the pad-space
+		// normalization, so a folded outer side restores exactly the shape
+		// the supported single-arm path executes.
+		if fn := arg.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+			len(fn.Args) == 2 && fn.Args[0].GetCorr() != nil &&
+			fn.Args[0].GetCorr().Depth == 1 && fn.Args[1].GetT() != nil {
+			if corrSide != nil {
+				return nil, nil, nil, false
+			}
+			corrSide = arg
+			corrRef = fn.Args[0].GetCorr()
+			continue
+		}
+		if col := arg.GetCol(); col != nil && col.RelPos == armTag {
+			if slotExpr != nil {
+				return nil, nil, nil, false
+			}
+			slotExpr = arg
+			continue
+		}
+		return nil, nil, nil, false
+	}
+	if corrSide == nil || corrRef == nil || slotExpr == nil || slotExpr.GetCol().ColPos != slotPos {
+		return nil, nil, nil, false
+	}
+	return slotExpr, corrSide, corrRef, true
+}
+
+// unionArmPredPairsEqual proves the left and right arm predicates are the
+// same comparison instantiated once per arm: identical function, constants
+// and outer reference, with the slot columns aligned to the same position
+// under their own arm tags.
+func unionArmPredPairsEqual(a, b *plan.Expr, aTag, bTag int32) bool {
+	switch x := a.Expr.(type) {
+	case *plan.Expr_F:
+		y, ok := b.Expr.(*plan.Expr_F)
+		if !ok || x.F.Func == nil || y.F.Func == nil ||
+			x.F.Func.ObjName != y.F.Func.ObjName || len(x.F.Args) != len(y.F.Args) {
+			return false
+		}
+		for i := range x.F.Args {
+			if !unionArmPredPairsEqual(x.F.Args[i], y.F.Args[i], aTag, bTag) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Col:
+		y, ok := b.Expr.(*plan.Expr_Col)
+		return ok && x.Col.RelPos == aTag && y.Col.RelPos == bTag &&
+			x.Col.ColPos == y.Col.ColPos && isSameColumnType(a.Typ, b.Typ)
+	case *plan.Expr_Corr:
+		y, ok := b.Expr.(*plan.Expr_Corr)
+		return ok && x.Corr.RelPos == y.Corr.RelPos && x.Corr.ColPos == y.Corr.ColPos &&
+			x.Corr.Depth == y.Corr.Depth && isSameColumnType(a.Typ, b.Typ)
+	default:
+		return reflect.DeepEqual(a.Expr, b.Expr) && isSameColumnType(a.Typ, b.Typ)
+	}
+}
+
+// replaceUnionArmSlotRef rewrites the folded predicate's single arm slot
+// reference to the union's output column. The single-slot shape was already
+// validated by unionArmPredShape.
+func replaceUnionArmSlotRef(pred *plan.Expr, armTag int32, key *plan.Expr) {
+	for i, arg := range pred.GetF().Args {
+		if col := arg.GetCol(); col != nil && col.RelPos == armTag {
+			pred.GetF().Args[i] = DeepCopyExpr(key)
+			return
+		}
+	}
+}
+
+// appendUnionPhysicalKeySlot extends a correlated UNION's physical equality
+// tuple for one hidden export slot appended to its ProjectList. The dedup
+// tuple must stay position-aligned with the projected row or
+// CompactPhysicalGroupKeys rejects it later, and a CHAR or pad-space proven
+// slot must carry the same set-operation cast normalization the original
+// user columns got.
+func (builder *QueryBuilder) appendUnionPhysicalKeySlot(node *plan.Node, output *plan.Expr) error {
+	if len(node.PhysicalEqualityKeyList) == 0 {
+		return nil
+	}
+	key := DeepCopyExpr(output)
+	if types.T(output.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(key) {
+		var err error
+		key, err = appendSetOperationCastBeforeExpr(builder.GetContext(), key, key.Typ)
+		if err != nil {
+			return err
+		}
+	}
+	node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, key)
+	return nil
+}
+
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
@@ -4514,41 +4651,94 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			break
 		}
 		// A distinct UNION combines both arms under one shared dedup
-		// domain. When each arm carries the same depth-1 hidden identity
-		// slot materialized for the same outer equality key, that slot
-		// must also leave the UNION: keep it as an ordinary output column
-		// and collapse the two correlation predicates into a single
-		// predicate on the shared slot. For a fixed outer row the key
-		// value is constant, so DISTINCT over (tuple, key) preserves
-		// DISTINCT over the user tuple alone. Misaligned identities stay
-		// explicitly unsupported here rather than being silently dropped.
-		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+		// domain. Each arm exports the inner column of every pulled
+		// correlated predicate as a hidden trailing slot. The union must
+		// re-export those slots and fold each pair of identical arm
+		// predicates into one predicate over the shared output column:
+		// a row leaving the union then satisfies exactly the predicate
+		// its own arm pulled, so the supported correlated join decides
+		// above the union. An equated identity slot is constant for a
+		// fixed outer row, so DISTINCT over (tuple, keys) preserves
+		// DISTINCT over the user tuple; a non-equality slot may keep
+		// duplicate user tuples, so those folds stay limited to the
+		// duplicate-insensitive EXISTS/IN/ANY/ALL consumers. Shapes the
+		// fold cannot prove keep the explicit boundary instead of being
+		// silently dropped.
+		if len(node.Children) != 2 || len(node.BindingTags) != 1 {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"correlated local CTE: UNION without matching row identities")
 		}
-		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
-		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
-		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
-		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
-		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
-			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
-			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
-			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
-			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
-			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
+		exports := len(left.ProjectList) - int(pos)
+		if exports < 1 || len(right.ProjectList) != int(pos)+exports ||
+			len(preds) != 2*exports {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
-				"correlated local CTE: UNION branch identities differ")
+				"correlated local CTE: UNION without matching row identities")
 		}
-		node.ProjectList = append(node.ProjectList,
-			GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
-		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
-		pred := DeepCopyExpr(preds[0])
-		for _, arg := range pred.GetF().Args {
-			if arg.GetCol() != nil {
-				*arg = *key
+		leftPreds := preds[:exports]
+		rightPreds := preds[exports:]
+		type unionFoldPair struct {
+			pred *plan.Expr
+			slot *plan.Expr
+		}
+		folds := make([]unionFoldPair, 0, exports)
+		anyRange := false
+		for i := range leftPreds {
+			leftSlot, leftCorrSide, leftCorr, leftOK := unionArmPredShape(leftPreds[i], left.BindingTags[0], pos+int32(i))
+			rightSlot, rightCorrSide, rightCorr, rightOK := unionArmPredShape(rightPreds[i], right.BindingTags[0], pos+int32(i))
+			if !leftOK || !rightOK || leftCorr == nil || rightCorr == nil ||
+				leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
+				!isSameColumnType(leftSlot.Typ, rightSlot.Typ) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated local CTE: UNION branch identities differ")
 			}
+			// The union output slot is the only remaining evaluation of each
+			// arm's pulled predicate: a fold may merge only predicates whose
+			// two arms pulled exactly the same comparison. Mixed ops would
+			// silently adopt the left arm's condition and drop the right
+			// arm's own semantics. Equality stays commutative (mirrored
+			// argument order folds) while both outer-value sides must remain
+			// the identical expression, bare or the same pad-space cast;
+			// inequality direction is never rewritten, so non-equality pairs
+			// require the same function tree modulo arm instantiation.
+			leftOp := leftPreds[i].GetF().Func.ObjName
+			rightOp := rightPreds[i].GetF().Func.ObjName
+			if leftOp != rightOp {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated local CTE: UNION branch identities differ")
+			}
+			if leftOp == "=" {
+				if !unionArmPredPairsEqual(leftCorrSide, rightCorrSide, left.BindingTags[0], right.BindingTags[0]) {
+					return 0, nil, moerr.NewNYI(builder.GetContext(),
+						"correlated local CTE: UNION branch identities differ")
+				}
+			} else if !unionArmPredPairsEqual(leftPreds[i], rightPreds[i], left.BindingTags[0], right.BindingTags[0]) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated local CTE: UNION branch identities differ")
+			}
+			equality := leftOp == "="
+			anyRange = anyRange || !equality
+			folds = append(folds, unionFoldPair{pred: leftPreds[i], slot: leftSlot})
 		}
-		preds = []*plan.Expr{pred}
+		if anyRange && !canPullupDeepCorrelatedPredicates(subqueryType) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated local CTE: UNION without matching row identities")
+		}
+		for i := range folds {
+			slotPos := pos + int32(i)
+			output := GetColExpr(folds[i].slot.Typ, left.BindingTags[0], slotPos)
+			node.ProjectList = append(node.ProjectList, output)
+			if err := builder.appendUnionPhysicalKeySlot(node, output); err != nil {
+				return 0, nil, err
+			}
+			key := GetColExpr(folds[i].slot.Typ, node.BindingTags[0], slotPos)
+			pred := DeepCopyExpr(folds[i].pred)
+			replaceUnionArmSlotRef(pred, left.BindingTags[0], key)
+			folds[i].pred = pred
+		}
+		preds = make([]*plan.Expr, len(folds))
+		for i := range folds {
+			preds[i] = folds[i].pred
+		}
 
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr
