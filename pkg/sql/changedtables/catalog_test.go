@@ -25,8 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -93,7 +95,7 @@ func TestReadWatchCatalogAtExactCut(t *testing.T) {
 			require.Equal(t, 4, strings.Count(sql, "{MO_TS = '42-17'}"))
 			require.Equal(t, []string{"17"}, watchCatalogTestParams(t, o))
 			require.NotZero(t, o.MaxResultBytes())
-			return changedTableTestResult(t, []any{uint32(3), "source", "db", "t", types.Uuid{2}, uint64(88), nil, nil}), nil
+			return changedTableTestResult(t, []any{uint32(3), "source", "db", "t", types.Uuid{2}, uint64(88), nil, nil, nil}), nil
 		default:
 			t.Fatalf("unexpected catalog query %s", sql)
 			return executor.Result{}, nil
@@ -129,12 +131,78 @@ func TestWatchCatalogRejectsInvalidRead(t *testing.T) {
 	_, err = readCatalog(ctx, e, callerIdentity{accountID: 7, roleID: 2}, &name, cut)
 	require.ErrorContains(t, err, "permission denied")
 
-	res := changedTableTestResult(t, []any{uint32(3), "source", "db", "t", types.Uuid{2}, uint64(10), uint64(11), int8(1)})
+	res := changedTableTestResult(t, []any{uint32(3), "source", "db", "t", types.Uuid{2}, uint64(10), uint64(11), int8(2), nil})
 	defer res.Close()
 	grants, names, err := decodeWatchGrants(ctx, res)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.ErrorContains(t, err, `source 3 granted "db"."t"`)
 	require.Nil(t, grants)
 	require.Nil(t, names)
+}
+
+func TestDecodeWatchPartitionIdentity(t *testing.T) {
+	encode := func(flag, parentID uint64) []byte {
+		raw, err := (&api.SchemaExtra{FeatureFlag: flag, ParentTableID: parentID}).Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+	for _, tc := range []struct {
+		name, table string
+		legacy      int8
+		extra       any
+		wantID      uint64
+	}{
+		{name: "old null extra", table: "t", wantID: 11},
+		{name: "old empty extra", table: "t", extra: []byte{}, wantID: 11},
+		{name: "flagged leaf", table: "%!%p0%!%t", extra: encode(features.Partition, 12)},
+		{name: "flagged index", table: "index_other_name", extra: encode(features.IndexTable, 12)},
+		{name: "partition index", table: "%!%p0%!%t", extra: encode(features.Partition|features.IndexTable, 12)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := changedTableTestResult(t, []any{uint32(3), "source", "db", tc.table, types.Uuid{2}, uint64(10), uint64(11), tc.legacy, tc.extra})
+			defer res.Close()
+			grants, names, err := decodeWatchGrants(t.Context(), res)
+			require.NoError(t, err)
+			require.Equal(t, map[uint32]string{3: "source"}, names)
+			require.Equal(t, []Grant{{AccountID: 3, DatabaseName: "db", TableName: tc.table, GrantID: [16]byte{2},
+				DatabaseID: 10, TableID: tc.wantID}}, grants)
+		})
+	}
+	for name, raw := range map[string][]byte{
+		"malformed":    {0x80},
+		"conflicting":  encode(features.Partition|features.Partitioned, 12),
+		"unknown link": encode(0, 12),
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := changedTableTestResult(t, []any{uint32(3), "source", "db", "t", types.Uuid{2}, uint64(10), uint64(11), int8(0), raw})
+			defer res.Close()
+			grants, names, err := decodeWatchGrants(t.Context(), res)
+			require.ErrorContains(t, err, `source 3 granted "db"."t"`)
+			require.Nil(t, grants)
+			require.Nil(t, names)
+		})
+	}
+	for _, tc := range []struct {
+		name, table string
+		legacy      int8
+		extra       any
+		errorText   string
+	}{
+		{name: "modern parent", table: "t", legacy: 1, extra: encode(features.Partitioned, 0), errorText: `partitioned source 3 granted "db"."t"`},
+		{name: "flag only parent", table: "t", extra: encode(features.Partitioned, 0), errorText: `partitioned source 3 granted "db"."t"`},
+		{name: "legacy parent", table: "t", legacy: 1, errorText: `partitioned source 3 granted "db"."t"`},
+		{name: "ambiguous name", table: "%!%p0%!%t", errorText: `partition-like source 3 granted "db"."%!%p0%!%t"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := changedTableTestResult(t, []any{uint32(3), "source", "db", tc.table, types.Uuid{2}, uint64(10), uint64(11), tc.legacy, tc.extra})
+			defer res.Close()
+			grants, names, err := decodeWatchGrants(t.Context(), res)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, tc.errorText)
+			require.Nil(t, grants)
+			require.Nil(t, names)
+		})
+	}
 }
 
 func changedTableTestResult(t *testing.T, row []any) executor.Result {
@@ -153,6 +221,9 @@ func changedTableTestResult(t *testing.T, row []any) executor.Result {
 		case string:
 			b.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
 			require.NoError(t, vector.AppendBytes(b.Vecs[i], []byte(v), false, mp))
+		case []byte:
+			b.Vecs[i] = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(b.Vecs[i], v, false, mp))
 		case int8:
 			b.Vecs[i] = vector.NewVec(types.T_int8.ToType())
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
@@ -178,6 +249,9 @@ func changedTableTestResult(t *testing.T, row []any) executor.Result {
 			oid := types.T_uint64
 			if i == 7 {
 				oid = types.T_int8
+			}
+			if i == 8 {
+				oid = types.T_varchar
 			}
 			b.Vecs[i] = vector.NewVec(oid.ToType())
 			require.NoError(t, vector.AppendNull(b.Vecs[i], mp))

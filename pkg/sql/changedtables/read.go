@@ -16,6 +16,7 @@ package changedtables
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"time"
 	"unicode/utf8"
@@ -59,12 +60,20 @@ const (
 	maxObserverNameRunes = 300
 )
 
-func Read(proc *process.Process, marker, observerName *string) (Result, error) {
+var errReadDeadline = errors.New("changed-table query deadline")
+
+func Read(proc *process.Process, marker, observerName *string) (_ Result, err error) {
 	if proc == nil || proc.Base == nil || proc.Ctx == nil {
 		return Result{}, moerr.NewInternalErrorNoCtx("changed-table query process is unavailable")
 	}
-	ctx, cancel := context.WithTimeout(proc.Ctx, readTimeout)
+	ctx, cancel := context.WithTimeoutCause(proc.Ctx, readTimeout, errReadDeadline)
 	defer cancel()
+	defer func() {
+		if context.Cause(ctx) == errReadDeadline &&
+			(errors.Is(err, context.DeadlineExceeded) || moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)) {
+			err = moerr.NewChangeWatchRetry(ctx, "the CN changed-table query deadline expired")
+		}
+	}()
 	if marker != nil && (len(*marker) == 0 || len(*marker) > MaxMarkerBytes) {
 		return Result{}, moerr.NewInvalidInput(ctx, "invalid changed-table marker length")
 	}
@@ -199,9 +208,14 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if current.binding != registry.binding || !maps.Equal(digests, currentDigests) ||
-		!maps.Equal(registry.sourceNames, current.sourceNames) {
-		return Result{}, moerr.NewInvalidInput(ctx, "changed-table authorization or catalog identity changed during query")
+	if current.binding != registry.binding {
+		return Result{}, moerr.NewInvalidInput(ctx, "changed-table observer binding changed during query")
+	}
+	if !maps.Equal(digests, currentDigests) || !maps.Equal(registry.sourceNames, current.sourceNames) {
+		if recheckTo.Equal(to) {
+			return Result{}, moerr.NewInternalError(ctx, "changed-table catalog scope changed at the same publication frontier")
+		}
+		return Result{}, moerr.NewChangeWatchRetry(ctx, "changed-table authorization or catalog scope changed during query")
 	}
 	recheckTN, err := changedTableTN(ctx, keeper)
 	if err != nil {
@@ -209,7 +223,7 @@ func Read(proc *process.Process, marker, observerName *string) (Result, error) {
 	}
 	if recheckTN.ShardID != target.ShardID || recheckTN.LogShardID != target.LogShardID ||
 		recheckTN.ReplicaID != target.ReplicaID || recheckTN.Address != target.Address {
-		return Result{}, moerr.NewNotSupported(ctx, "changed-table TN routing changed during query")
+		return Result{}, moerr.NewChangeWatchRetry(ctx, "changed-table TN routing changed during query")
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err

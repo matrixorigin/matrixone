@@ -25,8 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -209,7 +212,7 @@ func readWatchGrants(
 	// catalog scans so the planner can push it through the outer joins.
 	systemDatabases := strings.Join(catalog.SystemDatabases, "','")
 	query := fmt.Sprintf(`select w.source_account_id, s.account_name, w.database_name, w.table_name,
-       w.grant_id, d.dat_id, t.rel_id, t.partitioned
+       w.grant_id, d.dat_id, t.rel_id, t.partitioned, t.extra_info
 from mo_change_watch.watch %[1]s w
 join mo_catalog.mo_account %[1]s s on s.account_id = w.source_account_id and s.status = 'open'
 left join mo_catalog.mo_database %[1]s d
@@ -247,8 +250,9 @@ func decodeWatchGrants(ctx context.Context, res executor.Result) ([]Grant, map[u
 	sources := make(map[uint32]string)
 	var decodeErr error
 	res.ReadRows(func(n int, cols []*vector.Vector) bool {
-		if !watchResultTypes(cols, types.T_uint32, types.T_varchar, types.T_varchar, types.T_varchar,
-			types.T_uuid, types.T_uint64, types.T_uint64, types.T_int8) {
+		if len(cols) != 9 || !watchResultTypes(cols[:8], types.T_uint32, types.T_varchar, types.T_varchar,
+			types.T_varchar, types.T_uuid, types.T_uint64, types.T_uint64, types.T_int8) ||
+			cols[8] == nil || (cols[8].GetType().Oid != types.T_varchar && cols[8].GetType().Oid != types.T_text) {
 			decodeErr = moerr.NewInvalidInput(ctx, "invalid changed-table registration schema")
 			return false
 		}
@@ -297,21 +301,64 @@ func decodeWatchGrant(ctx context.Context, cols []*vector.Vector, row int) (Gran
 	if !cols[5].IsNull(uint64(row)) {
 		grant.DatabaseID = vector.GetFixedAtNoTypeCheck[uint64](cols[5], row)
 	}
-	if !cols[6].IsNull(uint64(row)) {
-		// Hidden index/sequence/internal tables are never watched, including
-		// legacy hidden tables that were serialized as ordinary catalog rows.
-		if catalog.IsHiddenTable(grant.TableName) {
-			return grant, sourceName, nil
+	if cols[6].IsNull(uint64(row)) {
+		if !cols[7].IsNull(uint64(row)) || !cols[8].IsNull(uint64(row)) {
+			return Grant{}, "", invalidWatchRelation(ctx, grant)
 		}
-		grant.TableID = vector.GetFixedAtNoTypeCheck[uint64](cols[6], row)
-		if grant.TableID == 0 || grant.DatabaseID == 0 || cols[7].IsNull(uint64(row)) {
-			return Grant{}, "", moerr.NewInvalidInput(ctx, "inconsistent changed-table relation identity")
-		}
-		if vector.GetFixedAtNoTypeCheck[int8](cols[7], row) != 0 {
-			return Grant{}, "", moerr.NewNotSupported(ctx, "mo_changed_tables does not support registered partitioned tables")
+		return grant, sourceName, nil
+	}
+	tableID := vector.GetFixedAtNoTypeCheck[uint64](cols[6], row)
+	if tableID == 0 || grant.DatabaseID == 0 || cols[7].IsNull(uint64(row)) {
+		return Grant{}, "", invalidWatchRelation(ctx, grant)
+	}
+	legacyPartitioned := vector.GetFixedAtNoTypeCheck[int8](cols[7], row)
+	if legacyPartitioned != 0 && legacyPartitioned != 1 {
+		return Grant{}, "", invalidWatchRelation(ctx, grant)
+	}
+	var extra api.SchemaExtra
+	// Old ordinary catalog rows may have NULL or empty extra metadata.
+	if !cols[8].IsNull(uint64(row)) {
+		if err := extra.Unmarshal(cols[8].GetBytesAt(row)); err != nil {
+			return Grant{}, "", invalidWatchRelation(ctx, grant)
 		}
 	}
+	partitioned := legacyPartitioned == 1 || features.IsPartitioned(extra.FeatureFlag)
+	child := features.IsPartition(extra.FeatureFlag)
+	legacyChild, _, _ := sqlutil.SplitNameOfPartitionTable(grant.TableName)
+	internal := catalog.IsHiddenTable(grant.TableName) ||
+		catalog.RequiresPrivilegedRelationAccess(grant.TableName, catalog.SystemOrdinaryRel, extra.FeatureFlag)
+	if internal {
+		return grant, sourceName, nil
+	}
+	if partitioned && (child || legacyChild || extra.ParentTableID != 0) {
+		return Grant{}, "", invalidWatchRelation(ctx, grant)
+	}
+	if child && (extra.ParentTableID == 0 || extra.ParentTableID == tableID) {
+		return Grant{}, "", invalidWatchRelation(ctx, grant)
+	}
+	if child {
+		return grant, sourceName, nil
+	}
+	if legacyChild {
+		return Grant{}, "", moerr.NewNotSupportedf(ctx,
+			"mo_changed_tables cannot identify partition-like source %d granted %q.%q without durable leaf metadata",
+			grant.AccountID, grant.DatabaseName, grant.TableName)
+	}
+	if extra.ParentTableID != 0 {
+		return Grant{}, "", invalidWatchRelation(ctx, grant)
+	}
+	if partitioned {
+		return Grant{}, "", moerr.NewNotSupportedf(ctx,
+			"mo_changed_tables cannot watch partitioned source %d granted %q.%q; remove the partitioned table registration to continue",
+			grant.AccountID, grant.DatabaseName, grant.TableName)
+	}
+	grant.TableID = tableID
 	return grant, sourceName, nil
+}
+
+func invalidWatchRelation(ctx context.Context, grant Grant) error {
+	return moerr.NewInvalidInputf(ctx, "inconsistent changed-table relation identity for source %d granted %q.%q",
+		grant.AccountID, grant.DatabaseName, grant.TableName)
 }
 
 func watchResultRows(res executor.Result) int {

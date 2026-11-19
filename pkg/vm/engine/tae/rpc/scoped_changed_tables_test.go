@@ -235,7 +235,7 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 	_, err = h.HandleGetScopedChangedTables(canceled, txn.TxnMeta{}, &req, &resp)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, resp)
-	require.False(t, h.scopedChangedTablesInFlight.Load())
+	require.Empty(t, h.scopedChangedTablesAdmission.admitted)
 
 	t.Run("concurrent GC discards candidates", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -277,7 +277,7 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 		require.ErrorContains(t, outcome.err, "crossed checkpoint coverage")
-		require.False(t, moerr.IsMoErrCode(outcome.err, moerr.ErrChangeWatchHistoryUnavailable))
+		require.True(t, moerr.IsMoErrCode(outcome.err, moerr.ErrChangeWatchRetry), "%v", outcome.err)
 		require.Empty(t, outcome.resp)
 	})
 }

@@ -494,6 +494,10 @@ const (
 	// ErrChangeWatchHistoryUnavailable tells consumers to establish a new
 	// baseline with a NULL marker after the requested history is no longer provable.
 	ErrChangeWatchHistoryUnavailable uint16 = 22602
+	// ErrChangeWatchRetry tells the watch client to retry the same marker.
+	ErrChangeWatchRetry uint16 = 22603
+	// ErrChangeWatchCapacity means the requested watch exceeds a work limit.
+	ErrChangeWatchCapacity uint16 = 22604
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -856,7 +860,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Keep the vendor-specific ERR packet number paired with SQLSTATE 40001.
 	ErrSnapshotNotAfter: {ErrSnapshotNotAfter, []string{"40001"}, "transaction snapshot must be after the requested watermark (retry with a new transaction)"},
 
-	ErrChangeWatchHistoryUnavailable: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "changed-table history unavailable: %s. Restart with a NULL marker"},
+	ErrChangeWatchHistoryUnavailable: {ErrChangeWatchHistoryUnavailable, []string{MySQLDefaultSqlState}, "changed-table history unavailable: %s. Restart with a NULL marker"},
+	ErrChangeWatchRetry:              {ErrChangeWatchRetry, []string{MySQLDefaultSqlState}, "changed-table query interrupted: %s. Retry with the same marker"},
+	ErrChangeWatchCapacity:           {ErrChangeWatchCapacity, []string{MySQLDefaultSqlState}, "changed-table capacity exceeded: %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -2079,6 +2085,14 @@ func NewSnapshotNotAfter(ctx context.Context) *Error {
 
 func NewChangeWatchHistoryUnavailable(ctx context.Context, detail string) *Error {
 	return newError(ctx, ErrChangeWatchHistoryUnavailable, detail)
+}
+
+func NewChangeWatchRetry(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchRetry, detail)
+}
+
+func NewChangeWatchCapacity(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchCapacity, detail)
 }
 
 // NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a

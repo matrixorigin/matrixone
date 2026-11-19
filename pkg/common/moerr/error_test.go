@@ -715,7 +715,9 @@ func TestChangeWatchErrorIdentity(t *testing.T) {
 		sqlState  string
 	}{
 		{"stale snapshot", NewSnapshotNotAfter(t.Context()), ErrSnapshotNotAfter, ErrSnapshotNotAfter, "40001"},
-		{"history unavailable", NewChangeWatchHistoryUnavailable(t.Context(), "retention gap"), ErrChangeWatchHistoryUnavailable, ER_UNKNOWN_ERROR, MySQLDefaultSqlState},
+		{"history unavailable", NewChangeWatchHistoryUnavailable(t.Context(), "retention gap"), ErrChangeWatchHistoryUnavailable, 22602, "HY000"},
+		{"retry same marker", NewChangeWatchRetry(t.Context(), "busy"), ErrChangeWatchRetry, 22603, "HY000"},
+		{"capacity exceeded", NewChangeWatchCapacity(t.Context(), "work limit"), ErrChangeWatchCapacity, 22604, "HY000"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.code, tt.err.ErrorCode())

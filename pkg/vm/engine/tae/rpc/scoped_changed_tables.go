@@ -16,6 +16,8 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,25 +39,70 @@ const (
 	scopedChangedTablesMaxIndexBlocks = 1_024
 )
 
+var errScopedChangedTablesDeadline = errors.New("scoped changed-table request deadline")
+
+// scopedChangedTablesAdmission admits one scan and at most one waiting request.
+// A request holds its admission slot until it finishes or leaves the wait.
+type scopedChangedTablesAdmission struct {
+	once     sync.Once
+	admitted chan struct{}
+	active   chan struct{}
+}
+
+func (a *scopedChangedTablesAdmission) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.once.Do(func() {
+		a.admitted = make(chan struct{}, 2)
+		a.active = make(chan struct{}, 1)
+	})
+	select {
+	case a.admitted <- struct{}{}:
+	default:
+		return moerr.NewChangeWatchRetry(ctx, "scoped changed-table scan is busy")
+	}
+	select {
+	case a.active <- struct{}{}:
+		if ctx.Err() == nil {
+			return nil
+		}
+		a.release()
+	case <-ctx.Done():
+		<-a.admitted
+	}
+	return ctx.Err()
+}
+
+func (a *scopedChangedTablesAdmission) release() {
+	<-a.active
+	<-a.admitted
+}
+
 func (h *Handle) HandleGetScopedChangedTables(
 	ctx context.Context,
 	_ txn.TxnMeta,
 	req *cmd_util.GetScopedChangedTablesReq,
 	resp *cmd_util.GetScopedChangedTablesResp,
-) (func(), error) {
+) (_ func(), err error) {
 	*resp = cmd_util.GetScopedChangedTablesResp{}
 	if !h.db.IsWriteMode() {
 		return nil, moerr.NewNotSupported(ctx, "scoped changed-table query requires TN write mode")
 	}
-	ctx, cancel := context.WithTimeout(ctx, scopedChangedTablesTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, scopedChangedTablesTimeout, errScopedChangedTablesDeadline)
 	defer cancel()
+	defer func() {
+		if errors.Is(err, context.DeadlineExceeded) && context.Cause(ctx) == errScopedChangedTablesDeadline {
+			err = moerr.NewChangeWatchRetry(ctx, "the TN scoped scan deadline expired")
+		}
+	}()
 
 	scan := req != nil && len(req.Tables) != 0 && req.From.Less(req.To)
 	if scan {
-		if !h.scopedChangedTablesInFlight.CompareAndSwap(false, true) {
-			return nil, moerr.NewInternalError(ctx, "scoped changed-table scan is busy")
+		if err := h.scopedChangedTablesAdmission.acquire(ctx); err != nil {
+			return nil, err
 		}
-		defer h.scopedChangedTablesInFlight.Store(false)
+		defer h.scopedChangedTablesAdmission.release()
 	}
 	allowed, err := req.AllowedTables(ctx)
 	if err != nil {
@@ -101,21 +148,22 @@ func (h *Handle) scanScopedChangedTables(
 	req *cmd_util.GetScopedChangedTablesReq,
 	allowed map[cmd_util.ScopedChangedTable]struct{},
 ) ([]cmd_util.ScopedChangedTable, error) {
-	// Charge admission input as well as all work in both history sources.
+	// Logtail traverses variable-size transaction and dirty identity lists.
+	// Keep its work limit separate from the scope and fixed-width index blocks.
 	work := 0
-	charge := func() error {
+	chargeLogtail := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if work >= scopedChangedTablesMaxWork {
-			return moerr.NewInvalidInput(ctx, "scoped changed-table scan budget exceeded")
+			return moerr.NewChangeWatchCapacity(ctx, "scoped changed-table logtail work budget exceeded")
 		}
 		work++
 		return nil
 	}
 	dbAccounts := make(map[uint64]uint32)
 	for _, table := range req.Tables {
-		if err := charge(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if account, ok := dbAccounts[table.DatabaseID]; ok && account != table.AccountID {
@@ -140,7 +188,7 @@ func (h *Handle) scanScopedChangedTables(
 		if end.GT(&to) {
 			end = to
 		}
-		if err := h.scanScopedChangedTableIndex(ctx, nextChangeTimestamp(from), end, charge, add); err != nil {
+		if err := h.scanScopedChangedTableIndex(ctx, nextChangeTimestamp(from), end, add); err != nil {
 			return nil, err
 		}
 		previous = end
@@ -150,7 +198,7 @@ func (h *Handle) scanScopedChangedTables(
 	}
 
 	verifiedDatabases := make(map[uint64]struct{})
-	if err := h.db.LogtailMgr.GetReader(nextChangeTimestamp(previous), to).ForEachDirtyTable(charge, func(record model.TableRecord) error {
+	if err := h.db.LogtailMgr.GetReader(nextChangeTimestamp(previous), to).ForEachDirtyTable(chargeLogtail, func(record model.TableRecord) error {
 		account, ok := dbAccounts[record.DbID]
 		if !ok {
 			return nil
@@ -160,7 +208,7 @@ func (h *Handle) scanScopedChangedTables(
 			return nil
 		}
 		if _, ok := verifiedDatabases[record.DbID]; !ok {
-			if err := charge(); err != nil {
+			if err := chargeLogtail(); err != nil {
 				return err
 			}
 			database, err := h.db.Catalog.GetDatabaseByID(record.DbID)
@@ -177,7 +225,7 @@ func (h *Handle) scanScopedChangedTables(
 	// GC publishes its frontier before removing blocks. It may race with the
 	// snapshot or the scan, so only accept an unchanged coverage boundary.
 	if floor := h.db.LogtailMgr.GetDirtyHistoryFloor(); floor.GT(&previous) {
-		return nil, moerr.NewInvalidInput(ctx, "scoped changed-table history crossed checkpoint coverage during GC")
+		return nil, moerr.NewChangeWatchRetry(ctx, "scoped changed-table history crossed checkpoint coverage during GC")
 	}
 	return changed, nil
 }
@@ -185,7 +233,6 @@ func (h *Handle) scanScopedChangedTables(
 func (h *Handle) scanScopedChangedTableIndex(
 	ctx context.Context,
 	from, to types.TS,
-	charge func() error,
 	add func(cmd_util.ScopedChangedTable),
 ) error {
 	checkpoint := h.db.BGCheckpointRunner.MaxCheckpoint()
@@ -200,11 +247,11 @@ func (h *Handle) scanScopedChangedTableIndex(
 		return moerr.NewChangeWatchHistoryUnavailable(ctx, "scoped changed-table history has no checkpoint index")
 	}
 	if locations.Len() > scopedChangedTablesMaxIndexBlocks {
-		return moerr.NewInvalidInput(ctx, "scoped changed-table checkpoint block budget exceeded")
+		return moerr.NewChangeWatchCapacity(ctx, "scoped changed-table checkpoint block budget exceeded")
 	}
 	blocks := 0
 	for i := 0; i < locations.Len(); i++ {
-		if err := charge(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		count := int(locations.Get(i).ID())
@@ -213,17 +260,20 @@ func (h *Handle) scanScopedChangedTableIndex(
 		}
 		blocks += count
 		if blocks > scopedChangedTablesMaxIndexBlocks {
-			return moerr.NewInvalidInput(ctx, "scoped changed-table checkpoint block budget exceeded")
+			return moerr.NewChangeWatchCapacity(ctx, "scoped changed-table checkpoint block budget exceeded")
 		}
 	}
 	reader, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, h.db.Runtime.Fs)
 	if err != nil {
 		return err
 	}
+	// Each read consumes one declared block, with at most BlockMaxRows fixed-
+	// width index rows. Every block must contribute to validation: coverage rows
+	// can occur anywhere and multiple rows can narrow the proven interval.
 	var start, end types.TS
 	var known bool
 	for {
-		if err := charge(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		release, bat, done, err := reader.Read(ctx)
@@ -244,8 +294,10 @@ func (h *Handle) scanScopedChangedTableIndex(
 			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
 			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 			for i, table := range tables {
-				if err := charge(); err != nil {
-					return err
+				if i%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 				}
 				if ends[i].LT(&starts[i]) || starts[i].Physical() < 0 {
 					return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint interval")
@@ -289,7 +341,7 @@ func nextChangeTimestamp(ts types.TS) types.TS {
 }
 
 func validScopedChangedTableIndex(bat *batch.Batch) bool {
-	if bat == nil || len(bat.Vecs) != len(logtail.TableIDTypes) {
+	if bat == nil || bat.RowCount() > objectio.BlockMaxRows || len(bat.Vecs) != len(logtail.TableIDTypes) {
 		return false
 	}
 	for i, v := range bat.Vecs {

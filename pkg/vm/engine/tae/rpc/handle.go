@@ -74,8 +74,8 @@ func isSoftDeleteEntry(fileName string) bool {
 type Handle struct {
 	db *db.DB
 
-	interceptMatchRegexp        atomic.Pointer[regexp.Regexp]
-	scopedChangedTablesInFlight atomic.Bool
+	interceptMatchRegexp         atomic.Pointer[regexp.Regexp]
+	scopedChangedTablesAdmission scopedChangedTablesAdmission
 
 	client client.QueryClient
 }
