@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '9d7d4c13011b41a54b74bf8c185b87bd6acc00c8' && github.run_attempt == 1
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'e7195d747bf0a282cd4ec6879674ad1ac0661ad6' && github.run_attempt == 1
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -59,7 +59,7 @@ jobs:
     name: Shanghai direct Coverage UT / group ${{ matrix.group }}
     needs: authorize
     if: needs.authorize.outputs.allowed == 'true'
-    runs-on: amd64-mo-shanghai-8c16g
+    runs-on: amd64-mo-shanghai-ut-safe
     timeout-minutes: 320
     strategy:
       fail-fast: false
@@ -71,7 +71,7 @@ jobs:
           ASSIGNED: ${{ runner.name }}
         run: |
           set -eu
-          [[ "$ASSIGNED" == amd64-mo-shanghai-8c16g-*-runner-* && "$(uname -m)" == x86_64 ]]
+          [[ "$ASSIGNED" == amd64-mo-shanghai-ut-safe-*-runner-* && "$(uname -m)" == x86_64 ]]
           for path in /var/run/secrets/kubernetes.io/serviceaccount/token /var/run/docker.sock /run/containerd/containerd.sock; do
             if test -e "$path" || test -L "$path"; then echo "::error::Worker exposes $path; stopped before checkout, no credential read"; exit 1; fi
           done
