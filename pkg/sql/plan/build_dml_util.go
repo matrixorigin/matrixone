@@ -6370,7 +6370,7 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 			// remove row_id
 			for i := range idxTableDefs {
-				idxTableDefs[i].Cols = RemoveIf[*ColDef](idxTableDefs[i].Cols, func(column *ColDef) bool {
+				idxTableDefs[i].Cols = slices.DeleteFunc(idxTableDefs[i].Cols, func(column *ColDef) bool {
 					return column.Name == catalog.Row_ID
 				})
 			}
@@ -6631,7 +6631,7 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 		return err
 	}
 	// remove row_id
-	idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(col *ColDef) bool {
+	idxTableDef.Cols = slices.DeleteFunc(idxTableDef.Cols, func(col *ColDef) bool {
 		return col.Name == catalog.Row_ID
 	})
 
@@ -6656,7 +6656,7 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 			return err
 		}
 		// remove row_id
-		idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
+		idxTableDef.Cols = slices.DeleteFunc(idxTableDef.Cols, func(colVal *ColDef) bool {
 			return colVal.Name == catalog.Row_ID
 		})
 		originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
@@ -6743,7 +6743,7 @@ func buildPreInsertMasterIndex(stmt *tree.Insert, ctx CompilerContext, builder *
 		return err
 	}
 	// remove row_id
-	idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
+	idxTableDef.Cols = slices.DeleteFunc(idxTableDef.Cols, func(colVal *ColDef) bool {
 		return colVal.Name == catalog.Row_ID
 	})
 	genLastNodeIdFn := func() int32 {
