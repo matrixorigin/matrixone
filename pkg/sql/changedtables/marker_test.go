@@ -46,14 +46,22 @@ func TestMarkerRoundTripAndScopeBinding(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, marker, decoded)
 
-	for name, wrongBinding := range map[string]Binding{
-		"epoch":       {Epoch: [16]byte{2}, Observer: binding.Observer},
-		"account":     {Epoch: binding.Epoch, Observer: Observer{AccountID: 24, Incarnation: 42}},
-		"incarnation": {Epoch: binding.Epoch, Observer: Observer{AccountID: 23, Incarnation: 43}},
+	for _, tc := range []struct {
+		name    string
+		binding Binding
+		code    uint16
+	}{
+		{"epoch", Binding{Epoch: [16]byte{2}, Observer: binding.Observer}, moerr.ErrChangeWatchHistoryUnavailable},
+		{"incarnation", Binding{Epoch: binding.Epoch, Observer: Observer{AccountID: 23, Incarnation: 43}}, moerr.ErrChangeWatchHistoryUnavailable},
+		{"account", Binding{Epoch: binding.Epoch, Observer: Observer{AccountID: 24, Incarnation: 42}}, moerr.ErrInvalidInput},
+		{"account and epoch", Binding{Epoch: [16]byte{2}, Observer: Observer{AccountID: 24, Incarnation: 43}}, moerr.ErrInvalidInput},
 	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := DecodeMarker(t.Context(), encoded, wrongBinding, marker.To)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			for _, cut := range []timestamp.Timestamp{marker.To, marker.To.Prev()} {
+				decoded, err := DecodeMarker(t.Context(), encoded, tc.binding, cut)
+				require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)
+				require.Empty(t, decoded)
+			}
 		})
 	}
 	_, err = DecodeMarker(t.Context(), encoded, binding, marker.To.Prev())
@@ -88,6 +96,8 @@ func TestMarkerRejectsInvalidWireData(t *testing.T) {
 		"corrupt":     base64.StdEncoding.EncodeToString(corrupt),
 		"version":     encodeModified(func(data []byte) { data[len(markerVersion)-1]++ }),
 		"count":       encodeModified(func(data []byte) { data[markerHeaderSize-1]++ }),
+		"zero epoch":  encodeModified(func(data []byte) { clear(data[len(markerVersion):][:16]) }),
+		"zero cut":    encodeModified(func(data []byte) { clear(data[len(markerVersion)+28:][:8]) }),
 		"duplicate": encodeModified(func(data []byte) {
 			binary.BigEndian.PutUint32(data[markerHeaderSize+markerSourceSize:], 3)
 		}),
@@ -96,7 +106,9 @@ func TestMarkerRejectsInvalidWireData(t *testing.T) {
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			decoded, err := DecodeMarker(t.Context(), candidate, binding, marker.To)
+			changedBinding := binding
+			changedBinding.Epoch = [16]byte{4}
+			decoded, err := DecodeMarker(t.Context(), candidate, changedBinding, marker.To.Prev())
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 			require.Empty(t, decoded.Sources)
 		})

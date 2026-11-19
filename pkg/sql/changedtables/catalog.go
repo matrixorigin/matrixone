@@ -17,6 +17,7 @@ package changedtables
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -37,7 +38,9 @@ const (
 	watchDisabled = "changed-table watch is disabled or not provisioned"
 
 	// Keep the internal result bounded independently of the number of rows.
-	watchCatalogMaxResultBytes = 128 << 20
+	watchCatalogMaxResultBytes     = 128 << 20
+	watchPartitionIDBatchSize      = 128
+	watchPartitionLookupResultSize = 64 << 10
 )
 
 type watchCatalog struct {
@@ -237,8 +240,104 @@ limit %[2]d`, hint, MaxTables+1, systemDatabases)
 		}
 		return nil, nil, err
 	}
+	grants, names, err := decodeWatchGrants(ctx, res)
+	res.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkWatchLegacyPartitions(ctx, te, hint, grants); err != nil {
+		return nil, nil, err
+	}
+	return grants, names, nil
+}
+
+func checkWatchLegacyPartitions(ctx context.Context, te executor.TxnExecutor, hint string, grants []Grant) error {
+	// Names matching the historical convention can also be created by ordinary
+	// DDL. Only relations that survived the durable kind and flag checks need
+	// this lookup in the source account's partition catalog.
+	var bySource map[uint32][]int
+	for i, grant := range grants {
+		if grant.TableID == 0 {
+			continue
+		}
+		if candidate, _, _ := sqlutil.SplitNameOfPartitionTable(grant.TableName); !candidate {
+			continue
+		}
+		if bySource == nil {
+			bySource = make(map[uint32][]int)
+		}
+		bySource[grant.AccountID] = append(bySource[grant.AccountID], i)
+	}
+
+	for account, indexes := range bySource {
+		for candidates := range slices.Chunk(indexes, watchPartitionIDBatchSize) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := filterWatchPartitionIDs(ctx, te, hint, account, grants, candidates); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func filterWatchPartitionIDs(
+	ctx context.Context,
+	te executor.TxnExecutor,
+	hint string,
+	account uint32,
+	grants []Grant,
+	indexes []int,
+) error {
+	query := fmt.Sprintf("select partition_id from mo_catalog.%s %s where partition_id in (%scast(? as unsigned)) limit %d",
+		catalog.MOPartitionTables, hint, strings.Repeat("cast(? as unsigned), ", len(indexes)-1), len(indexes)+1)
+	params := make([]string, len(indexes))
+	matched := make(map[uint64]bool, len(indexes))
+	for i, index := range indexes {
+		id := grants[index].TableID
+		params[i] = strconv.FormatUint(id, 10)
+		matched[id] = false
+	}
+	opts := executor.StatementOption{}.WithAccountID(account).WithDisableLog().
+		WithMaxResultBytes(watchPartitionLookupResultSize).WithParams(params)
+	res, err := te.Exec(query, opts)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			return moerr.NewNotSupportedf(ctx, "mo_changed_tables cannot verify partition identity for source %d: mo_catalog.mo_partition_tables is unavailable", account)
+		}
+		return err
+	}
 	defer res.Close()
-	return decodeWatchGrants(ctx, res)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if !watchResultTypes(cols, types.T_uint64) {
+			err = moerr.NewInternalError(ctx, "unexpected changed-table partition catalog result")
+			return false
+		}
+		for row := range rows {
+			if cols[0].IsNull(uint64(row)) {
+				err = moerr.NewInternalError(ctx, "NULL changed-table partition identity")
+				return false
+			}
+			id := vector.GetFixedAtNoTypeCheck[uint64](cols[0], row)
+			alreadyMatched, requested := matched[id]
+			if !requested || alreadyMatched {
+				err = moerr.NewInternalError(ctx, "unexpected changed-table partition identity")
+				return false
+			}
+			matched[id] = true
+		}
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		if matched[grants[index].TableID] {
+			grants[index].TableID = 0
+		}
+	}
+	return nil
 }
 
 func decodeWatchGrants(ctx context.Context, res executor.Result) ([]Grant, map[uint32]string, error) {
@@ -324,13 +423,12 @@ func decodeWatchGrant(ctx context.Context, cols []*vector.Vector, row int) (Gran
 	}
 	partitioned := legacyPartitioned == 1 || features.IsPartitioned(extra.FeatureFlag)
 	child := features.IsPartition(extra.FeatureFlag)
-	legacyChild, _, _ := sqlutil.SplitNameOfPartitionTable(grant.TableName)
 	internal := catalog.IsHiddenTable(grant.TableName) ||
 		catalog.RequiresPrivilegedRelationAccess(grant.TableName, catalog.SystemOrdinaryRel, extra.FeatureFlag)
 	if internal {
 		return grant, sourceName, nil
 	}
-	if partitioned && (child || legacyChild || extra.ParentTableID != 0) {
+	if partitioned && (child || extra.ParentTableID != 0) {
 		return Grant{}, "", invalidWatchRelation(ctx, grant)
 	}
 	if child && (extra.ParentTableID == 0 || extra.ParentTableID == tableID) {
@@ -338,11 +436,6 @@ func decodeWatchGrant(ctx context.Context, cols []*vector.Vector, row int) (Gran
 	}
 	if child {
 		return grant, sourceName, nil
-	}
-	if legacyChild {
-		return Grant{}, "", moerr.NewNotSupportedf(ctx,
-			"mo_changed_tables cannot identify partition-like source %d granted %q.%q without durable leaf metadata",
-			grant.AccountID, grant.DatabaseName, grant.TableName)
 	}
 	if extra.ParentTableID != 0 {
 		return Grant{}, "", invalidWatchRelation(ctx, grant)

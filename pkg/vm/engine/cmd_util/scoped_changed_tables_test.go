@@ -18,11 +18,81 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClassifyChangeWatchDeadline(t *testing.T) {
+	parent := t.Context()
+	owned := moerr.NewInternalError(parent, "change-watch test deadline")
+	ctx, cancel := context.WithDeadlineCause(parent, time.Unix(1, 0), owned)
+	defer cancel()
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.Same(t, owned, context.Cause(ctx))
+	timeout := &net.OpError{Op: "read", Err: syscall.ETIMEDOUT}
+	for name, err := range map[string]error{
+		"native":            context.DeadlineExceeded,
+		"wrapped deadline":  fmt.Errorf("waiting: %w", context.DeadlineExceeded),
+		"translated":        moerr.ConvertGoError(parent, context.DeadlineExceeded),
+		"query":             moerr.NewQueryTimeout(parent),
+		"wrapped rpc":       fmt.Errorf("rpc request: %w", moerr.NewRPCTimeout(parent)),
+		"wrapped I/O":       fmt.Errorf("disk read: %w", timeout),
+		"returned cause":    context.Cause(ctx),
+		"joined with cause": fmt.Errorf("scan: %w", moerr.AttachCause(ctx, context.DeadlineExceeded)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := ClassifyChangeWatchDeadline(ctx, owned, err, "owned deadline expired")
+			require.True(t, moerr.IsMoErrCode(got, moerr.ErrChangeWatchRetry), "%v", got)
+		})
+	}
+
+	capacity := moerr.NewChangeWatchCapacity(parent, "test capacity")
+	history := moerr.NewChangeWatchHistoryUnavailable(parent, "test history")
+	identity := moerr.NewInternalError(parent, "database identity could not be verified")
+	for name, err := range map[string]error{
+		"nil":                     nil,
+		"caller cancellation":     fmt.Errorf("sql canceled: %w", context.Canceled),
+		"unknown I/O":             &net.OpError{Op: "read", Err: io.ErrUnexpectedEOF},
+		"denied":                  moerr.NewInvalidInput(parent, "permission denied"),
+		"unavailable":             moerr.NewNotSupported(parent, "TN is unavailable"),
+		"capacity":                fmt.Errorf("scan: %w", capacity),
+		"history":                 history,
+		"identity":                identity,
+		"integrity fault":         io.ErrUnexpectedEOF,
+		"already retry":           moerr.NewChangeWatchRetry(parent, "authorization changed"),
+		"history with timeout":    errors.Join(history, context.DeadlineExceeded),
+		"capacity with timeout":   errors.Join(context.DeadlineExceeded, capacity),
+		"identity with timeout":   errors.Join(moerr.NewRPCTimeout(parent), identity, owned),
+		"unknown I/O and timeout": errors.Join(timeout, io.ErrUnexpectedEOF),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, err, ClassifyChangeWatchDeadline(ctx, owned, err, "owned deadline expired"))
+		})
+	}
+
+	parentDeadline, cancelParent := context.WithDeadline(parent, time.Unix(1, 0))
+	defer cancelParent()
+	inheritedDeadline, cancelChild := context.WithTimeoutCause(parentDeadline, time.Minute, owned)
+	defer cancelChild()
+	require.ErrorIs(t, ClassifyChangeWatchDeadline(inheritedDeadline, owned, inheritedDeadline.Err(), "owned deadline expired"),
+		context.DeadlineExceeded)
+	parentCanceled, stopParent := context.WithCancel(parent)
+	stopParent()
+	inheritedCancel, cancelChild := context.WithTimeoutCause(parentCanceled, time.Minute, owned)
+	defer cancelChild()
+	require.ErrorIs(t, ClassifyChangeWatchDeadline(inheritedCancel, owned, inheritedCancel.Err(), "owned deadline expired"),
+		context.Canceled)
+	require.Same(t, timeout, ClassifyChangeWatchDeadline(parent, owned, timeout, "owned deadline expired"))
+}
 
 func TestScopedChangedTablesWireLimit(t *testing.T) {
 	req := GetScopedChangedTablesReq{

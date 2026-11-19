@@ -28,7 +28,9 @@ var (
 		[]string{"phase"},
 	)
 	ChangeWatchBarrierDurationHistogram        = changeWatchDurationHistogram.WithLabelValues("barrier")
+	ChangeWatchCatalogDurationHistogram        = changeWatchDurationHistogram.WithLabelValues("catalog")
 	ChangeWatchRecheckBarrierDurationHistogram = changeWatchDurationHistogram.WithLabelValues("recheck-barrier")
+	ChangeWatchRecheckCatalogDurationHistogram = changeWatchDurationHistogram.WithLabelValues("recheck-catalog")
 	ChangeWatchCapabilityRPCDurationHistogram  = changeWatchDurationHistogram.WithLabelValues("capability-rpc")
 	ChangeWatchScanRPCDurationHistogram        = changeWatchDurationHistogram.WithLabelValues("scan-rpc")
 	ChangeWatchTNScanDurationHistogram         = changeWatchDurationHistogram.WithLabelValues("tn-scan")

@@ -17,6 +17,8 @@ package cmd_util
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"net"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -46,6 +48,46 @@ type GetScopedChangedTablesResp struct {
 	From, To timestamp.Timestamp
 	Complete bool
 	Tables   []ScopedChangedTable
+}
+
+// ClassifyChangeWatchDeadline returns a same-marker retry only for a timeout
+// under the deadline owned by the current watch operation.
+func ClassifyChangeWatchDeadline(ctx context.Context, deadlineCause, err error, detail string) error {
+	if err == nil || deadlineCause == nil || context.Cause(ctx) != deadlineCause || errors.Is(err, context.Canceled) ||
+		!isChangeWatchTimeout(err, deadlineCause) {
+		return err
+	}
+	return moerr.NewChangeWatchRetry(ctx, detail)
+}
+
+func isChangeWatchTimeout(err, deadlineCause error) bool {
+	for wrapped := err; wrapped != nil; wrapped = errors.Unwrap(wrapped) {
+		// Some waiters return context.Cause directly. AttachCause can also
+		// join it to the original deadline error.
+		if wrapped == deadlineCause {
+			return true
+		}
+		if group, ok := wrapped.(interface{ Unwrap() []error }); ok {
+			causes := group.Unwrap()
+			for _, cause := range causes {
+				if !isChangeWatchTimeout(cause, deadlineCause) {
+					return false
+				}
+			}
+			return len(causes) > 0
+		}
+	}
+	var moErr *moerr.Error
+	if errors.As(err, &moErr) {
+		switch moErr.ErrorCode() {
+		case moerr.ErrDeadlineExceeded, moerr.ErrQueryTimeout, moerr.ErrRPCTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func validScopedChangedTablesWindow(from, to timestamp.Timestamp) bool {

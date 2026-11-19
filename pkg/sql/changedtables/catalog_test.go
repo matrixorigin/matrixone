@@ -154,6 +154,7 @@ func TestDecodeWatchPartitionIdentity(t *testing.T) {
 	}{
 		{name: "old null extra", table: "t", wantID: 11},
 		{name: "old empty extra", table: "t", extra: []byte{}, wantID: 11},
+		{name: "ambiguous name awaits catalog proof", table: "%!%p0%!%t", wantID: 11},
 		{name: "flagged leaf", table: "%!%p0%!%t", extra: encode(features.Partition, 12)},
 		{name: "flagged index", table: "index_other_name", extra: encode(features.IndexTable, 12)},
 		{name: "partition index", table: "%!%p0%!%t", extra: encode(features.Partition|features.IndexTable, 12)},
@@ -191,7 +192,6 @@ func TestDecodeWatchPartitionIdentity(t *testing.T) {
 		{name: "modern parent", table: "t", legacy: 1, extra: encode(features.Partitioned, 0), errorText: `partitioned source 3 granted "db"."t"`},
 		{name: "flag only parent", table: "t", extra: encode(features.Partitioned, 0), errorText: `partitioned source 3 granted "db"."t"`},
 		{name: "legacy parent", table: "t", legacy: 1, errorText: `partitioned source 3 granted "db"."t"`},
-		{name: "ambiguous name", table: "%!%p0%!%t", errorText: `partition-like source 3 granted "db"."%!%p0%!%t"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := changedTableTestResult(t, []any{uint32(3), "source", "db", tc.table, types.Uuid{2}, uint64(10), uint64(11), tc.legacy, tc.extra})
@@ -201,6 +201,76 @@ func TestDecodeWatchPartitionIdentity(t *testing.T) {
 			require.ErrorContains(t, err, tc.errorText)
 			require.Nil(t, grants)
 			require.Nil(t, names)
+		})
+	}
+}
+
+func TestReadWatchGrantsChecksAmbiguousNamesAtSourceCut(t *testing.T) {
+	const (
+		hint  = "{MO_TS = '42-17'}"
+		table = "%!%p0%!%t"
+		id    = uint64(9_007_199_254_740_993)
+	)
+	for _, tc := range []struct {
+		name, table  string
+		relationID   any
+		match        bool
+		missingTable bool
+		wantError    string
+	}{
+		{name: "ordinary name", table: "t", relationID: id},
+		{name: "missing relation", table: table},
+		{name: "name collision", table: table, relationID: id},
+		{name: "legacy catalog leaf", table: table, relationID: id, match: true},
+		{name: "partition catalog unavailable", table: table, relationID: id, missingTable: true,
+			wantError: "mo_catalog.mo_partition_tables is unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var queries int
+			te := watchCatalogTestTxn{exec: func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				queries++
+				if queries == 1 {
+					var partitioned any
+					if tc.relationID != nil {
+						partitioned = int8(0)
+					}
+					return changedTableTestResult(t, []any{uint32(3), "source", "db", tc.table, types.Uuid{2}, uint64(10), tc.relationID, partitioned, nil}), nil
+				}
+				require.Equal(t, 2, queries)
+				require.Contains(t, sql, "mo_catalog.mo_partition_tables "+hint)
+				require.Contains(t, sql, "where partition_id in (cast(? as unsigned)) limit 2")
+				require.True(t, opts.HasAccountID())
+				require.Equal(t, uint32(3), opts.AccountID())
+				require.Equal(t, []string{"9007199254740993"}, watchCatalogTestParams(t, opts))
+				require.Equal(t, uint64(watchPartitionLookupResultSize), opts.MaxResultBytes())
+				if tc.missingTable {
+					return executor.Result{}, moerr.NewNoSuchTable(t.Context(), "mo_catalog", "mo_partition_tables")
+				}
+				if tc.match {
+					return changedTableTestResult(t, []any{id}), nil
+				}
+				return executor.Result{}, nil
+			}}
+			grants, names, err := readWatchGrants(t.Context(), te, 17, hint)
+			wantQueries := 1
+			if tc.table == table && tc.relationID != nil {
+				wantQueries = 2
+			}
+			require.Equal(t, wantQueries, queries)
+			if tc.wantError != "" {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.ErrorContains(t, err, tc.wantError)
+				require.Empty(t, grants)
+				require.Empty(t, names)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, grants, 1)
+			if tc.relationID == nil || tc.match {
+				require.Zero(t, grants[0].TableID)
+			} else {
+				require.Equal(t, id, grants[0].TableID)
+			}
 		})
 	}
 }

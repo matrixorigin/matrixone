@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -92,9 +91,7 @@ func (h *Handle) HandleGetScopedChangedTables(
 	ctx, cancel := context.WithTimeoutCause(ctx, scopedChangedTablesTimeout, errScopedChangedTablesDeadline)
 	defer cancel()
 	defer func() {
-		if errors.Is(err, context.DeadlineExceeded) && context.Cause(ctx) == errScopedChangedTablesDeadline {
-			err = moerr.NewChangeWatchRetry(ctx, "the TN scoped scan deadline expired")
-		}
+		err = cmd_util.ClassifyChangeWatchDeadline(ctx, errScopedChangedTablesDeadline, err, "the TN scoped scan deadline expired")
 	}()
 
 	scan := req != nil && len(req.Tables) != 0 && req.From.Less(req.To)
@@ -116,7 +113,7 @@ func (h *Handle) HandleGetScopedChangedTables(
 		return nil, err
 	}
 	if req.To.Greater(published) {
-		return nil, moerr.NewInvalidInput(ctx, "scoped changed-table window exceeds the TN publication frontier")
+		return nil, moerr.NewChangeWatchRetry(ctx, "scoped changed-table window exceeds the TN publication frontier")
 	}
 
 	var changed []cmd_util.ScopedChangedTable
@@ -132,7 +129,7 @@ func (h *Handle) HandleGetScopedChangedTables(
 		return nil, err
 	}
 	if !h.db.IsWriteMode() {
-		return nil, moerr.NewNotSupported(ctx, "TN left write mode during scoped changed-table query")
+		return nil, moerr.NewChangeWatchRetry(ctx, "TN left write mode during scoped changed-table query")
 	}
 	*resp = cmd_util.GetScopedChangedTablesResp{
 		From:     req.From,
@@ -212,6 +209,9 @@ func (h *Handle) scanScopedChangedTables(
 				return err
 			}
 			database, err := h.db.Catalog.GetDatabaseByID(record.DbID)
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewChangeWatchRetry(ctx, "scoped changed-table database left the TN catalog during query")
+			}
 			if err != nil || database.GetTenantID() != account {
 				return moerr.NewInternalError(ctx, "scoped changed-table database identity could not be verified")
 			}

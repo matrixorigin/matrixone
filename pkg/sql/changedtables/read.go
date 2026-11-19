@@ -16,7 +16,6 @@ package changedtables
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"time"
 	"unicode/utf8"
@@ -69,10 +68,7 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 	ctx, cancel := context.WithTimeoutCause(proc.Ctx, readTimeout, errReadDeadline)
 	defer cancel()
 	defer func() {
-		if context.Cause(ctx) == errReadDeadline &&
-			(errors.Is(err, context.DeadlineExceeded) || moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)) {
-			err = moerr.NewChangeWatchRetry(ctx, "the CN changed-table query deadline expired")
-		}
+		err = cmd_util.ClassifyChangeWatchDeadline(ctx, errReadDeadline, err, "the CN changed-table query deadline expired")
 	}()
 	if marker != nil && (len(*marker) == 0 || len(*marker) > MaxMarkerBytes) {
 		return Result{}, moerr.NewInvalidInput(ctx, "invalid changed-table marker length")
@@ -124,7 +120,9 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 	if to.PhysicalTime <= 0 || to.NodeID != 0 {
 		return Result{}, moerr.NewInternalError(ctx, "invalid changed-table publication frontier")
 	}
+	catalogStarted := time.Now()
 	registry, err := readCatalog(ctx, exec, caller, observerName, to)
+	v2.ChangeWatchCatalogDurationHistogram.Observe(time.Since(catalogStarted).Seconds())
 	if err != nil {
 		return Result{}, err
 	}
@@ -200,16 +198,18 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 	if recheckTo.Less(to) || recheckTo.NodeID != 0 {
 		return Result{}, moerr.NewInternalError(ctx, "changed-table publication frontier regressed during query")
 	}
+	catalogStarted = time.Now()
 	current, err := readCatalog(ctx, exec, caller, observerName, recheckTo)
-	if err != nil {
-		return Result{}, err
-	}
-	currentDigests, _, _, err := ProjectGrants(ctx, current.grants, digests)
+	v2.ChangeWatchRecheckCatalogDurationHistogram.Observe(time.Since(catalogStarted).Seconds())
 	if err != nil {
 		return Result{}, err
 	}
 	if current.binding != registry.binding {
-		return Result{}, moerr.NewInvalidInput(ctx, "changed-table observer binding changed during query")
+		return Result{}, moerr.NewChangeWatchRetry(ctx, "changed-table observer binding changed during query")
+	}
+	currentDigests, _, _, err := ProjectGrants(ctx, current.grants, digests)
+	if err != nil {
+		return Result{}, err
 	}
 	if !maps.Equal(digests, currentDigests) || !maps.Equal(registry.sourceNames, current.sourceNames) {
 		if recheckTo.Equal(to) {

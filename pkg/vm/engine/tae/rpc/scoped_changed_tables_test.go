@@ -133,12 +133,14 @@ func TestScopedChangedTablesReadDirtyAndReplay(t *testing.T) {
 	malformed.Tables = []cmd_util.ScopedChangedTable{{AccountID: 91, DatabaseID: scope.DatabaseID, TableID: scope.TableID}}
 	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &malformed, &resp)
 	require.ErrorContains(t, err, "database identity could not be verified")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
 	require.Empty(t, resp)
 
 	future := req
 	future.To.PhysicalTime += time.Hour.Nanoseconds()
 	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &future, &resp)
 	require.ErrorContains(t, err, "publication frontier")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchRetry), "%v", err)
 	require.Empty(t, resp)
 
 	reopenDir, reopenOpts := h.db.Dir, h.db.Opts
@@ -159,6 +161,23 @@ func TestScopedChangedTablesReadDirtyAndReplay(t *testing.T) {
 	// The same scan can cross the durable checkpoint into WAL replay.
 	req.From = create.GetCommitTS().Prev().ToTimestamp()
 	check()
+
+	// Evict the dropped database from the catalog before the logtail GC cut
+	// advances. The earlier delete still needs verification at its original cut.
+	drop := startScopedChangedTablesTxn(t, h.Handle)
+	_, err = drop.DropDatabase("watch")
+	require.NoError(t, err)
+	require.NoError(t, drop.Commit(ctx))
+	dropCommit := drop.GetCommitTS()
+	h.db.Catalog.GCByTS(ctx, dropCommit.Next())
+	_, err = h.db.Catalog.GetDatabaseByID(scope.DatabaseID)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "%v", err)
+	require.Equal(t, checkpointEnd, h.db.LogtailMgr.GetDirtyHistoryFloor())
+	req.From = commit.Prev().ToTimestamp()
+	_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &req, &resp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchRetry), "%v", err)
+	require.ErrorContains(t, err, "left the TN catalog")
+	require.Empty(t, resp)
 }
 
 type scopedIndexReadGate struct {
@@ -237,7 +256,8 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 	require.Empty(t, resp)
 	require.Empty(t, h.scopedChangedTablesAdmission.admitted)
 
-	t.Run("concurrent GC discards candidates", func(t *testing.T) {
+	holdIndexRead := func(t *testing.T, change func(context.Context), message string) {
+		t.Helper()
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		gate := &scopedIndexReadGate{
@@ -268,7 +288,7 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
-		h.db.LogtailMgr.GCByTS(ctx, published)
+		change(ctx)
 		close(gate.resume)
 		var outcome probeResult
 		select {
@@ -276,9 +296,24 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
-		require.ErrorContains(t, outcome.err, "crossed checkpoint coverage")
+		require.ErrorContains(t, outcome.err, message)
 		require.True(t, moerr.IsMoErrCode(outcome.err, moerr.ErrChangeWatchRetry), "%v", outcome.err)
 		require.Empty(t, outcome.resp)
+	}
+	t.Run("write mode changes during scan", func(t *testing.T) {
+		defer h.db.TxnMode.Store(uint32(db.DBTxnMode_Write))
+		holdIndexRead(t, func(context.Context) {
+			h.db.TxnMode.Store(uint32(db.DBTxnMode_Replay))
+		}, "left write mode")
+
+		_, err := h.HandleGetScopedChangedTables(t.Context(), txn.TxnMeta{}, &req, &resp)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+		require.Empty(t, resp)
+	})
+	t.Run("concurrent GC discards candidates", func(t *testing.T) {
+		holdIndexRead(t, func(ctx context.Context) {
+			h.db.LogtailMgr.GCByTS(ctx, published)
+		}, "crossed checkpoint coverage")
 	})
 }
 

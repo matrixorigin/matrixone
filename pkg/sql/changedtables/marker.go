@@ -15,7 +15,6 @@
 package changedtables
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -106,17 +105,18 @@ func DecodeMarker(ctx context.Context, encoded string, binding Binding, to times
 		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker checksum")
 	}
 	data = data[len(markerVersion):]
-	if !bytes.Equal(data[:16], binding.Epoch[:]) ||
-		binary.BigEndian.Uint32(data[16:20]) != binding.Observer.AccountID ||
-		binary.BigEndian.Uint64(data[20:28]) != binding.Observer.Incarnation {
-		return Marker{}, moerr.NewInvalidInput(ctx, "marker belongs to a different recovery epoch or observer")
-	}
+	epoch := [16]byte(data[:16])
+	accountID := binary.BigEndian.Uint32(data[16:20])
+	incarnation := binary.BigEndian.Uint64(data[20:28])
 	cut := timestamp.Timestamp{
 		PhysicalTime: int64(binary.BigEndian.Uint64(data[28:36])),
 		LogicalTime:  binary.BigEndian.Uint32(data[36:40]),
 	}
-	if cut.PhysicalTime <= 0 || cut.Greater(to) {
+	if epoch == ([16]byte{}) || cut.PhysicalTime <= 0 {
 		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker watermark")
+	}
+	if accountID != binding.Observer.AccountID {
+		return Marker{}, moerr.NewInvalidInput(ctx, "marker belongs to a different observer account")
 	}
 	count := binary.BigEndian.Uint32(data[40:44])
 	data = data[44:]
@@ -134,6 +134,12 @@ func DecodeMarker(ctx context.Context, encoded string, binding Binding, to times
 		scopes[account] = [16]byte(data[4:markerSourceSize])
 		data = data[markerSourceSize:]
 		previous = account
+	}
+	if epoch != binding.Epoch || incarnation != binding.Observer.Incarnation {
+		return Marker{}, moerr.NewChangeWatchHistoryUnavailable(ctx, "marker recovery epoch or observer incarnation has changed")
+	}
+	if cut.Greater(to) {
+		return Marker{}, moerr.NewInvalidInput(ctx, "invalid marker watermark")
 	}
 	return Marker{To: cut, Sources: scopes}, nil
 }
