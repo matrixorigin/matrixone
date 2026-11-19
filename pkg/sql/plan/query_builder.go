@@ -5909,6 +5909,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 			cteBindType:   CteBindTypeNonRecur,
 			cte:           cteRef,
 			recScanNodeId: -1})
+	subCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: subCtx.cteOwnerChain}
 	cteRef.isRecursive = false
 
 	func() {
@@ -6068,6 +6069,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
 	distinct bool,
+	bodyScope *BindContext,
 ) (nodeID int32, outputCtx *BindContext, err error) {
 	// Recursive binding wires and coerces existing feedback nodes.
 	builder.stableCTERoots = nil
@@ -6089,7 +6091,11 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 	//1. bind initial statement
 	targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]
-	initCtx := NewBindContext(builder, cteRef.declarationCtx)
+	initParent := cteRef.declarationCtx
+	if bodyScope != nil {
+		initParent = bodyScope
+	}
+	initCtx := NewBindContext(builder, initParent)
 	initCtx.cteName = table
 	if len(targets) > 0 {
 		initCtx.numericProjectionTypes = targets
@@ -6100,6 +6106,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			cte:           cteRef,
 			recScanNodeId: -1})
 	initCtx.sinkTag = builder.genNewBindTag()
+	initCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: initCtx.cteOwnerChain}
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
 		err = err1
@@ -6131,7 +6138,11 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 	//3. bind recursive parts
 	for i, r := range stmts {
-		subCtx := NewBindContext(builder, cteRef.declarationCtx)
+		memberParent := cteRef.declarationCtx
+		if bodyScope != nil {
+			memberParent = bodyScope
+		}
+		subCtx := NewBindContext(builder, memberParent)
 		subCtx.cteName = table
 		subCtx.sinkTag = initCtx.sinkTag
 		if len(targets) > 0 {
@@ -6151,6 +6162,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 				cteBindType:   CteBindTypeRecurStmt,
 				cte:           cteRef,
 				recScanNodeId: recScanId})
+		subCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: subCtx.cteOwnerChain}
 
 		var recursiveLastNodeID int32
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
@@ -6319,6 +6331,33 @@ func (bc *BindContext) bindingRecurQueryBlock() bool {
 		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
 }
 
+// selectTreePreservingWith peels parenthesized wrappers like getSelectTree but
+// stops at the first node carrying its own WITH clause, so an inner WITH that
+// sits behind intermediate wrappers still reaches bindSelect with its whole
+// lexical scope (PR 32906 reviews 5985861342/5985871552).
+func selectTreePreservingWith(s *tree.Select) *tree.Select {
+	for s != nil {
+		if s.With != nil {
+			return s
+		}
+		switch stmt := s.Select.(type) {
+		case *tree.ParenSelect:
+			if stmt.Select == nil {
+				return s
+			}
+			s = stmt.Select
+		case *tree.Select:
+			if stmt.Select == nil {
+				return s
+			}
+			s = stmt
+		default:
+			return s
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -6337,9 +6376,13 @@ func (builder *QueryBuilder) bindCte(
 	var s *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
 	case *tree.Select:
-		s = getSelectTree(stmt)
+		// Peel parenthesized wrappers but stop at a node carrying its own
+		// WITH: an inner WITH behind intermediate wrappers must reach
+		// bindSelect with its whole lexical scope (PR 32906 reviews
+		// 5985861342/5985871552).
+		s = selectTreePreservingWith(stmt)
 	case *tree.ParenSelect:
-		s = getSelectTree(stmt.Select)
+		s = selectTreePreservingWith(stmt.Select)
 	default:
 		err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		return
@@ -6349,7 +6392,18 @@ func (builder *QueryBuilder) bindCte(
 	var left *tree.SelectStatement
 	var stmts []tree.SelectStatement
 	var distinct bool
-	left, distinct, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+	// Recursive-union inspection must look through parenthesized wrappers
+	// around a WITH-bearing body, while the binder keeps the full select for
+	// its lexical scope (PR 32906 review 5985871552 G2).
+	inspection := s.Select
+	for {
+		paren, ok := inspection.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			break
+		}
+		inspection = paren.Select.Select
+	}
+	left, distinct, err = builder.splitRecursiveMember(&inspection, table, &stmts)
 	if err != nil {
 		return 0, err
 	}
@@ -6368,7 +6422,24 @@ func (builder *QueryBuilder) bindCte(
 		recursiveCtx := NewBindContext(builder, ctx)
 		recursiveCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
 		recursiveCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
-		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct)
+		// A recursive CTE body may declare its own WITH; its names merge onto
+		// an exclusive per-body scope only: the shared per-WITH declaration
+		// frame is never reassigned, so siblings cannot see body-local names,
+		// and the scope starts from a value snapshot of the shared map so
+		// displaced-outers keep recording (PR 32906 review 5985871552 G2,
+		// root19 C4).
+		var bodyScope *BindContext
+		if s.With != nil {
+			bodyScope = NewBindContext(builder, cteRef.declarationCtx)
+			bodyScope.cteByName = make(map[string]*CTERef, len(cteRef.declarationCtx.cteByName))
+			for n, r := range cteRef.declarationCtx.cteByName {
+				bodyScope.cteByName[n] = r
+			}
+			if err = builder.preprocessCte(s, bodyScope); err != nil {
+				return 0, err
+			}
+		}
+		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct, bodyScope)
 		if err != nil {
 			return 0, err
 		}
@@ -6418,7 +6489,7 @@ func cteReferences(with *tree.With) (map[string]*CTERef, string) {
 		for _, name := range later {
 			masked[name] = true
 		}
-		refs[name] = &CTERef{ast: cte, isRecursive: with.IsRecursive, maskedCTEs: masked}
+		refs[name] = &CTERef{ast: cte, isRecursive: with.IsRecursive, maskedCTEs: masked, withClause: with}
 		later = append(later, name)
 	}
 	return refs, ""
@@ -6441,11 +6512,22 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 			merged[name] = ref
 		}
 		for name, ref := range refs {
+			if outer, ok := ctx.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+				// Same-name inner declaration: keep the displaced enclosing
+				// definition reachable for lookups that happen before the
+				// inner name enters scope (PR 32906 review 5985871552).
+				ref.shadowedOuter = outer
+			}
 			merged[name] = ref
 		}
 		ctx.cteByName = merged
+		// One declaration scope per WITH clause: every ref in the same WITH
+		// shares a single declaration context, which is also the identifier
+		// the masked-lookup walk uses to distinguish a pending same-WITH
+		// sibling from an enclosing definition (PR 32906 review 5985871552).
+		declaration := newCTEDeclarationContext(builder, ctx)
 		for _, ref := range refs {
-			ref.declarationCtx = newCTEDeclarationContext(builder, ctx)
+			ref.declarationCtx = declaration
 		}
 	}
 	return nil
@@ -8084,6 +8166,7 @@ func numericCteBindingContext(ctx *BindContext, ref *CTERef) *BindContext {
 		snapshot:         snapshot,
 		numericCteByName: scope.numericCteByName,
 		cteState:         state,
+		cteOwnerChain:    scope.cteOwnerChain,
 	}
 }
 

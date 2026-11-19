@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -121,7 +122,7 @@ func TestNewReviewClosuresEmbeddedSQL(t *testing.T) {
 			for _, must := range []string{
 				"compression = 'zlib'", "encryption = 'Y'", "delay_key_write = 1",
 				"STORAGE DISK", "connection = 'c one'", "data directory = '/data/x'",
-				"index directory = '/idx/x'", "password = 'p''ass\\\\'", "tablespace = ts1",
+				"index directory = '/idx/x'", "password = 'p''ass\\\\'", "tablespace = `ts1`",
 			} {
 				require.Contains(t, createSQL, must, createSQL)
 			}
@@ -243,6 +244,152 @@ func TestNewReviewClosuresEmbeddedSQL(t *testing.T) {
 			shadow := "WITH outer_cte AS (SELECT 7 AS a) (WITH outer_cte AS (SELECT 9 AS a) SELECT a FROM outer_cte)"
 			require.Equal(t, []string{"9"}, readOneRow(t, shadow), "inner same-name CTE legally shadows the outer one")
 			require.Equal(t, []string{"7"}, readOneRow(t, flat), "outer scope keeps its own definition after inner shadowing")
+		})
+		t.Run("cte_body_with_inner_with_keeps_lexical_scope", func(t *testing.T) {
+			q := "WITH q AS (WITH local_c AS (SELECT 7 AS a) (SELECT a FROM local_c)) SELECT a FROM q"
+			require.Equal(t, []string{"7"}, readOneRow(t, q), "inner WITH inside a CTE body must keep its own lexical scope")
+			exec(t, "CREATE TABLE local_c (a INT)")
+			exec(t, "INSERT INTO local_c VALUES (99)")
+			require.Equal(t, []string{"7"}, readOneRow(t, q), "the CTE shadows the same-name physical table")
+			uq := "WITH q AS (WITH local_c AS (SELECT 7 AS a) SELECT a FROM local_c) SELECT a FROM q"
+			require.Equal(t, []string{"7"}, readOneRow(t, uq), "unwrapped control")
+			dq := "WITH q AS ((WITH local_c AS (SELECT 7 AS a) (SELECT a FROM local_c))) SELECT a FROM q"
+			require.Equal(t, []string{"7"}, readOneRow(t, dq), "extra paren wrapper keeps the inner WITH reachable")
+		})
+		t.Run("outer_cte_visible_before_inner_same_name_shadow", func(t *testing.T) {
+			w := "WITH c AS (SELECT 7 AS a) (WITH u AS (SELECT a FROM c), c AS (SELECT 9 AS a) SELECT a FROM u)"
+			require.Equal(t, []string{"7"}, readOneRow(t, w), "u's declaration must see the outer c")
+			post := "WITH c AS (SELECT 7 AS a) (WITH u AS (SELECT a FROM c), c AS (SELECT 9 AS a) SELECT a FROM c)"
+			require.Equal(t, []string{"9"}, readOneRow(t, post), "after the inner declaration the same name legally shadows")
+			renamed := "WITH c AS (SELECT 7 AS a) (WITH u AS (SELECT a FROM c), d AS (SELECT 9 AS a) SELECT a FROM u)"
+			require.Equal(t, []string{"7"}, readOneRow(t, renamed), "rename control")
+		})
+		t.Run("quoted_tablespace_and_engine_catalog_roundtrip", func(t *testing.T) {
+			// One multi-statement COM_QUERY so createTableSQLForCatalog takes
+			// the canonical branch; the quoted identifier and the spaced string
+			// must survive as grammar-valid quoting in the stored DDL.
+			exec(t, "CREATE TABLE rq TABLESPACE `ts archive` AS SELECT 1 AS a; CREATE TABLE sq ENGINE 'test engine' AS SELECT 2 AS b; CREATE TABLE rq2 TABLESPACE `select` AS SELECT 3 AS c; CREATE TABLE sq2 ENGINE '' AS SELECT 4 AS d")
+			require.Equal(t, []string{"1"}, readOneRow(t, "SELECT COUNT(*) FROM rq"))
+			require.Equal(t, []string{"1"}, readOneRow(t, "SELECT COUNT(*) FROM sq"))
+			var rqSQL, sqSQL string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 0 AND reldatabase = ? AND relname = ?", testDB, "rq").Scan(&rqSQL), "rq")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 0 AND reldatabase = ? AND relname = ?", testDB, "sq").Scan(&sqSQL), "sq")
+			require.Contains(t, rqSQL, "tablespace = `ts archive`", rqSQL)
+			var rq2SQL, sq2SQL string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 0 AND reldatabase = ? AND relname = ?", testDB, "rq2").Scan(&rq2SQL), "rq2")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 0 AND reldatabase = ? AND relname = ?", testDB, "sq2").Scan(&sq2SQL), "sq2")
+			require.Contains(t, rq2SQL, "tablespace = `select`", rq2SQL)
+			require.Contains(t, sq2SQL, "engine = ''", sq2SQL)
+			stmt3, e3 := parsers.ParseOne(t.Context(), dialect.MYSQL, rq2SQL, 1)
+			require.NoError(t, e3, "stored rq2 DDL must reparse: %s", rq2SQL)
+			c3, ok3 := stmt3.(*tree.CreateTable)
+			require.True(t, ok3, rq2SQL)
+			nT3 := 0
+			for _, o := range c3.Options {
+				if v, ok := o.(*tree.TableOptionTablespace); ok {
+					nT3++
+					require.Equal(t, "select", v.Name, rq2SQL)
+				}
+			}
+			require.Equal(t, 1, nT3, "tablespace typed option must be present exactly once")
+			stmt4, e4 := parsers.ParseOne(t.Context(), dialect.MYSQL, sq2SQL, 1)
+			require.NoError(t, e4, "stored sq2 DDL must reparse: %s", sq2SQL)
+			c4, ok4 := stmt4.(*tree.CreateTable)
+			require.True(t, ok4, sq2SQL)
+			nE4 := 0
+			for _, o := range c4.Options {
+				if v, ok := o.(*tree.TableOptionEngine); ok {
+					nE4++
+					require.Equal(t, "", v.Engine, sq2SQL)
+				}
+			}
+			require.Equal(t, 1, nE4, "engine typed option must be present exactly once")
+			require.Contains(t, sqSQL, "engine = `test engine`", sqSQL)
+			stmt1, e1 := parsers.ParseOne(t.Context(), dialect.MYSQL, rqSQL, 1)
+			require.NoError(t, e1, "stored rq DDL must reparse: %s", rqSQL)
+			c1, ok := stmt1.(*tree.CreateTable)
+			require.True(t, ok, rqSQL)
+			nT := 0
+			for _, o := range c1.Options {
+				if v, ok := o.(*tree.TableOptionTablespace); ok {
+					nT++
+					require.Equal(t, "ts archive", v.Name, rqSQL)
+				}
+			}
+			require.Equal(t, 1, nT, "tablespace typed option must be present exactly once")
+			stmt2, e2 := parsers.ParseOne(t.Context(), dialect.MYSQL, sqSQL, 1)
+			require.NoError(t, e2, "stored sq DDL must reparse: %s", sqSQL)
+			c2, ok := stmt2.(*tree.CreateTable)
+			require.True(t, ok, sqSQL)
+			nE := 0
+			for _, o := range c2.Options {
+				if v, ok := o.(*tree.TableOptionEngine); ok {
+					nE++
+					require.Equal(t, "test engine", v.Engine, sqSQL)
+				}
+			}
+			require.Equal(t, 1, nE, "engine typed option must be present exactly once")
+		})
+		t.Run("f2_body_local_scope_isolation_value_oracle", func(t *testing.T) {
+			// root19 F2 witness with real value oracle: without a physical x,
+			// sibling s must fail to bind (body-local x is isolated); with a
+			// physical x(99), s reads the physical 99 while q's body still
+			// drives the union from the body-local x (rows 1, then 2).
+			witness := "WITH RECURSIVE q(n) AS (WITH x AS (SELECT 1 AS a) (SELECT a FROM x UNION ALL SELECT n+1 FROM q WHERE n < 2)), s AS (SELECT a FROM x) SELECT s.a FROM q JOIN s ON q.n = 1"
+			_, err := conn.ExecContext(ctx, witness)
+			require.Error(t, err, "no physical x exists yet: body-local x must not leak to the sibling")
+
+			exec(t, "CREATE TABLE x (a INT)")
+			exec(t, "INSERT INTO x VALUES (99)")
+			require.Equal(t, []string{"99"}, readOneRow(t, witness), "sibling reads the physical x, not q's body-local one")
+			qOnly := "WITH RECURSIVE q(n) AS (WITH x AS (SELECT 1 AS a) (SELECT a FROM x UNION ALL SELECT n+1 FROM q WHERE n < 2)) SELECT n FROM q ORDER BY n"
+			rs, qerr := conn.QueryContext(ctx, qOnly)
+			require.NoError(t, qerr, qOnly)
+			defer rs.Close()
+			var got []string
+			for rs.Next() {
+				var n int64
+				require.NoError(t, rs.Scan(&n))
+				got = append(got, strconv.FormatInt(n, 10))
+			}
+			require.NoError(t, rs.Err(), qOnly)
+			require.Equal(t, []string{"1", "2"}, got, "q's body keeps using the body-local x")
+		})
+		t.Run("inherited_mask_children_value_oracle", func(t *testing.T) {
+			// root18 G1 boundary: the enclosing definition stays visible
+			// through scalar/derived children of the CTE being bound.
+			require.Equal(t, []string{"7"}, readOneRow(t,
+				"WITH c AS (SELECT 7 AS a) (WITH u AS (SELECT (SELECT a FROM c) AS a), c AS (SELECT 9 AS a) SELECT a FROM u)"),
+				"scalar subquery child keeps the enclosing definition")
+			require.Equal(t, []string{"7"}, readOneRow(t,
+				"WITH c AS (SELECT 7 AS a) (WITH u AS (SELECT a FROM (SELECT a FROM c) d), c AS (SELECT 9 AS a) SELECT a FROM u)"),
+				"derived table child keeps the enclosing definition")
+		})
+		t.Run("with_wrapped_recursive_body_value_oracle", func(t *testing.T) {
+			// root18 G2 boundary: a WITH-wrapped recursive CTE body keeps its
+			// inner lexical scope and still drives the recursive union,
+			// matching the unwrapped control.
+			wrapped := "WITH RECURSIVE q(n) AS (WITH x AS (SELECT 1 AS a) (SELECT a FROM x UNION ALL SELECT n + 1 FROM q WHERE n < 3)) SELECT n FROM q ORDER BY n"
+			unwrapped := "WITH RECURSIVE q(n) AS (WITH x AS (SELECT 1 AS a) SELECT a FROM x UNION ALL SELECT n + 1 FROM q WHERE n < 3) SELECT n FROM q ORDER BY n"
+			readRows := func(q string) []string {
+				rs, err := conn.QueryContext(ctx, q)
+				require.NoError(t, err, q)
+				defer rs.Close()
+				var got []string
+				for rs.Next() {
+					var n int64
+					require.NoError(t, rs.Scan(&n))
+					got = append(got, strconv.FormatInt(n, 10))
+				}
+				require.NoError(t, rs.Err(), q)
+				return got
+			}
+			require.Equal(t, []string{"1", "2", "3"}, readRows(wrapped), "wrapped recursive body drives the union")
+			require.Equal(t, []string{"1", "2", "3"}, readRows(unwrapped), "unwrapped control equals the wrapped result")
 		})
 	})
 }

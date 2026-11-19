@@ -142,7 +142,7 @@ func TestCTASAdmittedOptionLiteralsRelCreateSQLRoundtrip(t *testing.T) {
 		}
 	})
 	t.Run("tablespace_ident", func(t *testing.T) {
-		reCreate := roundtripAdmittedOptionCTAS(t, "TABLESPACE ts1 AS SELECT 1 AS a", "tablespace = ts1")
+		reCreate := roundtripAdmittedOptionCTAS(t, "TABLESPACE ts1 AS SELECT 1 AS a", "tablespace = `ts1`")
 		found := 0
 		for _, o := range reCreate.Options {
 			if _, ok := o.(*tree.TableOptionTablespace); ok {
@@ -214,6 +214,96 @@ func TestCTASAdmittedOptionLiteralsRelCreateSQLRoundtrip(t *testing.T) {
 		for _, o := range reCreate.Options {
 			if v, ok := o.(*tree.TableOptionPassword); ok {
 				require.Equal(t, "se'cret", v.Password, "reparse")
+			}
+		}
+	})
+	t.Run("tablespace_quoted_identifier", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "TABLESPACE `ts archive` AS SELECT 1 AS a", "tablespace = `ts archive`")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionTablespace); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "tablespace typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionTablespace); ok {
+				require.Equal(t, "ts archive", v.Name, "reparse")
+			}
+		}
+	})
+	t.Run("engine_spaced_value_identifier_form", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "ENGINE 'test engine' AS SELECT 1 AS a", "engine = `test engine`")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionEngine); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "engine typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionEngine); ok {
+				require.Equal(t, "test engine", v.Engine, "reparse")
+			}
+		}
+	})
+	t.Run("tablespace_reserved_word", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "TABLESPACE `select` AS SELECT 1 AS a", "tablespace = `select`")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionTablespace); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "tablespace typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionTablespace); ok {
+				require.Equal(t, "select", v.Name, "reparse")
+			}
+		}
+	})
+	t.Run("engine_reserved_word", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "ENGINE 'select' AS SELECT 1 AS a", "engine = `select`")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionEngine); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "engine typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionEngine); ok {
+				require.Equal(t, "select", v.Engine, "reparse")
+			}
+		}
+	})
+	t.Run("engine_empty_string_value", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "ENGINE '' AS SELECT 1 AS a", "engine = ''")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionEngine); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "engine typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionEngine); ok {
+				require.Equal(t, "", v.Engine, "reparse")
+			}
+		}
+	})
+	t.Run("engine_plain_identifier_roundtrip", func(t *testing.T) {
+		reCreate := roundtripAdmittedOptionCTAS(t, "ENGINE innodb AS SELECT 1 AS a", "engine = `innodb`")
+		found := 0
+		for _, o := range reCreate.Options {
+			if _, ok := o.(*tree.TableOptionEngine); ok {
+				found++
+			}
+		}
+		require.Equal(t, 1, found, "engine typed option must be present exactly once")
+		for _, o := range reCreate.Options {
+			if v, ok := o.(*tree.TableOptionEngine); ok {
+				require.Equal(t, "innodb", v.Engine, "reparse")
 			}
 		}
 	})
