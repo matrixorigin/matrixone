@@ -35,12 +35,10 @@ concerns, maintainability suggestions, and micro-nits are non-blocking or
 omitted. Assign severity only after the finding is verified.
 
 MatrixOne upgrades by full-cluster shutdown only; old and new binaries never
-serve one cluster together. "An older CN/TN cannot decode or run this" is not a
-finding: never request, or block on the absence of, a per-feature
-`MORPCVersion`, `AllCNsSupportProtocol`/capability gate, or old-peer fallback.
-Compatibility findings must show a new binary misreading persisted state,
-backups, or an external-boundary protocol. See
-[upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md).
+serve one cluster together. Apply the shared upgrade contract to affected
+boundaries, including changes in how unchanged persisted bytes are interpreted.
+For each finding, identify the supported source release or external contract,
+the reachable artifact/input, and the consequence or missing required proof.
 
 ## Design quality and delivery scope
 
@@ -100,6 +98,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Large/complex feature or major refactor; design document (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 | Production behavior or changed/added/removed/merged/optimized UT/BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
+| Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [../mo-dev/references/upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md) |
 | Index algorithm dispatch/plugin/registry/ISCP paths | [../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change](../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change) |
 
 ## Single-pass execution
@@ -148,7 +147,7 @@ not “diff is small.”
 | Control/liveness | Can cancel/close/reject/timeout terminate independently of the work it controls? |
 | Resource lifecycle | Does each resource have one effective cleanup owner on success, partial failure, cancel, panic, reset, and reuse? |
 | Boundedness/scale | Are queues, retries, caches, retained state, logs/metrics, memory/disk/FDs, and work admission bounded? |
-| Compatibility/security | Can a new binary read everything an old one persisted (disk/catalog/config/backup), do migrations and external protocols stay compatible, and are auth, tenant, and trust boundaries preserved? Upgrade is shutdown-only: never require in-cluster mixed-version gates or `MORPCVersion` bumps ([upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md)). |
+| Compatibility/security | Does the changed closure preserve the interpretation of released state on reads and later writes, supported migrations/restores, external contracts, and auth, tenant, and trust boundaries where applicable? Route affected compatibility boundaries through the shared upgrade contract. |
 | Performance/operations | Did hot-path work, allocations, I/O, synchronization, startup, capacity, rollout, observability, or blast radius change materially? |
 | Platform/delivery | Are build tags, OS/arch, CGo/native loading, generated files, packaging, and final committed artifacts correct? |
 | Test architecture | Do tests prove distinct contracts with minimum deterministic data/setup, correct UT/BVT layer, isolation, cleanup, and real selection? |

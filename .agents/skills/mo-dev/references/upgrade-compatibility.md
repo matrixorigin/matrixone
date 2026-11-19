@@ -6,8 +6,32 @@ CN/TN/LogService/proxy binaries serve one cluster at the same time, is not
 supported. Downgrade (starting an older binary on data written by a newer one)
 is not supported.
 
-Apply this contract when designing, implementing, or reviewing any change that
-touches RPC messages, plan/pipeline encoding, persisted state, or upgrade.
+Use this reference when a change can affect persisted state, upgrade/restore,
+or protocol and plan encoding. Classify the changed boundary once in the
+existing change map. A changed function, type, ID or default can alter what
+persisted bytes mean even when the format itself is unchanged. Trace a real
+writer and reader to distinguish durable state, an external contract and
+same-binary traffic. Only an affected release boundary needs release lookup
+and upgrade evidence. Docs, test-only or internal changes with no effect on
+that boundary proceed through the normal workflow.
+
+## Resolve the source release only when needed
+
+- Use the applicable source release specified by the user or the project's
+  upgrade policy for the target release line. Otherwise, use the upstream
+  latest stable release as the default when it is a supported source for the
+  target. Resolve it at task time, for example with
+  `gh api repos/matrixorigin/matrixone/releases/latest --jq .tag_name`. For a
+  maintenance branch, use the latest published supported predecessor for that
+  line when the upstream latest release is outside its upgrade path.
+- Verify that the release is published and pin the tag and resolved commit
+  (or identify the official binary used) in the task evidence. A newer-dated
+  hotfix or prerelease does not automatically replace that baseline. If the
+  source cannot be verified, report the precise gap and continue the checks
+  that do not depend on it. Do not substitute a branch tip or a guessed tag.
+- Check distinct older supported sources only when their data or upgrade paths
+  exercise a different contract. Reuse valid author, CI or previous task
+  evidence for the same source and affected behavior.
 
 ## Catalog upgrades follow release boundaries
 
@@ -34,18 +58,33 @@ the actual supported source release.
   unpublished commit is not sufficient justification. Any exception requires an
   explicit supported deployment and upgrade contract.
 
-Validate fresh installation and upgrades from supported releases, using pinned
-release tags and resolved commits as source fixtures. Use the latest supported
-release as the default baseline; retain older-source cases where their supported
-paths exercise distinct contracts. Do not use the previous commit or a moving
-main branch as the release compatibility baseline. Synthetic versions in unit
-tests may exercise framework behavior; they do not establish supported
-deployment sources.
+## Preserve the meaning of released data
 
-This boundary does not weaken recovery within a supported upgrade: still verify
-transaction rollback, retry, committed partial progress, restart and completion
-without duplicate effects. Reuse the existing upgrade owners and recovery paths
-rather than adding a separate state machine for development history.
+- Identify what the release actually wrote and how upgraded code consumes it.
+  Preserve the meaning of released encodings and stored IDs, including when
+  new writes reevaluate an existing definition. Use the existing owner to
+  distinguish released definitions from newly bound ones. Prefer deciding at
+  binding, decoding or migration time so ordinary execution avoids per-row
+  version checks, metadata lookups and allocations. Remove superseded
+  development-only branches or encodings within the changed boundary.
+- Choose the smallest test that distinguishes the two behaviors. For a
+  reachable change to released interpretation or migration, exercise a real
+  artifact from the verified release (or reuse equivalent evidence), open it
+  on the target, and check affected reads and new writes or recomputation.
+  Compare with a fresh target definition where semantics differ. Exercise a
+  fresh install if bootstrap changes. Include dump/restore, restart or
+  interrupted upgrade where the changed contract reaches those paths. Use a
+  synthetic fixture for decoder edge cases and release provenance for claims
+  about what a release actually wrote.
+- If changed writes or migrations affect a rollback plan, state when the
+  pre-upgrade backup must be taken, how to restore it, and which post-upgrade
+  changes that restore would lose. Keep forward-upgrade evidence separate
+  from any downgrade experiment. Do not require a downgrade matrix for
+  normal changes.
+
+For a changed migration, verify applicable transaction rollback, retry,
+committed partial progress, restart and completion without duplicate effects.
+Reuse the existing upgrade owners and recovery paths.
 
 ## In-cluster RPC: no mixed-version obligations
 
@@ -99,5 +138,6 @@ wrote. These remain hard compatibility contracts and valid review findings:
   external tools) keep their own compatibility rules. Shutdown upgrade of one
   cluster does not make the other side the same version.
 
-A valid compatibility finding names one of these surfaces and a concrete input
-written by the older binary that the newer binary misreads, rejects, or loses.
+A valid compatibility finding names one of these surfaces and a concrete
+released or external input that the target misreads, rejects, loses or
+reevaluates incorrectly.
