@@ -1,0 +1,40 @@
+name: Shanghai ordinary UT pool - token readability only
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/idc-ut-readability.yaml]
+permissions: {}
+jobs:
+  observe:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '8515aede6336accb46b10ad6f7fede716ba8c190' && github.run_attempt == 1
+    runs-on: amd64-mo-shanghai-8c16g
+    timeout-minutes: 2
+    steps:
+      - name: Direct shell permission check without opening the token
+        shell: bash
+        env:
+          ASSIGNED: ${{ runner.name }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSIGNED" == amd64-mo-shanghai-8c16g-*-runner-* && "$(uname -m)" == x86_64 ]]
+          printf 'effective_uid=%s\n' "$(id -u)"
+          if test -r /var/run/secrets/kubernetes.io/serviceaccount/token; then
+            echo 'ut_process_token_readable=yes'
+            echo 'coverage_gate=blocked'
+            exit 0
+          fi
+          echo 'ut_process_token_readable=no'
+          # Read only kernel-reported restrictions on this ordinary shell;
+          # never try to elevate, access a socket, or open the credential.
+          if [[ "$(id -u)" != 0 ]] && awk '
+            /^NoNewPrivs:/ {n=($2=="1")}
+            /^CapEff:/ {e=($2 ~ /^0+$/)}
+            /^CapPrm:/ {p=($2 ~ /^0+$/)}
+            /^CapAmb:/ {a=($2 ~ /^0+$/)}
+            /^CapInh:/ {i=($2 ~ /^0+$/)}
+            END { exit !(n && e && p && a && i) }
+          ' /proc/self/status; then
+            echo 'local_privilege_restrictions=present'
+          else
+            echo 'local_privilege_restrictions=unconfirmed'
+          fi
