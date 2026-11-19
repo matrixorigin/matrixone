@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -682,5 +684,70 @@ func TestM0ConcurrentAddColumnSQL(t *testing.T) {
 			require.Equal(t, 4, m0Count(t, ctx, db,
 				"select count(*) from "+customer+" where "+column+" is null"))
 		}
+	})
+}
+
+func TestM0SnapshotRestoreAndDecimalAttributes(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db := openM0SQL(t, cn)
+		defer db.Close()
+
+		const schema = "m0_restore_decimal"
+		const snapshot = "m0_restore_decimal_snapshot"
+		const table = schema + ".t"
+		defer cleanupSQLIntegration(t, cn,
+			"drop snapshot if exists "+snapshot,
+			"drop database if exists "+schema,
+		)
+		m0Exec(t, ctx, db, "create database "+schema)
+		m0Exec(t, ctx, db, "create table "+table+" (c_id int, d_id int, primary key(d_id,c_id))")
+		m0Exec(t, ctx, db, "insert into "+table+" values (1,1)")
+		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
+		objects := m0ObjectFingerprints(t, ctx, db, table)
+		require.NotEmpty(t, objects)
+
+		m0Exec(t, ctx, db, "alter table "+table+" add column amount decimal(10,2) unsigned")
+		m0Exec(t, ctx, db, "alter table "+table+" add column padded decimal(10,2) zerofill")
+		require.Equal(t, objects, m0ObjectFingerprints(t, ctx, db, table))
+		var ddl, name string
+		require.NoError(t, db.QueryRowContext(ctx, "show create table "+table).Scan(&name, &ddl))
+		require.Contains(t, strings.ToLower(ddl), "zerofill")
+		_, err = db.ExecContext(ctx, "insert into "+table+" values (2,1,-1.00,1.00)")
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(1264), mysqlErr.Number)
+		m0Exec(t, ctx, db, "insert into "+table+" values (2,1,2.25,3.50)")
+		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
+		m0Exec(t, ctx, db, "create snapshot "+snapshot+" for table "+schema+" t")
+		m0Exec(t, ctx, db, "delete from "+table)
+		require.Zero(t, m0Count(t, ctx, db, "select count(*) from "+table))
+		m0Exec(t, ctx, db, "restore table "+table+" {snapshot='"+snapshot+"'}")
+
+		service := cn.RawService().(cnservice.Service)
+		accountCtx := defines.AttachAccountId(ctx, 0)
+		require.NoError(t, service.GetSQLExecutor().ExecTxn(accountCtx, func(txn executor.TxnExecutor) error {
+			database, err := service.GetEngine().Database(accountCtx, schema, txn.Txn())
+			if err != nil {
+				return err
+			}
+			relation, err := database.Relation(accountCtx, "t", nil)
+			if err != nil {
+				return err
+			}
+			contract := relation.GetExtraInfo().GetM0Evolution()
+			require.NotNil(t, contract)
+			require.Equal(t, uint32(2), contract.LayoutGeneration)
+			require.Equal(t, relation.GetTableID(accountCtx), contract.RelationId)
+			return nil
+		}, executor.Options{}))
+		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table))
+		require.Equal(t, 1, m0Count(t, ctx, db,
+			"select count(*) from "+table+" where c_id=1 and amount is null and padded is null"))
+		require.Equal(t, 1, m0Count(t, ctx, db,
+			"select count(*) from "+table+" where c_id=2 and amount=2.25 and padded=3.50"))
 	})
 }

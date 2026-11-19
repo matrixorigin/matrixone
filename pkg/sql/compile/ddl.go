@@ -5525,11 +5525,11 @@ func (s *Scope) TableClone(c *Compile) error {
 		if bindErr != nil {
 			return bindErr
 		}
-		c.proc.Ctx = cloneCtx
 		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
 		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
-			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)
+			cloneCtx = context.WithValue(cloneCtx, defines.TrustedCheckConstraintNames{}, true)
 		}
+		c.proc.Ctx = cloneCtx
 		err = func() error {
 			defer func() { c.proc.Ctx = originalCtx }()
 			return s.createTable(c, func() { created = true })

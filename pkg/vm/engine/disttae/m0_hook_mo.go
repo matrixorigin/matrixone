@@ -523,13 +523,14 @@ func m0AppendCNDefs(oldDefs []engine.TableDef, newCol *plan.ColDef) ([]engine.Ta
 	for _, def := range oldDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok && objectio.IsPhysicalAddr(attr.Attr.Name) {
 			defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
-				Name:          newCol.Name,
-				ID:            newCol.ColId,
-				Type:          types.MustTypeFromPlan(newCol.Typ),
-				Default:       newCol.Default,
-				IsHidden:      false,
-				Seqnum:        uint16(newCol.Seqnum),
-				AutoIncrement: false,
+				Name:              newCol.Name,
+				ID:                newCol.ColId,
+				Type:              types.MustTypeFromPlan(newCol.Typ),
+				Default:           newCol.Default,
+				IsHidden:          false,
+				Seqnum:            uint16(newCol.Seqnum),
+				AutoIncrement:     false,
+				NumericAttributes: uint8(newCol.Typ.GetNumericAttributes() & types.NumericAttributeMask),
 			}})
 			inserted = true
 			// The old definition remains the rollback owner. Catalog regeneration
