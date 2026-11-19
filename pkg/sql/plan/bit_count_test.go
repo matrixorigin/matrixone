@@ -28,15 +28,19 @@ func TestTableDumpReleasedBitCountBindings(t *testing.T) {
 		"(bit_count(cast(d as double)) + bit_count(cast(-d as double))) stored)"
 	current := tableDumpDDLCatalog(tableDumpDDLCreate(t, compiler, ddl))
 	released := DeepCopyTableDef(current, true)
-	var calls []*pb.ObjectRef
+	var calls []*pb.Function
 	require.NoError(t, pb.VisitExprTree(released.Cols[1].GeneratedCol.Expr, func(e *pb.Expr) error {
 		if fn := e.GetF(); fn != nil && fn.Func.ObjName == "bit_count" {
 			fid, overload := function.DecodeOverloadID(fn.Func.Obj)
 			require.Equal(t, int32(function.BIT_COUNT), fid)
 			require.Equal(t, int32(16), overload)
-			// 4.2.8 used overload 9 for both DOUBLE calls.
+			// 4.2.8 stored BIT_COUNT overload 9 over CAST overload 0.
 			fn.Func.Obj = fn.Func.Obj&^0xffffffff | 9
-			calls = append(calls, fn.Func)
+			cast := fn.Args[0].GetF()
+			require.Equal(t, "cast", cast.Func.ObjName)
+			cast.Func.Obj &^= 0xffffffff
+			cast.SyntaxExplicitCast = false
+			calls = append(calls, fn)
 		}
 		return nil
 	}))
@@ -48,7 +52,8 @@ func TestTableDumpReleasedBitCountBindings(t *testing.T) {
 	sensitive, err = AnalyzeTableDumpBindings(compiler, current, released)
 	require.NoError(t, err)
 	require.True(t, sensitive)
-	calls[0].Obj = calls[0].Obj&^0xffffffff | 16
+	calls[0].Func.Obj = calls[0].Func.Obj&^0xffffffff | 16
+	calls[0].Args[0].GetF().Func.Obj |= 1
 	_, err = AnalyzeTableDumpBindings(compiler, current, released)
 	require.ErrorContains(t, err, "cannot verify bound generated expression", "mixed modes have no SQL binding")
 }

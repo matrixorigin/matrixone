@@ -333,7 +333,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
-		if useExplicitCastOverload(exprImpl.Type) {
+		if bitCountFloatFieldOverload(types.T(typ.Id)) >= 0 && b.GetContext().Value(releasedBitCountDumpBindingKey{}) != nil {
+			// The released SQL binder used the ordinary CAST overload for
+			// FLOAT/DOUBLE. Rebuild that input tree during dump verification.
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		} else if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
