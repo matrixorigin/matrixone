@@ -68,6 +68,10 @@ func TestCandidateSchemaDefaultsAndResidual(t *testing.T) {
 }
 
 func TestCandidateUnsupportedTypeIsResidual(t *testing.T) {
+	for _, id := range []int32{-256, 256} {
+		_, ok := candidateType(plan.Type{Id: id})
+		require.False(t, ok, "planner ID %d must not wrap to T_any", id)
+	}
 	unknown := plan.Type{Id: 255}
 	_, ok := candidateType(unknown)
 	require.False(t, ok)

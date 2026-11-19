@@ -36,13 +36,15 @@ type candidateResidual struct {
 	rowID bool
 }
 
-func candidateType(p plan.Type) (t types.Type, ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	t = types.T(p.Id).ToType()
+func candidateType(p plan.Type) (types.Type, bool) {
+	oid := types.T(p.Id)
+	if int32(oid) != p.Id {
+		return types.Type{}, false
+	}
+	t, ok := oid.TryToType()
+	if !ok {
+		return types.Type{}, false
+	}
 	t.Width, t.Scale, t.Charset, t.CollationVersion = p.Width, p.Scale, uint8(p.Charset), uint8(p.CollationVersion)
 	return t, true
 }
