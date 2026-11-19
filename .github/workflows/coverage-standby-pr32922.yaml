@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '12dd8d6f9b5f60737ebfe6feff61733e777de546' && github.run_attempt == 1
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'b854c2fef9d54e01d313ff9414c8296f5f72ab9d' && github.run_attempt == 1
     runs-on: ubuntu-latest
     permissions:
       actions: read
