@@ -2418,7 +2418,7 @@ var supportedOperators = []FuncNew{
 	// operator `unary_tilde`
 	{
 		functionId:        UNARY_TILDE,
-		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}},
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter, keepsOperandBinding: true}},
 		class:             plan.Function_STRICT,
 		layout:            UNARY_ARITHMETIC_OPERATOR,
 		checkFn:           unaryTildeTypeMatch,

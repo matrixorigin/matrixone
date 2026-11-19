@@ -1,0 +1,26 @@
+{
+  "binary_hex": {
+    "sql": "create table tilde_binary(v binary(2) default (~X'0102'))",
+    "table_def": "Egx0aWxkZV9iaW5hcnkiNRIBdiABKgYIQCACQAE6IgoTCggIQBABIAJAARIHWgL+/egBARIJKH4weDAxMDIpGAGaAQF2IiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWAKXgoMCgdyZWxraW5kEgFyCk4KDXJlbF9jcmVhdGVzcWwSPWNyZWF0ZSB0YWJsZSBgdGlsZGVfYmluYXJ5YCAoYHZgIGJpbmFyeSgyKSBkZWZhdWx0ICh+MHgwMTAyKSm4AgM="
+  },
+  "unsigned_hex": {
+    "sql": "create table tilde_unsigned(v bigint unsigned default (~X'0102'))",
+    "table_def": "Eg50aWxkZV91bnNpZ25lZCJOEgF2IAEqDwgcIEAo////////////AToyCiMKEQgcEAEgQCj///////////8BEg5I/f3/////////AegBARIJKH4weDAxMDIpGAGaAQF2IiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWgKZgoMCgdyZWxraW5kEgFyClYKDXJlbF9jcmVhdGVzcWwSRWNyZWF0ZSB0YWJsZSBgdGlsZGVfdW5zaWduZWRgIChgdmAgYmlnaW50IHVuc2lnbmVkIGRlZmF1bHQgKH4weDAxMDIpKbgCAw=="
+  },
+  "varbinary_hex": {
+    "sql": "create table tilde_varbinary(v varbinary(8) default (~X'0102'))",
+    "table_def": "Eg90aWxkZV92YXJiaW5hcnkiNRIBdiABKgYIQSAIQAE6IgoTCggIQRABIAhAARIHWgL+/egBARIJKH4weDAxMDIpGAGaAQF2IiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWYKZAoMCgdyZWxraW5kEgFyClQKDXJlbF9jcmVhdGVzcWwSQ2NyZWF0ZSB0YWJsZSBgdGlsZGVfdmFyYmluYXJ5YCAoYHZgIHZhcmJpbmFyeSg4KSBkZWZhdWx0ICh+MHgwMTAyKSm4AgM="
+  },
+  "varchar_bit": {
+    "sql": "create table tilde_varchar_bit(v varchar(32) default (~0b0101))",
+    "table_def": "EhF0aWxkZV92YXJjaGFyX2JpdCKrARIBdiABKgYIPSAgQAM6lwEKhwEKCAg9EAEgIEADOnsKFCCAgICA0ENCC2Nhc3Rfc3RyaWN0ElUKBAgcEAE6TQoUIIOAgICQAUILdW5hcnlfdGlsZGUSNQoECBcQATotCg0ggoCAgNACQgRjYXN0EhIKCAg9EAEgIEADEgZaAQXgAQISCAoECBcQAVoAEgwKCAg9EAEgIEADWgASCSh+MGIwMTAxKRgBmgEBdiIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFnCmUKDAoHcmVsa2luZBIBcgpVCg1yZWxfY3JlYXRlc3FsEkRjcmVhdGUgdGFibGUgYHRpbGRlX3ZhcmNoYXJfYml0YCAoYHZgIHZhcmNoYXIoMzIpIGRlZmF1bHQgKH4wYjAxMDEpKbgCAw=="
+  },
+  "varchar_hex": {
+    "sql": "create table tilde_varchar(v varchar(32) default (~X'0102'))",
+    "table_def": "Eg10aWxkZV92YXJjaGFyIqwBEgF2IAEqBgg9ICBAAzqYAQqIAQoICD0QASAgQAM6fAoUIICAgIDQQ0ILY2FzdF9zdHJpY3QSVgoECBwQATpOChQgg4CAgJABQgt1bmFyeV90aWxkZRI2CgQIFxABOi4KDSCCgICA0AJCBGNhc3QSEwoICD0QASAgQAMSB1oCAQLgAQISCAoECBcQAVoAEgwKCAg9EAEgIEADWgASCSh+MHgwMTAyKRgBmgEBdiIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFjCmEKDAoHcmVsa2luZBIBcgpRCg1yZWxfY3JlYXRlc3FsEkBjcmVhdGUgdGFibGUgYHRpbGRlX3ZhcmNoYXJgIChgdmAgdmFyY2hhcigzMikgZGVmYXVsdCAofjB4MDEwMikpuAID"
+  },
+  "varchar_string": {
+    "sql": "create table tilde_varchar_string(v varchar(32) default (~'5'))",
+    "table_def": "EhR0aWxkZV92YXJjaGFyX3N0cmluZyJEEgF2IAEqBgg9ICBAAzoxCiUKCAg9EAEgIEADEhlaFDE4NDQ2NzQ0MDczNzA5NTUxNjEw6AEBEgYofic1JykYAZoBAXYiIggBEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBZwplCgwKB3JlbGtpbmQSAXIKVQoNcmVsX2NyZWF0ZXNxbBJEY3JlYXRlIHRhYmxlIGB0aWxkZV92YXJjaGFyX3N0cmluZ2AgKGB2YCB2YXJjaGFyKDMyKSBkZWZhdWx0ICh+JzUnKSm4AgM="
+  }
+}

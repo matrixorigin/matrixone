@@ -133,6 +133,19 @@ select id, ~d as date_not, ~dt as datetime_not, ~tm as time_not, ~ts as timestam
 from temporal_values order by id;
 select ~20240101 as integer_control, ~'20240101' as text_control;
 
+-- Non-temporal unary NOT defaults keep the column-typed operand binding.
+create table tilde_defaults (
+  id int primary key,
+  b binary(2) default (~X'0102'),
+  vb varbinary(8) default (~X'0102'),
+  vc varchar(32) default (~X'0102'),
+  u bigint unsigned default (~X'0102'),
+  d varchar(32) default (~date'2024-06-18')
+);
+insert into tilde_defaults(id) values (1);
+select id, hex(b), hex(vb), vc, u, d from tilde_defaults;
+drop table tilde_defaults;
+
 -- Text and binary inputs retain their existing domains.
 select '2024-01-01' & 3 as text_and,
        bit_count('2024-01-01') as text_bits,

@@ -182,6 +182,19 @@ from temporal_values order by id;
 select ~20240101 as integer_control, ~'20240101' as text_control;
 ➤ integer_control[-5,64,0]  ¦  text_control[-5,64,0]  𝄀
 18446744073689311514  ¦  18446744073689311514
+create table tilde_defaults (
+id int primary key,
+b binary(2) default (~X'0102'),
+vb varbinary(8) default (~X'0102'),
+vc varchar(32) default (~X'0102'),
+u bigint unsigned default (~X'0102'),
+d varchar(32) default (~date'2024-06-18')
+);
+insert into tilde_defaults(id) values (1);
+select id, hex(b), hex(vb), vc, u, d from tilde_defaults;
+➤ id[4,32,0]  ¦  hex(b)[12,4,0]  ¦  hex(vb)[12,16,0]  ¦  vc[12,32,0]  ¦  u[-5,64,0]  ¦  d[12,32,0]  𝄀
+1  ¦  FEFD  ¦  FEFD  ¦  18446744073709551615  ¦  18446744073709551357  ¦  18446744073689310997
+drop table tilde_defaults;
 select '2024-01-01' & 3 as text_and,
 bit_count('2024-01-01') as text_bits,
 sec_to_time('01:02:03') as text_seconds;

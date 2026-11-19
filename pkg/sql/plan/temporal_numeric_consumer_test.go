@@ -304,6 +304,77 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 	}
 }
 
+// Unary NOT converts only a bound native temporal operand. Non-temporal DEFAULT
+// operands keep their column-typed binding (BINARY ~X'0102' is bytewise), so
+// defaults persisted by earlier versions re-verify unchanged on dump/load.
+func TestUnaryTildeDefaultKeepsOperandBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		wantBytes []byte
+		wantUint  uint64
+	}{
+		{name: "binary hex", sql: "create table b (v binary(2) default (~X'0102'))", wantBytes: []byte{0xfe, 0xfd}},
+		{name: "varbinary hex", sql: "create table b (v varbinary(8) default (~X'0102'))", wantBytes: []byte{0xfe, 0xfd}},
+		{name: "varchar hex", sql: "create table c (v varchar(32) default (~X'0102'))", wantBytes: []byte("18446744073709551615")},
+		{name: "varchar bit literal", sql: "create table c (v varchar(32) default (~0b0101))", wantBytes: []byte("18446744073709551615")},
+		{name: "varchar string", sql: "create table c (v varchar(32) default (~'5'))", wantBytes: []byte("18446744073709551610")},
+		{name: "unsigned hex", sql: "create table u (v bigint unsigned default (~X'0102'))", wantUint: ^uint64(0x0102)},
+		{name: "varchar date", sql: "create table d (v varchar(32) default (~date'2024-06-18'))", wantBytes: []byte("18446744073689310997")},
+		{name: "unsigned time", sql: "create table d (v bigint unsigned default (~time'01:02:03'))", wantUint: ^uint64(10203)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			built, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false, nil)
+			require.NoError(t, err)
+			expr := built.GetDdl().GetCreateTable().TableDef.Cols[0].Default.Expr
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			if tc.wantBytes != nil {
+				require.Equal(t, tc.wantBytes, result.GetBytesAt(0))
+			} else {
+				require.Equal(t, tc.wantUint, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+		})
+	}
+}
+
+// AST binding must not put a non-temporal unary NOT operand in the integer
+// source context; only a bound temporal operand gets the private cast.
+func TestUnaryTildeBindsOperandInOrdinaryContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	binaryType := types.New(types.T_binary, 2, 0)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, makePlan2Type(&binaryType), nil)
+	for _, tc := range []struct {
+		sql          string
+		wantOperand  types.T
+		wantTemporal bool
+	}{
+		{sql: "~X'0102'", wantOperand: types.T_binary},
+		{sql: "~date'2024-06-18'", wantOperand: types.T_int64, wantTemporal: true},
+	} {
+		stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select "+tc.sql, 1)
+		require.NoError(t, err)
+		ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		expr, err := binder.BindExpr(ast, 0, false)
+		require.NoError(t, err, tc.sql)
+		tilde := expr.GetF()
+		require.Equal(t, "unary_tilde", tilde.Func.GetObjName(), tc.sql)
+		operand := tilde.Args[0]
+		require.Equal(t, tc.wantOperand, types.T(operand.Typ.Id), tc.sql)
+		cast := operand.GetF()
+		temporal := false
+		if cast != nil {
+			id, overload := function.DecodeOverloadID(cast.Func.GetObj())
+			temporal = id == int32(function.CAST) && overload == function.TemporalIntegerArgumentCastOverload
+		}
+		require.Equal(t, tc.wantTemporal, temporal, tc.sql)
+	}
+}
+
 type temporalNumericWarningSink struct {
 	codes    []uint16
 	messages []string
