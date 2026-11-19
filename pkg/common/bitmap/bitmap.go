@@ -62,62 +62,22 @@ var rightmost_one_pos_8 = [256]uint8{
 	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 }
 
-func encodeTaggedLen(length int64, external bool) int64 {
-	if length < 0 {
-		panic("negative bitmap length")
-	}
-	if external {
-		return ^length
-	}
-	return length
-}
-
-func (n *Bitmap) logicalLen() int64 {
-	if n.taggedLen < 0 {
-		return ^n.taggedLen
-	}
-	return n.taggedLen
-}
-
-func (n *Bitmap) setLogicalLen(length int64) {
-	n.taggedLen = encodeTaggedLen(length, n.HasExternalStorage())
-}
-
 func (n *Bitmap) InitWith(m *Bitmap) {
 	if n == m {
 		return
 	}
-	n.setLogicalLen(m.logicalLen())
-	n.count = m.count
-	if n.HasExternalStorage() {
-		if len(m.data) > cap(n.data) {
-			panic("bitmap external storage capacity exceeded")
-		}
-		previousLength := len(n.data)
-		storage := n.data[:cap(n.data)]
-		clear(storage[len(m.data):max(previousLength, len(m.data))])
-		n.data = storage[:len(m.data)]
-		copy(n.data, m.data)
-		return
-	}
+	n.numBits = m.numBits
+	n.popCount = m.popCount
 	n.data = append([]uint64(nil), m.data...)
 }
 
 func (n *Bitmap) InitWithSize(length int64) {
-	n.setLogicalLen(length)
-	n.count = 0
-	words := int((length + 63) / 64)
-	if n.HasExternalStorage() {
-		if words > cap(n.data) {
-			panic("bitmap external storage capacity exceeded")
-		}
-		previousLength := len(n.data)
-		storage := n.data[:cap(n.data)]
-		clear(storage[:max(previousLength, words)])
-		n.data = storage[:words]
-		return
+	if length < 0 {
+		panic("negative bitmap length")
 	}
-	n.data = make([]uint64, words)
+	n.numBits = length
+	n.popCount = 0
+	n.data = make([]uint64, (length+63)/64)
 }
 
 func (n *Bitmap) Clone() *Bitmap {
@@ -172,7 +132,7 @@ func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
 	// if the uint64 is not 0, then calculate the rightest_one position in a word, add up prev result and return.
 	// when there is 1 in Bitmap, return true, otherwise Bitmap is empty and return false.
 	// either case loop over words not bits
-	nwords := (itr.bm.logicalLen() + 63) / 64
+	nwords := (itr.bm.numBits + 63) / 64
 	current_word := i >> 6
 	mask := (^(bitmask)(0)) << (i & 0x3F) // ignore bits check before
 	var result uint64
@@ -217,75 +177,37 @@ func (itr *BitmapIterator) Next() uint64 {
 
 // Reset set n.data to nil
 func (n *Bitmap) Reset() {
-	n.setLogicalLen(0)
-	n.count = 0
-	if n.HasExternalStorage() {
-		clear(n.data)
-		storage := n.data[:cap(n.data)]
-		n.data = storage[:0]
-		return
-	}
+	n.numBits = 0
+	n.popCount = 0
 	n.data = nil
-}
-
-// InstallExternalStorage replaces the bitmap backing with caller-owned
-// storage while preserving the logical bitmap. The caller remains responsible
-// for releasing the returned previous external storage, if any.
-func (n *Bitmap) InstallExternalStorage(storage []uint64) []uint64 {
-	required := len(n.data)
-	if required > cap(storage) {
-		panic("bitmap external storage capacity exceeded")
-	}
-	var previous []uint64
-	if n.HasExternalStorage() && cap(n.data) > 0 {
-		previous = n.data[:cap(n.data)]
-	}
-	target := storage[:cap(storage)]
-	if len(target) > required {
-		clear(target[required:])
-	}
-	copy(target[:required], n.data)
-	n.data = target[:required]
-	n.taggedLen = encodeTaggedLen(n.logicalLen(), true)
-	return previous
-}
-
-// ReleaseExternalStorage detaches caller-owned storage and clears the bitmap.
-// It returns nil for a bitmap that owns its Go-allocated backing.
-func (n *Bitmap) ReleaseExternalStorage() []uint64 {
-	if !n.HasExternalStorage() {
-		return nil
-	}
-	var storage []uint64
-	if cap(n.data) > 0 {
-		storage = n.data[:cap(n.data)]
-	}
-	n.count = 0
-	n.taggedLen = 0
-	n.data = nil
-	return storage
-}
-
-func (n *Bitmap) ExternalStorageCapacity() int {
-	if n == nil || !n.HasExternalStorage() {
-		return 0
-	}
-	return cap(n.data)
-}
-
-func (n *Bitmap) HasExternalStorage() bool {
-	return n != nil && n.taggedLen < 0
 }
 
 // Len returns the number of bits in the Bitmap.
 func (n *Bitmap) Len() int64 {
-	return n.logicalLen()
+	return n.numBits
+}
+
+// CapWords returns the backing capacity in 64-bit words.
+func (n *Bitmap) CapWords() int {
+	if n == nil {
+		return 0
+	}
+	return cap(n.data)
 }
 
 // Size return number of bytes in n.data
 // XXX WTF Note that this size is not the same as InitWithSize.
 func (n *Bitmap) Size() int {
 	return len(n.data) * 8
+}
+
+// RawPtrLen returns the address of the first data word and the logical length
+// in bits, for passing the bitmap to C. It returns (0, 0) for an empty bitmap.
+func (n *Bitmap) RawPtrLen() (uintptr, uintptr) {
+	if n == nil || len(n.data) == 0 {
+		return 0, 0
+	}
+	return uintptr(unsafe.Pointer(&n.data[0])), uintptr(n.numBits)
 }
 
 func (n *Bitmap) Ptr() *uint64 {
@@ -298,18 +220,18 @@ func (n *Bitmap) Ptr() *uint64 {
 // EmptyByFlag is a quick and dirty way to check if the Bitmap is empty.
 // If it retruns true, the Bitmap is empty.  Otherwise, it may or may not be empty.
 func (n *Bitmap) EmptyByFlag() bool {
-	return n == nil || n.count == 0 || len(n.data) == 0
+	return n == nil || n.popCount == 0 || len(n.data) == 0
 }
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
-	return n.count == 0
+	return n.popCount == 0
 }
 
 // We always assume that Bitmap has been extended to at least row.
 func (n *Bitmap) Add(row uint64) {
 	if n.data[row>>6]&(1<<(row&0x3F)) == 0 {
-		n.count++
+		n.popCount++
 	}
 	n.data[row>>6] |= 1 << (row & 0x3F)
 }
@@ -317,25 +239,25 @@ func (n *Bitmap) Add(row uint64) {
 func (n *Bitmap) AddMany(rows []uint64) {
 	for _, row := range rows {
 		if n.data[row>>6]&(1<<(row&0x3F)) == 0 {
-			n.count++
+			n.popCount++
 		}
 		n.data[row>>6] |= 1 << (row & 0x3F)
 	}
 }
 
 func (n *Bitmap) Remove(row uint64) {
-	if row >= uint64(n.logicalLen()) {
+	if row >= uint64(n.numBits) {
 		return
 	}
 	if n.data[row>>6]&(1<<(row&0x3F)) != 0 {
-		n.count--
+		n.popCount--
 	}
 	n.data[row>>6] &^= (uint64(1) << (row & 0x3F))
 }
 
 // Contains returns true if the row is contained in the Bitmap
 func (n *Bitmap) Contains(row uint64) bool {
-	if row >= uint64(n.logicalLen()) {
+	if row >= uint64(n.numBits) {
 		return false
 	}
 	idx := row >> 6
@@ -352,7 +274,7 @@ func (n *Bitmap) AddRange(start, end uint64) {
 		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
 		count = bits.OnesCount64(mask &^ n.data[i])
 		n.data[i] |= mask
-		n.count += int64(count)
+		n.popCount += int64(count)
 		return
 	}
 	mask := ^uint64(0) << uint(start&0x3F)
@@ -365,12 +287,12 @@ func (n *Bitmap) AddRange(start, end uint64) {
 	mask = ^uint64(0) >> (uint(-end) & 0x3F)
 	count += bits.OnesCount64(mask &^ n.data[j])
 	n.data[j] |= mask
-	n.count += int64(count)
+	n.popCount += int64(count)
 }
 
 func (n *Bitmap) RemoveRange(start, end uint64) {
-	if end > uint64(n.logicalLen()) {
-		end = uint64(n.logicalLen())
+	if end > uint64(n.numBits) {
+		end = uint64(n.numBits)
 	}
 	if start >= end {
 		return
@@ -381,7 +303,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
 		count = bits.OnesCount64(n.data[i] & mask)
 		n.data[i] &= ^mask
-		n.count -= int64(count)
+		n.popCount -= int64(count)
 		return
 	}
 	mask := ^uint64(0) << uint(start&0x3F)
@@ -394,7 +316,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	mask = ^uint64(0) >> (uint(-end) & 0x3F)
 	count += bits.OnesCount64(n.data[j] & mask)
 	n.data[j] &= ^mask
-	n.count -= int64(count)
+	n.popCount -= int64(count)
 }
 
 func (n *Bitmap) IsSame(b *Bitmap) bool {
@@ -411,7 +333,7 @@ func (n *Bitmap) IsSame(b *Bitmap) bool {
 
 func (n *Bitmap) Or(b *Bitmap) {
 	n.TryExpand(b)
-	n.OrBounded(b, b.logicalLen())
+	n.OrBounded(b, b.numBits)
 }
 
 // OrBounded merges source bits below limit without growing or changing the
@@ -421,7 +343,7 @@ func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
 	if n == nil || b == nil || limit <= 0 {
 		return
 	}
-	limit = min(limit, n.logicalLen(), b.logicalLen())
+	limit = min(limit, n.numBits, b.numBits)
 	if limit <= 0 {
 		return
 	}
@@ -434,17 +356,17 @@ func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
 		}
 		added := source &^ n.data[i]
 		n.data[i] |= source
-		n.count += int64(bits.OnesCount64(added))
+		n.popCount += int64(bits.OnesCount64(added))
 	}
 }
 
 func (n *Bitmap) And(b *Bitmap) {
 	n.TryExpand(b)
-	n.count = 0
-	size := (int(b.logicalLen()) + 63) / 64
+	n.popCount = 0
+	size := (int(b.numBits) + 63) / 64
 	for i := range size {
 		n.data[i] &= b.data[i]
-		n.count += int64(bits.OnesCount64(n.data[i]))
+		n.popCount += int64(bits.OnesCount64(n.data[i]))
 	}
 	for i := size; i < len(n.data); i++ {
 		n.data[i] = 0
@@ -452,35 +374,41 @@ func (n *Bitmap) And(b *Bitmap) {
 }
 
 func (n *Bitmap) Negate() {
-	nBlock, nTail := int(n.logicalLen())/64, int(n.logicalLen())%64
-	n.count = 0
+	nBlock, nTail := int(n.numBits)/64, int(n.numBits)%64
+	n.popCount = 0
 	for i := range nBlock {
 		n.data[i] = ^n.data[i]
-		n.count += int64(bits.OnesCount64(n.data[i]))
+		n.popCount += int64(bits.OnesCount64(n.data[i]))
 	}
 	if nTail > 0 {
 		mask := (uint64(1) << nTail) - 1
 		n.data[nBlock] ^= mask
-		n.count += int64(bits.OnesCount64(n.data[nBlock]))
+		n.popCount += int64(bits.OnesCount64(n.data[nBlock]))
 	}
+}
+
+// Reserve grows the backing capacity so the bitmap can hold nbits bits
+// without reallocating. The logical length and the bits are unchanged.
+func (n *Bitmap) Reserve(nbits int) {
+	words := (nbits + 63) / 64
+	if words <= cap(n.data) {
+		return
+	}
+	data := make([]uint64, len(n.data), words)
+	copy(data, n.data)
+	n.data = data
 }
 
 func (n *Bitmap) TryExpand(m *Bitmap) {
-	n.TryExpandWithSize(int(m.logicalLen()))
+	n.TryExpandWithSize(int(m.numBits))
 }
 
 func (n *Bitmap) TryExpandWithSize(size int) {
-	if int(n.logicalLen()) >= size {
+	if int(n.numBits) >= size {
 		return
 	}
 	requiredCap := (size + 63) / 64
-	if requiredCap > cap(n.data) && n.HasExternalStorage() {
-		// Keep the previous logical bitmap intact when caller-owned storage is
-		// insufficient. A recovered panic must not expose a length that its
-		// backing data cannot represent.
-		panic("bitmap external storage capacity exceeded")
-	}
-	n.setLogicalLen(int64(size))
+	n.numBits = int64(size)
 	if requiredCap > cap(n.data) {
 		newCap := requiredCap
 		currentCap := cap(n.data)
@@ -511,7 +439,7 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 	if n == nil {
 		return
 	}
-	oldLength := n.logicalLen()
+	oldLength := n.numBits
 	previous := int64(-1)
 	for _, sel := range sels {
 		if sel <= previous || sel < 0 {
@@ -580,7 +508,7 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 	if n == nil || sels == nil {
 		return
 	}
-	oldLength := n.logicalLen()
+	oldLength := n.numBits
 	logicalLength := min(oldLength, int64(sels.Count()))
 	if negate {
 		logicalLength = oldLength
@@ -641,7 +569,10 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 func (n *Bitmap) prepareOrderedRemap(logicalLength int64) {
 	words := int((logicalLength + 63) / 64)
 	if words > cap(n.data) {
-		panic("bitmap external storage capacity exceeded")
+		data := make([]uint64, words)
+		copy(data, n.data)
+		n.data = data
+		return
 	}
 	if words > len(n.data) {
 		storage := n.data[:cap(n.data)]
@@ -665,16 +596,16 @@ func (n *Bitmap) finishOrderedRemap(written, logicalLength int64) {
 	}
 	clear(n.data[words:])
 	n.data = n.data[:words]
-	n.setLogicalLen(logicalLength)
-	n.count = 0
+	n.numBits = logicalLength
+	n.popCount = 0
 	for _, word := range n.data {
-		n.count += int64(bits.OnesCount64(word))
+		n.popCount += int64(bits.OnesCount64(word))
 	}
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
 	var b Bitmap
-	b.InitWithSize(n.logicalLen())
+	b.InitWithSize(n.numBits)
 	for i, sel := range sels {
 		if n.Contains(uint64(sel)) {
 			b.Add(uint64(i))
@@ -684,17 +615,17 @@ func (n *Bitmap) Filter(sels []int64) *Bitmap {
 }
 
 func (n *Bitmap) Count() int {
-	return int(n.count)
+	return int(n.popCount)
 }
 
 // CountRange returns the number of set bits in [start, end). It never scans
 // outside the bitmap's logical coverage and does not allocate.
 func (n *Bitmap) CountRange(start, end uint64) int {
-	if n == nil || start >= end || start >= uint64(n.logicalLen()) {
+	if n == nil || start >= end || start >= uint64(n.numBits) {
 		return 0
 	}
-	if end > uint64(n.logicalLen()) {
-		end = uint64(n.logicalLen())
+	if end > uint64(n.numBits) {
+		end = uint64(n.numBits)
 	}
 	first := start >> 6
 	last := (end - 1) >> 6
@@ -715,11 +646,11 @@ func (n *Bitmap) CountRange(start, end uint64) int {
 // other. It is used when one provenance bitmap (GROUPING) overrides another
 // (SQL NULL) without expanding either bitmap row by row.
 func (n *Bitmap) AnySetNotIn(other *Bitmap, start, end uint64) bool {
-	if n == nil || start >= end || start >= uint64(n.logicalLen()) {
+	if n == nil || start >= end || start >= uint64(n.numBits) {
 		return false
 	}
-	if end > uint64(n.logicalLen()) {
-		end = uint64(n.logicalLen())
+	if end > uint64(n.numBits) {
+		end = uint64(n.numBits)
 	}
 	first := start >> 6
 	last := (end - 1) >> 6
@@ -781,20 +712,20 @@ func (n *Bitmap) MarshalSize() int {
 
 // Validate checks the in-memory representation after streaming decode.
 func (n *Bitmap) Validate() error {
-	if n == nil || n.logicalLen() < 0 || n.count < 0 ||
-		n.count > n.logicalLen() ||
-		len(n.data) != int((n.logicalLen()+63)/64) {
+	if n == nil || n.numBits < 0 || n.popCount < 0 ||
+		n.popCount > n.numBits ||
+		len(n.data) != int((n.numBits+63)/64) {
 		return moerr.NewInvalidInputNoCtx("invalid bitmap representation")
 	}
 	actual := int64(0)
 	for i, word := range n.data {
-		if i == len(n.data)-1 && n.logicalLen()%64 != 0 &&
-			word>>uint(n.logicalLen()%64) != 0 {
+		if i == len(n.data)-1 && n.numBits%64 != 0 &&
+			word>>uint(n.numBits%64) != 0 {
 			return moerr.NewInvalidInputNoCtx("invalid bitmap trailing bits")
 		}
 		actual += int64(bits.OnesCount64(word))
 	}
-	if actual != n.count {
+	if actual != n.popCount {
 		return moerr.NewInvalidInputNoCtx("invalid bitmap count")
 	}
 	return nil
@@ -828,28 +759,20 @@ func DecodeMarshalHeader(data []byte) (
 	return count, bitLength, dataSize, nil
 }
 
-// PrepareExternalUnmarshal publishes a validated bitmap header into existing
-// caller-owned storage and returns the payload bytes to fill.
-func (n *Bitmap) PrepareExternalUnmarshal(
-	header []byte,
-	totalSize int,
-) ([]byte, error) {
-	if !n.HasExternalStorage() {
-		return nil, moerr.NewInvalidInputNoCtx("bitmap does not use external storage")
-	}
-	count, bitLength, dataSize, err := DecodeMarshalHeader(header)
+// PrepareUnmarshal publishes a validated bitmap header and returns the
+// freshly allocated payload bytes for the caller to fill, so a stream decoder
+// can read the words in place.
+func (n *Bitmap) PrepareUnmarshal(header []byte, totalSize int) ([]byte, error) {
+	popCount, numBits, dataSize, err := DecodeMarshalHeader(header)
 	if err != nil {
 		return nil, err
 	}
-	if totalSize != MarshalHeaderSize+dataSize ||
-		dataSize/8 > cap(n.data) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid bitmap external storage capacity")
+	if totalSize != MarshalHeaderSize+dataSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid bitmap payload size")
 	}
-	storage := n.data[:cap(n.data)]
-	clear(storage)
-	n.data = storage[:dataSize/8]
-	n.count = count
-	n.setLogicalLen(bitLength)
+	n.data = make([]uint64, dataSize/8)
+	n.popCount = popCount
+	n.numBits = numBits
 	return types.EncodeSlice(n.data), nil
 }
 
@@ -860,13 +783,13 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 	if w == nil {
 		return io.ErrClosedPipe
 	}
-	bitLength := uint64(n.logicalLen())
+	bitLength := uint64(n.numBits)
 	dataLength := uint64(len(n.data) * 8)
 	if typed, ok := w.(interface {
 		WriteInt64(int64) error
 		WriteUint64(uint64) error
 	}); ok {
-		if err := typed.WriteInt64(n.count); err != nil {
+		if err := typed.WriteInt64(n.popCount); err != nil {
 			return err
 		}
 		if err := typed.WriteUint64(bitLength); err != nil {
@@ -877,7 +800,7 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 		}
 		return types.WriteFull(w, types.EncodeSlice(n.data))
 	}
-	if err := types.WriteFull(w, types.EncodeInt64(&n.count)); err != nil {
+	if err := types.WriteFull(w, types.EncodeInt64(&n.popCount)); err != nil {
 		return err
 	}
 	if err := types.WriteFull(w, types.EncodeUint64(&bitLength)); err != nil {
@@ -889,11 +812,11 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 	return types.WriteFull(w, types.EncodeSlice(n.data))
 }
 
-// MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it
+// MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
 func (n *Bitmap) MarshalV1() []byte {
 	var buf bytes.Buffer
 	empty := int32(0)
-	u1 := uint64(n.logicalLen())
+	u1 := uint64(n.numBits)
 	u2 := uint64(len(n.data) * 8)
 	buf.Write(types.EncodeInt32(&empty))
 	buf.Write(types.EncodeUint64(&u1))
@@ -903,43 +826,23 @@ func (n *Bitmap) MarshalV1() []byte {
 }
 
 func (n *Bitmap) Unmarshal(data []byte) {
-	n.count = types.DecodeInt64(data[:8])
+	n.popCount = types.DecodeInt64(data[:8])
 	data = data[8:]
-	n.setLogicalLen(int64(types.DecodeUint64(data[:8])))
+	n.numBits = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	if size == 0 {
-		if n.HasExternalStorage() {
-			storage := n.data[:cap(n.data)]
-			clear(storage)
-			n.data = storage[:0]
-		} else {
-			n.data = nil
-		}
+		n.data = nil
 	} else {
-		if n.HasExternalStorage() {
-			words := size / 8
-			if size%8 != 0 || words > cap(n.data) {
-				panic("bitmap external storage capacity exceeded")
-			}
-			storage := n.data[:cap(n.data)]
-			clear(storage)
-			n.data = storage[:words]
-			copy(n.data, types.DecodeSlice[uint64](data[:size]))
-			return
-		}
 		n.data = types.DecodeSlice[uint64](data[:size])
 	}
 }
 
 func (n *Bitmap) UnmarshalNoCopy(data []byte) {
-	if n.HasExternalStorage() {
-		panic("cannot install alias into bitmap external storage")
-	}
-	n.count = types.DecodeInt64(data[:8])
+	n.popCount = types.DecodeInt64(data[:8])
 	data = data[8:]
-	n.setLogicalLen(int64(types.DecodeUint64(data[:8])))
+	n.numBits = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
@@ -950,47 +853,27 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	}
 }
 
-// UnmarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it
+// UnmarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
 func (n *Bitmap) UnmarshalV1(data []byte) {
 	data = data[4:]
-	n.setLogicalLen(int64(types.DecodeUint64(data[:8])))
+	n.numBits = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	if size == 0 {
-		if n.HasExternalStorage() {
-			storage := n.data[:cap(n.data)]
-			clear(storage)
-			n.data = storage[:0]
-		} else {
-			n.data = nil
-		}
+		n.data = nil
 	} else {
-		if n.HasExternalStorage() {
-			words := size / 8
-			if size%8 != 0 || words > cap(n.data) {
-				panic("bitmap external storage capacity exceeded")
-			}
-			storage := n.data[:cap(n.data)]
-			clear(storage)
-			n.data = storage[:words]
-			copy(n.data, types.DecodeSlice[uint64](data[:size]))
-		} else {
-			n.data = types.DecodeSlice[uint64](data[:size])
-		}
+		n.data = types.DecodeSlice[uint64](data[:size])
 	}
-	n.count = 0
+	n.popCount = 0
 	for i := 0; i < len(n.data); i++ {
-		n.count += int64(bits.OnesCount64(n.data[i]))
+		n.popCount += int64(bits.OnesCount64(n.data[i]))
 	}
 }
 
 func (n *Bitmap) UnmarshalNoCopyV1(data []byte) {
-	if n.HasExternalStorage() {
-		panic("cannot install alias into bitmap external storage")
-	}
 	data = data[4:]
-	n.setLogicalLen(int64(types.DecodeUint64(data[:8])))
+	n.numBits = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
@@ -999,9 +882,9 @@ func (n *Bitmap) UnmarshalNoCopyV1(data []byte) {
 	} else {
 		n.data = unsafe.Slice((*uint64)(unsafe.Pointer(&data[0])), size/8)
 	}
-	n.count = 0
+	n.popCount = 0
 	for i := 0; i < len(n.data); i++ {
-		n.count += int64(bits.OnesCount64(n.data[i]))
+		n.popCount += int64(bits.OnesCount64(n.data[i]))
 	}
 }
 
@@ -1023,7 +906,7 @@ func (n *Bitmap) UnmarshalBinary(data []byte) error {
 }
 
 func (n *Bitmap) Clear() {
-	n.count = 0
+	n.popCount = 0
 	for i := range n.data {
 		n.data[i] = 0
 	}

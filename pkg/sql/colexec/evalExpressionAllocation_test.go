@@ -208,22 +208,16 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
-	require.Zero(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity(),
+	require.Zero(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords(),
 		"the first non-NULL generation needs no validity reservation")
 	// Establish real nullable storage before probing a stale NULL beyond its
 	// bound. The non-NULL fast path intentionally has no bitmap to exceed.
 	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
 	require.NoError(t, err)
 	require.True(t, equalResult.IsNull(1))
-	capacityRows := uint64(equalRoot.resultVector.GetResultVector().
-		GetNulls().GetBitmap().ExternalStorageCapacity() * 64)
-	require.GreaterOrEqual(t, capacityRows, uint64(4))
-	second.Vecs[0].GetNulls().Add(capacityRows)
-
 	equalResult, err = equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
 	require.NoError(t, err)
 	require.True(t, equalResult.IsNull(1))
-	require.False(t, equalResult.IsNull(capacityRows))
 	equalExecutor.Free()
 	equalExecutor = nil
 
@@ -307,51 +301,5 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 	executor.Free()
 	executor = nil
 	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, registry.LiveAllocationMetadata())
-}
-
-func TestAccountedLiteralConstructorReleasesPayloadOnDomainDenial(t *testing.T) {
-	pool := mpool.MustNewZero()
-	t.Cleanup(func() {
-		defer mpool.DeleteMPool(pool)
-		assert.Zero(t, pool.CurrNB(), "native storage before pool deletion")
-		bytes, objects := pool.OnHeapOutstanding()
-		assert.Zero(t, bytes, "heap storage before pool deletion")
-		assert.Zero(t, objects, "heap objects before pool deletion")
-	})
-	proc := testutil.NewProcess(t, testutil.WithMPool(pool), testutil.WithFileService(nil))
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	// One inline varlen cell and its NULL bitmap fit; the text-domain bitmap does not.
-	account, err := registry.Open(types.VarlenaSize + 16)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.Zero(t, account.Snapshot().Used)
-		assert.Zero(t, registry.LiveAllocationMetadata())
-		snapshot := account.Seal()
-		assert.Zero(t, snapshot.Used)
-		_, err := registry.Finalize(account)
-		assert.NoError(t, err)
-	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
-	require.NoError(t, err)
-	func() {
-		payload, err := vector.NewConstBytesWithAllocation(types.T_varbinary.ToType(), []byte("selected"), 1, proc.Mp(), selection)
-		require.NoError(t, err, "payload allocation must succeed before domain admission")
-		defer payload.Free(proc.Mp())
-		require.Positive(t, account.Snapshot().Used)
-	}()
-	executor, err := NewExpressionExecutorWithAllocation(proc, &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varbinary)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Value: &plan.Literal_Sval{Sval: "selected"}, LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
-		}},
-	}, selection)
-	if executor != nil {
-		t.Cleanup(executor.Free)
-	}
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Nil(t, executor)
-	require.Zero(t, account.Snapshot().Used, "constructor must release the already materialized payload")
 	require.Zero(t, registry.LiveAllocationMetadata())
 }

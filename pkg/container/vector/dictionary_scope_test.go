@@ -138,11 +138,15 @@ func TestDictionarySelectionScopeStringsAndFailure(t *testing.T) {
 	for i := range rows {
 		rows[i] = int64(i)
 	}
+	// Null bitmaps are Go-owned, so a selection over a nullable fixed column
+	// needs no account admission even with a one-byte account.
 	admitted, err = scope.Bind([]*Vector{many}, outputs, []int{0}, rows, 512, mp, allocation)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.False(t, admitted)
-	require.Nil(t, outputs[0])
-	require.Nil(t, scope.columns[0].base.vec)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NotNil(t, outputs[0])
+	require.True(t, outputs[0].IsNull(511))
+	require.False(t, outputs[0].IsNull(0))
+	require.Zero(t, account.Snapshot().Used)
 	scope.Free(mp)
 	require.Zero(t, account.Snapshot().Used)
 }

@@ -130,7 +130,7 @@ func TestFixedMembershipScopedProbeLifecycle(t *testing.T) {
 						}
 					}
 					if !listNull {
-						require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+						require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 					}
 					frame.End()
 					require.Nil(t, root.parameterResults[0])

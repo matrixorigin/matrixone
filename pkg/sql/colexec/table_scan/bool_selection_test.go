@@ -125,7 +125,7 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row), row == 2, proc.Mp()))
 			}
 			input.SetRowCount(66)
-			require.Equal(t, 1, input.Vecs[1].GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Equal(t, 1, input.Vecs[1].GetNulls().GetBitmap().CapWords())
 			before := account.Snapshot()
 			var loaded []int
 			if late {

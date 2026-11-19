@@ -286,7 +286,6 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (ctr *container) cleanRightMatchState(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
 	ctr.rightRowsMatched = nil
 	if cap(ctr.rightBatchOffset) > 0 {
 		mpool.FreeSlice(proc.Mp(), ctr.rightBatchOffset)

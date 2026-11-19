@@ -239,7 +239,6 @@ func (ctr *container) cleanHashMap() {
 }
 
 func (ctr *container) cleanBitmap(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 

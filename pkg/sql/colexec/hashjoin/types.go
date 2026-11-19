@@ -535,7 +535,6 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) freeRightRowsMatched(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
 	ctr.rightRowsMatched = nil
 }
 

@@ -15504,7 +15504,8 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
 			require.Equal(t, 128, result.GetResultVector().Length())
-			require.Equal(t, uint64(528), account.Snapshot().Used)
+			// Payload only: the NULL bitmap is Go-owned and not charged.
+			require.Equal(t, uint64(512), account.Snapshot().Used)
 			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
 		})
 	}

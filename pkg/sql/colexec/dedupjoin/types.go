@@ -218,8 +218,6 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 
 func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	if msg != nil {
-		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
-		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
 		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
@@ -599,7 +597,6 @@ func (ctr *container) cleanCaptured(proc *process.Process) {
 		}
 	}
 	ctr.capturedVecs = nil
-	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -633,7 +630,6 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 	ctr.resetActionReplayCursors()
 }

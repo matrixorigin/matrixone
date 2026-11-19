@@ -193,7 +193,7 @@ func TestRowNumberStreamStreaming(t *testing.T) {
 }
 
 func TestRowNumberStreamTerminalFailures(t *testing.T) {
-	for _, kind := range []string{"ordinal admission", "view admission", "overflow", "child error", "pre cancellation", "fill cancellation"} {
+	for _, kind := range []string{"ordinal admission", "overflow", "child error", "pre cancellation", "fill cancellation"} {
 		t.Run(kind, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
@@ -212,9 +212,6 @@ func TestRowNumberStreamTerminalFailures(t *testing.T) {
 			limit := uint64(1024)
 			if kind == "ordinal admission" {
 				limit = 1
-			}
-			if kind == "view admission" {
-				limit = 32
 			}
 			account, err := registry.Open(limit)
 			require.NoError(t, err)
@@ -237,7 +234,7 @@ func TestRowNumberStreamTerminalFailures(t *testing.T) {
 			}
 			_, err = vm.Exec(arg, proc)
 			require.Error(t, err)
-			if kind == "ordinal admission" || kind == "view admission" {
+			if kind == "ordinal admission" {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			}
 			if kind == "child error" {

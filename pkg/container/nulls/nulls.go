@@ -97,13 +97,7 @@ func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 // Or performs union operation on Nulls nsp,m and store the result in r
 func Or(nsp, m, r *Nulls) {
 	if nsp.EmptyByFlag() && m.EmptyByFlag() {
-		if r.np.HasExternalStorage() {
-			// External capacity belongs to the result owner and is not a row
-			// count. Clear values while retaining the owner's current bound.
-			r.Clear()
-		} else {
-			r.Reset()
-		}
+		r.Reset()
 		return
 	}
 
@@ -118,12 +112,6 @@ func Or(nsp, m, r *Nulls) {
 
 func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
 	if src == nil || src.EmptyByFlag() || src == &dst.np {
-		return
-	}
-	if dst.np.HasExternalStorage() {
-		// External storage capacity can exceed the destination's current row
-		// domain. The owner-established logical length is the only valid bound.
-		dst.np.OrBounded(src, dst.np.Len())
 		return
 	}
 	dst.np.Or(src)
@@ -351,11 +339,7 @@ func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
 		return
 	}
 	nsp.materializeValidity()
-	if !nsp.np.HasExternalStorage() {
-		Filter(nsp, sels, negate)
-		return
-	}
-	nsp.np.RemapOrdered(sels, negate)
+	Filter(nsp, sels, negate)
 }
 
 func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
@@ -428,11 +412,7 @@ func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool,
 		return
 	}
 	nsp.materializeValidity()
-	if !nsp.np.HasExternalStorage() {
-		FilterByMaskWithOffset(nsp, sels, negate, offset)
-		return
-	}
-	nsp.np.RemapMaskOrderedWithOffset(sels, negate, offset)
+	FilterByMaskWithOffset(nsp, sels, negate, offset)
 }
 
 // XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.

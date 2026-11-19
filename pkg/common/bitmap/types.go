@@ -21,12 +21,12 @@ type Iterator interface {
 }
 
 type Bitmap struct {
-	count int64 //in version 1, we use emptyFlag with type int32 to indicate whether it is empty
-	// taggedLen stores the logical length directly for Go-owned backing and its
-	// bitwise complement for caller-owned backing. This keeps Bitmap's footprint
-	// unchanged while making backing ownership explicit.
-	taggedLen int64
-	data      []uint64
+	// popCount is the number of set bits. Version 1 stored an int32 emptyFlag here.
+	popCount int64
+	// numBits is the logical length in bits. Bits at or beyond numBits are
+	// never read; words missing from data read as zero.
+	numBits int64
+	data    []uint64
 }
 
 type BitmapIterator struct {

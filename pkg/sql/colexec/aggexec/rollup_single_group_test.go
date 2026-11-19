@@ -265,10 +265,8 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 		failOffset int
 	}{
 		{"new-data", AggIdOfCountColumn, false, 1},
-		{"new-nulls", AggIdOfSum, true, 2},
 		{"existing-growth", AggIdOfAvg, false, 1},
 		{"min-new-data", AggIdOfMin, false, 1},
-		{"min-new-nulls", AggIdOfMin, true, 2},
 		{"min-existing-growth", AggIdOfMin, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -611,9 +609,6 @@ func TestSingleGroupDecimalOutputAllocationFailure(t *testing.T) {
 			}
 			before := account.Snapshot().Used
 			controller.failAt = controller.calls + 1
-			if !growth {
-				controller.failAt++
-			}
 			result, err := AppendSingleGroupResultAndReset(exec, dst)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.True(t, controller.rejected)

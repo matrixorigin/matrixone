@@ -144,9 +144,6 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.freeIgnoreRows(mp)
 	hb.uniqueSels = nil
 	hb.curVecs = nil
-	jm.SetMemoryRelease(func() {
-		releaseDedupBitmap(jmDelRows, mp)
-	})
 	return jm
 }
 

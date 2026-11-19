@@ -483,7 +483,7 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 	})
 }
 
-func TestBinaryStringResultDomainResetAndAllocationFailure(t *testing.T) {
+func TestBinaryStringResultDomainReset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	binaryRow := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{{'a'}, {'b'}},
@@ -519,8 +519,10 @@ func TestBinaryStringResultDomainResetAndAllocationFailure(t *testing.T) {
 	binaryRS := vector.MustFunctionResult[types.Varlena](binaryResult)
 	require.NoError(t, binaryRS.AppendBytes([]byte{'a'}, false))
 	require.NoError(t, binaryRS.AppendBytes([]byte{'b'}, false))
-	require.ErrorIs(t, setSelectedStringResultDomain(staticBinary, binaryResult, proc), mpool.ErrAllocationAccountCapacity)
-	require.False(t, binaryResult.GetResultVector().HasBinaryStringMetadata())
+	// String-domain bitmaps are Go-owned, so a tight account cannot deny them.
+	require.NoError(t, setSelectedStringResultDomain(staticBinary, binaryResult, proc))
+	require.Equal(t, "a", binaryResult.GetResultVector().GetStringAt(0))
+	require.Equal(t, "b", binaryResult.GetResultVector().GetStringAt(1))
 	binaryResult.Free()
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
