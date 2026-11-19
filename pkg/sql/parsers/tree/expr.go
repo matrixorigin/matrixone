@@ -1106,7 +1106,9 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 			return
 		}
 	}
-	if ctx.ModeIndependentStringLiterals() &&
+	// Width-preserving SQL already emits a text hex literal for this argument.
+	// A bare hex number would change the implicit NAME_CONST column name.
+	if ctx.ModeIndependentStringLiterals() && !ctx.preserveTextLiteralWidth &&
 		node.FuncName != nil &&
 		strings.EqualFold(node.FuncName.Origin(), "name_const") &&
 		len(node.Exprs) == 2 &&

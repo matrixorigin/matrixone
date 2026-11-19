@@ -714,6 +714,7 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		wantErr           bool
 	}{
 		{"ineligible earlier rule", left + " order by a", right, false},
+		{"ineligible later rule", left, right + " order by a", false},
 		{"invalid winner", left + " order by a", "select a from", true},
 		{"potentially mergeable earlier rule", left, right, true},
 		{"corrupt earlier rule", "select a from", right, true},
@@ -729,7 +730,7 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, map[string]string{"db1.t1": right}, rules)
+			require.Equal(t, map[string]string{"db1.t1": tc.right}, rules)
 		})
 	}
 }

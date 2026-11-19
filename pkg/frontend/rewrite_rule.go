@@ -1281,8 +1281,12 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		// to prove this earlier rule could never merge, not to interpret a
 		// predicate for execution. The effective rule is still validated in
 		// the session mode before loadRuleCache publishes it.
-		if mysql.ParseSQLModeFlags(sqlMode) != 0 && defaultModeRuleIsUnmergeable(ctx, leftRule) {
-			return "", false, nil
+		if mysql.ParseSQLModeFlags(sqlMode) != 0 {
+			// The later rule can independently settle precedence even when
+			// the earlier predicate cannot be parsed in this mode.
+			if ruleIsUnmergeable(ctx, rightRule, sqlMode) || ruleIsUnmergeable(ctx, leftRule, "") {
+				return "", false, nil
+			}
 		}
 		return "", false, err
 	}
@@ -1315,15 +1319,15 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 	return sql, true, nil
 }
 
-func defaultModeRuleIsUnmergeable(ctx context.Context, rule string) bool {
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+func ruleIsUnmergeable(ctx context.Context, rule, sqlMode string) bool {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
 	if err != nil {
 		return false
 	}
 	defer stmt.Free()
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
-		_, mergeable := rewriteRuleMergeShapeForStatement(stmt, "")
+		_, mergeable := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
 		return !mergeable
 	default:
 		return false

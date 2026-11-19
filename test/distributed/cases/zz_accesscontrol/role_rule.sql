@@ -422,6 +422,20 @@ alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup whe
 select a from db1.t_dup order by a;
 -- @session
 
+-- The later ordered rule alone determines precedence.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3 order by a" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A merged NAME_CONST projection must still be addressable by its original name.
+alter role test_rule_role_dup_projection_a add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select `a\b` from db1.t_dup;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
