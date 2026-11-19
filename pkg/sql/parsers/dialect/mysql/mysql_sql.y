@@ -7447,7 +7447,7 @@ select_no_parens:
             yylex.Error(intoErr)
             return 1
         }
-        $$ = &tree.Select{Select: $2, IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: $1}
+        $$ = &tree.Select{Select: $2, Ep: tree.SelectIntoExportOr($2, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: $1}
         if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
