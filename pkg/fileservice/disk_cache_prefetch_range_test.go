@@ -932,7 +932,7 @@ func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
 	ctx := withDownloadStarted(context.Background(), sync.OnceFunc(func() { close(started) }))
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(ctx, "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
+		_, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
 			[]PrefetchRange{{Offset: 0, Size: 1 << 10}, {Offset: 32 << 10, Size: 1 << 10}}, g.open)
 		done <- err
 	}()
@@ -959,7 +959,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
+		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
 		done <- err
 	}()
 	inFlight := func() int { cur, _, _ := g.counts(); return cur }

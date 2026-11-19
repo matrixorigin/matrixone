@@ -543,12 +543,12 @@ func (d *DiskCache) runFlight(
 	fl *memoryPrefetchObject,
 	open rangeOpener,
 	closing context.Context,
-	background bool,
+	held bool,
 ) {
 	defer d.prefetchObjects.reads.Done()
 	defer fl.cancelRead()
 	defer context.AfterFunc(closing, fl.cancelRead)()
-	err := d.readFlight(fl, open, background)
+	err := d.readFlight(fl, open, held)
 	content := fl.content()
 	if err == nil && len(content) == 0 {
 		err = io.ErrUnexpectedEOF
@@ -566,13 +566,10 @@ func (d *DiskCache) runFlight(
 	fl.release()
 }
 
-// readFlight reads the range of fl through open. A background flight holds one of the
-// connections downloads may hold while it reads, so it leaves range reads theirs.
-func (d *DiskCache) readFlight(fl *memoryPrefetchObject, open rangeOpener, background bool) error {
-	if background && d.maxDownloadConns > 0 {
-		if err := d.waitDownloadConns(fl.ctx, 1); err != nil {
-			return err
-		}
+// readFlight reads the range of fl through open, and frees the download connection the
+// flight holds, when held.
+func (d *DiskCache) readFlight(fl *memoryPrefetchObject, open rangeOpener, held bool) error {
+	if held {
 		defer d.releaseDownloadConns(1)
 	}
 	return fl.read(fl.ctx, open)
@@ -587,13 +584,16 @@ var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache clo
 // the error of a flight that did not cache its range. A range a flight already reads is
 // waited for, not read again. Ranges that would pass the bytes of the flights under way
 // wait until they fit, or no flight is under way; a range cached meanwhile is not read.
-// The download counts as started once its first ranges are under way: a read of a range
-// not yet under way reads its own bytes. It reports false,
+// Each flight holds one of the connections downloads may hold while it reads; a range
+// waits for one before reads can join it. The download counts as started once its first
+// ranges are under way: a read of a range not yet under way reads its own bytes. No range
+// starts after a delete of the object counted since deletes. It reports false,
 // reading nothing, when the cache is closed before a range is under way, and
 // errPrefetchClosed when it closes after.
 func (d *DiskCache) readRanges(
 	ctx context.Context,
 	filePath string,
+	deletes uint64,
 	policy Policy,
 	ranges []PrefetchRange,
 	open rangeOpener,
@@ -615,6 +615,16 @@ func (d *DiskCache) readRanges(
 			_ = waitFlights(ctx, objects)
 			return true, errPrefetchClosed
 		}
+		if d.deletes.since(diskPath, deletes) {
+			f.mu.Unlock()
+			_ = waitFlights(ctx, objects)
+			return true, errPrefetchDeleted
+		}
+		conns := d.maxDownloadConns > 0
+		var connsFreed chan struct{}
+		if conns {
+			connsFreed = d.downloadConnsFreed()
+		}
 		now := time.Now()
 		var (
 			flights []*memoryPrefetchObject
@@ -632,7 +642,7 @@ func (d *DiskCache) readRanges(
 			}
 			// Past the bytes of the flights under way, a range waits for flights to end;
 			// with none under way, one range starts.
-			if f.bytes > 0 && f.bytes+flightBufSize(r.Size) > budget {
+			if f.bytes > 0 && f.bytes+flightBufSize(r.Size) > budget || conns && !d.reserveDownloadConns(1) {
 				rest = append(rest, r)
 				continue
 			}
@@ -649,7 +659,7 @@ func (d *DiskCache) readRanges(
 		}
 		f.mu.Unlock()
 		for _, fl := range flights {
-			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing, true)
+			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing, conns)
 		}
 		if len(objects) > 0 {
 			started()
@@ -660,6 +670,7 @@ func (d *DiskCache) readRanges(
 		}
 		select {
 		case <-freed:
+		case <-connsFreed:
 		case <-ctx.Done():
 			return true, ctx.Err()
 		}

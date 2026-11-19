@@ -292,7 +292,7 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	ctx := context.WithValue(context.Background(), downloadStartedKey{}, func() { started.Add(1) })
 	done := make(chan error, 1)
 	go func() {
-		ok, err := fs.diskCache.readRanges(ctx, "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, open)
+		ok, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, open)
 		if err == nil && !ok {
 			err = errors.New("the ranges were not read")
 		}

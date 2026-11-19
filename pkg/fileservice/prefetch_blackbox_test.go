@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,4 +207,97 @@ func TestBlackBoxEndedDeferredPrefetchNotInherited(t *testing.T) {
 		Ranges: []PrefetchRange{{Offset: 0, Size: 1 << 10}}, Scan: &PrefetchScan{}}))
 	require.Eventually(t, func() bool { _, _, total := g.counts(otherKey); return total == 1 }, 5*time.Second, time.Millisecond,
 		"the live request of another object is downloaded")
+}
+
+// foregroundReadOfWaitingRange starts a background column prefetch of two ranges, holds the
+// first range it reads from storage, and once it does reads the other range in the
+// foreground; it returns the bytes read, the range's offset, and the error.
+func foregroundReadOfWaitingRange(t *testing.T, fs *S3FS, ranges []PrefetchRange) ([]byte, int64, error) {
+	held := make(chan struct{})
+	t.Cleanup(sync.OnceFunc(func() { close(held) }))
+	var heldOffset atomic.Int64
+	heldOffset.Store(-1)
+	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g.gated = func(_ string, offset int64) chan struct{} {
+		if heldOffset.CompareAndSwap(-1, offset) {
+			return held
+		}
+		return nil
+	}
+	fs.storage = g
+	ctx := context.Background()
+	key := fs.pathToKey("object")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
+	r := ranges[0]
+	if heldOffset.Load() == r.Offset {
+		r = ranges[1]
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	got, err := readColumnRange(readCtx, fs, r)
+	return got, r.Offset, err
+}
+
+// A column read of a range a background prefetch has not started, as it waits for a
+// download connection, reads its own bytes: the range is not joinable before it holds one.
+func TestBlackBoxForegroundReadNotHeldByWaitingConnection(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	fs.diskCache.maxDownloadConns = 1
+	ranges := columnRanges(2, 40<<10, 1<<10)
+	fs.diskCache.prefetchFlightBytes = 4 * flightBufSize(ranges[0].Size)
+	got, offset, err := foregroundReadOfWaitingRange(t, fs, ranges)
+	require.NoError(t, err)
+	require.Equal(t, data[offset:offset+ranges[0].Size], got)
+}
+
+// A column prefetch whose range cannot get a download connection holds no buffer, so a
+// column read of another range of its object, waiting for buffers, gets one and returns.
+func TestBlackBoxForegroundReadNotHeldByBufferOfWaitingRange(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	ctx := context.Background()
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
+		Policy: SkipDiskCache | SkipMemoryCache}))
+	ranges := columnRanges(2, 40<<10, 1<<10)
+	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
+	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
+	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
+		"the whole download of other holds the connection")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: ranges[0].Size,
+		Ranges: ranges[:1], Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { return fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	got, err := readColumnRange(readCtx, fs, ranges[1])
+	require.NoError(t, err)
+	require.Equal(t, data[ranges[1].Offset:ranges[1].Offset+ranges[1].Size], got)
+	_, _, total := g.counts(objectKey)
+	require.Equal(t, 1, total, "only the read reads the object")
+}
+
+// A memory-backed column prefetch starts no range of an object deleted while its ranges
+// wait for buffers.
+func TestBlackBoxMemoryColumnPrefetchStopsAfterDelete(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
+	ranges := columnRanges(6, 20<<10, 1<<10)
+	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
+	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	ctx := context.Background()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 6 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
+	key := fs.pathToKey("object")
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
+	require.NoError(t, fs.Delete(ctx, "object"))
+	release()
+	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	_, _, total := g.counts(key)
+	require.Equal(t, 1, total, "no range starts after the delete")
 }

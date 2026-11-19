@@ -60,7 +60,7 @@ func TestJoinedReadOfIdleStoppedFlightReadsItsBytes(t *testing.T) {
 	}
 	bg := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
+		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
 			[]PrefetchRange{{Offset: 0, Size: 4096}}, open)
 		bg <- err
 	}()

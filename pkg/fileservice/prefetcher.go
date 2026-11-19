@@ -293,21 +293,30 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			// The running download does not download what req asks for: it is queued once
 			// the download ends. Past the queues' bytes, what it asks for is not kept. What
 			// scans that all ended asked for is dropped, not merged into req.
-			if e.next != nil && !slices.ContainsFunc(e.nextScans, (*PrefetchScan).live) {
-				p.takeDeferredLocked(e)
-				metric.FSPrefetchEndedCounter.Inc()
-			}
-			deferred := func() (ObjectPrefetch, int64) {
-				if e.next == nil {
-					return req, 0
+			var next ObjectPrefetch
+			var grow int64
+			for {
+				if e.next != nil && !slices.ContainsFunc(e.nextScans, (*PrefetchScan).live) {
+					p.takeDeferredLocked(e)
+					metric.FSPrefetchEndedCounter.Inc()
 				}
-				return e.next.merge(req), e.next.Size
-			}
-			next, kept := deferred()
-			grow := next.Size - kept
-			if grow > 0 && !p.roomLocked(grow, nil) {
-				metric.FSPrefetchDroppedCounter.Inc()
-				return
+				before := e.next
+				next, grow = req, req.Size
+				if before != nil {
+					next = before.merge(req)
+					grow = next.Size - before.Size
+				}
+				if grow <= 0 {
+					break
+				}
+				if !p.roomLocked(grow, nil) {
+					metric.FSPrefetchDroppedCounter.Inc()
+					return
+				}
+				// Making room may have dropped what was deferred behind e.
+				if e.next == before {
+					break
+				}
 			}
 			p.deferred += grow
 			p.deferredOf[e] = struct{}{}
@@ -728,7 +737,7 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 			return
 		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
-		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
+		if ok, err := s.diskCache.readRanges(ctx, path.File, req.deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
 			if err != nil {
 				metric.FSPrefetchFailedCounter.Inc()
 				logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))

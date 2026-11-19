@@ -773,3 +773,38 @@ func TestObjectPrefetchCovers(t *testing.T) {
 	require.False(t, r.covers(ObjectPrefetch{}), "ranges do not cover the whole object")
 	require.True(t, ObjectPrefetch{}.covers(r), "the whole object covers any range")
 }
+
+// A request deferred behind a running download is charged what it keeps when the last scan
+// of the request deferred before it ends while room is made for it.
+func TestPrefetcherDeferredMergeChargedWhenScanEndsDuringAdmission(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release
+	}
+	var onLimit atomic.Pointer[func()]
+	limit := func() int64 {
+		if f := onLimit.Swap(nil); f != nil {
+			(*f)()
+		}
+		return 100
+	}
+	p := newPrefetcher(1, limit, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	defer close(release)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}})
+	require.Equal(t, "a", <-started)
+	first := &PrefetchScan{}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 40, Ranges: []PrefetchRange{{Offset: 100, Size: 40}}, Scan: first})
+	p.add(ObjectPrefetch{FilePath: "b", Size: 40, Ranges: []PrefetchRange{{Offset: 0, Size: 40}}, Scan: &PrefetchScan{}})
+	end := first.End
+	onLimit.Store(&end)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 30, Ranges: []PrefetchRange{{Offset: 300, Size: 30}}, Scan: &PrefetchScan{}})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	next := p.entries["a"].next
+	require.NotNil(t, next)
+	require.Equal(t, []PrefetchRange{{Offset: 300, Size: 30}}, next.Ranges, "what the ended scan asked for is not kept")
+	require.Equal(t, next.Size, p.deferred)
+}
