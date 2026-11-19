@@ -128,6 +128,55 @@ func TestChangeWatchProxy(t *testing.T) {
 	require.NoError(t, tx.QueryRowContext(ctx, "select id from watched_db.t").Scan(&id))
 	require.Equal(t, 1, id)
 	require.NoError(t, tx.Commit())
+
+	exec(source, "create table watched_db.empty_input(id int primary key)")
+	requireStandaloneSnapshotGuard(t, ctx, source)
+
+	exec(source, "create table watched_db.partitioned_parent(id int primary key) partition by hash(id) partitions 2")
+	exec(sys, `insert into mo_change_watch.watch
+		select observer_account_id, source_account_id, database_name, 'partitioned_parent', uuid()
+		from mo_change_watch.watch where database_name='watched_db' and table_name='t'`)
+	for _, input := range []any{nil, firstMarker} {
+		rows, err := observer.QueryContext(ctx, "select * from mo_changed_tables(?)", input)
+		if rows != nil {
+			require.False(t, rows.Next(), "unsupported grants must publish no table rows or END")
+			err = rows.Err()
+			require.NoError(t, rows.Close())
+		}
+		var serverErr *mysql.MySQLError
+		require.ErrorAs(t, err, &serverErr)
+		require.Equal(t, moerr.ErrNotSupported, serverErr.Number)
+		require.Contains(t, serverErr.Message, `granted "watched_db"."partitioned_parent"`)
+	}
+	exec(sys, "delete from mo_change_watch.watch where database_name='watched_db' and table_name='partitioned_parent'")
+	readProjectedWatch(t, ctx, observer, firstMarker, "CHANGED", tableID)
+}
+
+func requireStandaloneSnapshotGuard(t *testing.T, ctx context.Context, source *sql.DB) {
+	t.Helper()
+	conn, err := source.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "set session transaction isolation level repeatable read")
+	require.NoError(t, err)
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	var snapshot string
+	require.NoError(t, tx.QueryRowContext(ctx, "select watermark from change_watermark() w").Scan(&snapshot))
+	var id int
+	err = tx.QueryRowContext(ctx, "select id from watched_db.empty_input where mo_assert_snapshot_after(?)", snapshot).Scan(&id)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	var verified bool
+	err = tx.QueryRowContext(ctx, "select mo_assert_snapshot_after(?)", snapshot).Scan(&verified)
+	var serverErr *mysql.MySQLError
+	require.ErrorAs(t, err, &serverErr)
+	require.Equal(t, uint16(22601), serverErr.Number)
+	require.Equal(t, "40001", string(serverErr.SQLState[:]))
+	var after string
+	require.NoError(t, tx.QueryRowContext(ctx, "select watermark from change_watermark() w").Scan(&after))
+	require.Equal(t, snapshot, after)
 }
 
 func readProjectedWatch(t *testing.T, ctx context.Context, db *sql.DB, marker any, wantKind string, tableID uint64) (string, string) {
