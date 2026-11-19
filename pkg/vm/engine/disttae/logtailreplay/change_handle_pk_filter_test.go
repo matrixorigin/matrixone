@@ -16,7 +16,10 @@ package logtailreplay
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -31,7 +34,151 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+type replayReadRecorder struct {
+	fileservice.FileService
+	reads atomic.Int64
+}
+
+func (fs *replayReadRecorder) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if len(v.Entries) > 1 {
+		fs.reads.Add(1)
+	}
+	return fs.FileService.Read(ctx, v)
+}
+
+func writeReplayTestObject(t *testing.T, ctx context.Context, mp *mpool.MPool, mem fileservice.FileService, ts types.TS, keys ...int32) *objectio.ObjectEntry {
+	t.Helper()
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1, objectio.SEQNUM_COMMITTS}, 0, true, false, mem)
+	for i, key := range keys {
+		b := batch.NewWithSize(3)
+		b.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(b.Vecs[0], key, false, mp))
+		require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(i+1), false, mp))
+		require.NoError(t, vector.AppendFixed(b.Vecs[2], ts, false, mp))
+		b.SetRowCount(1)
+		_, err := writer.WriteBatch(b)
+		b.Clean(mp)
+		require.NoError(t, err)
+	}
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.Stats()
+	objectio.WithAppendable()(&stats)
+	return &objectio.ObjectEntry{ObjectStats: stats}
+}
+
+func TestHistoricalChangesCoalescedReadsPreservePruning(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer mem.Close(ctx)
+
+	ts := types.BuildTS(100, 0)
+	obj := writeReplayTestObject(t, ctx, mp, mem, ts, 11, 99, 11)
+	key := int32(11)
+	zm := index.NewZM(types.T_int32, 0)
+	index.UpdateZM(zm, types.EncodeInt32(&key))
+	filter := &engine.PKFilter{Segments: [][]byte{zm}}
+
+	replay := func(ctx context.Context) int64 {
+		fs := &replayReadRecorder{FileService: mem}
+		changes := &ChangeHandler{pkFilter: filter, scheduler: tasks.NewParallelJobScheduler(LoadParallism)}
+		defer changes.scheduler.Stop()
+		handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts, []*objectio.ObjectEntry{obj}, fs, mp)
+		require.NoError(t, handle.init(ctx, true))
+		var payload []int64
+		var commits []types.TS
+		for {
+			var b *batch.Batch
+			err := handle.QuickNext(ctx, &b, mp)
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			require.NoError(t, err)
+			payload = append(payload, vector.MustFixedColWithTypeCheck[int64](b.Vecs[1])...)
+			commits = append(commits, vector.MustFixedColWithTypeCheck[types.TS](b.Vecs[2])...)
+			b.Clean(mp)
+		}
+		require.Equal(t, []int64{1, 3}, payload)
+		require.Equal(t, []types.TS{ts, ts}, commits)
+		return fs.reads.Load()
+	}
+
+	individual := replay(ctx)
+	coalesced := replay(engine.WithPKFilter(ctx, filter))
+	require.Less(t, coalesced, individual, "separate reads covered the same physical byte range")
+}
+
+// The first object is ready to read. Delay metadata for the next object
+// until its payload request starts, as a slow cold object lookup would.
+type replayDispatchFS struct {
+	fileservice.FileService
+	firstObject, nextObject string
+	firstRead               chan struct{}
+	onFirstRead             sync.Once
+}
+
+func (fs *replayDispatchFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if v.FilePath == fs.firstObject && len(v.Entries) > 1 {
+		fs.onFirstRead.Do(func() { close(fs.firstRead) })
+	}
+	if v.FilePath == fs.nextObject && len(v.Entries) == 1 {
+		select {
+		case <-fs.firstRead:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return fs.FileService.Read(ctx, v)
+}
+
+func TestHistoricalChangesSubmitFinishedObjectBeforePlanningNext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []int32
+	}{
+		{name: "single surviving block", keys: []int32{11, 99, 99}},
+		{name: "finished group", keys: []int32{11, 99, 11}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer mem.Close(ctx)
+			ts := types.BuildTS(100, 0)
+			first := writeReplayTestObject(t, ctx, mp, mem, ts, tc.keys...)
+			next := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+			fs := &replayDispatchFS{
+				FileService: mem,
+				firstObject: first.ObjectName().String(),
+				nextObject:  next.ObjectName().String(),
+				firstRead:   make(chan struct{}),
+			}
+			zm := index.NewZM(types.T_int32, 0)
+			pk := int32(11)
+			index.UpdateZM(zm, types.EncodeInt32(&pk))
+			filter := &engine.PKFilter{Segments: [][]byte{zm}}
+			ctx = engine.WithPKFilter(ctx, filter)
+			changes := &ChangeHandler{pkFilter: filter, scheduler: tasks.NewParallelJobScheduler(LoadParallism)}
+			defer changes.scheduler.Stop()
+			handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts, []*objectio.ObjectEntry{first, next}, fs, mp)
+			require.NoError(t, handle.prefetch(ctx))
+			for _, b := range handle.cache {
+				b.Clean(mp)
+			}
+		})
+	}
+}
 
 // Tombstones store the deleted user PK at seqnum 1, independently of its
 // position in the data schema. Both paths must prune the unrelated block, while
@@ -238,7 +385,10 @@ func TestHistoricalChangesPKFilterReplacementChain(t *testing.T) {
 			zm := index.NewZM(types.T_int32, 0)
 			key := int32(11)
 			index.UpdateZM(zm, types.EncodeInt32(&key))
-			filter := &engine.PKFilter{Segments: [][]byte{zm}, PrimarySeqnum: 0, ObjectZMIsPK: true}
+			filter := &engine.PKFilter{
+				Segments: [][]byte{zm}, PrimarySeqnum: 0, ObjectZMIsPK: true,
+				PrefetchObjectMeta: true,
+			}
 			for _, filtered := range []bool{false, true} {
 				readCtx := ctx
 				if filtered {

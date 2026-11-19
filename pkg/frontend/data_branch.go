@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -996,6 +997,11 @@ func diffMergeAgency(
 
 	ctx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
+	ctx = logtailreplay.WithCheckpointObjectReuse(ctx)
+	ctx = context.WithValue(ctx, branchCatalogHistoryKey{}, &branchCatalogHistory{
+		dbLowerBounds: make(map[dbCreatedTimeLowerBoundKey]types.TS),
+		tableCTS:      make(map[tableCreationCommitTSKey]types.TS),
+	})
 
 	// DATA BRANCH write destinations are never subscription tables (design
 	// §4.3, I3): classify the destination before any write. DIFF ... OUTPUT
@@ -2691,28 +2697,35 @@ func decideCollectRange(
 	err error,
 ) {
 
-	var (
-		tarCTS  types.TS
-		baseCTS types.TS
-
-		tblCommitTS []types.TS
-
-		tarTableID  = tables.tarRel.GetTableID(ctx)
-		baseTableID = tables.baseRel.GetTableID(ctx)
-	)
-
+	tarTableID := tables.tarRel.GetTableID(ctx)
+	baseTableID := tables.baseRel.GetTableID(ctx)
 	tarSp, baseSp := tables.resolvedSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
-	if tblCommitTS, err = getTablesCreationCommitTS(
-		ctx, ses, tarIdent, tables.tarRel, baseIdent, tables.baseRel,
-		[]types.TS{tarSp, baseSp},
-	); err != nil {
-		return
+	lcaIdent := tables.resolvedLCAIdentity(ctx, ses)
+	resolveEndpoint := func(ident branchIdentity, rel engine.Relation, tableID uint64, snap types.TS) (types.TS, error) {
+		// At an endpoint snapshot a checkpoint may only retain an ALTER's
+		// rewritten catalog row. Reuse the bound already proven at the LCA
+		// for the same physical generation so earlier writes remain visible.
+		if tableID == dagInfo.lcaTableId && ident.account == lcaIdent.account &&
+			!tables.lcaCTS.IsEmpty() && tables.lcaCTS.LE(&snap) {
+			return tables.lcaCTS, nil
+		}
+		timestamps, err := getTablesCreationCommitTS(ctx, ses, ident, rel, ident, rel, []types.TS{snap, snap})
+		if err != nil {
+			return types.TS{}, err
+		}
+		return timestamps[0], nil
 	}
 
-	tarCTS = tblCommitTS[0]
-	baseCTS = tblCommitTS[1]
+	tarCTS, err := resolveEndpoint(tarIdent, tables.tarRel, tarTableID, tarSp)
+	if err != nil {
+		return
+	}
+	baseCTS, err := resolveEndpoint(baseIdent, tables.baseRel, baseTableID, baseSp)
+	if err != nil {
+		return
+	}
 
 	// ============================================================
 	// Running example used throughout the comments below.
@@ -3066,9 +3079,12 @@ func buildSideCollectRange(
 		}
 
 		// Resolve creation commit TS so the window starts after the
-		// clone-materialization commit. Reuse endpointCTS for the
-		// endpoint to avoid a redundant lookup.
-		if nodeID == endpointID {
+		// clone-materialization commit. Reuse the boundary already
+		// resolved for the LCA or the endpoint.
+		if i == 0 && !wholeHistory && segIdent.account == tables.resolvedLCAIdentity(ctx, ses).account &&
+			!tables.lcaCTS.IsEmpty() && tables.lcaCTS.LE(&windowEnd) {
+			nodeCTS = tables.lcaCTS
+		} else if nodeID == endpointID {
 			nodeCTS = endpointCTS
 		} else if !nodeCTSResolved {
 			ctsList, err2 := getTablesCreationCommitTS(
@@ -3131,9 +3147,8 @@ func dataBranchCollectRelationSnapshot(endpointSP, windowEnd types.TS, endpoint 
 }
 
 // getTablesCreationCommitTS resolves the creation commit timestamp for
-// both tar and base tables.  It tries CollectChanges first (fast,
-// preserves real commit_ts from partition state), falling back to the
-// Reader-based snapshot scan when partition state is unavailable.
+// both tar and base tables, preferring the original catalog row at the
+// requested snapshot and replaying catalog changes when that row is unavailable.
 func getTablesCreationCommitTS(
 	ctx context.Context,
 	ses *Session,
@@ -3144,8 +3159,13 @@ func getTablesCreationCommitTS(
 	snapshot []types.TS,
 ) ([]types.TS, error) {
 	txnSnap := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	history, _ := ctx.Value(branchCatalogHistoryKey{}).(*branchCatalogHistory)
 	dbLowerBounds := make(map[dbCreatedTimeLowerBoundKey]types.TS)
 	tableCTS := make(map[tableCreationCommitTSKey]types.TS)
+	if history != nil {
+		dbLowerBounds = history.dbLowerBounds
+		tableCTS = history.tableCTS
+	}
 
 	snapFor := func(idx int) types.TS {
 		if idx < len(snapshot) && !snapshot[idx].IsEmpty() {
@@ -3170,7 +3190,10 @@ func getTablesCreationCommitTS(
 		}
 
 		key := tableCreationCommitTSKey{
+			accountID:  ident.account,
 			tableID:    tableID,
+			database:   targetRel.GetTableDef(rctx).DbName,
+			table:      targetRel.GetTableName(),
 			snapshot:   snap,
 			lowerBound: lowerBound,
 		}
@@ -3178,83 +3201,81 @@ func getTablesCreationCommitTS(
 			return ts, nil
 		}
 
-		collectStart := time.Now()
-		ts, err := getTableCreationCommitTSByCollectChanges(
-			rctx, ses, ident.account, targetRel, tableID, snap, lowerBound,
-		)
-		if err == nil {
+		readerStart := time.Now()
+		catalogKey := packMoTablesCPKey(key.accountID, key.database, key.table)
+		ts, original, readerErr := readTableCatalogCommitTS(rctx, ses, tableID, snap, catalogKey)
+		readerCost := time.Since(readerStart)
+		var collectCost time.Duration
+		finish := func(ts types.TS, path string) (types.TS, error) {
 			tableCTS[key] = ts
 			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
 				zap.String("lower-bound", lowerBound.ToString()),
-				zap.String("path", "CollectChanges"),
+				zap.String("path", path),
 				zap.String("commit-ts", ts.ToString()),
-				zap.Duration("collectchanges-cost", time.Since(collectStart)),
+				zap.Duration("reader-cost", readerCost),
+				zap.Duration("collectchanges-cost", collectCost),
 				zap.Duration("total-cost", time.Since(totalStart)),
 			)
 			return ts, nil
 		}
-		collectCost := time.Since(collectStart)
+		if readerErr == nil && original && !ts.IsEmpty() && ts.GE(&lowerBound) && ts.LE(&snap) {
+			return finish(ts, "Reader")
+		}
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, err
+		}
+
+		collectStart := time.Now()
+		replayed, collectErr := getTableCreationCommitTSByCollectChanges(
+			rctx, ses, ident.account, targetRel, tableID, snap, lowerBound, history != nil,
+		)
+		collectCost = time.Since(collectStart)
+		if collectErr == nil {
+			return finish(replayed, "CollectChanges")
+		}
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, err
+		}
+
 		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
 			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
-			zap.Error(err),
+			zap.Error(collectErr),
 		)
-		readerStart := time.Now()
-		ts, readerErr := getTableCreationCommitTSByID(rctx, ses, tableID, snap)
-		if readerErr != nil {
-			// A branch whose parent was created earlier in the same explicit
-			// transaction records a pre-commit clone timestamp.  The parent has
-			// no catalog row at that timestamp, but it is visible at the endpoint
-			// snapshot after commit.  Resolve its real creation timestamp there;
-			// the resulting CTS > clone TS makes the inherited parent window
-			// empty, which is the correct history for a same-commit fork.
-			if snap.LT(&txnSnap) {
-				currentTS, currentErr := getTableCreationCommitTSByID(
-					rctx, ses, tableID, txnSnap,
-				)
-				if currentErr == nil && currentTS.GT(&snap) {
-					logutil.Info("DataBranch-TableCTS-Resolve-Done",
-						zap.Uint64("table-id", tableID),
-						zap.String("snapshot", snap.ToString()),
-						zap.String("fallback-snapshot", txnSnap.ToString()),
-						zap.String("path", "PostCreationSnapshotFallback"),
-						zap.String("commit-ts", currentTS.ToString()),
-						zap.Duration("collectchanges-cost", collectCost),
-						zap.Duration("reader-cost", time.Since(readerStart)),
-						zap.Duration("total-cost", time.Since(totalStart)),
-					)
-					tableCTS[key] = currentTS
-					return currentTS, nil
-				}
-			}
-			logutil.Warn("DataBranch-TableCTS-Resolve-Error",
-				zap.Uint64("table-id", tableID),
-				zap.String("snapshot", snap.ToString()),
-				zap.String("path", "ReaderFallback"),
-				zap.String("lower-bound", lowerBound.ToString()),
-				zap.Duration("collectchanges-cost", collectCost),
-				zap.Duration("reader-cost", time.Since(readerStart)),
-				zap.Duration("total-cost", time.Since(totalStart)),
-				zap.Error(readerErr),
-			)
-			return types.TS{}, readerErr
+		readerStart = time.Now()
+		// Keep the ID-based recovery for historical names and catalog formats
+		// where the compound key lookup cannot resolve the row.
+		ts, _, readerErr = readTableCatalogCommitTS(rctx, ses, tableID, snap, nil)
+		readerCost += time.Since(readerStart)
+		if readerErr == nil {
+			return finish(ts, "ReaderFallback")
 		}
-		logutil.Info("DataBranch-TableCTS-Resolve-Done",
+
+		// A parent created in the same transaction as its branch has no row
+		// at the pre-commit fork timestamp. Its later creation timestamp
+		// makes the inherited parent window empty.
+		if snap.LT(&txnSnap) {
+			readerStart = time.Now()
+			currentTS, _, currentErr := readTableCatalogCommitTS(rctx, ses, tableID, txnSnap, nil)
+			readerCost += time.Since(readerStart)
+			if currentErr == nil && currentTS.GT(&snap) {
+				return finish(currentTS, "PostCreationSnapshotFallback")
+			}
+		}
+		logutil.Warn("DataBranch-TableCTS-Resolve-Error",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
-			zap.String("path", "ReaderFallback"),
-			zap.String("commit-ts", ts.ToString()),
 			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
-			zap.Duration("reader-cost", time.Since(readerStart)),
+			zap.Duration("reader-cost", readerCost),
 			zap.Duration("total-cost", time.Since(totalStart)),
+			zap.Error(readerErr),
 		)
-		tableCTS[key] = ts
-		return ts, nil
+		return types.TS{}, readerErr
 	}
 
 	tarCTS, err := resolve(tarIdent, tar, snapFor(0))
@@ -3276,9 +3297,21 @@ type dbCreatedTimeLowerBoundKey struct {
 }
 
 type tableCreationCommitTSKey struct {
+	accountID  uint32
 	tableID    uint64
+	database   string
+	table      string
 	snapshot   types.TS
 	lowerBound types.TS
+}
+
+type branchCatalogHistoryKey struct{}
+
+// Branch reconciliation and the diff producer resolve catalog history sequentially.
+// Their results are scoped to this statement's transaction.
+type branchCatalogHistory struct {
+	dbLowerBounds map[dbCreatedTimeLowerBoundKey]types.TS
+	tableCTS      map[tableCreationCommitTSKey]types.TS
 }
 
 func getDatabaseCreatedTimeLowerBound(
@@ -3406,45 +3439,67 @@ func databaseCreatedTimeToCollectLowerBound(createdTime types.Timestamp) (types.
 	return types.BuildTS(unixMicros*int64(time.Microsecond), 0).Prev(), nil
 }
 
-// getTableCreationCommitTSByID scans the mo_tables snapshot at the given
-// timestamp and returns the earliest commit_ts for the specified table ID.
-func getTableCreationCommitTSByID(
+// readTableCatalogCommitTS returns the earliest visible commit of the matching
+// catalog row. A compound key is used for the fast lookup. The original row
+// has version zero: a committed ALTER that reuses the physical ID increments
+// rel_version before replacing its catalog row.
+func readTableCatalogCommitTS(
 	ctx context.Context,
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
-) (types.TS, error) {
+	catalogKey []byte,
+) (ts types.TS, original bool, err error) {
 	mp := ses.proc.Mp()
 
-	filterVec := vector.NewVec(types.T_uint64.ToType())
-	defer filterVec.Free(mp)
-	if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
-		return types.TS{}, err
+	var filterExpr *plan.Expr
+	if len(catalogKey) != 0 {
+		filterVec := vector.NewVec(types.T_varchar.ToType())
+		defer filterVec.Free(mp)
+		if err := vector.AppendBytes(filterVec, catalogKey, false, mp); err != nil {
+			return types.TS{}, false, err
+		}
+		filterExpr, err = readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_CPKey, filterVec)
+	} else {
+		filterVec := vector.NewVec(types.T_uint64.ToType())
+		defer filterVec.Free(mp)
+		if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
+			return types.TS{}, false, err
+		}
+		filterExpr, err = readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	}
+
+	if err != nil {
+		return types.TS{}, false, err
 	}
 
 	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
-	if cerr != nil {
-		return types.TS{}, cerr
+	checkVersion := len(catalogKey) != 0
+	if checkVersion {
+		attrs = append(attrs, catalog.SystemRelAttr_Version)
+		colTypes = append(colTypes, types.T_uint32.ToType())
 	}
 
 	found := false
-	result := types.TS{}
-
-	err := scanSnapshotRelationByID(
+	err = scanSnapshotRelationByID(
 		ctx, "table-creation-commit-ts", ses,
 		catalog.MO_TABLES_ID, snapshotTS,
 		attrs, colTypes, filterExpr, 1,
 		func(bat *batch.Batch) error {
 			ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
 			cts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1])
+			var versions []uint32
+			if checkVersion {
+				versions = vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[2])
+			}
 			for i, id := range ids {
 				if id != tableID || bat.Vecs[1].IsNull(uint64(i)) {
 					continue
 				}
-				if !found || cts[i].LT(&result) {
-					result = cts[i]
+				if !found || cts[i].LT(&ts) {
+					ts = cts[i]
+					original = checkVersion && !bat.Vecs[2].IsNull(uint64(i)) && versions[i] == 0
 				}
 				found = true
 			}
@@ -3452,12 +3507,12 @@ func getTableCreationCommitTSByID(
 		},
 	)
 	if err != nil {
-		return types.TS{}, err
+		return types.TS{}, false, err
 	}
 	if found {
-		return result, nil
+		return ts, original, nil
 	}
-	return types.TS{}, moerr.NewInternalErrorNoCtxf(
+	return types.TS{}, false, moerr.NewInternalErrorNoCtxf(
 		"cannot find table %d commit ts at snapshot %s",
 		tableID, snapshotTS.ToString(),
 	)
@@ -3475,6 +3530,7 @@ func getTableCreationCommitTSByCollectChanges(
 	tableID uint64,
 	snapshotTS types.TS,
 	lowerBound types.TS,
+	prefetchObjectMeta bool,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -3525,6 +3581,7 @@ func getTableCreationCommitTSByCollectChanges(
 		return types.TS{}, err
 	}
 	if pkFilter != nil {
+		pkFilter.PrefetchObjectMeta = prefetchObjectMeta
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
