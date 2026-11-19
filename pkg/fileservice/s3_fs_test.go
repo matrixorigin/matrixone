@@ -3380,3 +3380,346 @@ func TestS3FSReadFullObjectToDiskCacheStreamingBackgroundEndsOnClose(t *testing.
 		t.Fatal("the download outlived the disk cache")
 	}
 }
+
+func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		offsets []int64
+		reads   int
+	}{
+		{"sparse", []int64{0, 16 << 20}, 2},
+		{"adjacent", []int64{0, 4096}, 1},
+		{"out of order", []int64{16 << 20, 0}, 1},
+		{"four sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20}, 4},
+		{"five sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20, 64 << 20}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			storage := &generatedRangeObjectStorage{}
+			fs.storage = storage
+			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache}
+			for _, offset := range tc.offsets {
+				vector.Entries = append(vector.Entries, IOEntry{Offset: offset, Size: 4096})
+			}
+			t.Cleanup(vector.Release)
+			require.NoError(t, fs.Read(ctx, vector))
+			reads := storage.readRanges()
+			require.Len(t, reads, tc.reads)
+			if tc.reads > 1 {
+				for i, read := range reads {
+					require.Equal(t, tc.offsets[i], *read.min)
+					require.Equal(t, tc.offsets[i]+4096, *read.max)
+				}
+			}
+			for _, entry := range vector.Entries {
+				require.Equal(t, make([]byte, 4096), entry.Data)
+			}
+		})
+	}
+}
+
+type sparseFailureStorage struct {
+	dummyObjectStorage
+	calls int
+	err   error
+}
+
+func (s *sparseFailureStorage) Read(_ context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+	s.calls++
+	if s.calls == 2 {
+		return nil, s.err
+	}
+	return io.NopCloser(bytes.NewReader(make([]byte, *max-*min))), nil
+}
+
+type rangeStatusError struct{}
+
+func (rangeStatusError) Error() string       { return "range beyond object" }
+func (rangeStatusError) HTTPStatusCode() int { return 416 }
+
+func TestS3FSSparseRangeFailure(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	storage := &sparseFailureStorage{err: rangeStatusError{}}
+	fs.storage = storage
+	cache := &publicationVectorCache{}
+	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
+		{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+	}}
+	t.Cleanup(vector.Release)
+	err = fs.Read(ctx, vector)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+	require.Equal(t, 2, storage.calls)
+	require.Zero(t, cache.updates.Load())
+}
+
+func TestS3FSSparseFailureDoesNotPopulateMemoryCache(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()},
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20)}, nil, false, false)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	storage := &sparseFailureStorage{err: rangeStatusError{}}
+	fs.storage = storage
+	entry := func(offset int64) IOEntry {
+		return IOEntry{Offset: offset, Size: 4096, ToCacheData: CacheOriginalData}
+	}
+	vector := &IOVector{FilePath: "foo", Entries: []IOEntry{entry(0), entry(16 << 20)}}
+	t.Cleanup(vector.Release)
+	require.Error(t, fs.Read(ctx, vector))
+	cached := &IOVector{FilePath: "foo", Entries: []IOEntry{entry(0)}}
+	t.Cleanup(cached.Release)
+	require.NoError(t, fs.ReadCache(ctx, cached))
+	require.False(t, cached.allDone())
+}
+
+func TestS3FSSparseFailureDoesNotPopulateDiskCache(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()},
+		CacheConfig{DiskCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(t.TempDir())}, nil, false, false)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.storage = &sparseFailureStorage{err: rangeStatusError{}}
+	entry := func(offset int64) IOEntry { return IOEntry{Offset: offset, Size: 4096, ToCacheData: CacheOriginalData} }
+	vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Entries: []IOEntry{entry(0), entry(16 << 20)}}
+	t.Cleanup(vector.Release)
+	require.Error(t, fs.Read(ctx, vector))
+	cached := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Entries: []IOEntry{entry(0)}}
+	t.Cleanup(cached.Release)
+	require.NoError(t, readCache(ctx, fs.diskCache, cached))
+	require.False(t, cached.allDone())
+}
+
+func TestS3FSSparsePreservesConverterError(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.storage = &generatedRangeObjectStorage{}
+	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
+		{Offset: 0, Size: 4096},
+		{Offset: 16 << 20, Size: 4096, ToCacheData: func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+			return nil, rangeStatusError{}
+		}},
+	}}
+	t.Cleanup(vector.Release)
+	err = fs.Read(ctx, vector)
+	status, ok := objectStorageStatusCode(err)
+	require.True(t, ok, "%v", err)
+	require.Equal(t, 416, status)
+}
+
+type sparsePatternReader struct{ value byte }
+
+func (r sparsePatternReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.value
+	}
+	return len(p), nil
+}
+
+type sparseTrackingStorage struct {
+	dummyObjectStorage
+	opens, closes       int
+	bytes               int64
+	firstErr, secondErr error
+	shortSecond         bool
+	cancel              context.CancelFunc
+}
+
+func (s *sparseTrackingStorage) Read(_ context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+	s.opens++
+	if s.opens == 1 && s.firstErr != nil {
+		return nil, s.firstErr
+	}
+	if s.opens == 2 && s.secondErr != nil {
+		return nil, s.secondErr
+	}
+	n := *max - *min
+	if s.opens == 2 && s.shortSecond {
+		n--
+	}
+	s.bytes += n
+	return &readCloser{r: io.LimitReader(sparsePatternReader{value: byte(*min/(16<<20) + 1)}, n), closeFunc: func() error {
+		s.closes++
+		if s.cancel != nil {
+			s.cancel()
+			s.cancel = nil
+		}
+		return nil
+	}}, nil
+}
+
+type sparseReleaseCountingData struct {
+	fscache.Data
+	releases *int
+}
+
+func (d *sparseReleaseCountingData) Release() { *d.releases++; d.Data.Release() }
+
+func TestS3FSSparseReadLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		firstErr, secondErr error
+		short, cancel       bool
+		opens, closes       int
+	}{
+		{name: "first 416", firstErr: rangeStatusError{}, opens: 1},
+		{name: "second 416", secondErr: rangeStatusError{}, opens: 2, closes: 1},
+		{name: "short body", short: true, opens: 2, closes: 2},
+		{name: "cancel between opens", cancel: true, opens: 1, closes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			storage := &sparseTrackingStorage{firstErr: tc.firstErr, secondErr: tc.secondErr, shortSecond: tc.short}
+			if tc.cancel {
+				storage.cancel = cancel
+			}
+			fs.storage = storage
+			releases := 0
+			convert := func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+				d, err := CacheOriginalData(ctx, r, data, allocator)
+				if err != nil {
+					return nil, err
+				}
+				return &sparseReleaseCountingData{Data: d, releases: &releases}, nil
+			}
+			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
+				{Offset: 0, Size: 4096, ToCacheData: convert}, {Offset: 16 << 20, Size: 4096},
+			}}
+			err = fs.Read(ctx, vector)
+			require.Error(t, err)
+			if tc.cancel {
+				require.ErrorIs(t, err, context.Canceled)
+			} else if tc.firstErr != nil {
+				status, ok := objectStorageStatusCode(err)
+				require.True(t, ok)
+				require.Equal(t, 416, status)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+			}
+			require.Equal(t, tc.opens, storage.opens)
+			require.Equal(t, tc.closes, storage.closes)
+			vector.ReleaseReadResultOnError()
+			if tc.firstErr == nil {
+				require.Equal(t, 1, releases)
+			} else {
+				require.Zero(t, releases)
+			}
+		})
+	}
+}
+
+type sparseFirstEntryCache struct{ publicationVectorCache }
+
+func (c *sparseFirstEntryCache) Read(_ context.Context, vector *IOVector) error {
+	c.reads.Add(1)
+	vector.Entries[0].Data = []byte("cached")
+	vector.Entries[0].done = true
+	return nil
+}
+
+func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	t.Run("partial cache", func(t *testing.T) {
+		storage := &sparseTrackingStorage{}
+		fs.storage = storage
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{&sparseFirstEntryCache{}}, Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096}, {Offset: 32 << 20, Size: 4096},
+		}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Equal(t, []byte("cached"), vector.Entries[0].Data)
+		require.Equal(t, bytes.Repeat([]byte{2}, 4096), vector.Entries[1].Data)
+		require.Equal(t, bytes.Repeat([]byte{3}, 4096), vector.Entries[2].Data)
+		require.Equal(t, 2, storage.opens)
+		require.Equal(t, 2, storage.closes)
+		require.Equal(t, int64(8192), storage.bytes)
+	})
+	t.Run("one remaining miss", func(t *testing.T) {
+		storage := &sparseTrackingStorage{}
+		fs.storage = storage
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{&sparseFirstEntryCache{}}, Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+		}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Equal(t, 1, storage.opens)
+		require.Equal(t, bytes.Repeat([]byte{2}, 4096), vector.Entries[1].Data)
+		require.Equal(t, int64(4096), storage.bytes)
+	})
+	t.Run("success updates original vector", func(t *testing.T) {
+		storage := &sparseTrackingStorage{}
+		fs.storage = storage
+		cache := &publicationVectorCache{}
+		buf := make([]byte, 4096)
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
+			{Offset: 0, Size: 4096, Data: buf}, {Offset: 16 << 20, Size: 4096},
+		}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Same(t, vector, cache.last)
+		require.Equal(t, int64(1), cache.updates.Load())
+		require.Same(t, &buf[0], &vector.Entries[0].Data[0])
+	})
+	t.Run("mixed read closer", func(t *testing.T) {
+		storage := &sparseTrackingStorage{}
+		fs.storage = storage
+		var reader io.ReadCloser
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096, ReadCloserForRead: &reader},
+		}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Equal(t, 1, storage.opens)
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.NoError(t, reader.Close())
+		require.Len(t, data, 4096)
+		require.Equal(t, 1, storage.closes)
+	})
+	t.Run("mixed writer", func(t *testing.T) {
+		storage := &sparseTrackingStorage{}
+		fs.storage = storage
+		var output bytes.Buffer
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096, WriterForRead: &output},
+		}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Equal(t, 1, storage.opens)
+		require.Equal(t, 1, storage.closes)
+		require.Equal(t, 4096, output.Len())
+	})
+}
+
+type sparseFailingReadCache struct{ publicationVectorCache }
+
+func (*sparseFailingReadCache) Read(context.Context, *IOVector) error {
+	return errors.New("cache read failed")
+}
+
+func TestS3FSFailedCacheReadDoesNotUpdateEarlierCache(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	first := &publicationVectorCache{}
+	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{first, &sparseFailingReadCache{}}, Entries: []IOEntry{{Offset: 0, Size: 4096}}}
+	require.ErrorContains(t, fs.Read(ctx, vector), "cache read failed")
+	require.Zero(t, first.updates.Load())
+}
