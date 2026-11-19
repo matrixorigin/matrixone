@@ -957,7 +957,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <funcExpr> function_call_window
 %type <expr> sample_function_expr
 
-%type <unresolvedName> column_name column_name_unresolved normal_ident
+%type <unresolvedName> column_name column_name_unresolved column_decl_name normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
@@ -12856,19 +12856,11 @@ index_name:
 	}
 
 column_def:
-    column_name column_type column_attribute_list_opt
+    column_decl_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
-|   END column_type column_attribute_list_opt
-    {
-        $$ = tree.NewColumnTableDef(
-            tree.NewUnresolvedName(tree.NewCStr($1, 1)),
-            $2,
-            $3,
-        )
-    }
-|   column_name SERIAL column_attribute_list_opt
+|   column_decl_name SERIAL column_attribute_list_opt
     {
         // MySQL SERIAL is the alias for BIGINT UNSIGNED NOT NULL
         // AUTO_INCREMENT UNIQUE. Expanding at the column-definition owner
@@ -12892,6 +12884,20 @@ column_def:
             tree.NewAttributeUnique(),
         }
         $$ = tree.NewColumnTableDef($1, typ, append(serialAttrs, $3...))
+    }
+
+// The bare END declaration name shares one owner rule across the ordinary
+// column_type alternative and the SERIAL alias alternative, so `end SERIAL`
+// parses exactly like the quoted name and the expanded type (PR 32906 reviews
+// 5983418028/5983638763). END outside a declaration position is untouched.
+column_decl_name:
+    column_name
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
     }
 
 column_name_unresolved:

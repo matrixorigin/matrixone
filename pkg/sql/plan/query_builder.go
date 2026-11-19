@@ -6388,7 +6388,20 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 		if duplicate != "" {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "WITH query name %q specified more than once", duplicate)
 		}
-		ctx.cteByName = refs
+		// Copy-merge instead of replacing: enclosing CTEs stay lexically
+		// visible when an inner (possibly parenthesized) WITH is preprocessed
+		// into the same BindContext, inner names legally shadow the outer
+		// ones with declaration order preserved, and a parent-shared map
+		// inherited through BindContext is never mutated (PR 32906 review
+		// 5983495748).
+		merged := make(map[string]*CTERef, len(ctx.cteByName)+len(refs))
+		for name, ref := range ctx.cteByName {
+			merged[name] = ref
+		}
+		for name, ref := range refs {
+			merged[name] = ref
+		}
+		ctx.cteByName = merged
 		for _, ref := range refs {
 			ref.declarationCtx = newCTEDeclarationContext(builder, ctx)
 		}
@@ -6461,25 +6474,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.projectTag = builder.genNewBindTag()
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
-	if astTimeWindow != nil {
-		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
-			return
-		}
-		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
-		// GAPFILL uses the same second-stage aggregate state machine as an
-		// explicit sliding window even when its external SQL is a tumbling
-		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
-		// remapped to consume the child aggregate's partial-result type and the
-		// projected type matches the executor's actual vector.
-		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
-			ctx.sliding = true
-		}
-		ctx.explicitSliding = astTimeWindow.Sliding != nil
-
-		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
-			return
-		}
-	}
 
 	effectiveSelectLockInfo := stmt.SelectLockInfo
 
@@ -6509,6 +6503,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				astRankOption = selectClause.Select.RankOption
 			}
+			if selectClause.Select.TimeWindow != nil {
+				if astTimeWindow != nil {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple time window clauses not allowed")
+				}
+				astTimeWindow = selectClause.Select.TimeWindow
+			}
 			stmt = selectClause.Select
 			if stmt.SelectLockInfo != nil {
 				effectiveSelectLockInfo = stmt.SelectLockInfo
@@ -6522,6 +6522,31 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		} else {
 			break
+		}
+	}
+
+	// The effective time window is only known after the parenthesized body is
+	// unwrapped: the clause can live on the inner select while bindSelect's
+	// stmt parameter is the outer wrapper (PR 32906 review 5983495748). Adopt
+	// it above like ORDER BY/LIMIT/BY RANK, then initialize time-window
+	// binding state from the effective clause.
+	if astTimeWindow != nil {
+		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
+		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
+		// GAPFILL uses the same second-stage aggregate state machine as an
+		// explicit sliding window even when its external SQL is a tumbling
+		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
+		// remapped to consume the child aggregate's partial-result type and the
+		// projected type matches the executor's actual vector.
+		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
+			ctx.sliding = true
+		}
+		ctx.explicitSliding = astTimeWindow.Sliding != nil
+
+		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
+			return
 		}
 	}
 
