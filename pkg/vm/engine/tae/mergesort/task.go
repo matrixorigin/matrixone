@@ -300,6 +300,7 @@ func DoMergeAndWrite(
 		commitEntry.StartTs.DebugString(),
 		commitEntry.MergedObjs,
 		int8(commitEntry.Level),
+		mergehost.GetBlockMaxRows(),
 	)
 	defer func() {
 		if err != nil {
@@ -421,7 +422,7 @@ func iterStatsBs(bss [][]byte) iter.Seq[*objectio.ObjectStats] {
 	}
 }
 
-func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8) {
+func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8, blockRows uint32) {
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
@@ -452,7 +453,7 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 		blkn += int(obj.BlkCnt())
 	}
 
-	estSize = float64(EstimateMergeSize(iterStatsBs(mergedObjs)))
+	estSize = float64(EstimateMergeSizeWithBlockRows(iterStatsBs(mergedObjs), blockRows))
 
 	logutil.Info(
 		"[MERGE-START]",
@@ -522,15 +523,21 @@ func cutIfByteSlice(value any, forCompose bool) any {
 }
 
 func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
+	return EstimateMergeSizeWithBlockRows(objs, objectio.BlockMaxRows)
+}
+
+// EstimateMergeSizeWithBlockRows estimates admission using the table's block capacity.
+func EstimateMergeSizeWithBlockRows(objs iter.Seq[*objectio.ObjectStats], blockRows uint32) int {
+	// Existing input objects can have default-sized blocks even when the
+	// current schema has a smaller capacity.
+	blockRows = max(blockRows, uint32(objectio.BlockMaxRows))
 	estSize := 0
 	totalSize := 0
 	for obj := range objs {
-		blkRowCnt := 8192
-		if r := obj.Rows(); r == 0 {
+		if obj.Rows() == 0 {
 			continue
-		} else if r < 8192 {
-			blkRowCnt = int(r)
 		}
+		blkRowCnt := int(min(obj.Rows(), blockRows))
 		// read one block, x 2 factor
 		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2
 		// transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
