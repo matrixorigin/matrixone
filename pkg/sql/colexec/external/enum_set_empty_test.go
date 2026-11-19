@@ -43,9 +43,8 @@ func enumSetLoadParam(typ plan.Type, mode string) *ExternalParam {
 
 // An empty ENUM member and an empty SET are valid values that must not be
 // loaded as NULL (issue #29840); explicit NULL markers still load as NULL.
-// SET is stored as uint64 but must not be zero-filled or numeric-prefixed.
-// enumTyp is a legacy definition (new DDL rejects labels equal after trailing-
-// space trimming): a space and the empty string both resolve to label 1.
+// SET is stored as uint64 but must not be zero-filled or numeric-prefixed, and
+// a declared whitespace ENUM member must not be trimmed into another member.
 func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -58,7 +57,7 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 			want any // Enum / uint64, or the raw text under parallel load
 		}{
 			{enumTyp, " ", types.Enum(1)},
-			{enumTyp, "", types.Enum(1)},
+			{enumTyp, "", types.Enum(3)},
 			{enumTyp, " red ", types.Enum(2)},
 			{setTyp, "", uint64(0)},
 			{setTyp, " ", uint64(0)},

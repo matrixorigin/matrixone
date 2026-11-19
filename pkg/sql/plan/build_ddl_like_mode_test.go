@@ -458,3 +458,26 @@ func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
 		})
 	}
 }
+
+// A released catalog may store ENUM labels that are equal after trimming, e.g.
+// ENUM(' ','red',''). CREATE TABLE LIKE (and CLONE/restore, which share this
+// planner) must reproduce that domain and its ordinals instead of rejecting it.
+func TestCreateTableLikePreservesLegacyPaddedEnumDomain(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(t.Context(), "create table legacy_enum_src(v enum('x','red'))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	FindColumn(source.Cols, "v").Typ.Enumvalues = " ,red,"
+	mock.ctxt.tables["legacy_enum_src"] = source
+
+	likeStmt, err := mysql.ParseOne(t.Context(), "create table legacy_enum_clone like legacy_enum_src", 1)
+	require.NoError(t, err)
+	defer likeStmt.Free()
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
+	require.NoError(t, err)
+	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, " ,red,", FindColumn(clone.Cols, "v").Typ.Enumvalues)
+}

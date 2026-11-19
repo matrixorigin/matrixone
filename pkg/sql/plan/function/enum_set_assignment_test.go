@@ -318,10 +318,39 @@ func TestEnumValueIndexAssignmentBoundaries(t *testing.T) {
 				defer proc.Free()
 				proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 				// "a " and "a" are equal after trimming (a legacy definition;
-				// new DDL rejects it), so every spelling of a resolves to 1 on
-				// both the linear (<8 labels / <64 rows) and indexed paths.
+				// new DDL rejects it). Raw labels keep precedence on both the
+				// linear (<8 labels / <64 rows) and indexed paths.
 				inputs := []string{"a ", "a  ", "A ", "02", "2 ", "+2", "0", "0x2", "000002", "a"}
-				wantCycle := []types.Enum{1, 1, 1, 3, 4, 2, 0, 0, 0, 1}
+				wantCycle := []types.Enum{1, 2, 1, 3, 4, 2, 0, 0, 0, 2}
+				values := make([]string, rows)
+				want := make([]types.Enum, rows)
+				for i := range rows {
+					values[i] = inputs[i%len(inputs)]
+					want[i] = wantCycle[i%len(inputs)]
+				}
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{def}, nil), NewFunctionTestInput(types.T_varchar.ToType(), values, nil)}, NewFunctionTestResult(types.T_enum.ToType(), false, want, nil), CastValueToIndex)
+				fc.fnLength = rows
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
+			})
+		}
+	}
+}
+
+// A released definition may store padded and empty labels side by side, e.g.
+// ENUM(' ','red ',''). The empty string must keep selecting its own member,
+// and the padded label must still match its trimmed spelling.
+func TestEnumValueIndexLegacyPaddedLabels(t *testing.T) {
+	for _, labelCount := range []int{7, 8} {
+		labels := []string{" ", "red ", "", "x", "y", "z", "w", "v"}[:labelCount]
+		def := strings.Join(labels, ",")
+		for _, rows := range []int{63, 64} {
+			t.Run(fmt.Sprintf("%d-labels/%d-rows", labelCount, rows), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
+				inputs := []string{"", " ", "  ", "red", "RED  ", "red ", "x ", "X"}
+				wantCycle := []types.Enum{3, 1, 3, 2, 2, 2, 4, 4}
 				values := make([]string, rows)
 				want := make([]types.Enum, rows)
 				for i := range rows {

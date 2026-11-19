@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func ParseIntToEnum(input int64) (Enum, error) {
@@ -151,12 +152,25 @@ func parseEnumNameWithContext(ctx context.Context, elems []string, name string) 
 	if err := validateEnumMemberCountWithContext(ctx, len(elems)); err != nil {
 		return 0, err
 	}
-	// Trailing spaces are insignificant on both sides. New definitions are
-	// trimmed by NormalizeEnumValues, but tables created before that may still
-	// store padded labels, so trim each label here too.
-	name = strings.TrimRight(name, " ")
+	// Raw labels keep precedence so a released definition that stores padded
+	// labels such as ENUM(' ','red','') still resolves '' to its own member.
+	// Trailing spaces are then insignificant: first on the value, matching the
+	// released fallback, and finally on both sides for padded stored labels.
 	for i, n := range elems {
-		if strings.EqualFold(strings.TrimRight(n, " "), name) {
+		if strings.EqualFold(n, name) {
+			return Enum(i + 1), nil
+		}
+	}
+	trimmed := strings.TrimRight(name, " ")
+	if trimmed != name {
+		for i, n := range elems {
+			if strings.EqualFold(n, trimmed) {
+				return Enum(i + 1), nil
+			}
+		}
+	}
+	for i, n := range elems {
+		if strings.EqualFold(strings.TrimRight(n, " "), trimmed) {
 			return Enum(i + 1), nil
 		}
 	}
@@ -164,14 +178,15 @@ func parseEnumNameWithContext(ctx context.Context, elems []string, name string) 
 }
 
 // NormalizeEnumValues applies MySQL's CREATE-time ENUM member rules: trailing
-// spaces are removed, and members that are then equal case-insensitively are
+// spaces are removed, and members that are then equal under the same
+// case-insensitive equivalence used for assignment (strings.EqualFold) are
 // rejected as duplicates.
 func NormalizeEnumValues(ctx context.Context, values []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		trimmed := strings.TrimRight(value, " ")
-		key := strings.ToLower(trimmed)
+		key := util.EqualFoldKey(trimmed)
 		if _, ok := seen[key]; ok {
 			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "duplicate enum member %q", value)
 		}

@@ -43,9 +43,7 @@ func TestCSVEnumSetBoundaryMatchesConversion(t *testing.T) {
 	}{
 		{name: "padded enum", oid: types.T_enum, domain: " ,red,", raw: " red ", text: "red", want: 2},
 		{name: "declared space", oid: types.T_enum, domain: " ,red,", raw: " ", text: " ", want: 1},
-		// " ,red," is a legacy domain (new DDL rejects it); "" matches the first
-		// label equal after trimming.
-		{name: "declared empty", oid: types.T_enum, domain: " ,red,", want: 1},
+		{name: "declared empty", oid: types.T_enum, domain: " ,red,", want: 3},
 		{name: "single empty enum", oid: types.T_enum, want: 1},
 		{name: "padded single empty enum", oid: types.T_enum, raw: "\u3000", want: 1},
 		{name: "nullable enum empty", oid: types.T_enum, domain: "red,blue", null: true},

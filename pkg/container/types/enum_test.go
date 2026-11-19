@@ -108,6 +108,9 @@ func TestNormalizeEnumValues(t *testing.T) {
 
 	for _, dup := range [][]string{
 		{"a", "a "}, {"a", "A"}, {" ", ""}, {"", "   "}, {"x ", "X  "},
+		// Duplicate detection uses the assignment equivalence
+		// (strings.EqualFold), where final sigma folds with capital sigma.
+		{"Σ ", "ς"}, {"K", "\u212a"},
 	} {
 		_, err = NormalizeEnumValues(context.Background(), dup)
 		require.ErrorContains(t, err, "duplicate enum member", "%q", dup)
@@ -260,11 +263,13 @@ func TestEnumAssignmentParsing(t *testing.T) {
 	}{
 		{"02,x,y,2,z", "02", 1}, {"02,x,y,2,z", "2 ", 4},
 		{"", " ", 1}, {",a", "", 1},
-		// Trailing spaces are insignificant on both sides. A legacy
-		// definition with labels equal after trimming (rejected by new DDL)
-		// resolves to the first of them.
-		{"a ,a", "a ", 1}, {"a ,a", "a", 1}, {"a ,a", "a  ", 1},
+		// Raw labels keep their released precedence in legacy definitions
+		// that new DDL would reject as duplicates after trimming.
+		{"a ,a", "a ", 1}, {"a ,a", "a", 2}, {"a ,a", "a  ", 2},
+		{" ,red,", "", 3}, {" ,red,", " ", 1}, {" ,red,", "  ", 3},
+		// Padded stored labels also match their trimmed spelling.
 		{"a ,b", "a", 1}, {"a ,b", "a  ", 1}, {"a,b", "a ", 1},
+		{" ,red ,", "RED", 2}, {" ,red ,", "red  ", 2}, {" ,red ,", "red ", 2},
 	} {
 		got, truncated, err := ParseEnumAssignment(tc.def, tc.input)
 		require.NoError(t, err)
