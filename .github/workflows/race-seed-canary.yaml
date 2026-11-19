@@ -70,7 +70,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-pvc-metadata-preflight.yaml@deeccbcf13c8f72713d6274422401f0d97a47d63
+    uses: matrixorigin/CI/.github/workflows/node-cache-native-metadata-preflight.yaml@48edf24e44a888c1c4d57318c4eca7cbb310c6e7
     secrets: inherit
   persistent-real-pr-validation:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && inputs.coverage_comparison == 'persistent-env-real-pr-2' && contains(fromJSON('["mty","mnl2","jed","ruh"]'), fromJSON(inputs.matrixone_sha).environment) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
@@ -81,7 +81,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: matrixorigin/CI/.github/workflows/node-cache-persistent-real-pr-validation.yaml@deeccbcf13c8f72713d6274422401f0d97a47d63
+    uses: matrixorigin/CI/.github/workflows/node-cache-native-measured-real-pr.yaml@48edf24e44a888c1c4d57318c4eca7cbb310c6e7
     with:
       pr_number: ${{ fromJSON(inputs.matrixone_sha).pr_number }}
       expected_head_sha: ${{ fromJSON(inputs.matrixone_sha).head_sha }}
