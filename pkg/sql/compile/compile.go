@@ -3079,14 +3079,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
-		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	if err = c.prepareScanBlockFilters(s.DataSource, node.BlockFilterList); err != nil {
+		return err
 	}
 
 	s.DataSource.Timestamp = ts
@@ -3100,6 +3094,30 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.IndexReaderParam = node.IndexReaderParam
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
+	return nil
+}
+
+// Finalize static IN domains once, when the source's Fold slots are built.
+// ReplaceFoldExpr materializes constant lists as Vecs; parameter Fold expressions
+// are never deduplicated, even if two executions happen to produce equal bytes.
+func (c *Compile) prepareScanBlockFilters(src *Source, filters []*plan.Expr) error {
+	if len(filters) == len(src.BlockFilterList) {
+		return nil
+	}
+	compiled := plan2.DeepCopyExprList(filters)
+	for _, e := range compiled {
+		if _, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes); err != nil {
+			return err
+		}
+	}
+	src.BlockFilterList = compiled
+	src.readerBlockFilters = nil
+	if len(compiled) > 1 {
+		view := plan2.DeduplicateFinalBlockFilters(append([]*plan.Expr(nil), compiled...))
+		if len(view) < len(compiled) {
+			src.readerBlockFilters = view
+		}
+	}
 	return nil
 }
 

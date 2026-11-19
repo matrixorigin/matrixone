@@ -133,11 +133,14 @@ type Source struct {
 	Rel             engine.Relation
 	FilterExpr      *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
-	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
+	BlockFilterList []*plan.Expr // full compiled list; preserves rebuild length and Fold executor slots
 	node            *plan.Node
 	TableDef        *plan.TableDef
 	Timestamp       timestamp.Timestamp
 	AccountId       *plan.PubInfo
+
+	// Shorter view into BlockFilterList when source preparation found duplicate static INs.
+	readerBlockFilters []*plan.Expr
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan

@@ -429,7 +429,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t2 [ForceOneCN]  𝄀
               Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9]), t2.c3 in ([1 2 3])  𝄀
-              Block Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9])  𝄀
+              Block Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9]), t2.c3 in ([1 2 3])  𝄀
               Runtime Filter Probe: t2.c1  𝄀
         ->  Index Table Scan on t2.t2i1 [ForceOneCN]  𝄀
               Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 1, INT)) in ([1 2 3])  𝄀
@@ -451,7 +451,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t2 [ForceOneCN]  𝄀
               Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c5 in ([2 3 4])  𝄀
-              Block Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9])  𝄀
+              Block Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c5 in ([2 3 4])  𝄀
               Runtime Filter Probe: t2.c1  𝄀
         ->  Index Table Scan on t2.t2i2 [ForceOneCN]  𝄀
               Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 1, INT)) in ([2 3 4])  𝄀

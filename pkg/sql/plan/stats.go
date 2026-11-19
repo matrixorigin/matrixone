@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1611,7 +1612,7 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	fn := expr.GetF()
 	n := 2
 	switch fn.GetFunc().GetObjName() {
-	case "=", "<", "<=", ">", ">=":
+	case "=", "<", "<=", ">", ">=", "in":
 	case "between":
 		n = 3
 	case "in_range":
@@ -1627,6 +1628,10 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 			return false
 		}
 	}
+	if fn.GetFunc().GetObjName() == "in" {
+		// IN 不可交换；只扩大安全、有界的小列表准入，其余保留旧统计/hint 策略。
+		return fn.Args[0].GetCol() != nil && isSmallZoneMapIn(types.T(fn.Args[0].Typ.Id), fn.Args[1])
+	}
 	if fn.Args[0].GetCol() == nil {
 		return n == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
 	}
@@ -1636,6 +1641,67 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+// 没有选择率收益证据时，每个对象/块最多额外检查 64 个候选（含 NULL）。
+// 字符串只接受已知、可完整放入 ZoneMap 30 字节上界槽的值；未知参数、
+// 长值及二进制族不能假设 AnyIn 已支持截断上界。浮点同样不扩大准入。
+func isSmallZoneMapIn(typ types.T, rhs *plan.Expr) bool {
+	const maxStringBytes = 30
+	if !smallZoneMapInBounds(typ, rhs) {
+		return false
+	}
+	isString := typ == types.T_char || typ == types.T_varchar
+	if list := rhs.GetList(); list != nil {
+		if isString {
+			for _, item := range list.List {
+				lit := item.GetLit()
+				if lit == nil {
+					return false
+				}
+				if !lit.Isnull {
+					value, ok := lit.Value.(*plan.Literal_Sval)
+					if !ok || len(value.Sval) > maxStringBytes {
+						return false
+					}
+				}
+			}
+		}
+		return isRuntimeConstExpr(rhs)
+	}
+	vec := rhs.GetVec()
+	if isString {
+		// 只读借用 payload，不复制向量，也不改残余表达式或 NULL bitmap。
+		v := vector.TryUnmarshalBinaryVarlena(vec.Data)
+		if v == nil || v.GetType().Oid != typ || v.Length() != int(vec.Len) {
+			return false
+		}
+		for i := 0; i < v.Length(); i++ {
+			if !v.IsNull(uint64(i)) && len(v.GetBytesAt(i)) > maxStringBytes {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+const (
+	maxZoneMapInCandidates   = 64
+	maxZoneMapInPayloadBytes = 4 << 10
+)
+
+// 只看类型/形状/预算，不解码payload；供准入及去重的便宜候选筛选共用。
+func smallZoneMapInBounds(typ types.T, rhs *plan.Expr) bool {
+	if rhs == nil || !(typ.IsInteger() || typ.IsDecimal() || typ.IsDateRelate() ||
+		typ == types.T_bool || typ == types.T_char || typ == types.T_varchar) || types.T(rhs.Typ.Id).IsFloat() {
+		return false
+	}
+	if list := rhs.GetList(); list != nil {
+		return len(list.List) <= maxZoneMapInCandidates
+	}
+	vec := rhs.GetVec()
+	// SortAndCompact 可缩短逻辑行数而保留整个 varlen area，不能只检查 Len。
+	return vec != nil && vec.Len >= 0 && vec.Len <= maxZoneMapInCandidates && len(vec.Data) <= maxZoneMapInPayloadBytes
 }
 
 // This branch's isRuntimeConstExpr also accepts rand() and variable reads.

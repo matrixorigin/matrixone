@@ -175,6 +175,9 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 		},
 	}
 	filterExpr := func(column int32, op string, lower, upper int32) *plan.Expr {
+		if op == "in" {
+			return MakeInExprForTest(MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name), []int32{lower, upper}, types.T_int32, mp)
+		}
 		args := []*plan.Expr{MakeColExprForTest(column, types.T_int32, tableDef.Cols[column].Name)}
 		bounds := []int32{lower}
 		if op == "between" || op == "in_range" {
@@ -263,6 +266,8 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 				upper  int32
 				want   []uint16
 			}{
+				{name: "in", op: "in", column: 1, lower: 100, upper: 150, want: layout.want},
+				{name: "outside_object_in", op: "in", column: 1, lower: 300, upper: 400},
 				{name: "between", op: "between", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "in_range", op: "in_range", column: 1, lower: 100, upper: 150, want: layout.want},
 				{name: "equal", op: "=", column: 1, lower: 100, want: layout.comparisons[0]},
@@ -326,7 +331,7 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 			col.ClusterBy = sorted
 			table.Cols = append([]*plan.ColDef(nil), tableDef.Cols...)
 			table.Cols[1] = &col
-			for _, op := range []string{"between", "in_range"} {
+			for _, op := range []string{"between", "in_range", "in"} {
 				hints := []uint8{0}
 				if op == "in_range" {
 					hints = []uint8{0, 1, 2, 3}

@@ -777,7 +777,11 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []runtimeFilt
 		}
 	}
 
-	return append(runtimeExprs, s.DataSource.BlockFilterList...), nil
+	static := s.DataSource.readerBlockFilters
+	if static == nil {
+		static = s.DataSource.BlockFilterList
+	}
+	return append(runtimeExprs, static...), nil
 }
 
 func (s *Scope) isTableScan() bool {
