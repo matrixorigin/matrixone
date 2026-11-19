@@ -113,7 +113,8 @@ func DescribeViewMetadataCandidate(ctx context.Context, database, name string, s
 	err = unwrapViewSchemaDefinitionError(err)
 	invalid := definitionFailure && (moerr.IsMoErrCode(err, moerr.ErrNoDB) ||
 		moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-		moerr.IsMoErrCode(err, moerr.ErrBadFieldError))
+		moerr.IsMoErrCode(err, moerr.ErrBadFieldError) ||
+		moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound))
 	return result, invalid, err
 }
 

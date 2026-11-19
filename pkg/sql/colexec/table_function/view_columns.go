@@ -36,14 +36,16 @@ const (
 	viewColumnsBatchHardBytes  = 16 << 20
 )
 
-// Only catalog/column lookup failures prove that a previously valid View
-// definition has become invalid. Other errors may indicate protocol, resource,
-// permission, cancellation or compiler failures and must remain fatal.
+// Only missing dependencies of a previously valid View can be skipped in a
+// metadata scan. A dropped FULLTEXT index makes MATCH() unservable just as a
+// dropped source table makes a View unservable; unrelated rows must survive.
+// Protocol, resource, permission, cancellation and compiler errors stay fatal.
 func skippableViewDescriptionError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoDB) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 		moerr.IsMoErrCode(err, moerr.ErrBadFieldError) ||
-		moerr.IsMoErrCode(err, moerr.ErrBadDB)
+		moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound)
 }
 
 type viewColumnsState struct {
