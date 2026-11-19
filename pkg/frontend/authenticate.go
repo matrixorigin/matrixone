@@ -7105,7 +7105,8 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		for _, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN ||
 				(node.NodeType == plan.Node_EXTERNAL_SCAN &&
-					node.GetTableDef().GetTableType() == catalog.SystemExternalRel) {
+					node.GetTableDef().GetTableType() == catalog.SystemExternalRel &&
+					node.GetExternScan().GetType() == int32(plan.ExternType_EXTERNAL_TB)) {
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
@@ -7139,7 +7140,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if node.NodeType == plan.Node_EXTERNAL_SCAN || !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
@@ -7255,11 +7256,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
 						tableName = node.TableDef.Name
 					}
-					// do not check the privilege of the index table
+					// Skip internal index targets. External tables are independent catalog
+					// objects even when their names use the internal index prefix.
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
-					if !isIndexTable(tableName) {
+					if (q.StmtType == plan.Query_INSERT && node.GetTableDef().GetTableType() == catalog.SystemExternalRel) || !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
 							typ:                   PrivilegeTypeInsert,

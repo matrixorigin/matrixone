@@ -5822,23 +5822,38 @@ func makeCSVExternalTablePrivilegePlan(dbName, tableName string) *plan2.Plan {
 }
 
 func TestExtractPrivilegeTipsFromPlanCSVExternalTable(t *testing.T) {
-	arr := extractPrivilegeTipsFromPlan(makeCSVExternalTablePrivilegePlan("csv_db", "events"))
+	for _, tableName := range []string{"events", "__mo_index_events"} {
+		t.Run(tableName, func(t *testing.T) {
+			arr := extractPrivilegeTipsFromPlan(makeCSVExternalTablePrivilegePlan("csv_db", tableName))
 
-	require.Len(t, arr, 1)
-	assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
-	assert.Equal(t, objectTypeTable, arr[0].objType)
-	assert.Equal(t, "csv_db", arr[0].databaseName)
-	assert.Equal(t, "events", arr[0].tableName)
+			require.Len(t, arr, 1)
+			assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			assert.Equal(t, objectTypeTable, arr[0].objType)
+			assert.Equal(t, "csv_db", arr[0].databaseName)
+			assert.Equal(t, tableName, arr[0].tableName)
+		})
+	}
 }
 
-func TestExtractPrivilegeTipsFromPlanSkipsNonCatalogExternalScans(t *testing.T) {
-	for _, externType := range []plan.ExternType{plan.ExternType_LOAD, plan.ExternType_RESULT_SCAN} {
-		t.Run(externType.String(), func(t *testing.T) {
+func TestExtractPrivilegeTipsFromPlanSkipsNonCSVExternalScans(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stmtType   plan.Query_StatementType
+		externType plan.ExternType
+		tableType  string
+	}{
+		{name: "load", stmtType: plan.Query_INSERT, externType: plan.ExternType_LOAD, tableType: catalog.SystemExternalRel},
+		{name: "result scan", stmtType: plan.Query_SELECT, externType: plan.ExternType_RESULT_SCAN, tableType: "query_result"},
+		{name: "iceberg write scan", stmtType: plan.Query_MERGE, externType: plan.ExternType_ICEBERG_TB, tableType: catalog.SystemExternalRel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
-				StmtType: plan.Query_SELECT,
+				StmtType: tc.stmtType,
 				Nodes: []*plan2.Node{{
 					NodeType:   plan.Node_EXTERNAL_SCAN,
-					ExternScan: &plan.ExternScan{Type: int32(externType)},
+					ObjRef:     &plan2.ObjectRef{SchemaName: "csv_db", ObjName: "events"},
+					TableDef:   &plan2.TableDef{TableType: tc.tableType},
+					ExternScan: &plan.ExternScan{Type: int32(tc.externType)},
 				}},
 			}}}
 			assert.Empty(t, extractPrivilegeTipsFromPlan(p))
@@ -5846,12 +5861,83 @@ func TestExtractPrivilegeTipsFromPlanSkipsNonCatalogExternalScans(t *testing.T) 
 	}
 }
 
-func TestAuthenticateCSVExternalTableSelectPrivilege(t *testing.T) {
-	const (
-		dbName    = "csv_db"
-		tableName = "events"
-	)
+type tablePrivilegeFixture struct {
+	dbName    string
+	tableName string
+	allowed   map[PrivilegeType]bool
+}
 
+func addExactTablePrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	fixture tablePrivilegeFixture,
+) {
+	t.Helper()
+	for _, privType := range []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeDelete,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	} {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeTable
+		entry.databaseName = fixture.dbName
+		entry.tableName = fixture.tableName
+		for _, level := range objectType2privilegeLevels[objectTypeTable] {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if level == privilegeLevelDatabaseTable && fixture.allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
+func authenticatePlanWithTablePrivileges(
+	t *testing.T,
+	stmt tree.Statement,
+	p *plan2.Plan,
+	tables ...tablePrivilegeFixture,
+) bool {
+	t.Helper()
+	return authenticatePlanWithTablePrivilegesInDatabase(t, "", stmt, p, tables...)
+}
+
+func authenticatePlanWithTablePrivilegesInDatabase(
+	t *testing.T,
+	databaseName string,
+	stmt tree.Statement,
+	p *plan2.Plan,
+	tables ...tablePrivilegeFixture,
+) bool {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(ctrl)
+	t.Cleanup(ses.Close)
+	ses.SetDatabaseName(databaseName)
+	sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+	for _, table := range tables {
+		addExactTablePrivilegeResultsForRole(t, sql2result, 0, table)
+	}
+	sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+	bh := newBh(ctrl, sql2result)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+	require.NoError(t, err)
+	return ok
+}
+
+func TestAuthenticateCSVExternalTableSelectPrivilege(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		granted bool
@@ -5860,25 +5946,249 @@ func TestAuthenticateCSVExternalTableSelectPrivilege(t *testing.T) {
 		{name: "granted", granted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			stmt := &tree.Select{}
-			ses := newSes(ctrl)
-			sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
-			addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
-				PrivilegeTypeSelect: tc.granted,
-			})
-			sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
-
-			bh := newBh(ctrl, sql2result)
-			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-			defer bhStub.Reset()
-
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
-				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, makeCSVExternalTablePrivilegePlan(dbName, tableName))
-			require.NoError(t, err)
+			ok := authenticatePlanWithTablePrivileges(
+				t, &tree.Select{}, makeCSVExternalTablePrivilegePlan("csv_db", "events"),
+				tablePrivilegeFixture{dbName: "csv_db", tableName: "events", allowed: map[PrivilegeType]bool{
+					PrivilegeTypeSelect: tc.granted,
+				}})
 			assert.Equal(t, tc.granted, ok)
+		})
+	}
+}
+
+func makeExternalLoadPrivilegePlan(dbName, tableName string) *plan2.Plan {
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	tableDef := &plan.TableDef{DbName: dbName, Name: tableName, TableType: catalog.SystemExternalRel}
+	return &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan.Query_INSERT,
+		Nodes: []*plan.Node{
+			{
+				NodeType:   plan.Node_EXTERNAL_SCAN,
+				ObjRef:     objRef,
+				TableDef:   tableDef,
+				ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD)},
+			},
+			{
+				NodeType:  plan.Node_INSERT,
+				ObjRef:    objRef,
+				TableDef:  tableDef,
+				InsertCtx: &plan.InsertCtx{Ref: objRef, TableDef: tableDef, AddAffectedRows: true},
+			},
+		},
+	}}}
+}
+
+func TestAuthenticateExternalLoadRequiresOnlyInsert(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		tableName     string
+		selectGranted bool
+		insertGranted bool
+		want          bool
+	}{
+		{name: "insert only", tableName: "events", insertGranted: true, want: true},
+		{name: "select only", tableName: "events", selectGranted: true},
+		{name: "insert only with index prefixed target", tableName: "__mo_index_events", insertGranted: true, want: true},
+		{name: "no privileges with index prefixed target", tableName: "__mo_index_events"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok := authenticatePlanWithTablePrivileges(
+				t, &tree.Load{}, makeExternalLoadPrivilegePlan("csv_db", tc.tableName),
+				tablePrivilegeFixture{dbName: "csv_db", tableName: tc.tableName, allowed: map[PrivilegeType]bool{
+					PrivilegeTypeSelect: tc.selectGranted,
+					PrivilegeTypeInsert: tc.insertGranted,
+				}})
+			assert.Equal(t, tc.want, ok)
+		})
+	}
+}
+
+func makeCSVInsertSelectPrivilegePlan(sourceTable, targetTable, targetType string) *plan2.Plan {
+	sourceRef := &plan.ObjectRef{SchemaName: "csv_db", ObjName: sourceTable}
+	targetRef := &plan.ObjectRef{SchemaName: "csv_db", ObjName: targetTable}
+	sourceDef := &plan.TableDef{DbName: "csv_db", Name: sourceTable, TableType: catalog.SystemExternalRel}
+	targetDef := &plan.TableDef{DbName: "csv_db", Name: targetTable, TableType: targetType}
+	nodes := []*plan.Node{{
+		NodeType:   plan.Node_EXTERNAL_SCAN,
+		ObjRef:     sourceRef,
+		TableDef:   sourceDef,
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
+	}}
+	if targetType != catalog.SystemExternalRel {
+		nodes = append(nodes, &plan.Node{
+			NodeType:     plan.Node_PRE_INSERT,
+			PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef},
+		})
+	}
+	nodes = append(nodes, &plan.Node{
+		NodeType:  plan.Node_INSERT,
+		ObjRef:    targetRef,
+		TableDef:  targetDef,
+		InsertCtx: &plan.InsertCtx{Ref: targetRef, TableDef: targetDef, AddAffectedRows: true},
+	})
+	return &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan.Query_INSERT,
+		Nodes:    nodes,
+	}}}
+}
+
+func insertInto(dbName, tableName string) *tree.Insert {
+	return tree.NewInsert(tree.NewTableName(
+		tree.Identifier(tableName),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true},
+		nil,
+	), nil, nil, nil)
+}
+
+func TestAuthenticateCSVInsertSelectRequiresSourceSelectAndTargetInsert(t *testing.T) {
+	const targetTable = "__mo_index_target"
+	for _, tc := range []struct {
+		name         string
+		sourceSelect bool
+		targetInsert bool
+		want         bool
+	}{
+		{name: "source select only", sourceSelect: true},
+		{name: "target insert only", targetInsert: true},
+		{name: "source select and target insert", sourceSelect: true, targetInsert: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok := authenticatePlanWithTablePrivileges(
+				t, insertInto("csv_db", targetTable), makeCSVInsertSelectPrivilegePlan("events", targetTable, catalog.SystemExternalRel),
+				tablePrivilegeFixture{dbName: "csv_db", tableName: "events", allowed: map[PrivilegeType]bool{
+					PrivilegeTypeSelect: tc.sourceSelect,
+				}},
+				tablePrivilegeFixture{dbName: "csv_db", tableName: targetTable, allowed: map[PrivilegeType]bool{
+					PrivilegeTypeInsert: tc.targetInsert,
+				}})
+			assert.Equal(t, tc.want, ok)
+		})
+	}
+}
+
+func TestAuthenticateCSVInsertSelectRejectsOtherTableInsert(t *testing.T) {
+	const targetTable = "__mo_index_target"
+	ok := authenticatePlanWithTablePrivileges(
+		t, insertInto("csv_db", targetTable), makeCSVInsertSelectPrivilegePlan("events", targetTable, catalog.SystemExternalRel),
+		tablePrivilegeFixture{dbName: "csv_db", tableName: "events", allowed: map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+		}},
+		tablePrivilegeFixture{dbName: "csv_db", tableName: targetTable, allowed: map[PrivilegeType]bool{}},
+		tablePrivilegeFixture{dbName: "csv_db", tableName: "other_table", allowed: map[PrivilegeType]bool{
+			PrivilegeTypeInsert: true,
+		}})
+	assert.False(t, ok)
+}
+
+func TestAuthenticateCSVInsertSelectRequiresInsertOnOrdinaryPrefixNamedTarget(t *testing.T) {
+	const targetTable = "__mo_index_target"
+	for _, tc := range []struct {
+		name         string
+		sourceSelect bool
+		targetInsert bool
+		want         bool
+	}{
+		{name: "source select only", sourceSelect: true},
+		{name: "target insert only", targetInsert: true},
+		{name: "source select and target insert", sourceSelect: true, targetInsert: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok := authenticatePlanWithTablePrivileges(
+				t, insertInto("csv_db", targetTable), makeCSVInsertSelectPrivilegePlan("events", targetTable, ""),
+				tablePrivilegeFixture{dbName: "csv_db", tableName: "events", allowed: map[PrivilegeType]bool{
+					PrivilegeTypeSelect: tc.sourceSelect,
+				}},
+				tablePrivilegeFixture{dbName: "csv_db", tableName: targetTable, allowed: map[PrivilegeType]bool{
+					PrivilegeTypeInsert: tc.targetInsert,
+				}})
+			assert.Equal(t, tc.want, ok)
+		})
+	}
+}
+
+func makeInsertTargetPrivilegePlan(dbName, tableName string, modern bool) *plan2.Plan {
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	tableDef := &plan.TableDef{DbName: dbName, Name: tableName}
+	node := &plan.Node{
+		NodeType:  plan.Node_INSERT,
+		ObjRef:    objRef,
+		TableDef:  tableDef,
+		InsertCtx: &plan.InsertCtx{Ref: objRef, TableDef: tableDef, AddAffectedRows: true},
+	}
+	if modern {
+		node = &plan.Node{
+			NodeType:      plan.Node_MULTI_UPDATE,
+			UpdateCtxList: []*plan.UpdateCtx{{ObjRef: objRef, TableDef: tableDef}},
+		}
+	}
+	return &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan.Query_INSERT,
+		Nodes:    []*plan.Node{node},
+	}}}
+}
+
+func TestAuthenticateInsertUsesPlanBoundTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		planDB, sessionDB  string
+		modern             bool
+		grantPlanTarget    bool
+		grantSessionTarget bool
+		want               bool
+	}{
+		{name: "prepared statement after database switch", planDB: "db_a", sessionDB: "db_b", grantPlanTarget: true, want: true},
+		{name: "remapped default database", planDB: "physical", sessionDB: "logical", grantPlanTarget: true, want: true},
+		{name: "session database grant does not cover plan target", planDB: "db_a", sessionDB: "db_b", grantSessionTarget: true},
+		{name: "modern prepared statement after database switch", planDB: "db_a", sessionDB: "db_b", modern: true, grantPlanTarget: true, want: true},
+		{name: "modern remapped default database", planDB: "physical", sessionDB: "logical", modern: true, grantPlanTarget: true, want: true},
+		{name: "modern session database grant does not cover plan target", planDB: "db_a", sessionDB: "db_b", modern: true, grantSessionTarget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok := authenticatePlanWithTablePrivilegesInDatabase(
+				t, tc.sessionDB, insertInto("", "target"), makeInsertTargetPrivilegePlan(tc.planDB, "target", tc.modern),
+				tablePrivilegeFixture{dbName: tc.planDB, tableName: "target", allowed: map[PrivilegeType]bool{
+					PrivilegeTypeInsert: tc.grantPlanTarget,
+				}},
+				tablePrivilegeFixture{dbName: tc.sessionDB, tableName: "target", allowed: map[PrivilegeType]bool{
+					PrivilegeTypeInsert: tc.grantSessionTarget,
+				}})
+			assert.Equal(t, tc.want, ok)
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromPlanExternalInsertTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stmtType  plan.Query_StatementType
+		tableType string
+		want      bool
+	}{
+		{name: "external insert", stmtType: plan.Query_INSERT, tableType: catalog.SystemExternalRel, want: true},
+		{name: "iceberg update", stmtType: plan.Query_UPDATE, tableType: catalog.SystemExternalRel},
+		{name: "iceberg delete", stmtType: plan.Query_DELETE, tableType: catalog.SystemExternalRel},
+		{name: "ordinary prefix named insert target", stmtType: plan.Query_INSERT},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objRef := &plan.ObjectRef{SchemaName: "csv_db", ObjName: "__mo_index_target"}
+			tableDef := &plan.TableDef{DbName: "csv_db", Name: "__mo_index_target", TableType: tc.tableType}
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+				StmtType: tc.stmtType,
+				Nodes: []*plan.Node{{
+					NodeType:  plan.Node_INSERT,
+					ObjRef:    objRef,
+					TableDef:  tableDef,
+					InsertCtx: &plan.InsertCtx{Ref: objRef, TableDef: tableDef},
+				}},
+			}}}
+			arr := extractPrivilegeTipsFromPlan(p)
+			if !tc.want {
+				assert.Empty(t, arr)
+				return
+			}
+			require.Len(t, arr, 1)
+			assert.Equal(t, PrivilegeTypeInsert, arr[0].typ)
+			assert.Equal(t, "__mo_index_target", arr[0].tableName)
 		})
 	}
 }

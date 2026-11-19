@@ -40,6 +40,35 @@ type planAuthorization struct {
 	dynamic                        bool
 }
 
+func insertAuthorizationTarget(ses FeSession, stmt *tree.Insert, p *plan.Plan) (string, string, bool) {
+	if q := p.GetQuery(); q != nil {
+		for _, node := range q.GetNodes() {
+			if q.GetStmtType() == plan.Query_INSERT && node.GetNodeType() == plan.Node_MULTI_UPDATE {
+				// The modern INSERT binder puts the statement target first; later
+				// contexts maintain internal indexes.
+				if contexts := node.GetUpdateCtxList(); len(contexts) > 0 {
+					ref := contexts[0].GetObjRef()
+					if ref.GetSchemaName() != "" && ref.GetObjName() != "" {
+						return ref.GetSchemaName(), ref.GetObjName(), true
+					}
+				}
+			}
+			insertCtx := node.GetInsertCtx()
+			if node.GetNodeType() != plan.Node_INSERT || insertCtx == nil || !insertCtx.GetAddAffectedRows() {
+				continue
+			}
+			ref := insertCtx.GetRef()
+			if ref == nil {
+				ref = node.GetObjRef()
+			}
+			if ref.GetSchemaName() != "" && ref.GetObjName() != "" {
+				return ref.GetSchemaName(), ref.GetObjName(), true
+			}
+		}
+	}
+	return getInsertTargetTableName(stmt, ses)
+}
+
 func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
 	arr := extractPrivilegeTipsFromPlan(p)
@@ -51,18 +80,27 @@ func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, a
 		result.dynamic = true
 	}
 	if ins, ok := stmt.(*tree.Insert); ok {
-		// Preserve the existing fallback when the plan has no concrete
-		// object requirements; view-only requirements are not targets.
+		db, table, hasTarget := insertAuthorizationTarget(ses, ins, p)
 		hasConcreteRequirement := false
+		hasTargetInsert := false
 		for _, tip := range arr {
-			if !tip.viewOnly {
-				hasConcreteRequirement = true
-				break
+			if tip.viewOnly {
+				continue
+			}
+			hasConcreteRequirement = true
+			if hasTarget && tip.typ == PrivilegeTypeInsert && tip.databaseName == db && tip.tableName == table {
+				hasTargetInsert = true
 			}
 		}
-		if !hasConcreteRequirement {
+		// Source requirements cannot stand in for the statement target. If the
+		// plan omitted the target INSERT tip, recover it from the resolved AST.
+		needsFallback := !hasConcreteRequirement
+		if hasTarget {
+			needsFallback = !hasTargetInsert
+		}
+		if needsFallback {
 			result.dynamic = true
-			if db, table, ok := getInsertTargetTableName(ins, ses); ok {
+			if hasTarget {
 				arr = append(arr, privilegeTips{typ: PrivilegeTypeInsert, objType: objectTypeTable, databaseName: db, tableName: table, isClusterTable: isClusterTable(db, table), clusterTableOperation: clusterTableModify})
 			}
 		}
