@@ -1,0 +1,26 @@
+name: Shanghai IDC three path presence check
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/idc-presence.yaml]
+permissions: {}
+jobs:
+  observe:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '1ea1bb2dc5db7f75892d00ac47bef2bcf948b70d' && github.run_attempt == 1
+    runs-on: amd64-mo-shanghai-8c16g
+    timeout-minutes: 2
+    steps:
+      - name: Check three paths for existence only
+        shell: bash
+        run: |
+          set -eu
+          present() {
+            if test -e "$2"; then
+              printf 'presence %s=yes\n' "$1"
+            else
+              printf 'presence %s=no\n' "$1"
+            fi
+          }
+          present serviceaccount_token /var/run/secrets/kubernetes.io/serviceaccount/token
+          present docker_socket /var/run/docker.sock
+          present containerd_socket /run/containerd/containerd.sock
