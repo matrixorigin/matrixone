@@ -8,10 +8,11 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 jobs:
   cs:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@a7cd8b1901ef909176284590edb3a95b972de5ed
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@758b01007ef3a27e853ceacabbc6cb918cb958c0
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
@@ -26,7 +27,7 @@ jobs:
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   idc:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'idc'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@a7cd8b1901ef909176284590edb3a95b972de5ed
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@758b01007ef3a27e853ceacabbc6cb918cb958c0
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
