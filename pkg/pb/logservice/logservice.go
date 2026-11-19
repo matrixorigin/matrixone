@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -438,6 +439,25 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 		storeInfo.ConfigData = hb.ConfigData
 	}
 	s.Stores[hb.UUID] = storeInfo
+}
+
+// ParseLocality parses a locality string of the form "k1:v1;k2:v2" into a
+// key/value map; it is the inverse of (*Locality).Format. A key without a
+// value ("k2" or "k2:") maps to "". An empty string returns nil.
+func ParseLocality(str string) map[string]string {
+	if str == "" {
+		return nil
+	}
+	loc := make(map[string]string)
+	for _, kv := range strings.Split(str, ";") {
+		pair := strings.Split(kv, ":")
+		if len(pair) == 2 {
+			loc[pair[0]] = pair[1]
+		} else if len(pair) == 1 {
+			loc[pair[0]] = ""
+		}
+	}
+	return loc
 }
 
 func (l *Locality) Format() string {
