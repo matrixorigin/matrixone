@@ -1,0 +1,40 @@
+name: Coverage standby single-group worker
+run-name: Coverage standby / ${{ fromJSON(inputs.ticket).parent }}/${{ fromJSON(inputs.ticket).attempt }}/${{ fromJSON(inputs.ticket).group }}/${{ fromJSON(inputs.ticket).head }}/${{ inputs.pool }}/${{ fromJSON(inputs.ticket).key }}
+on:
+  workflow_dispatch:
+    inputs:
+      ticket: {description: 'Trusted parent admission envelope', required: true, type: string}
+      pool: {description: 'Single target pool', type: choice, required: true, options: [cs, idc]}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cs:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@a390e086089d56fc83b45e0c96aa6fc0717645a8
+    with:
+      group: ${{ fromJSON(inputs.ticket).group }}
+      source: ${{ fromJSON(inputs.ticket).source }}
+      head: ${{ fromJSON(inputs.ticket).head }}
+      ticket: ${{ inputs.ticket }}
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_COVERAGE_CACHE_READ_TOKEN: ${{ secrets.CS_COVERAGE_CACHE_READ_TOKEN }}
+      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
+  idc:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'idc'
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@a390e086089d56fc83b45e0c96aa6fc0717645a8
+    with:
+      group: ${{ fromJSON(inputs.ticket).group }}
+      source: ${{ fromJSON(inputs.ticket).source }}
+      head: ${{ fromJSON(inputs.ticket).head }}
+      ticket: ${{ inputs.ticket }}
+    secrets:
+      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
+      S3REGION: ${{ secrets.S3REGION }}
+      S3BUCKET: ${{ secrets.S3BUCKET }}
+      S3APIKEY: ${{ secrets.S3APIKEY }}
+      S3APISECRET: ${{ secrets.S3APISECRET }}

@@ -135,7 +135,12 @@ jobs:
     name: Matrixone UT Coverage execution
     needs: [preflight]
     if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
+    # Only the GitHub-hosted single-group dispatcher uses actions:write.
+    # The pinned reusable workflow narrows every test/collection job to read.
+    permissions:
+      contents: read
+      actions: write
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@a390e086089d56fc83b45e0c96aa6fc0717645a8
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit
