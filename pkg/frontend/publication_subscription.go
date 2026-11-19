@@ -310,6 +310,9 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	pubName := string(cp.Name)
+	if err = lockPublicationTargetAccounts(ctx, bh, subAccounts); err != nil {
+		return err
+	}
 	dbName := string(cp.Database)
 	comment := cp.Comment
 
@@ -567,6 +570,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		}
 	}
 
+	if err = lockPublicationTargetAccounts(ctx, bh, newSubAccounts); err != nil {
+		return err
+	}
 	// alter comment
 	comment := pub.Comment
 	if ap.Comment != "" {
@@ -2922,6 +2928,36 @@ func insertMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInf
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(insertIntoMoSubsFormat, subInfo.SubAccountId, sanitizeSQLInput(subInfo.SubAccountName), subInfo.PubAccountId, sanitizeSQLInput(subInfo.PubAccountName), sanitizeSQLInput(subInfo.PubName), sanitizeSQLInput(subInfo.PubDbName), sanitizeSQLInput(subInfo.PubTables), sanitizeSQLInput(subInfo.PubComment), subInfo.Status)
 	return bh.Exec(ctx, sql)
+}
+
+// Keep the resolved subscriber IDs alive through catalog fanout. A name can be
+// dropped and recreated between target selection and the mo_subs insert.
+func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targets map[int32]*pubsub.AccountInfo) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	ids := make([]int32, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, "select account_id from mo_catalog.mo_account where account_id in ("+pubsub.JoinAccountIds(ids)+") for share"); err != nil {
+		return err
+	}
+	rs, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	var n uint64
+	for _, r := range rs {
+		n += r.GetRowCount()
+	}
+	if n != uint64(len(ids)) {
+		return moerr.NewTxnNeedRetry(ctx)
+	}
+	return nil
 }
 
 func batchInsertMoSubs(
