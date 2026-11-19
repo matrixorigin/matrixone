@@ -139,6 +139,20 @@ func lcaProbeColumnLayout(
 	targetOnlyIdxes []int,
 	lcaColNames []string,
 ) (lcaProbeLayout, error) {
+	return buildLCAProbeColumnLayout(lcaDef, targetDef, targetColNames, targetColTypes, targetOnlyIdxes, lcaColNames, false)
+}
+
+func buildLCAProbeColumnLayout(
+	lcaDef, targetDef *plan2.TableDef,
+	targetColNames []string,
+	targetColTypes []types.Type,
+	targetOnlyIdxes []int,
+	lcaColNames []string,
+	resolvedSnapshot bool,
+) (lcaProbeLayout, error) {
+	if lcaDef == nil {
+		return lcaProbeLayout{}, moerr.NewInternalErrorNoCtx("DATA BRANCH LCA table definition is unavailable")
+	}
 	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
 	for _, idx := range targetOnlyIdxes {
 		targetOnly[idx] = struct{}{}
@@ -206,7 +220,7 @@ func lcaProbeColumnLayout(
 		if lcaCol == nil {
 			continue
 		}
-		if lcaAttrName == "" {
+		if resolvedSnapshot || lcaAttrName == "" {
 			lcaAttrName = lcaCol.Name
 		}
 		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
@@ -228,6 +242,41 @@ func lcaProbeColumnLayout(
 	return layout, nil
 }
 
+func lcaProbeTableDefAtSnapshot(
+	ctx context.Context, ses *Session, tblStuff tableStuff, snapshotTS types.TS,
+	allowMismatchedEndpointFallback bool,
+) (rel engine.Relation, def *plan2.TableDef, resolvedSnapshot bool, err error) {
+	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
+	var lookupErr error
+	if handler := ses.GetTxnHandler(); handler != nil {
+		storage, txnOp := handler.GetStorage(), handler.GetTxn()
+		if storage != nil && txnOp != nil {
+			if !snapshotTS.IsEmpty() {
+				txnOp = txnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+			}
+			_, _, snapshotRel, lookupErrAtSnapshot := storage.GetRelationById(scanCtx, txnOp, tblStuff.lcaRel.GetTableID(scanCtx))
+			lookupErr = lookupErrAtSnapshot
+			if lookupErr == nil && snapshotRel != nil {
+				if snapshotDef := snapshotRel.GetTableDef(scanCtx); snapshotDef != nil {
+					return snapshotRel, snapshotDef, true, nil
+				}
+			}
+		}
+	}
+	fallbackRel := tblStuff.lcaFallbackRangeRel(snapshotTS)
+	if !allowMismatchedEndpointFallback && fallbackRel == nil {
+		if lookupErr != nil {
+			return nil, nil, false, lookupErr
+		}
+		return nil, nil, false, moerr.NewInternalErrorNoCtxf(
+			"DATA BRANCH LCA table definition is unavailable at snapshot %s", snapshotTS.ToString(),
+		)
+	}
+	// Time-travel SQL can use compatible type metadata from an endpoint
+	// while keeping the column names resolved from the historical lineage.
+	return nil, tblStuff.lcaRel.GetTableDef(scanCtx), fallbackRel != nil && !tblStuff.lcaRelSnapshot.IsEmpty(), nil
+}
+
 // should read the LCA table to get all column values.
 func handleDelsOnLCA(
 	ctx context.Context,
@@ -245,9 +294,8 @@ func handleDelsOnLCA(
 	var (
 		sqlRet           executor.Result
 		fullTargetLayout bool
-
-		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
-		targetTblDef = tblStuff.tarRel.GetTableDef(ctx)
+		lcaLayout        lcaProbeLayout
+		lcaTableName     string
 
 		colTypes        = tblStuff.def.colTypes
 		probePKColIdxes = tblStuff.def.pkColIdxes
@@ -260,14 +308,6 @@ func handleDelsOnLCA(
 		// column rather than from the first visible column.
 		probePKColIdxes = []int{tblStuff.def.pkColIdx}
 	}
-	lcaLayout, err := lcaProbeColumnLayout(
-		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
-		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// The SQL probe resolves db.table by name under the statement account.
 	// A lineage node owned by another account (design §6.4, e.g. reopened
 	// under a subscription source owner) would resolve that name to a
@@ -283,6 +323,18 @@ func handleDelsOnLCA(
 		}
 		fullTargetLayout = true
 	} else {
+		lcaSnapshotRel, lcaTblDef, resolvedSnapshot, lookupErr := lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS, true)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		lcaLayout, err = buildLCAProbeColumnLayout(
+			lcaTblDef, tblStuff.tarRel.GetTableDef(ctx), tblStuff.def.colNames, tblStuff.def.colTypes,
+			tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, resolvedSnapshot,
+		)
+		if err != nil {
+			return nil, err
+		}
+		lcaTableName = lcaTblDef.Name
 		sqlBuf := acquireBuffer(tblStuff.bufPool)
 		valsBuf := acquireBuffer(tblStuff.bufPool)
 		defer func() {
@@ -296,7 +348,7 @@ func handleDelsOnLCA(
 		// created for the corresponding account/db/table, catalog lookup at that
 		// timestamp may fail with unknown db/table even though the caller already
 		// knows the stable table ID.
-		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
+		mots := fmt.Sprintf("{MO_TS='%s'} ", snapshotTS.ToString())
 		var pkNames []string
 		if tblStuff.def.pkKind == fakeKind {
 			// The synthetic hash column is internal and cannot be renamed.
@@ -446,7 +498,9 @@ func handleDelsOnLCA(
 					zap.String("snapshot-ts", snapshotTS.ToString()),
 					zap.Error(err),
 				)
-				sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
+				sqlRet, err = runLCAProbeWithReaderFallbackWithPreopened(
+					ctx, ses, tBat, tblStuff, snapshotTS, lcaSnapshotRel, lcaTblDef, resolvedSnapshot,
+				)
 				if err != nil {
 					logutil.Error(
 						"DataBranch-LCA-SQL-Fallback-Error",
@@ -477,7 +531,7 @@ func handleDelsOnLCA(
 		logutil.Debug(
 			"DataBranch-LCA-ReaderProbe-Direct",
 			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-			zap.String("table-name", lcaTblDef.Name),
+			zap.String("table-name", lcaTableName),
 			zap.Int("input-pk-rows", tBat.RowCount()),
 			zap.String("snapshot-ts", snapshotTS.ToString()),
 		)
@@ -573,7 +627,7 @@ func handleDelsOnLCA(
 	logutil.Debug(
 		"DataBranch-LCA-Join-Result",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-		zap.String("table-name", lcaTblDef.Name),
+		zap.String("table-name", lcaTableName),
 		zap.Int("joined-rows", joinedRows),
 		zap.Int("lca-hit-rows", lcaHitRows),
 		zap.Int("lca-miss-rows", lcaMissRows),
@@ -597,7 +651,7 @@ func handleDelsOnLCA(
 	logutil.Debug(
 		"DataBranch-LCA-PostProcess-Done",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-		zap.String("table-name", lcaTblDef.Name),
+		zap.String("table-name", lcaTableName),
 		zap.Int("remaining-tbat-rows", tBat.RowCount()),
 		zap.Int("remaining-dbat-rows", dBat.RowCount()),
 	)
@@ -685,6 +739,19 @@ func runLCAProbeWithReaderFallback(
 	tBat *batch.Batch,
 	tblStuff tableStuff,
 	snapshotTS types.TS,
+) (executor.Result, error) {
+	return runLCAProbeWithReaderFallbackWithPreopened(ctx, ses, tBat, tblStuff, snapshotTS, nil, nil, false)
+}
+
+func runLCAProbeWithReaderFallbackWithPreopened(
+	ctx context.Context,
+	ses *Session,
+	tBat *batch.Batch,
+	tblStuff tableStuff,
+	snapshotTS types.TS,
+	preopenedRel engine.Relation,
+	preopenedDef *plan2.TableDef,
+	preopenedResolved bool,
 ) (sqlRet executor.Result, err error) {
 	start := time.Now()
 	sqlRet.Mp = ses.proc.Mp()
@@ -703,6 +770,13 @@ func runLCAProbeWithReaderFallback(
 		return sqlRet, nil
 	}
 
+	lcaSnapshotRel, lcaTblDef, resolvedSnapshot := preopenedRel, preopenedDef, preopenedResolved
+	if lcaSnapshotRel == nil || lcaTblDef == nil {
+		lcaSnapshotRel, lcaTblDef, resolvedSnapshot, err = lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
 	mp := ses.proc.Mp()
 	pkVec := tBat.Vecs[0]
 	var (
@@ -717,11 +791,9 @@ func runLCAProbeWithReaderFallback(
 	for i := 0; i < rowCount; i++ {
 		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
-	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
-	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
-	lcaLayout, err := lcaProbeColumnLayout(
-		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
-		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
+	lcaLayout, err := buildLCAProbeColumnLayout(
+		lcaTblDef, tblStuff.tarRel.GetTableDef(ctx), tblStuff.def.colNames, tblStuff.def.colTypes,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, resolvedSnapshot,
 	)
 	if err != nil {
 		return executor.Result{}, err
@@ -810,13 +882,17 @@ func runLCAProbeWithReaderFallback(
 	// every in-flight catalog and storage read here (identityCtx keeps the
 	// live context when accounts already match).
 	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
+	fallbackRangeRel := lcaSnapshotRel
+	if fallbackRangeRel == nil {
+		fallbackRangeRel = tblStuff.lcaFallbackRangeRel(snapshotTS)
+	}
 	err = scanSnapshotRelationByIDWithFallback(
 		scanCtx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
-		tblStuff.lcaRel,
+		fallbackRangeRel,
 		lcaLayout.attrs,
 		lcaLayout.types,
 		pkFilterExpr,
@@ -1074,6 +1150,24 @@ func hashDiff(
 	return
 }
 
+func sideTableStuffForLCAProbe(
+	tblStuff tableStuff, copt compositeOption, dagInfo branchMetaInfo, tarSP, baseSP types.TS, forBase bool,
+) tableStuff {
+	if copt.preservePickConflicts {
+		_, _, bothForked := dagInfo.lcaProbeAnchors(tarSP, baseSP)
+		if bothForked {
+			names := tblStuff.def.tarLCAColNames
+			if forBase {
+				names = tblStuff.def.baseLCAColNames
+			}
+			if len(names) > 0 {
+				tblStuff.def.lcaColNames = names
+			}
+		}
+	}
+	return tblStuff
+}
+
 func hashDiffIfHasLCA(
 	ctx context.Context,
 	ses *Session,
@@ -1088,36 +1182,8 @@ func hashDiffIfHasLCA(
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	// Resolve per-side LCA snapshots once. Both sides must resolve
-	// their collected changes against the shared divergence point of
-	// the two lineages: the earlier of the two per-side fork anchors
-	// (see branchMetaInfo helper docs). The side that forked off the
-	// LCA later inherits the LCA's writes between the two forks, and
-	// those writes are exactly the divergence its collect range
-	// gathered (buildSideCollectRange clamps the LCA window up to
-	// otherFork.Next()). Resolving that side against its own fork
-	// absorbs the divergence into the fork baseline — handleDelsOnLCA
-	// returns the post-fork rows, the collected inserts compare equal
-	// and are dropped — erasing real both-sides conflicts: WHEN
-	// CONFLICT FAIL and SKIP would silently behave like ACCEPT and
-	// DATA BRANCH DIFF would hide the destination rows. The
-	// earlier-forked side keeps its own fork as the anchor, and when
-	// both sides anchor identically (e.g. the other endpoint IS the
-	// LCA) the mutual anchor equals that moment.
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
-	var tarLCAProbe, baseLCAProbe types.TS
-	if copt.preservePickConflicts {
-		// PICK keeps the per-side fork anchors. Its conflict rule counts
-		// only writes each side made after its own fork: state the
-		// destination inherited from the LCA between the two forks is
-		// part of its baseline, and such picks must apply without a
-		// conflict (the byte-chain pick in branch_binary_pk.sql).
-		tarLCAProbe = dagInfo.tarLCASnapshot(baseSP)
-		baseLCAProbe = dagInfo.baseLCASnapshot(tarSP)
-	} else {
-		mutualProbe := dagInfo.lcaProbeSnapshot(tarSP, baseSP)
-		tarLCAProbe, baseLCAProbe = mutualProbe, mutualProbe
-	}
+	tarLCAProbe, baseLCAProbe := dagInfo.lcaProbeSnapshots(tarSP, baseSP, copt.preservePickConflicts)
 	// A parent created earlier in the same explicit transaction has no
 	// catalog state at the pre-commit CloneTS recorded by its child.  Both
 	// tables become visible together, so the parent's creation commit is the
@@ -1477,7 +1543,7 @@ func hashDiffIfHasLCA(
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	asyncDelsAndUpdatesHandler := func(forBase bool, tmpCh chan batchWithKind) (err2 error) {
+	asyncDelsAndUpdatesHandler := func(forBase bool, sideStuff tableStuff, tmpCh chan batchWithKind) (err2 error) {
 		var (
 			branchTS = baseLCAProbe
 			hashmap1 = baseDataHashmap
@@ -1501,7 +1567,7 @@ func hashDiffIfHasLCA(
 			}()
 
 			if err3 := findDeleteAndUpdateBat(
-				newCtx, ses, bh, tblStuff, name,
+				newCtx, ses, bh, sideStuff, name,
 				func() int {
 					if forBase {
 						return diffSideBase
@@ -1528,6 +1594,7 @@ func hashDiffIfHasLCA(
 	}
 
 	stepHandler := func(forBase bool) (err2 error) {
+		sideStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, forBase)
 		if copt.onlineApply {
 			name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
 			hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
@@ -1537,7 +1604,7 @@ func hashDiffIfHasLCA(
 			}
 			// Delivery owns the batch even on failure. Held batches remain in
 			// retPool until the agency unwinds; handlers release emitted failures.
-			return findDeleteAndUpdateBat(ctx, ses, bh, tblStuff, name, side,
+			return findDeleteAndUpdateBat(ctx, ses, bh, sideStuff, name, side,
 				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, 1)
 		}
 
@@ -1546,7 +1613,7 @@ func hashDiffIfHasLCA(
 			first error
 		)
 
-		if err2 = asyncDelsAndUpdatesHandler(forBase, tmpCh); err2 != nil {
+		if err2 = asyncDelsAndUpdatesHandler(forBase, sideStuff, tmpCh); err2 != nil {
 			return err2
 		}
 
@@ -3439,7 +3506,7 @@ func hydrateHistoricalDataBranchBatch(
 	tblStuff tableStuff,
 	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
-	endpointSnapshot types.TS,
+	endpointSnapshot, endpointRelSnapshot types.TS,
 ) (err error) {
 	if projected == nil || projected.RowCount() == 0 {
 		return nil
@@ -3462,6 +3529,7 @@ func hydrateHistoricalDataBranchBatch(
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
 	probeStuff.lcaIdent = &endpointIdent
+	probeStuff.lcaRelSnapshot = endpointRelSnapshot
 	probe, err := runLCAProbeWithReaderFallback(
 		ctx, ses, tBat, probeStuff, endpointSnapshot,
 	)
@@ -3511,12 +3579,13 @@ func (h *ownerScopedChangesHandle) Close() error {
 }
 
 type historicalDataBranchChangesHandle struct {
-	inner            engine.ChangesHandle
-	sourceMapping    []int
-	tblStuff         tableStuff
-	ses              *Session
-	endpointRel      engine.Relation
-	endpointSnapshot types.TS
+	inner               engine.ChangesHandle
+	sourceMapping       []int
+	tblStuff            tableStuff
+	ses                 *Session
+	endpointRel         engine.Relation
+	endpointSnapshot    types.TS
+	endpointRelSnapshot types.TS
 	// endpointIdent is the physical owner identity endpointRel was opened
 	// under (design §6); hydration probes the endpoint under it.
 	endpointIdent branchIdentity
@@ -3536,7 +3605,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot, h.endpointRelSnapshot,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

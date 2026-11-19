@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -367,7 +368,7 @@ func scanSnapshotRelationByID(
 	)
 }
 
-// scanSnapshotRelationByIDWithFallback prefers current-view ranges, but can
+// scanSnapshotRelationByIDWithFallback prefers ranges opened at snapshotTS, but can
 // fall back to a relation that was already opened at snapshotTS. ALTER drops
 // replaced physical generations from the current catalog, while bounded data
 // branch operations may still need to hydrate rows from such a generation.
@@ -439,6 +440,21 @@ func scanSnapshotRelationByIDWithFallbackImpl(
 		)
 		rangeRel = fallbackRangeRel
 		rangeTS = snapshotTS
+	}
+
+	rangeDef := rangeRel.GetTableDef(ctx)
+	for _, attr := range attrs {
+		name := strings.ToLower(attr)
+		// The snapshot reader assigns reserved sequence numbers to these attributes.
+		if objectio.IsPhysicalAddr(name) || name == objectio.DefaultCommitTS_Attr {
+			continue
+		}
+		if rangeDef == nil || dataBranchColumnDefByName(rangeDef, name) == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"scanSnapshotRelationByID: column %q is unavailable for table %d at snapshot %s",
+				attr, tableID, snapshotTS.ToString(),
+			)
+		}
 	}
 
 	rangesParam := engine.DefaultRangesParam

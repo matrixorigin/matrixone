@@ -1,0 +1,171 @@
+drop snapshot if exists diff_older_ancestor_sp;
+drop snapshot if exists diff_same_table_old_sp;
+drop snapshot if exists diff_same_table_renamed_sp;
+drop database if exists test_diff_older_ancestor;
+create database test_diff_older_ancestor;
+use test_diff_older_ancestor;
+create table t0(id int primary key, v int);
+insert into t0 values (1,10),(2,20),(3,30),(4,40),(5,50);
+create snapshot diff_older_ancestor_sp for database test_diff_older_ancestor;
+update t0 set v = v + 1 where id in (1,3);
+delete from t0 where id = 2;
+insert into t0 values (6,60),(7,70);
+data branch create table t1 from t0;
+update t1 set v = 30 where id = 3;
+update t1 set v = 41 where id = 4;
+delete from t1 where id in (5,7);
+insert into t1 values (8,80);
+data branch diff t1 against t0{snapshot='diff_older_ancestor_sp'};
+➤ diff t1 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+t1  ¦  UPDATE  ¦  1  ¦  11  𝄀
+t1  ¦  DELETE  ¦  2  ¦  20  𝄀
+t1  ¦  UPDATE  ¦  4  ¦  41  𝄀
+t1  ¦  DELETE  ¦  5  ¦  50  𝄀
+t1  ¦  INSERT  ¦  6  ¦  60  𝄀
+t1  ¦  INSERT  ¦  8  ¦  80
+data branch diff t1 against t0{snapshot='diff_older_ancestor_sp'} output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0{snapshot = 'diff_older_ancestor_sp'}[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  2  ¦  0  𝄀
+UPDATED  ¦  2  ¦  0
+data branch diff t0{snapshot='diff_older_ancestor_sp'} against t1;
+➤ diff t0 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+t1  ¦  UPDATE  ¦  1  ¦  11  𝄀
+t1  ¦  DELETE  ¦  2  ¦  20  𝄀
+t1  ¦  UPDATE  ¦  4  ¦  41  𝄀
+t1  ¦  DELETE  ¦  5  ¦  50  𝄀
+t1  ¦  INSERT  ¦  6  ¦  60  𝄀
+t1  ¦  INSERT  ¦  8  ¦  80
+data branch diff t0{snapshot='diff_older_ancestor_sp'} against t1 output summary;
+➤ metric[12,0,0]  ¦  t0{snapshot = 'diff_older_ancestor_sp'}[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  2  𝄀
+DELETED  ¦  0  ¦  2  𝄀
+UPDATED  ¦  0  ¦  2
+data branch create table t2 from t1;
+update t2 set v = 81 where id = 8;
+insert into t2 values (9,90);
+data branch diff t2 against t0{snapshot='diff_older_ancestor_sp'};
+➤ diff t2 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+t2  ¦  UPDATE  ¦  1  ¦  11  𝄀
+t2  ¦  DELETE  ¦  2  ¦  20  𝄀
+t2  ¦  UPDATE  ¦  4  ¦  41  𝄀
+t2  ¦  DELETE  ¦  5  ¦  50  𝄀
+t2  ¦  INSERT  ¦  6  ¦  60  𝄀
+t2  ¦  INSERT  ¦  8  ¦  81  𝄀
+t2  ¦  INSERT  ¦  9  ¦  90
+drop snapshot diff_older_ancestor_sp;
+create table a0(id int primary key, v int);
+insert into a0 values (1,10),(2,20),(3,30);
+create table n0(id int, v int);
+insert into n0 values (1,10),(2,20);
+create table c0(id int, region int, v int, primary key(id,region));
+insert into c0 values (1,1,10),(1,2,20),(2,1,30);
+create snapshot diff_older_ancestor_sp for database test_diff_older_ancestor;
+update a0 set v = 11 where id = 1;
+alter table a0 add column extra int default 0;
+delete from a0 where id = 2;
+update a0 set v = 31 where id = 3;
+data branch create table a1 from a0;
+data branch diff a1 against a0{snapshot='diff_older_ancestor_sp'} columns (id,v);
+➤ diff a1 against a0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+a1  ¦  UPDATE  ¦  1  ¦  11  𝄀
+a1  ¦  DELETE  ¦  2  ¦  20  𝄀
+a1  ¦  UPDATE  ¦  3  ¦  31
+data branch diff a0{snapshot='diff_older_ancestor_sp'} against a1 columns (id,v);
+internal error: schema compatibility check: base column 'extra' is not present in target schema
+update n0 set v = 11 where id = 1;
+delete from n0 where id = 2;
+data branch create table n1 from n0;
+data branch diff n1 against n0{snapshot='diff_older_ancestor_sp'};
+➤ diff n1 against n0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+n1  ¦  UPDATE  ¦  1  ¦  11  𝄀
+n1  ¦  DELETE  ¦  2  ¦  20
+update c0 set v = 11 where id = 1 and region = 1;
+delete from c0 where id = 1 and region = 2;
+data branch create table c1 from c0;
+data branch diff c1 against c0{snapshot='diff_older_ancestor_sp'};
+➤ diff c1 against c0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  region[4,32,0]  ¦  v[4,32,0]  𝄀
+c1  ¦  UPDATE  ¦  1  ¦  1  ¦  11  𝄀
+c1  ¦  DELETE  ¦  1  ¦  2  ¦  20
+drop snapshot diff_older_ancestor_sp;
+create table r0(id int primary key, v int);
+insert into r0 values (1,10);
+create table m0(id int primary key, v int);
+insert into m0 values (1,10);
+create table p0(id int primary key, v int);
+insert into p0 values (1,10);
+create snapshot diff_older_ancestor_sp for database test_diff_older_ancestor;
+data branch create table r1 from r0;
+alter table r0 rename column v to w;
+data branch create table r2 from r0;
+delete from r1 where id = 1;
+delete from r2 where id = 1;
+data branch diff r1 against r0;
+➤ diff r1 against r0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+r1  ¦  DELETE  ¦  1  ¦  10
+data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'};
+➤ diff r2 against r0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]  𝄀
+r2  ¦  DELETE  ¦  1  ¦  10
+data branch diff r0{snapshot='diff_older_ancestor_sp'} against r2;
+➤ diff r0 against r2[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+r2  ¦  DELETE  ¦  1  ¦  10
+create table s0(id int primary key, v int);
+insert into s0 values (1,10);
+create snapshot diff_same_table_old_sp for database test_diff_older_ancestor;
+alter table s0 rename column v to w;
+delete from s0 where id = 1;
+create snapshot diff_same_table_renamed_sp for database test_diff_older_ancestor;
+data branch diff s0 against s0{snapshot='diff_same_table_old_sp'};
+➤ diff s0 against s0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]  𝄀
+s0  ¦  DELETE  ¦  1  ¦  10
+data branch diff s0{snapshot='diff_same_table_old_sp'} against s0;
+➤ diff s0 against s0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+s0  ¦  DELETE  ¦  1  ¦  10
+data branch diff s0{snapshot='diff_same_table_renamed_sp'} against s0{snapshot='diff_same_table_old_sp'};
+➤ diff s0 against s0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]  𝄀
+s0  ¦  DELETE  ¦  1  ¦  10
+data branch diff s0{snapshot='diff_same_table_old_sp'} against s0{snapshot='diff_same_table_renamed_sp'};
+➤ diff s0 against s0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+s0  ¦  DELETE  ¦  1  ¦  10
+drop snapshot diff_same_table_renamed_sp;
+drop snapshot diff_same_table_old_sp;
+create table sb0(id int primary key, v int);
+insert into sb0 values (1,10);
+data branch create table sb1 from sb0;
+update sb0 set v = 20 where id = 1;
+alter table sb0 rename column v to w;
+data branch create table sb2 from sb0;
+update sb2 set w = 10 where id = 1;
+data branch diff sb2 against sb1;
+➤ diff sb2 against sb1[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]
+data branch diff sb1 against sb2;
+➤ diff sb1 against sb2[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]
+update sb1 set v = 30 where id = 1;
+data branch pick sb2 into sb1 keys(1) when conflict accept;
+select * from sb1 order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+data branch create table m1 from m0;
+delete from m1 where id = 1;
+delete from m0 where id = 1;
+insert into m0 values (1,99);
+data branch merge m1 into m0{snapshot='diff_older_ancestor_sp'} when conflict fail;
+invalid input: destination snapshot option is not supported for DATA BRANCH MERGE
+select * from m0 order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99
+update p0 set v = 11 where id = 1;
+data branch create table p1 from p0;
+insert into p1 values (2,20);
+data branch pick p1 into p0 keys(2);
+select * from p0 order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  20
+data branch pick p0{snapshot='diff_older_ancestor_sp'} into p1 keys(1) when conflict accept;
+select * from p1 order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  20
+drop snapshot diff_older_ancestor_sp;
+drop database test_diff_older_ancestor;

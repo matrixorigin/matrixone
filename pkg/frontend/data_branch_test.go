@@ -24,6 +24,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -46,6 +49,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2429,6 +2434,96 @@ func TestCheckSchemaCompatibility_FakePKRejectsTargetOnlyColumns(t *testing.T) {
 	require.Contains(t, err.Error(), "require an explicit primary key")
 }
 
+func TestDataBranchGetRelationsUsesOpeningTransactionSnapshots(t *testing.T) {
+	foreground := types.BuildTS(20, 2)
+	background := types.BuildTS(30, 1)
+	pinned := types.BuildTS(10, 0)
+	for _, tc := range []struct {
+		name         string
+		pinnedTarget bool
+		pinnedBase   bool
+	}{
+		{name: "both endpoints current"},
+		{name: "target pinned", pinnedTarget: true},
+		{name: "base pinned", pinnedBase: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			ses.txnCompileCtx = &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+			foregroundTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			foregroundTxn.EXPECT().SnapshotTS().Return(foreground.ToTimestamp()).AnyTimes()
+			backgroundTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			backgroundTxn.EXPECT().SnapshotTS().Return(background.ToTimestamp()).AnyTimes()
+			storage := mock_frontend.NewMockEngine(ctrl)
+			ses.txnHandler = &TxnHandler{storage: storage, txnOp: foregroundTxn}
+			ses.proc.Base.SessionInfo.StorageEngine = storage
+			getPu(ses.GetService()).StorageEngine = storage
+			bh := &backExec{backSes: &backSession{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{txnOp: backgroundTxn},
+			}}}
+
+			open := func(name string, id uint64, pin bool) (tree.TableName, engine.Relation, types.TS, types.TS) {
+				var hint *tree.AtTimeStamp
+				txnOp := backgroundTxn
+				wantObserved, wantOpened := foreground, background
+				if pin {
+					hint = newMoTimestampHint(pinned.Physical())
+					txnOp = mock_frontend.NewMockTxnOperator(ctrl)
+					backgroundTxn.EXPECT().CloneSnapshotOp(pinned.ToTimestamp()).Return(txnOp)
+					txnOp.EXPECT().SnapshotTS().Return(pinned.ToTimestamp())
+					wantObserved, wantOpened = pinned, pinned
+				}
+				db := mock_frontend.NewMockDatabase(ctrl)
+				storage.EXPECT().Database(gomock.Any(), name, txnOp).Return(db, nil).Times(2)
+				db.EXPECT().IsSubscription(gomock.Any()).Return(false)
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableID(gomock.Any()).Return(id).AnyTimes()
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef(name, "name")).AnyTimes()
+				db.EXPECT().Relation(gomock.Any(), name, nil).Return(rel, nil)
+				return newQualifiedCloneTableName(name, name, hint), rel, wantObserved, wantOpened
+			}
+			tarName, tarRel, wantTarObserved, wantTarOpened := open("target", 77, tc.pinnedTarget)
+			baseName, baseRel, wantBaseObserved, wantBaseOpened := open("base", 78, tc.pinnedBase)
+			tables, err := getTableStuff(ctx, ses, bh, tarName, baseName)
+			require.NoError(t, err)
+			require.Same(t, tarRel, tables.tarRel)
+			require.Same(t, baseRel, tables.baseRel)
+			require.Equal(t, wantTarOpened, tables.tarRelSnapshot)
+			require.Equal(t, wantBaseOpened, tables.baseRelSnapshot)
+			tarSP, baseSP := tables.resolvedSnapshots(ses)
+			require.Equal(t, wantTarObserved, tarSP)
+			require.Equal(t, wantBaseObserved, baseSP)
+			tarRelSP, baseRelSP := tables.resolvedRelSnapshots(ses)
+			require.Equal(t, wantTarOpened, tarRelSP)
+			require.Equal(t, wantBaseOpened, baseRelSP)
+
+			lookupErr := errors.New("cannot reopen at observation snapshot")
+			probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			keys := buildIntDataBatch(t, ses.proc.Mp(), []string{"id"}, tables.def.colTypes[:1], [][]any{{int64(1)}})
+			defer keys.Clean(ses.proc.Mp())
+			for _, side := range []struct {
+				rel              engine.Relation
+				observed, opened types.TS
+			}{{tarRel, tarSP, tarRelSP}, {baseRel, baseSP, baseRelSP}} {
+				tables.lcaRel, tables.lcaRelSnapshot = side.rel, side.opened
+				if side.observed == side.opened {
+					require.Same(t, side.rel, tables.lcaFallbackRangeRel(side.observed))
+					continue
+				}
+				require.Nil(t, tables.lcaFallbackRangeRel(side.observed))
+				foregroundTxn.EXPECT().CloneSnapshotOp(side.observed.ToTimestamp()).Return(probeTxn)
+				storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, side.rel.GetTableID(ctx)).
+					Return("", "", nil, lookupErr)
+				ret, err := runLCAProbeWithReaderFallback(ctx, ses, keys, tables, side.observed)
+				ret.Close()
+				require.ErrorIs(t, err, lookupErr)
+			}
+		})
+	}
+}
+
 func TestDataBranchCollectRelationSnapshot(t *testing.T) {
 	endpointSP := types.BuildTS(300, 7)
 	transitionTS := types.BuildTS(200, 3)
@@ -2451,6 +2546,399 @@ func TestBranchMetaInfoLCASnapshotIgnoresAlterLineageEdges(t *testing.T) {
 		pathFromLCAToBaseLineageOnly: []bool{false, false},
 	}
 
-	require.Equal(t, forkTS, info.tarLCASnapshot(baseSP))
-	require.Equal(t, forkTS, info.baseLCASnapshot(tarSP))
+	require.Equal(t, forkTS, info.lcaProbeSnapshot(tarSP, baseSP))
+	tarProbe, baseProbe := info.lcaProbeSnapshots(tarSP, baseSP, true)
+	require.Equal(t, forkTS, tarProbe)
+	require.Equal(t, forkTS, baseProbe)
+}
+
+func TestBranchMetaInfoLCASnapshotUsesEarlierObservation(t *testing.T) {
+	old := types.BuildTS(100, 1)
+	alter := types.BuildTS(200, 1)
+	fork := types.BuildTS(300, 1)
+	secondFork := types.BuildTS(400, 1)
+	now := types.BuildTS(500, 1)
+
+	for _, tc := range []struct {
+		name                    string
+		tarPath, basePath       []types.TS
+		tarLineage, baseLineage []bool
+		tarSP, baseSP, want     types.TS
+		wantPickBase            types.TS
+	}{
+		{name: "clone against old ancestor", tarPath: []types.TS{{}, fork}, tarSP: now, baseSP: old, want: old},
+		{name: "old ancestor against clone", basePath: []types.TS{{}, fork}, tarSP: old, baseSP: now, want: old},
+		{name: "multi-hop clone", tarPath: []types.TS{{}, fork, secondFork}, tarSP: now, baseSP: old, want: old},
+		{
+			name:    "old ancestor before copy alter",
+			tarPath: []types.TS{{}, alter, fork}, tarLineage: []bool{false, true, false},
+			tarSP: now, baseSP: old, want: old,
+		},
+		{
+			name:    "alter-only ancestor path is not a branch",
+			tarPath: []types.TS{{}, alter}, tarLineage: []bool{false, true},
+			basePath: []types.TS{{}, secondFork}, tarSP: fork, baseSP: now, want: fork,
+		},
+		{name: "live ancestor", tarPath: []types.TS{{}, fork}, tarSP: now, baseSP: now, want: fork},
+		{
+			name: "siblings", tarPath: []types.TS{{}, fork}, basePath: []types.TS{{}, secondFork},
+			tarSP: now, baseSP: now, want: fork, wantPickBase: secondFork,
+		},
+		{name: "same table", tarSP: now, baseSP: old, want: old},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := branchMetaInfo{
+				pathFromLCAToTarTS:           tc.tarPath,
+				pathFromLCAToBaseTS:          tc.basePath,
+				pathFromLCAToTarLineageOnly:  tc.tarLineage,
+				pathFromLCAToBaseLineageOnly: tc.baseLineage,
+			}
+			require.Equal(t, tc.want, info.lcaProbeSnapshot(tc.tarSP, tc.baseSP))
+			tarProbe, baseProbe := info.lcaProbeSnapshots(tc.tarSP, tc.baseSP, true)
+			wantPickBase := tc.want
+			if !tc.wantPickBase.IsEmpty() {
+				wantPickBase = tc.wantPickBase
+			}
+			require.Equal(t, tc.want, tarProbe)
+			require.Equal(t, wantPickBase, baseProbe)
+		})
+	}
+}
+
+func TestDataBranchMergeRejectsDestinationSnapshot(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "data branch merge t1 into t0{snapshot='s'} when conflict fail", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	err = handleBranchMerge(nil, nil, stmt.(*tree.DataBranchMerge))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.ErrorContains(t, err, "destination snapshot option is not supported for DATA BRANCH MERGE")
+}
+
+func TestDataBranchReconcileSameTableSnapshotRename(t *testing.T) {
+	const tableID = uint64(1)
+	old := types.BuildTS(100, 2).ToTimestamp()
+	renamed := types.BuildTS(200, 2).ToTimestamp()
+	now := types.BuildTS(300, 0).ToTimestamp()
+	oldSnap, renamedSnap := &plan.Snapshot{TS: &old}, &plan.Snapshot{TS: &renamed}
+	for _, tc := range []struct {
+		name                  string
+		tarSnap, baseSnap     *plan.Snapshot
+		tarColumn, baseColumn string
+	}{
+		{"live against snapshot", nil, oldSnap, "w", "v"},
+		{"snapshot against live", oldSnap, nil, "v", "w"},
+		{"later against earlier snapshot", renamedSnap, oldSnap, "w", "v"},
+		{"earlier against later snapshot", oldSnap, renamedSnap, "v", "w"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			snapshotTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(now)
+			txnOp.EXPECT().CloneSnapshotOp(old).Return(snapshotTxn)
+			snapshotDef := newTestBranchTableDef("tbl", "v")
+			snapshotRel := mock_frontend.NewMockRelation(ctrl)
+			snapshotRel.EXPECT().GetTableDef(gomock.Any()).Return(snapshotDef)
+			storage := mock_frontend.NewMockEngine(ctrl)
+			storage.EXPECT().GetRelationById(gomock.Any(), snapshotTxn, tableID).
+				Return("db1", "tbl", snapshotRel, nil)
+			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
+
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(tableID).Times(2)
+			tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(tableID)
+			tarDef := tables.tarRel.GetTableDef(ctx)
+			tarDef.Cols[1].Name = tc.tarColumn
+			tables.baseRel.GetTableDef(ctx).Cols[1].Name = tc.baseColumn
+			tables.def.colNames[1] = tc.tarColumn
+			tables.tarSnap, tables.baseSnap = tc.tarSnap, tc.baseSnap
+			tables.lcaRel = tables.tarRel
+			info := branchMetaInfo{lcaTableId: tableID}
+			require.NoError(t, reconcileDataBranchEndpointSchema(ctx, ses, nil, &tables, &info))
+			wantNames := []string{"id", "v", "hidden"}
+			require.Equal(t, wantNames, tables.def.lcaColNames)
+
+			rel, lcaDef, resolved, err := lcaProbeTableDefAtSnapshot(ctx, ses, tables, types.TimestampToTS(old), false)
+			require.NoError(t, err)
+			require.Same(t, snapshotRel, rel)
+			require.True(t, resolved)
+			layout, err := buildLCAProbeColumnLayout(lcaDef, tarDef, tables.def.colNames, tables.def.colTypes,
+				tables.def.tarOnlyIdxes, tables.def.lcaColNames, resolved)
+			require.NoError(t, err)
+			require.Equal(t, wantNames, layout.attrs)
+			require.Equal(t, []int{0, 1, 2}, layout.targetIdxes)
+		})
+	}
+}
+
+func TestDataBranchReconcileEarlierLCAColumnName(t *testing.T) {
+	const ancestor, branch, grandchild, earlierSibling = uint64(1), uint64(2), uint64(3), uint64(4)
+	old := types.BuildTS(100, 2).ToTimestamp()
+	now := types.BuildTS(400, 0).ToTimestamp()
+	forks := map[uint64]types.TS{
+		branch: types.BuildTS(250, 0), grandchild: types.BuildTS(300, 0), earlierSibling: types.BuildTS(150, 0),
+	}
+	for _, tc := range []struct {
+		name                    string
+		tarPath, basePath       []uint64
+		tarLCAName, baseLCAName string
+	}{
+		{"ancestor as base", []uint64{ancestor, branch}, []uint64{ancestor}, "w", "v"},
+		{"ancestor as target", []uint64{ancestor}, []uint64{ancestor, branch}, "v", "w"},
+		{"ancestor as base through multiple forks", []uint64{ancestor, branch, grandchild}, []uint64{ancestor}, "w", "v"},
+		{"third-party LCA at the earlier target fork", []uint64{ancestor, earlierSibling}, []uint64{ancestor, branch}, "v", "w"},
+		{"third-party LCA at the earlier base fork", []uint64{ancestor, branch}, []uint64{ancestor, earlierSibling}, "w", "v"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(now).Times(2)
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			vDef := newTestBranchTableDef("ancestor", "v")
+			wDef := newTestBranchTableDef("renamed", "w")
+			newRelation := func(id uint64, def *plan.TableDef) *mock_frontend.MockRelation {
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableID(gomock.Any()).Return(id).AnyTimes()
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+				return rel
+			}
+			vRel, wRel := newRelation(ancestor, vDef), newRelation(ancestor, wDef)
+			branchRel := newRelation(branch, wDef)
+			original := reopenDataBranchRelationByID
+			t.Cleanup(func() { reopenDataBranchRelationByID = original })
+			reopenDataBranchRelationByID = func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snapshot *plan.Snapshot) (engine.Relation, error) {
+				if id == branch {
+					require.Equal(t, forks[grandchild].ToTimestamp(), *snapshot.TS)
+					return branchRel, nil
+				}
+				require.Equal(t, ancestor, id)
+				if types.TimestampToTS(*snapshot.TS) == forks[earlierSibling] {
+					return vRel, nil
+				}
+				require.Equal(t, forks[branch].ToTimestamp(), *snapshot.TS)
+				return wRel, nil
+			}
+			endpoint := func(path []uint64) (engine.Relation, *plan.Snapshot, []types.TS, []bool) {
+				id := path[len(path)-1]
+				pathTS := make([]types.TS, len(path))
+				for i := 1; i < len(path); i++ {
+					pathTS[i] = forks[path[i]]
+				}
+				var snap *plan.Snapshot
+				def := wDef
+				if id == ancestor {
+					snap = &plan.Snapshot{TS: &old}
+				}
+				if id == ancestor || id == earlierSibling {
+					def = vDef
+				}
+				return newRelation(id, def), snap, pathTS, make([]bool, len(path))
+			}
+			info := branchMetaInfo{lcaTableId: ancestor, pathFromLCAToTar: tc.tarPath, pathFromLCAToBase: tc.basePath}
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel, tables.tarSnap, info.pathFromLCAToTarTS, info.pathFromLCAToTarLineageOnly = endpoint(tc.tarPath)
+			tables.baseRel, tables.baseSnap, info.pathFromLCAToBaseTS, info.pathFromLCAToBaseLineageOnly = endpoint(tc.basePath)
+			tarDef := tables.tarRel.GetTableDef(ctx)
+			tables.def.colNames[1] = tarDef.Cols[1].Name
+			require.NoError(t, reconcileDataBranchEndpointSchema(ctx, ses, nil, &tables, &info))
+			require.Equal(t, []string{"id", "v", "hidden"}, tables.def.lcaColNames)
+			require.Equal(t, []string{"id", tc.tarLCAName, "hidden"}, tables.def.tarLCAColNames)
+			require.Equal(t, []string{"id", tc.baseLCAName, "hidden"}, tables.def.baseLCAColNames)
+			layout, err := lcaProbeColumnLayout(vDef, tarDef, tables.def.colNames, tables.def.colTypes,
+				tables.def.tarOnlyIdxes, tables.def.lcaColNames)
+			require.NoError(t, err)
+			require.Equal(t, []string{"id", "v", "hidden"}, layout.attrs)
+
+			tarSP, baseSP := tables.resolvedSnapshots(ses)
+			for _, forBase := range []bool{false, true} {
+				diff := sideTableStuffForLCAProbe(tables, compositeOption{}, info, tarSP, baseSP, forBase)
+				require.Equal(t, tables.def.lcaColNames, diff.def.lcaColNames)
+				pick := sideTableStuffForLCAProbe(tables, compositeOption{preservePickConflicts: true}, info, tarSP, baseSP, forBase)
+				want := tables.def.lcaColNames
+				if tables.tarSnap == nil && tables.baseSnap == nil {
+					want = tables.def.tarLCAColNames
+					if forBase {
+						want = tables.def.baseLCAColNames
+					}
+				}
+				require.Equal(t, want, pick.def.lcaColNames)
+			}
+		})
+	}
+}
+
+func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	const tableID, databaseID = uint64(1), uint64(7)
+	old := types.BuildTS(2_000_000_000, 2)
+	creation := types.BuildTS(3_000_000_000, 0)
+	now := types.BuildTS(5_000_000_000, 0)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(now.ToTimestamp()).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(catalog.MO_TABLES_ID)).
+		Return("", "", nil, moerr.NewInternalErrorNoCtx("CollectChanges unavailable"))
+	ses.txnHandler = &TxnHandler{txnOp: txnOp, storage: storage}
+
+	tables := newTestBranchTableStuff(ctrl)
+	tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(ctx).Return(uint64(2))
+	tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(tableID).Times(3)
+	tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetDBID(gomock.Any()).Return(databaseID).Times(2)
+	oldSnapshot := old.ToTimestamp()
+	tables.baseSnap = &plan.Snapshot{TS: &oldSnapshot}
+	info := branchMetaInfo{
+		lcaTableId:         tableID,
+		pathFromLCAToTarTS: []types.TS{{}, types.BuildTS(4_000_000_000, 0)},
+	}
+
+	var tableScans []types.TS
+	original := scanSnapshotRelationByIDWithFallback
+	t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
+	scanSnapshotRelationByIDWithFallback = func(
+		_ context.Context, _ string, _ *Session, relID uint64, snap types.TS, _ engine.Relation,
+		attrs []string, colTypes []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
+	) error {
+		mp := ses.proc.Mp()
+		readBatch := batch.NewWithSize(len(attrs))
+		defer readBatch.Clean(mp)
+		for i, typ := range colTypes {
+			readBatch.Vecs[i] = vector.NewVec(typ)
+		}
+		switch relID {
+		case catalog.MO_DATABASE_ID:
+			require.Equal(t, old, snap)
+			require.Equal(t, []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}, attrs)
+			require.NoError(t, vector.AppendFixed(readBatch.Vecs[0], databaseID, false, mp))
+			require.NoError(t, vector.AppendFixed(readBatch.Vecs[1], types.UnixToTimestamp(1), false, mp))
+		case catalog.MO_TABLES_ID:
+			tableScans = append(tableScans, snap)
+			if snap == old {
+				return nil // The table has no catalog row at the old endpoint snapshot.
+			}
+			require.Equal(t, now, snap)
+			require.Equal(t, []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}, attrs)
+			require.NoError(t, vector.AppendFixed(readBatch.Vecs[0], tableID, false, mp))
+			require.NoError(t, vector.AppendFixed(readBatch.Vecs[1], creation, false, mp))
+		default:
+			t.Fatalf("unexpected catalog relation id %d", relID)
+		}
+		readBatch.SetRowCount(1)
+		return onBatch(readBatch)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil)
+	require.ErrorContains(t, err, "LCA table 1 was created after an endpoint snapshot")
+	require.Equal(t, []types.TS{old, now}, tableScans)
+}
+
+func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	const tableID, databaseID = uint64(77), uint64(7)
+	creation := types.BuildTS(2_000_000_000, 0)
+	snapshot := types.BuildTS(3_000_000_000, 2)
+	now := types.BuildTS(5_000_000_000, 0)
+	snapshotTS := snapshot.ToTimestamp()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(now.ToTimestamp()).AnyTimes()
+	txnOp.EXPECT().CloneSnapshotOp(snapshotTS).Return(probeTxn).Times(2)
+	probeTxn.EXPECT().SnapshotTS().Return(snapshotTS)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(catalog.MO_TABLES_ID)).
+		Return("", "", nil, errors.New("use catalog snapshot reader for creation time")).Times(3)
+	storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).
+		Return("", "", nil, errors.New("cannot reopen historical relation")).Times(2)
+	ses.txnHandler = &TxnHandler{txnOp: txnOp, storage: storage}
+
+	tables := newTestBranchTableStuff(ctrl)
+	targetRel := tables.tarRel.(*mock_frontend.MockRelation)
+	baseRel := tables.baseRel.(*mock_frontend.MockRelation)
+	for _, rel := range []*mock_frontend.MockRelation{targetRel, baseRel} {
+		rel.EXPECT().GetTableID(gomock.Any()).Return(tableID).AnyTimes()
+		rel.EXPECT().GetDBID(gomock.Any()).Return(databaseID).AnyTimes()
+	}
+	targetDef := targetRel.GetTableDef(ctx)
+	baseDef := baseRel.GetTableDef(ctx)
+	targetDef.Name, baseDef.Name = "t", "t"
+	targetDef.Cols[1].Name, baseDef.Cols[1].Name = "w", "v"
+	targetDef.Cols[1].OriginName = "v"
+	targetDef.Cols[1].Typ.Id = int32(types.T_int64)
+	baseDef.Cols[1].Typ.Id = int32(types.T_int64)
+	tables.def.colNames[1] = "w"
+	tables.def.colTypes[1] = types.T_int64.ToType()
+	tables.baseSnap = &plan.Snapshot{TS: &snapshotTS}
+	tables.lcaReaderProbeMode = &atomic.Bool{}
+	tables.lcaReaderProbeMode.Store(true)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	t.Cleanup(worker.Release)
+	tables.worker = worker
+	tables.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	t.Cleanup(func() { tables.retPool.freeAllRetBatches(mp) })
+
+	targetRel.EXPECT().CollectChanges(gomock.Any(), snapshot.Next(), now, false, mp).
+		DoAndReturn(func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+			tombstone := buildHashDiffTombstoneBatchWithRowIDs(t, mp, []types.Rowid{buildHashDiffRowID(t, 1)}, [][]any{
+				{int64(1), commitTSBytes(now)},
+			})
+			return &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{tombstone: tombstone}}}, nil
+		})
+	rangesReached := errors.New("historical ranges reached")
+	baseRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, rangesReached)
+	original := scanSnapshotRelationByIDWithFallback
+	t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
+	scanSnapshotRelationByIDWithFallback = func(
+		ctx context.Context, caller string, ses *Session, id uint64, snap types.TS, fallback engine.Relation,
+		attrs []string, colTypes []types.Type, filter *plan.Expr, parallelism int, onBatch func(*batch.Batch) error,
+	) error {
+		var row []any
+		switch id {
+		case catalog.MO_DATABASE_ID:
+			row = []any{databaseID, types.UnixToTimestamp(1)}
+		case catalog.MO_TABLES_ID:
+			row = []any{tableID, creation}
+		case tableID:
+			require.Equal(t, "lca-reader-fallback", caller)
+			require.Equal(t, snapshot, snap)
+			require.Same(t, baseRel, fallback)
+			require.Equal(t, []string{"id", "v", "hidden"}, attrs)
+			// Exercise attribute validation and Ranges on the historical handle,
+			// then supply the reader's batch without starting a storage engine.
+			require.ErrorIs(t, original(ctx, caller, ses, id, snap, fallback, attrs, colTypes, filter, parallelism, onBatch), rangesReached)
+			row = []any{int64(1), int64(10), "h1"}
+		default:
+			t.Fatalf("unexpected snapshot scan table ID %d", id)
+		}
+		rows := buildIntDataBatch(t, mp, attrs, colTypes, [][]any{row})
+		defer rows.Clean(mp)
+		return onBatch(rows)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var emitted []capturedBatch
+	emit := func(w batchWithKind) (bool, error) {
+		defer tables.retPool.releaseRetBatch(w.batch, false)
+		if rows := decodeCapturedRows(t, w.batch, tables.def.colTypes); len(rows) > 0 {
+			emitted = append(emitted, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+		}
+		return false, nil
+	}
+	// Use the serial hash-diff path so the scan assertions run on this goroutine.
+	err = diffOnBase(ctx, ses, nil, &wg, branchMetaInfo{lcaTableId: tableID}, tables,
+		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), int64(10), "h1"}}}}, emitted)
 }
