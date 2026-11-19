@@ -135,9 +135,6 @@ type txnWaiter struct {
 func (w *txnWaiter) Add() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.count == 0 {
-		w.emptyCh = make(chan struct{})
-	}
 	w.count++
 }
 
@@ -148,7 +145,7 @@ func (w *txnWaiter) Done() {
 		panic("txn waiter: negative transaction count")
 	}
 	w.count--
-	if w.count == 0 {
+	if w.count == 0 && w.emptyCh != nil {
 		close(w.emptyCh)
 		w.emptyCh = nil
 	}
@@ -159,6 +156,9 @@ func (w *txnWaiter) Wait(ctx context.Context) error {
 	if w.count == 0 {
 		w.mu.Unlock()
 		return nil
+	}
+	if w.emptyCh == nil {
+		w.emptyCh = make(chan struct{})
 	}
 	emptyCh := w.emptyCh
 	w.mu.Unlock()

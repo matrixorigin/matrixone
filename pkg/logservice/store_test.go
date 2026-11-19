@@ -42,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMain(m *testing.M) {
@@ -2524,4 +2526,56 @@ func TestHAKeeperCheckWakeupRechecksDuringActiveCheck(t *testing.T) {
 		<-done
 		require.GreaterOrEqual(t, gate.calls, 2)
 	})
+}
+
+func TestAppendHeartbeatReplicas(t *testing.T) {
+	st := &store{runtime: runtime.DefaultRuntime()}
+	ready := []dragonboat.ShardInfo{
+		{ShardID: 9, ReplicaID: 2, ConfigChangeIndex: 11, LeaderID: 2, Term: 4, NonVotingNodes: map[uint64]string{7: "nonvoting"}, IsNonVoting: true},
+		{ShardID: 3, ReplicaID: 1, ConfigChangeIndex: 12, LeaderID: 1, Term: 5, Nodes: map[uint64]string{1: "voting"}},
+	}
+	pending := dragonboat.ShardInfo{ShardID: 7, Pending: true}
+	for _, tc := range []struct {
+		name   string
+		shards []dragonboat.ShardInfo
+		want   []pb.LogReplicaInfo
+	}{
+		{name: "empty", want: []pb.LogReplicaInfo{}},
+		{name: "pending", shards: []dragonboat.ShardInfo{pending}, want: []pb.LogReplicaInfo{}},
+		{name: "one ready among pending", shards: []dragonboat.ShardInfo{pending, ready[1], pending}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+		{name: "mixed", shards: []dragonboat.ShardInfo{ready[0], pending, ready[1]}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 9, Replicas: map[uint64]string{}, NonVotingReplicas: map[uint64]string{7: "nonvoting"}, Epoch: 11, LeaderID: 2, Term: 4}, ReplicaID: 2, IsNonVoting: true},
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), tc.shards)
+			require.NotNil(t, got)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, len(tc.want), cap(got))
+			gotWire, err := (&pb.LogStoreHeartbeat{Replicas: got}).Marshal()
+			require.NoError(t, err)
+			wantWire, err := (&pb.LogStoreHeartbeat{Replicas: tc.want}).Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wantWire, gotWire)
+			var decoded pb.LogStoreHeartbeat
+			require.NoError(t, decoded.Unmarshal(gotWire))
+			require.Len(t, decoded.Replicas, len(tc.want))
+			for i := range decoded.Replicas {
+				require.Equal(t, tc.want[i].ShardID, decoded.Replicas[i].ShardID)
+			}
+		})
+	}
+	require.Panics(t, func() {
+		st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{{ShardID: 8}})
+	})
+	core, logs := observer.New(zap.InfoLevel)
+	observed := &store{runtime: runtime.NewRuntime(metadata.ServiceType_LOG, "test", zap.New(core))}
+	require.Panics(t, func() {
+		observed.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{ready[0], pending, {ShardID: 8}})
+	})
+	require.Len(t, logs.FilterMessageSnippet("shard 7 is pending").All(), 1)
+
 }

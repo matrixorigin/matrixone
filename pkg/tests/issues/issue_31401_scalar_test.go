@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -77,9 +78,24 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				defer cancel()
 				cleanupSQL := func(exec func(context.Context, string, ...any) (sql.Result, error), timeout time.Duration, statement string) error {
 					t.Helper()
+					started := time.Now()
 					cleanup, stop := context.WithTimeout(context.Background(), timeout)
 					defer stop()
 					_, err := exec(cleanup, statement)
+					if err != nil {
+						// Test-only error-boundary diagnostic: retain this cleanup
+						// phase's SQL start/end/cause and a bounded snapshot of
+						// goroutine state before the assert, without touching the
+						// budget, the result, the original error or the fixture.
+						ended := time.Now()
+						var waiters [16384]byte
+						n := runtime.Stack(waiters[:], true)
+						t.Logf("issue31401 cleanupSQL error boundary: statement=%q budget=%s start=%s end=%s elapsed=%s err=%v cleanupCtxErr=%v; goroutine snapshot (bounded %d bytes):\n%s",
+							statement, timeout,
+							started.UTC().Format(time.RFC3339Nano),
+							ended.UTC().Format(time.RFC3339Nano),
+							ended.Sub(started), err, cleanup.Err(), n, waiters[:n])
+					}
 					assert.NoErrorf(t, err, "cleanup SQL: %s", statement)
 					return err
 				}
