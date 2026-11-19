@@ -81,7 +81,7 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 					}
 				}
 				if !hashJoin.IsShuffle && !ctr.checkBuildArea && ctr.asofBuildLeftBestRight != nil {
-					ctr.checkBuildArea = needsOutputAreaCheck(hashJoin.ResultCols, ctr.asofBuildLeftBestRight, 1)
+					ctr.checkBuildArea = needsOutputAreaCheck(hashJoin.ResultCols, ctr.asofBuildLeftBestRight, 1, false)
 				}
 				ctr.state = Finalize
 				continue

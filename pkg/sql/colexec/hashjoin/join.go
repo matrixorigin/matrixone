@@ -325,7 +325,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.leftBat = bat
 				ctr.lastIdx = 0
 				ctr.checkProbeArea = !hashJoin.IsShuffle && ctr.mp != nil && !ctr.skipProbe &&
-					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0)
+					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, hashJoin.usesMembershipProjection())
 			}
 
 			if err = hashJoin.resetResultBat(); err != nil {
@@ -606,7 +606,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			buildRel = 0
 		}
 		for _, bat := range ctr.rightBats {
-			if needsOutputAreaCheck(hashJoin.ResultCols, bat, buildRel) {
+			if needsOutputAreaCheck(hashJoin.ResultCols, bat, buildRel, false) {
 				ctr.checkBuildArea = true
 				break
 			}
@@ -743,6 +743,19 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 	}
 }
 
+func (hashJoin *HashJoin) usesMembershipProjection() bool {
+	ctr := &hashJoin.ctr
+	if (!ctr.probeLeftSemi && !ctr.probeLeftAnti) || ctr.probeTrackBuildMatches || hashJoin.NonEqCond != nil {
+		return false
+	}
+	for _, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	err := ctr.evalJoinCondition(ctr.leftBat, proc)
 	if err != nil {
@@ -787,16 +800,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	}
 	batchUnique := ctr.probeHashOnPK && hashJoin.NonEqCond == nil &&
 		((hashJoin.IsInner() && !ctr.probeTrackBuildMatches) || hashJoin.JoinType == plan.Node_RIGHT)
-	batchMembership := (ctr.probeLeftSemi || ctr.probeLeftAnti) &&
-		!ctr.probeTrackBuildMatches && hashJoin.NonEqCond == nil
-	if batchMembership {
-		for _, column := range hashJoin.ResultCols {
-			if column.Rel != 0 {
-				batchMembership = false
-				break
-			}
-		}
-	}
+	batchMembership := hashJoin.usesMembershipProjection()
 	var probeCopy vector.UnionMultiFunc = (*vector.Vector).UnionMulti
 	if hashJoin.NonEqCond == nil && !ctr.probeHashOnPK && !batchMembership && ctr.probeRightSemiAnti {
 		// This invocation retains one probe input through every continuation.

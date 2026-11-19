@@ -15,10 +15,12 @@
 package hashjoin
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -151,6 +153,92 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.proc.GetMessageBoard().Reset()
 			}
+		})
+	}
+}
+
+func TestHashJoinMembershipOutputArea(t *testing.T) {
+	previousLimit := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = previousLimit })
+
+	for _, shape := range []struct {
+		name       string
+		valueBytes int
+		dictionary bool
+		batchRows  []int
+	}{
+		{name: "flat-disjoint", valueBytes: 256 << 10, batchRows: []int{2}},
+		{name: "dictionary-repeated", valueBytes: 600 << 10, dictionary: true, batchRows: []int{1, 1}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			keyType, textType := types.T_int32.ToType(), types.T_text.ToType()
+			key := newExpr(0, keyType)
+			tc := newTestCase(t, []types.Type{keyType}, nil, [][]*plan.Expr{{key}, {key}})
+			tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_SEMI, nil
+			tc.arg.LeftTypes = append(tc.arg.LeftTypes, textType)
+			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 0, Pos: 1}}
+			mp := tc.proc.Mp()
+			t.Cleanup(func() {
+				tc.proc.Free()
+				tc.cancel()
+				require.Zero(t, mp.CurrNB())
+			})
+
+			values := []int32{1, 2}
+			probe, build := makeInt32Batch(tc.proc, values), makeInt32Batch(tc.proc, values)
+			t.Cleanup(func() { probe.Clean(mp) })
+			t.Cleanup(func() { build.Clean(mp) })
+			payload := vector.NewOffHeapVecWithType(textType)
+			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
+			if shape.dictionary {
+				t.Cleanup(func() { payload.Free(mp) })
+				require.NoError(t, vector.AppendBytes(payload, value, false, mp))
+				base, err := vector.FreezeVector(payload, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				selection, err := vector.NewRowSelection([]int64{0, 0}, 1, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(selection.Release)
+				dictionary, err := vector.NewDictionaryVector(base, selection, mp, nil)
+				require.NoError(t, err)
+				probe.Vecs = append(probe.Vecs, dictionary)
+			} else {
+				probe.Vecs = append(probe.Vecs, payload)
+				for range values {
+					require.NoError(t, vector.AppendBytes(payload, value, false, mp))
+				}
+				require.True(t, payload.VarlenaAreaIsDisjoint())
+			}
+
+			resetChildrenWithBatch(tc.arg, probe)
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+			t.Cleanup(func() { tc.barg.Free(tc.proc, false, nil) })
+			t.Cleanup(func() { tc.arg.Free(tc.proc, false, nil) })
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			next := 0
+			for _, rows := range shape.batchRows {
+				res, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, res.Batch)
+				require.Equal(t, rows, res.Batch.RowCount())
+				// Disjoint membership can skip sizing even when a single
+				// value would require checks on a row-repeating path.
+				require.Equal(t, shape.dictionary, tc.arg.ctr.checkProbeArea)
+				for row := range rows {
+					require.Equal(t, values[next], vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[0], row))
+					require.True(t, bytes.Equal(value, res.Batch.Vecs[1].GetBytesAt(row)))
+					next++
+				}
+			}
+			res, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+			require.Nil(t, res.Batch)
+			require.Equal(t, len(values), next)
 		})
 	}
 }

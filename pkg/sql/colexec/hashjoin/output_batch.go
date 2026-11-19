@@ -57,8 +57,9 @@ func (ctr *container) retainedOutputBatch(index int64) *batch.Batch {
 // needsOutputAreaCheck only chooses whether projection needs to count bytes.
 // Even a build value that never matches can enable the check, but only payloads
 // selected for output use up the result batch's physical area.
-func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, relation int32) bool {
-	threshold := mpool.MaxAllocationSize() / colexec.DefaultBatchSize
+func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, relation int32, eachRowOnce bool) bool {
+	limit := mpool.MaxAllocationSize()
+	threshold := limit / colexec.DefaultBatchSize
 	for _, column := range columns {
 		if column.Rel != relation || column.Pos < 0 || int(column.Pos) >= len(source.Vecs) {
 			continue
@@ -72,6 +73,11 @@ func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, rela
 			areaBytes = len(vector.ResolveVarlenaReadView(vec).Area)
 		} else {
 			areaBytes = len(vec.GetArea())
+			// Membership selects each input row at most once. Disjoint
+			// payloads can therefore contribute at most the source area.
+			if eachRowOnce && int64(areaBytes) <= limit && vec.VarlenaAreaIsDisjoint() {
+				continue
+			}
 		}
 		if int64(areaBytes) <= threshold {
 			continue
