@@ -185,7 +185,7 @@ func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			out := batch.NewOffHeapWithSize(1)
 			defer out.Clean(mp)

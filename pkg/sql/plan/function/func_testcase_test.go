@@ -907,7 +907,7 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 0}, nil),
 		}, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, nil), Sleep[uint64])
 		defer fc.Free()
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 		require.NoError(t, err)
 		result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_uint8.ToType(), mp, selection)
 		require.NoError(t, err)

@@ -25,8 +25,8 @@ import (
 const (
 	executionResourceAllocationSiteExpressionData mpool.AllocationSite = iota + 98
 	executionResourceAllocationSiteExpressionArea
-	executionResourceAllocationSiteExpressionNulls
-	executionResourceAllocationSiteExpressionGrouping
+	_ // reserved: was executionResourceAllocationSiteExpressionNulls
+	_ // reserved: was executionResourceAllocationSiteExpressionGrouping
 )
 
 // NewExpressionExecutors constructs expression trees used by HashBuild and
@@ -67,8 +67,6 @@ func NewJoinProbeExpressionExecutors(
 		account, mpool.AllocationOwnerHashBuild,
 		executionResourceAllocationSiteExpressionData,
 		executionResourceAllocationSiteExpressionArea,
-		executionResourceAllocationSiteExpressionNulls,
-		executionResourceAllocationSiteExpressionGrouping,
 		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
@@ -111,8 +109,6 @@ func newExpressionExecutorsWithCapacityClassAndDiagnostic(
 		mpool.AllocationOwnerHashBuild,
 		executionResourceAllocationSiteExpressionData,
 		executionResourceAllocationSiteExpressionArea,
-		executionResourceAllocationSiteExpressionNulls,
-		executionResourceAllocationSiteExpressionGrouping,
 		capacityClass,
 	)
 	if err != nil {

@@ -71,16 +71,17 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	info := stats.ConstructBlockInfo(0)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
-	// The selected two-row map consumes the available capacity; nullable view
-	// metadata is optional, while a temporary wide-value copy cannot fit.
-	account, err := registry.Open(16)
+	// Null bitmaps are not charged to allocation accounts, so the optional
+	// refusal comes from the selected two-row map (16 bytes), which does not
+	// fit; a temporary wide-value copy cannot fit either.
+	account, err := registry.Open(8)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.Zero(t, account.Snapshot().Used)
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	output := batch.NewOffHeapWithSize(2)
 	require.NoError(t, output.SetAllocationAccount(allocation))
@@ -194,7 +195,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 				require.NoError(t, err)
 				output := batch.NewWithSchema(true, nil, typs)
 				t.Cleanup(func() { output.Clean(mp) })
