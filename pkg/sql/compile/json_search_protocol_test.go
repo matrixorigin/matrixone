@@ -71,7 +71,6 @@ func TestJSONSearchProtocolPlacementSendReceive(t *testing.T) {
 	}{
 		{0, plan2.ExecTypeAP_ONECN},
 		{defines.MORPCVersion134, plan2.ExecTypeAP_ONECN},
-		{defines.MORPCVersion135 - 1, plan2.ExecTypeAP_ONECN},
 		{defines.MORPCVersion135, plan2.ExecTypeAP_MULTICN},
 	} {
 		client.version = tc.version

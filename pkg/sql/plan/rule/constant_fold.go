@@ -239,7 +239,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if !spatialChecked || !jsonFeatureChecked {
 		features, err := plan.RequiredRemoteExpressionFeatures(expr)
 		if err != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
-			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
+			(!jsonFeatureChecked && (features.JSONSearch || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr
 		}
 		spatialChecked, jsonFeatureChecked = true, true

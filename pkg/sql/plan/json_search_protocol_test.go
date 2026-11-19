@@ -39,7 +39,7 @@ func jsonSearchProtocolExpr() *planpb.Expr {
 	}
 }
 
-func TestJSONSearchRequiresProtocol136(t *testing.T) {
+func TestJSONSearchRequiresProtocol135(t *testing.T) {
 	expr := jsonSearchProtocolExpr()
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestJSONSearchRequiresProtocol136(t *testing.T) {
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion135, required)
-	require.Equal(t, int64(136), defines.MORPCLatestVersion)
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, required)
 }
 
 func TestJSONSearchRejectedInNonViewDefinitions(t *testing.T) {
@@ -77,6 +77,35 @@ func TestJSONSearchProtocolSurvivesWireRoundTrip(t *testing.T) {
 	required, err := RequiredPersistedExpressionProtocolVersion(&decoded)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion135, required)
+}
+
+func TestJSONSearchProtocolSurvivesSelectPlanning(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		prepared bool
+	}{
+		{name: "projection", sql: `select json_search('{"a":"x"}', 'one', 'missing')`},
+		{name: "nested projection", sql: `select coalesce(json_search('{"a":"x"}', 'one', 'missing'), cast('null' as json))`},
+		{name: "prepared projection", sql: `select json_search('{"a":"x"}', 'one', 'missing')`, prepared: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			optimizer := NewBaseOptimizer(ctx)
+			if tc.prepared {
+				optimizer = NewPrepareOptimizer(ctx)
+			}
+			planned, err := optimizer.Optimize(stmt, tc.prepared, nil)
+			require.NoError(t, err)
+			features, err := planpb.RequiredRemoteExpressionFeatures(planned)
+			require.NoError(t, err)
+			require.True(t, features.JSONSearch)
+		})
+	}
 }
 
 func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
@@ -107,7 +136,7 @@ func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion134)

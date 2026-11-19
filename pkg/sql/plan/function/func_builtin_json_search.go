@@ -279,7 +279,7 @@ func JSONSearch(
 			}
 		}
 
-		pattern, err := regexpSet.prepareLikeRegexp(term, escape, escapeEnabled, false)
+		pattern, err := regexpSet.prepareLikeRegexp(term, escape, escapeEnabled, likeFoldNone)
 		if err != nil {
 			return err
 		}
