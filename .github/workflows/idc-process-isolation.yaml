@@ -5,11 +5,34 @@ on:
     paths: [.github/workflows/idc-process-isolation.yaml]
 permissions: {}
 jobs:
+  package:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'c4f61314f61b0f1d72a99cc10ab8d2beacdd6b88' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stage pinned Debian package (no install, no checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -q --proto '=https' --fail --silent --show-error --max-time 45 --output bwrap.deb 'https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1_amd64.deb'
+          echo '3cc9134a3286ad01a323dcd924ba123eb634cefaeec82d774257e06308aeaadb  bwrap.deb' | sha256sum --check --strict
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bwrap-pinned-${{ github.run_id }}
+          path: ${{ runner.temp }}/bwrap.deb
+          if-no-files-found: error
+          retention-days: 1
   isolate:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '8c197b0ea428dd3c140481622f0b4e9ede9b96e6' && github.run_attempt == 1
+    needs: package
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'c4f61314f61b0f1d72a99cc10ab8d2beacdd6b88' && github.run_attempt == 1
     runs-on: amd64-mo-shanghai-8c16g
     timeout-minutes: 3
     steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: bwrap-pinned-${{ github.run_id }}
+          path: ${{ runner.temp }}/idc-bwrap-input
       - name: Verify an unprivileged isolated process (no PR checkout)
         shell: bash
         run: |
@@ -20,10 +43,19 @@ jobs:
           done
           if test "$(id -u)" = 0; then echo 'probe stopped: outer runner is root'; exit 1; fi
           if unshare --user --map-root-user -- /bin/true; then echo 'unprivileged user namespace=yes'; else echo 'unprivileged user namespace=no'; fi
-          b=/usr/bin/bwrap
-          if ! test -x "$b" || test -u "$b" || test "$(stat -Lc %u "$b")" != 0; then
-            echo 'probe stopped: approved non-setuid bubblewrap not available'; exit 1
-          fi
+          [[ "$(uname -m)" == x86_64 ]]
+          umask 077
+          private=$(mktemp -d "$RUNNER_TEMP/idc-local-tool.XXXXXXXX")
+          cd "$RUNNER_TEMP/idc-bwrap-input"
+          echo '3cc9134a3286ad01a323dcd924ba123eb634cefaeec82d774257e06308aeaadb  bwrap.deb' | sha256sum --check --strict
+          b="$private/bwrap"
+          dpkg-deb --fsys-tarfile bwrap.deb | tar -xOf - ./usr/bin/bwrap > "$b"
+          (cd "$private"; echo '85580dd52ed366ece8844e90fa75ac7c4de8802963071344e123221fb9f6f11e  bwrap' | sha256sum --check --strict)
+          chmod 0500 "$b"
+          test ! -u "$b" && test ! -g "$b"
+          test "$(stat -c %a "$b")" = 500
+          test "$(stat -c %u "$b")" = "$(id -u)"
+          "$b" --version
           marker=$(mktemp /tmp/idc-isolation-marker.XXXXXXXX)
           trap 'unlink -- "$marker"' EXIT
           binds=(--ro-bind /usr /usr)
