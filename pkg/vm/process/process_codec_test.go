@@ -429,3 +429,16 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 		_ = GetCodecService(rtSvc)
 	})
 }
+
+func TestCurrentRoleContextWireRoundTrip(t *testing.T) {
+	for _, want := range []CurrentRoleContext{{}, {Mode: 1}, {Mode: 2, AccountID: 42, UserID: 7, PrimaryRoleID: 9, AccountName: "tenant", UserName: "user"}} {
+		input := &pipeline.SessionInfo{CurrentRoleContext: encodeCurrentRoleContext(want)}
+		data, err := input.Marshal()
+		require.NoError(t, err)
+		var decoded pipeline.SessionInfo
+		require.NoError(t, decoded.Unmarshal(data))
+		got, err := ConvertToProcessSessionInfo(decoded)
+		require.NoError(t, err)
+		require.Equal(t, want, got.CurrentRoleContext)
+	}
+}

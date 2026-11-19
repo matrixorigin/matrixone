@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -64,18 +65,20 @@ func (p *vectorQueryTestProducer) Free(proc *process.Process, failed bool, err e
 func TestVectorQueryScopeLifecycle(t *testing.T) {
 	sentinel := errors.New("vector provider failed")
 	for _, tc := range []struct {
-		name                           string
-		rows                           int
-		null                           bool
-		limit                          uint64
-		prepareErr, callErr, initPanic bool
+		name                  string
+		rows                  int
+		null                  bool
+		limit                 uint64
+		prepareErr, initPanic bool
+		callErr               error
 	}{
 		{name: "ann", rows: 1, limit: 2},
 		{name: "null", rows: 1, null: true, limit: 2},
 		{name: "empty", limit: 2},
 		{name: "zero", rows: 1, limit: 0},
 		{name: "prepare_error", limit: 2, prepareErr: true},
-		{name: "call_error", limit: 2, callErr: true},
+		{name: "call_error", limit: 2, callErr: sentinel},
+		{name: "independent_cancellation", limit: 2, callErr: context.Canceled},
 		{name: "initialization_panic", limit: 2, initPanic: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,9 +119,7 @@ func TestVectorQueryScopeLifecycle(t *testing.T) {
 			if tc.prepareErr {
 				producers[0].prepareErr = sentinel
 			}
-			if tc.callErr {
-				producers[0].callErr = sentinel
-			}
+			producers[0].callErr = tc.callErr
 			selected := 1
 			if tc.null || tc.rows == 0 {
 				selected = 2
@@ -134,7 +135,9 @@ func TestVectorQueryScopeLifecycle(t *testing.T) {
 			case err := <-done:
 				if tc.initPanic {
 					require.Error(t, err)
-				} else if tc.prepareErr || tc.callErr {
+				} else if tc.callErr != nil {
+					require.ErrorIs(t, err, tc.callErr)
+				} else if tc.prepareErr {
 					require.ErrorIs(t, err, sentinel)
 				} else {
 					require.NoError(t, err)
@@ -145,7 +148,7 @@ func TestVectorQueryScopeLifecycle(t *testing.T) {
 			}
 			for i, p := range producers {
 				expected := int32(0)
-				if tc.limit > 0 && !tc.initPanic && (i == 0 || i == selected && !tc.prepareErr && !tc.callErr) {
+				if tc.limit > 0 && !tc.initPanic && (i == 0 || i == selected && !tc.prepareErr && tc.callErr == nil) {
 					expected = 1
 				}
 				require.Equal(t, expected, p.prepared.Load(), "branch %d prepare", i)

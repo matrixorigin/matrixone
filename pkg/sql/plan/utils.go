@@ -784,18 +784,13 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 			return nil
 		}
 
-		// Verify all remaining arguments either:
-		// 1. Don't contain any column references (literals/constants), OR
-		// 2. Contain the same column reference as the first argument
-		for i := 1; i < len(args); i++ {
-			otherCol := extractColRefInFilter(args[i])
-			if otherCol != nil {
-				// If this argument has a column reference, it must match the first argument's column
-				if col.RelPos != otherCol.RelPos || col.ColPos != otherCol.ColPos {
-					return nil
-				}
+		// A nil extraction can also mean multiple columns or an unsupported
+		// expression, not just a constant. Check the entire remaining subtree.
+		allowed := map[[2]int32]bool{{col.RelPos, col.ColPos}: true}
+		for _, arg := range args[1:] {
+			if !exprColRefsSubsetOf(arg, allowed) {
+				return nil
 			}
-			// If otherCol is nil, the argument is a literal/constant (no column reference), which is acceptable
 		}
 
 		return col

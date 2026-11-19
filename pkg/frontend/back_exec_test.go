@@ -579,3 +579,13 @@ func TestBackExecStmtBorrowedAST(t *testing.T) {
 	require.Error(t, back.ExecStmt(nil, nil))
 	require.Error(t, back.ExecStmt(t.Context(), nil))
 }
+
+func TestBackExecExplicitRoleIdentityBeforeExecution(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	ses.SetQueryInProgress(false)
+	identity := process.CurrentRoleContext{Mode: 1, AccountID: 12, UserID: 34, PrimaryRoleID: 56, AccountName: "tenant", UserName: "user"}
+	be := ses.InitBackExec(nil, "", nil, &BackgroundExecOption{currentRoleContext: &identity}).(*backExec)
+	require.Equal(t, identity, be.backSes.currentRoleContext)
+	identity.Mode = 2
+	require.Equal(t, uint32(1), be.backSes.currentRoleContext.Mode)
+}

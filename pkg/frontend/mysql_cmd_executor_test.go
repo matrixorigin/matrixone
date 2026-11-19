@@ -2456,6 +2456,29 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 }
 
+func TestRefreshStatementRoleIdentity(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	tenant := &TenantInfo{Tenant: "tenant", User: "user", TenantID: 12, UserID: 34, DefaultRoleID: 56}
+	ses.SetTenantInfo(tenant)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want := process.CurrentRoleContext{Mode: 1, AccountID: 12, UserID: 34, PrimaryRoleID: 56, AccountName: "tenant", UserName: "user"}
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	tenant.SetUseSecondaryRole(true)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want.Mode = 2
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	tenant.SetUseSecondaryRole(false)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want.Mode = 1
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	ses.SetTenantInfo(nil)
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, process.CurrentRoleContext{}, proc.Base.SessionInfo.CurrentRoleContext)
+}
+
 func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
