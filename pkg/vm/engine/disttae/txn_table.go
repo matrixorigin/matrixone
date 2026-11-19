@@ -3213,52 +3213,52 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
-	bytes, _ := keys.MarshalBinary()
-	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
-	inExpr := plan2.MakeInExpr(
-		ctx,
-		colExpr,
-		int32(keys.Length()),
-		bytes,
-		false)
-
-	basePKFilter, err := readutil.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
-	if err != nil {
-		return false, err
-	}
-
-	filter, err := readutil.ConstructBlockPKFilter(
-		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
-		basePKFilter,
-		nil,
-	)
-	if err != nil {
-		return false, err
-	}
-	if filter.Cleanup != nil {
-		defer filter.Cleanup()
-	}
-
-	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		inner := LinearSearchOffsetByValFactory(keys)
-		return func(cacheVectors containers.Vectors) []int64 {
-			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
-				return nil
-			}
-			return inner(&cacheVectors[0])
-		}
-	}
-
-	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
-		reason = "candidate_blocks_bailout"
-		return true, nil
-	}
-
-	cacheVectors := containers.NewVectors(3)
-	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
-	pkSeq := pkDef.Seqnum
-	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
+		bytes, _ := keys.MarshalBinary()
+		colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+		inExpr := plan2.MakeInExpr(
+			ctx,
+			colExpr,
+			int32(keys.Length()),
+			bytes,
+			false)
+
+		basePKFilter, err := readutil.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
+		if err != nil {
+			return false, err
+		}
+
+		filter, err := readutil.ConstructBlockPKFilter(
+			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+			basePKFilter,
+			nil,
+		)
+		if err != nil {
+			return false, err
+		}
+		if filter.Cleanup != nil {
+			defer filter.Cleanup()
+		}
+
+		buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
+			inner := LinearSearchOffsetByValFactory(keys)
+			return func(cacheVectors containers.Vectors) []int64 {
+				if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+					return nil
+				}
+				return inner(&cacheVectors[0])
+			}
+		}
+
+		if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
+			reason = "candidate_blocks_bailout"
+			return true, nil
+		}
+
+		cacheVectors := containers.NewVectors(3)
+		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+		pkSeq := pkDef.Seqnum
+		pkType := plan2.ExprType2Type(&pkDef.Typ)
 		// Acquire semaphore to limit concurrent block I/O across all transactions.
 		// This prevents 1000 goroutines from simultaneously reading blocks and
 		// exhausting mpool capacity. Release before the tombstone phase, which
