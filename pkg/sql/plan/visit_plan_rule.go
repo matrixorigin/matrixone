@@ -1805,7 +1805,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 			}
 		}
 		var originalBoundExpr *Expr
-		if name == "+" || name == "-" || name == "*" {
+		if name == "+" || name == "-" || name == "*" || name == "bit_count" {
 			originalBoundExpr = expr
 		}
 		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
@@ -3944,7 +3944,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			} else {
 				var originalBoundExpr *Expr
 				switch functionName {
-				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime":
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime", "bit_count":
 					// The saved operands already own immutable provenance. Share
 					// them only when rebinding, without copying the tree again.
 					originalFunction := *exprImpl.F

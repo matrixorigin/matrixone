@@ -8767,7 +8767,7 @@ var supportedMathBuiltIns = []FuncNew{
 			case types.T_char, types.T_varchar, types.T_text:
 				return newCheckResultWithSuccess(13)
 			}
-			return fixedTypeMatch(overloads, inputs)
+			return fixedTypeMatch(overloads[:BitCountFieldFloat32Overload], inputs)
 		},
 
 		Overloads: []overload{
@@ -8923,6 +8923,18 @@ var supportedMathBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return BitCountBinaryString
 				},
+			},
+			{
+				overloadId: BitCountFieldFloat32Overload,
+				args:       []types.T{types.T_float32},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32] },
+			},
+			{
+				overloadId: BitCountFieldFloat64Overload,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float64] },
 			},
 		},
 	},
