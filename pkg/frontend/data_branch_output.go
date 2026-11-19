@@ -37,6 +37,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -470,7 +471,16 @@ func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]
 
 	nameToIdx := make(map[string]int, len(tblStuff.def.visibleIdxes))
 	for _, idx := range tblStuff.def.visibleIdxes {
-		nameToIdx[strings.ToLower(tblStuff.def.colNames[idx])] = idx
+		colName := tblStuff.def.colNames[idx]
+		nameKey := commonutil.EqualFoldKey(colName)
+		if prevIdx, exists := nameToIdx[nameKey]; exists && prevIdx != idx {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"column names %q and %q are equivalent",
+				tblStuff.def.colNames[prevIdx],
+				colName,
+			)
+		}
+		nameToIdx[nameKey] = idx
 	}
 
 	projected := make([]int, 0, len(columns)+len(tblStuff.def.pkColIdxes))
@@ -486,7 +496,7 @@ func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]
 	}
 
 	for _, col := range columns {
-		idx, ok := nameToIdx[strings.ToLower(string(col))]
+		idx, ok := nameToIdx[commonutil.EqualFoldKey(string(col))]
 		if !ok {
 			if tblStuff.tarRel != nil && tblStuff.tarRel.GetTableName() != "" {
 				return nil, moerr.NewInvalidInputNoCtxf(
@@ -566,9 +576,19 @@ func newDiffOutputTable(
 
 	columnNames := make([]string, 0, len(projectedIdxes)+2)
 	usedNames := make(map[string]struct{}, len(projectedIdxes)+2)
+	usedColNames := make(map[string]string, len(projectedIdxes))
 	for _, idx := range projectedIdxes {
 		name := tblStuff.def.colNames[idx]
-		usedNames[strings.ToLower(name)] = struct{}{}
+		nameKey := commonutil.EqualFoldKey(name)
+		if prevName, exists := usedColNames[nameKey]; exists {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"column names %q and %q are equivalent",
+				prevName,
+				name,
+			)
+		}
+		usedColNames[nameKey] = name
+		usedNames[nameKey] = struct{}{}
 	}
 	columnNames = append(columnNames,
 		nextAvailableDiffOutputColumnName(diffOutputSourceColumn, usedNames),
@@ -592,11 +612,11 @@ func nextAvailableDiffOutputColumnName(base string, used map[string]struct{}) st
 		if suffix > 0 {
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
-		lowerName := strings.ToLower(name)
-		if _, exists := used[lowerName]; exists {
+		nameKey := commonutil.EqualFoldKey(name)
+		if _, exists := used[nameKey]; exists {
 			continue
 		}
-		used[lowerName] = struct{}{}
+		used[nameKey] = struct{}{}
 		return name
 	}
 }
@@ -615,32 +635,37 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS target table definition is unavailable")
 	}
 
-	projectedNames := make([]string, len(output.projectedIdxes))
-	projectedTargetOnly := make([]bool, len(output.projectedIdxes))
-	targetOnlyIdxes := make(map[int]struct{}, len(tblStuff.def.tarOnlyIdxes))
-	for _, idx := range tblStuff.def.tarOnlyIdxes {
-		targetOnlyIdxes[idx] = struct{}{}
-	}
-	for i, idx := range output.projectedIdxes {
-		projectedNames[i] = tblStuff.def.colNames[idx]
-		_, projectedTargetOnly[i] = targetOnlyIdxes[idx]
-	}
-	outputColDefs, targetOnly, err := dataBranchOutputColumnDefs(
-		targetTableDef, baseTableDef, projectedNames, projectedTargetOnly,
-	)
-	if err != nil {
-		return "", err
-	}
-
 	columnDefs := []string{
 		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
-	for i, name := range projectedNames {
-		colDef := outputColDefs[i]
+	for _, idx := range output.projectedIdxes {
+		name := tblStuff.def.colNames[idx]
+		targetOnly := slices.Contains(tblStuff.def.tarOnlyIdxes, idx)
+		var colDef *plan2.ColDef
+		if targetOnly {
+			colDef = dataBranchColumnDefByName(targetTableDef, name)
+			if colDef == nil {
+				return "", moerr.NewInternalErrorNoCtxf(
+					"DATA BRANCH source column %q is unavailable", name,
+				)
+			}
+		} else {
+			// The reconciled mapping identifies the same logical column across
+			// physical table generations, including renamed columns.
+			if idx < len(tblStuff.def.baseColNames) {
+				colDef = dataBranchColumnDefByName(baseTableDef, tblStuff.def.baseColNames[idx])
+			}
+			if colDef == nil {
+				return "", moerr.NewInternalErrorNoCtxf(
+					"DATA BRANCH destination column for source column %q is unavailable", name,
+				)
+			}
+		}
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
-		if colDef.Typ.NotNullable && !targetOnly[i] {
+		// Base-side rows project missing target-only values as NULL.
+		if colDef.Typ.NotNullable && !targetOnly {
 			columnDef += " not null"
 		} else {
 			columnDef += " default null"
@@ -716,50 +741,6 @@ func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.C
 	return colDef
 }
 
-// dataBranchColumnsByIdentity maps each source column name to the column with
-// the same stable identity in the destination definition. Column names are
-// intentionally not part of schema equivalence: a branch may rename a column
-// without changing its identity, so physical reads from another branch or an
-// ancestor must resolve that branch's local name through ColId and Seqnum.
-func dataBranchOutputColumnDefs(
-	sourceTableDef *plan2.TableDef,
-	destinationTableDef *plan2.TableDef,
-	sourceColumnNames []string,
-	sourceTargetOnly []bool,
-) ([]*plan2.ColDef, []bool, error) {
-	if sourceTableDef == nil || destinationTableDef == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
-	}
-	if len(sourceColumnNames) != len(sourceTargetOnly) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH output column classification is unavailable")
-	}
-
-	outputColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
-	targetOnly := make([]bool, len(sourceColumnNames))
-	for i, sourceColumnName := range sourceColumnNames {
-		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
-		if sourceColDef == nil {
-			return nil, nil, moerr.NewInternalErrorNoCtxf(
-				"DATA BRANCH source column %q is unavailable", sourceColumnName,
-			)
-		}
-		outputColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
-		if outputColDefs[i] == nil {
-			if !sourceTargetOnly[i] {
-				return nil, nil, moerr.NewInternalErrorNoCtxf(
-					"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
-				)
-			}
-			// A target-only column has no base identity. Keep its target type in
-			// the materialized schema, but make the output column nullable because
-			// base-side DIFF rows project target-only values as NULL.
-			outputColDefs[i] = sourceColDef
-			targetOnly[i] = true
-		}
-	}
-	return outputColDefs, targetOnly, nil
-}
-
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
 	return fmt.Sprintf(
 		"insert into %s (%s) values %s",
@@ -780,6 +761,16 @@ func materializeDiffOutputAsTable(
 	if err != nil {
 		cancel()
 		return err
+	}
+
+	// Use UTC by default so TIMESTAMP literals remain unambiguous in a DST fold.
+	activeLoc := time.UTC
+	activeOffsetHours := 0
+	back, _ := bh.(*backExec)
+	if back != nil && back.backSes != nil {
+		previousTimeZone := back.backSes.GetTimeZone()
+		back.backSes.SetTimeZone(activeLoc)
+		defer back.backSes.SetTimeZone(previousTimeZone)
 	}
 
 	created := false
@@ -812,6 +803,7 @@ func materializeDiffOutputAsTable(
 	values := acquireBuffer(tblStuff.bufPool)
 	defer releaseBuffer(tblStuff.bufPool, values)
 
+	rowCount := 0
 	flush := func() error {
 		if values.Len() == 0 {
 			return nil
@@ -820,12 +812,14 @@ func materializeDiffOutputAsTable(
 			return flushErr
 		}
 		values.Reset()
+		rowCount = 0
 		return nil
 	}
 
+	const microsPerHour = 3600 * types.MicroSecsPerSec
+	minValidUTC := types.FromClockUTC(1, 1, 1, 0, 0, 0, 0)
 	var (
 		firstErr error
-		rowCount int
 		row      = make([]any, len(tblStuff.def.colNames))
 	)
 	for {
@@ -845,13 +839,8 @@ func materializeDiffOutputAsTable(
 			if firstErr != nil {
 				break
 			}
-			rowValues := acquireBuffer(tblStuff.bufPool)
-			rowValues.Reset()
-			rowValues.WriteByte('(')
-			writeEscapedSQLString(rowValues, []byte(wrapped.name))
-			rowValues.WriteByte(',')
-			writeEscapedSQLString(rowValues, []byte(wrapped.kind))
-
+			var minTS, maxTS types.Timestamp
+			hasNonZeroTS := false
 			for _, colIdx := range output.projectedIdxes {
 				vec := wrapped.batch.Vecs[colIdx]
 				if rowIdx >= vec.Length() {
@@ -865,8 +854,59 @@ func materializeDiffOutputAsTable(
 					firstErr = extractErr
 					break
 				}
+				if ts, ok := row[colIdx].(types.Timestamp); ok && ts != types.ZeroTimestamp {
+					if !hasNonZeroTS {
+						minTS, maxTS = ts, ts
+						hasNonZeroTS = true
+					} else {
+						minTS = min(minTS, ts)
+						maxTS = max(maxTS, ts)
+					}
+				}
+			}
+			if firstErr != nil {
+				cancel()
+				break
+			}
+
+			// Round any excess over the UTC year-9999 limit up to a whole-hour negative offset.
+			rowOffsetHours := 0
+			if hasNonZeroTS && maxTS > types.TimestampMaxValue {
+				rowOffsetHours = int((maxTS-types.TimestampMaxValue-1)/microsPerHour) + 1
+			}
+			// A fixed offset has no DST folds. Keep batching while the shifted row fits years 0001–9999.
+			needsSwitch := rowOffsetHours > activeOffsetHours ||
+				(activeOffsetHours > 0 && hasNonZeroTS &&
+					(minTS < minValidUTC || int64(activeOffsetHours) > int64(minTS-minValidUTC)/microsPerHour))
+			if needsSwitch {
+				if firstErr = flush(); firstErr != nil {
+					cancel()
+					break
+				}
+				activeLoc = time.UTC
+				if rowOffsetHours != 0 {
+					activeLoc = time.FixedZone("", -rowOffsetHours*3600)
+				}
+				if back != nil && back.backSes != nil {
+					back.backSes.SetTimeZone(activeLoc)
+				}
+				activeOffsetHours = rowOffsetHours
+			}
+
+			rowValues := acquireBuffer(tblStuff.bufPool)
+			rowValues.Reset()
+			rowValues.WriteByte('(')
+			writeEscapedSQLString(rowValues, []byte(wrapped.name))
+			rowValues.WriteByte(',')
+			writeEscapedSQLString(rowValues, []byte(wrapped.kind))
+			for _, colIdx := range output.projectedIdxes {
 				rowValues.WriteByte(',')
-				if formatErr := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], rowValues); formatErr != nil {
+				colType := tblStuff.def.colTypes[colIdx]
+				if value := row[colIdx]; colType.Oid == types.T_timestamp && value != nil {
+					rowValues.WriteByte('\'')
+					rowValues.WriteString(value.(types.Timestamp).String2(activeLoc, colType.Scale))
+					rowValues.WriteByte('\'')
+				} else if formatErr := formatValIntoString(ses, value, colType, rowValues); formatErr != nil {
 					firstErr = formatErr
 					break
 				}
@@ -881,7 +921,6 @@ func materializeDiffOutputAsTable(
 					if flushErr := flush(); flushErr != nil {
 						firstErr = flushErr
 					}
-					rowCount = 0
 				}
 				if firstErr == nil {
 					if values.Len() > 0 {
@@ -2133,7 +2172,7 @@ func dataBranchIndexedSpecialUpdateColIdxes(
 			continue
 		}
 		for _, part := range index.Parts {
-			uniqueColumns[strings.ToLower(catalog.ResolveAlias(part))] = struct{}{}
+			uniqueColumns[commonutil.EqualFoldKey(catalog.ResolveAlias(part))] = struct{}{}
 		}
 	}
 	if len(uniqueColumns) == 0 {
@@ -2146,7 +2185,7 @@ func dataBranchIndexedSpecialUpdateColIdxes(
 			!dataBranchSpecialUpdateColumn(tblStuff, baseDef, idx) {
 			continue
 		}
-		if _, unique := uniqueColumns[strings.ToLower(tblStuff.def.baseColNames[idx])]; unique {
+		if _, unique := uniqueColumns[commonutil.EqualFoldKey(tblStuff.def.baseColNames[idx])]; unique {
 			idxes = append(idxes, idx)
 		}
 	}

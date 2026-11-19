@@ -926,21 +926,6 @@ func runLCAProbeWithReaderFallback(
 				return executor.Result{}, err
 			}
 		}
-	} else if len(missedRows) == 0 {
-		for targetIdx, sourceIdx := range sourceIdxByTarget {
-			if sourceIdx < 0 {
-				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
-				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
-				nullConst.Free(mp)
-				if err != nil {
-					return executor.Result{}, err
-				}
-				continue
-			}
-			if err = out.Vecs[targetIdx+1].UnionBatch(tmp.Vecs[sourceIdx], 0, rowCount, nil, mp); err != nil {
-				return executor.Result{}, err
-			}
-		}
 	} else {
 		for targetIdx, sourceIdx := range sourceIdxByTarget {
 			if sourceIdx < 0 {
@@ -952,6 +937,7 @@ func runLCAProbeWithReaderFallback(
 				}
 				continue
 			}
+			// Even an all-hit scan may return rows in a different order than orderedIdx.
 			if err = out.Vecs[targetIdx+1].Union(tmp.Vecs[sourceIdx], sels, mp); err != nil {
 				return executor.Result{}, err
 			}
@@ -3176,6 +3162,7 @@ func dataBranchSourceColToTargetIdx(
 	sourceDef, targetDef *plan2.TableDef,
 	targetColNames []string,
 	targetOnlyIdxes []int,
+	excludeTargetOnly bool,
 ) ([]int, error) {
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
@@ -3232,6 +3219,11 @@ func dataBranchSourceColToTargetIdx(
 		if targetCol != nil {
 			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
 		}
+		_, isTargetOnly := targetOnly[targetIdx]
+		if excludeTargetOnly && isTargetOnly {
+			// A historical base value is absent from the current base schema.
+			targetIdx = -1
+		}
 		mapping = append(mapping, targetIdx)
 		if targetIdx < 0 {
 			continue
@@ -3241,7 +3233,7 @@ func dataBranchSourceColToTargetIdx(
 		sameType := col.Typ.Id == targetCol.Typ.Id &&
 			(dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) || derivedCompositePK)
 		if !sameType {
-			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
+			if isTargetOnly {
 				// This column does not exist on the base endpoint and is excluded
 				// from comparison and MERGE apply. Its old physical representation
 				// cannot be moved into the endpoint-typed batch; project it as NULL

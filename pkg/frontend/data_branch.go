@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1443,20 +1444,19 @@ func reconcileDataBranchEndpointSchema(
 			return err
 		}
 		tables.def.lcaColNames = make([]string, len(tables.def.colNames))
+		tarDataIdx := -1
 		for _, tarCol := range tarDef.Cols {
 			if tarCol.Name == catalog.Row_ID {
 				continue
 			}
+			tarDataIdx++
 			reachesLCA, lcaCol, redefined := dataBranchColumnReachesLCA(
 				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
 			)
 			if !reachesLCA || redefined || lcaCol == nil {
 				continue
 			}
-			idx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
-			if idx >= 0 {
-				tables.def.lcaColNames[idx] = lcaCol.Name
-			}
+			tables.def.lcaColNames[tarDataIdx] = lcaCol.Name
 		}
 		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
 			if baseCol := endpointColumns[strings.ToLower(tarCol.Name)]; baseCol != nil {
@@ -1498,21 +1498,20 @@ func reconcileDataBranchEndpointSchema(
 		tables.def.baseColToTarIdx[i] = -1
 	}
 	tables.def.baseColNames = make([]string, len(tables.def.colNames))
+	tarDataIdx := -1
 	for _, tarCol := range tarDef.Cols {
 		if tarCol.Name == catalog.Row_ID {
 			continue
 		}
+		tarDataIdx++
 		baseCol := resolveBaseColumn(tarCol)
 		if baseCol == nil {
 			continue
 		}
-		tarIdx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
-		if tarIdx >= 0 {
-			tables.def.baseColNames[tarIdx] = baseCol.Name
-		}
+		tables.def.baseColNames[tarDataIdx] = baseCol.Name
 		for i, candidate := range baseDataCols {
-			if strings.EqualFold(candidate.Name, baseCol.Name) {
-				tables.def.baseColToTarIdx[i] = tarIdx
+			if candidate == baseCol || strings.EqualFold(candidate.Name, baseCol.Name) {
+				tables.def.baseColToTarIdx[i] = tarDataIdx
 				break
 			}
 		}
@@ -1724,6 +1723,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
 		left.Scale == right.Scale &&
+		left.NumericAttributes == right.NumericAttributes &&
 		left.Enumvalues == right.Enumvalues &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
@@ -1743,16 +1743,22 @@ func checkSchemaCompatibilityWithResolver(
 
 	baseVisibleColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
 	for _, col := range baseDef.Cols {
-		if col.Name == catalog.Row_ID {
-			continue
-		}
-		name := strings.ToLower(col.Name)
 		if isDataBranchUserVisibleColumn(col) {
-			baseVisibleColMap[name] = col
+			nameKey := commonutil.EqualFoldKey(col.Name)
+			if prev := baseVisibleColMap[nameKey]; prev != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: base columns '%s' and '%s' have equivalent names",
+					prev.Name, col.Name,
+				)
+				return
+			}
+			baseVisibleColMap[nameKey] = col
 		}
 	}
 
 	commonColNameSet := make(map[string]bool)
+	matchedBaseCols := make(map[*plan.ColDef]string)
+	tarVisibleColMap := make(map[string]*plan.ColDef, len(tarDef.Cols))
 	dataIdx := 0
 	for _, tarCol := range tarDef.Cols {
 		if tarCol.Name == catalog.Row_ID {
@@ -1764,8 +1770,28 @@ func checkSchemaCompatibilityWithResolver(
 			continue
 		}
 
-		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
+		if baseCol != nil {
+			if prevTarName, matched := matchedBaseCols[baseCol]; matched {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: base column '%s' matches multiple target columns ('%s' and '%s')",
+					baseCol.Name, prevTarName, tarCol.Name,
+				)
+				return
+			}
+			matchedBaseCols[baseCol] = tarCol.Name
+		}
+		if isDataBranchUserVisibleColumn(tarCol) {
+			tarNameKey := commonutil.EqualFoldKey(tarCol.Name)
+			if prev := tarVisibleColMap[tarNameKey]; prev != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: target columns '%s' and '%s' have equivalent names",
+					prev.Name, tarCol.Name,
+				)
+				return
+			}
+			tarVisibleColMap[tarNameKey] = tarCol
+		}
 		if baseCol != nil {
 			if !dataBranchGeneratedColumnsLogicallyEqual(
 				tarCol, baseCol, tarDef, baseDef, resolveBaseColumn,
@@ -1792,12 +1818,13 @@ func checkSchemaCompatibilityWithResolver(
 					return
 				}
 				commonIdxes = append(commonIdxes, dataIdx)
-				commonColNameSet[name] = true
-				commonColNameSet[strings.ToLower(baseCol.Name)] = true
+				baseNameKey := commonutil.EqualFoldKey(baseCol.Name)
+				commonColNameSet[commonutil.EqualFoldKey(tarCol.Name)] = true
+				commonColNameSet[baseNameKey] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
 				}
-				delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
+				delete(baseVisibleColMap, baseNameKey)
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
@@ -1823,7 +1850,7 @@ func checkSchemaCompatibilityWithResolver(
 		// No specific PK name to verify.
 	} else if baseDef.Pkey.CompPkeyCol != nil {
 		for _, pkName := range baseDef.Pkey.Names {
-			if !commonColNameSet[strings.ToLower(pkName)] {
+			if !commonColNameSet[commonutil.EqualFoldKey(pkName)] {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: composite primary key column '%s' is not present in common columns",
 					pkName,
@@ -1833,7 +1860,7 @@ func checkSchemaCompatibilityWithResolver(
 		}
 	} else {
 		pkName := baseDef.Pkey.PkeyColName
-		if !commonColNameSet[strings.ToLower(pkName)] {
+		if !commonColNameSet[commonutil.EqualFoldKey(pkName)] {
 			err = moerr.NewInternalErrorNoCtxf(
 				"schema compatibility check: primary key column '%s' is not present in common columns",
 				pkName,
@@ -1859,12 +1886,8 @@ func checkSchemaCompatibilityWithResolver(
 // guarantee that values valid on one side can be materialized into the other.
 func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 	return left.Id == right.Id &&
-		left.Width == right.Width &&
-		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
 		left.SameCollation(right) &&
-		left.NotNullable == right.NotNullable &&
-		left.AutoIncr == right.AutoIncr
+		dataBranchColumnTypeAttributesEqual(left, right)
 }
 
 func getRelationById(
@@ -2283,7 +2306,7 @@ func constructChangeHandle(
 		if tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
-				tables.def.tarOnlyIdxes,
+				tables.def.tarOnlyIdxes, false,
 			); err != nil {
 				return
 			}
@@ -2344,7 +2367,7 @@ func constructChangeHandle(
 		if baseRange.rel[i].GetTableID(ctx) != tables.baseRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				baseRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
-				tables.def.tarOnlyIdxes,
+				tables.def.tarOnlyIdxes, true,
 			); err != nil {
 				return
 			}
@@ -2616,10 +2639,19 @@ func dataBranchLineageEndpointColumns(
 	tarEndpoint := tarDefs[len(tarDefs)-1]
 	baseEndpoint := baseDefs[len(baseDefs)-1]
 	endpointColumns := make(map[string]*plan.ColDef, len(tarEndpoint.Cols))
+	seenTargetKeys := make(map[string]string, len(tarEndpoint.Cols))
 	for _, tarCol := range tarEndpoint.Cols {
 		if !isDataBranchUserVisibleColumn(tarCol) {
 			continue
 		}
+		key := commonutil.EqualFoldKey(tarCol.Name)
+		if prevName, exists := seenTargetKeys[key]; exists {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"schema compatibility check: target columns '%s' and '%s' have equivalent names",
+				prevName, tarCol.Name,
+			)
+		}
+		seenTargetKeys[key] = tarCol.Name
 		tarReachesLCA, tarLCACol, tarRedefined := dataBranchColumnReachesLCA(
 			tarDefs, tarLineageOnly, tarCol,
 		)
