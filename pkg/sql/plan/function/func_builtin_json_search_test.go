@@ -21,9 +21,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -55,6 +57,39 @@ func TestJSONSearchRegistrationAndTypeCheck(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, DeduceNotNullable(overload.GetEncodedOverloadID(), nil))
+}
+
+func TestJSONSearchExecutionRequiresProtocol135(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	fc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"one"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"x"}, nil),
+		},
+		NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+		JSONSearch,
+	)
+	defer fc.Free()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+	require.NoError(t, fc.result.PreExtendAndReset(1))
+	require.ErrorContains(t, fc.fn(fc.parameters, fc.result, proc, 1, nil), "protocol version 135")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
+	require.NoError(t, fc.result.PreExtendAndReset(1))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 1, nil))
+	require.Equal(t, `"$.a"`, jsonVectorRowString(t, fc.result.GetResultVector(), 0))
 }
 
 func TestJSONSearchOneAllAndLocations(t *testing.T) {

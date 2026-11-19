@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -167,6 +168,11 @@ func JSONSearch(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	// Planner metadata inference can evaluate constants before Compile sees
+	// their expression tree. Apply the local floor on that path as well.
+	if jsonSessionProtocolVersion(proc) < defines.MORPCVersion135 {
+		return moerr.NewNotSupported(proc.Ctx, "JSON_SEARCH requires MORPC protocol version 135")
+	}
 	if len(parameters) < 3 {
 		return moerr.NewWrongArguments(proc.Ctx, "json_search")
 	}
