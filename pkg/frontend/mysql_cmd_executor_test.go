@@ -1542,7 +1542,7 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = make(map[string]string)
+	ses.ruleCache = &roleRuleCache{}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
 		`{"remapdb":{"src":"session_db"}}`))
 	execCtx := newTestExecCtx(ctx, ctrl)
@@ -1627,7 +1627,7 @@ func TestPrepareStringStatementCombinesSQLModeAndRemapPolicy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = make(map[string]string)
+	ses.ruleCache = &roleRuleCache{}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
 		`{"remapdb":{"src":"session_db"}}`))
@@ -2588,7 +2588,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = map[string]string{}
+	ses.ruleCache = &roleRuleCache{}
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
@@ -2736,7 +2736,7 @@ func TestExecRequestStmtPrepareBindsSource(t *testing.T) {
 			defer ses.Close()
 			ses.txnHandler = &TxnHandler{}
 			ses.rewriteEnabled.Store(enabled)
-			ses.ruleCache = map[string]string{"db.t": "select id from db.t where id=1"}
+			ses.ruleCache = &roleRuleCache{first: map[string]string{"db.t": "select id from db.t where id=1"}}
 			original := GetComputationWrapper
 			observed := false
 			stubs := gostub.Stub(&GetComputationWrapper, func(ec *ExecCtx, _ string, _ string,
@@ -6034,7 +6034,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			ses := newTestSession(t, ctrl)
 			ses.txnHandler = &TxnHandler{}
 			ses.rewriteEnabled.Store(true)
-			ses.ruleCache = map[string]string{}
+			ses.ruleCache = &roleRuleCache{}
 			setRowCount(ses, ses.GetProc(), 7)
 			ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
