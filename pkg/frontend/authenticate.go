@@ -7103,7 +7103,9 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 
 		for _, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN {
+			if node.NodeType == plan.Node_TABLE_SCAN ||
+				(node.NodeType == plan.Node_EXTERNAL_SCAN &&
+					node.GetTableDef().GetTableType() == catalog.SystemExternalRel) {
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true

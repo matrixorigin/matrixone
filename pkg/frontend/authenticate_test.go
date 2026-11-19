@@ -5809,6 +5809,80 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, "t1", arr[0].tableName)
 }
 
+func makeCSVExternalTablePrivilegePlan(dbName, tableName string) *plan2.Plan {
+	return &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan.Query_SELECT,
+		Nodes: []*plan2.Node{{
+			NodeType:   plan.Node_EXTERNAL_SCAN,
+			ObjRef:     &plan2.ObjectRef{SchemaName: dbName, ObjName: tableName},
+			TableDef:   &plan2.TableDef{TableType: catalog.SystemExternalRel},
+			ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
+		}},
+	}}}
+}
+
+func TestExtractPrivilegeTipsFromPlanCSVExternalTable(t *testing.T) {
+	arr := extractPrivilegeTipsFromPlan(makeCSVExternalTablePrivilegePlan("csv_db", "events"))
+
+	require.Len(t, arr, 1)
+	assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+	assert.Equal(t, objectTypeTable, arr[0].objType)
+	assert.Equal(t, "csv_db", arr[0].databaseName)
+	assert.Equal(t, "events", arr[0].tableName)
+}
+
+func TestExtractPrivilegeTipsFromPlanSkipsNonCatalogExternalScans(t *testing.T) {
+	for _, externType := range []plan.ExternType{plan.ExternType_LOAD, plan.ExternType_RESULT_SCAN} {
+		t.Run(externType.String(), func(t *testing.T) {
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan2.Node{{
+					NodeType:   plan.Node_EXTERNAL_SCAN,
+					ExternScan: &plan.ExternScan{Type: int32(externType)},
+				}},
+			}}}
+			assert.Empty(t, extractPrivilegeTipsFromPlan(p))
+		})
+	}
+}
+
+func TestAuthenticateCSVExternalTableSelectPrivilege(t *testing.T) {
+	const (
+		dbName    = "csv_db"
+		tableName = "events"
+	)
+
+	for _, tc := range []struct {
+		name    string
+		granted bool
+	}{
+		{name: "revoked"},
+		{name: "granted", granted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			stmt := &tree.Select{}
+			ses := newSes(ctrl)
+			sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+				PrivilegeTypeSelect: tc.granted,
+			})
+			sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, makeCSVExternalTablePrivilegePlan(dbName, tableName))
+			require.NoError(t, err)
+			assert.Equal(t, tc.granted, ok)
+		})
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
