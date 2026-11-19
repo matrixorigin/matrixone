@@ -59,7 +59,7 @@ func TestIe(t *testing.T) {
 			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
-			assert.Error(t, err)
+			assert.Error(t, res.Error())
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
@@ -85,23 +85,24 @@ func TestIeProto(t *testing.T) {
 	assert.Nil(t, p.WriteEOFOrOK(0, 1))
 
 	p.stashResult = true
-	p.WriteResponse(ctx, &Response{
+	require.NoError(t, p.WriteResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
 		data:         nil,
-	})
-	assert.Nil(t, nil, p.result.resultSet)
+	}))
+	assert.Nil(t, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.WriteResponse(ctx, &Response{
+	require.NoError(t, p.WriteResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
 			affectedRows: 1,
 			mrs:          mockResultSet(),
 		},
-	})
-	v, _ := p.result.Value(ctx, 0, 0)
+	}))
+	v, err := p.result.Value(ctx, 0, 0)
+	require.NoError(t, err)
 	assert.Equal(t, 42, v.(int))
 
 	p.ResetStatistics()
@@ -114,6 +115,27 @@ func TestIeProto(t *testing.T) {
 
 	r = p.swapOutResult()
 	assert.Equal(t, uint64(0), r.resultSet.GetRowCount())
+}
+
+func TestInternalProtocolResultStashLimit(t *testing.T) {
+	p := &internalProtocol{result: &internalExecResult{}, stashResult: true}
+	rows := mockResultSet()
+	for i := 0; i < 101; i++ {
+		require.NoError(t, p.WriteResultSetRow(rows, 1))
+	}
+	require.EqualValues(t, 101, p.result.RowCount())
+	require.EqualValues(t, 101, p.result.affectedRows)
+
+	// The next batch is ignored once the existing result has more than 100 rows.
+	require.NoError(t, p.WriteResultSetRow(rows, 1))
+	require.EqualValues(t, 101, p.result.RowCount())
+	require.EqualValues(t, 101, p.result.affectedRows)
+
+	p.ResetStatistics()
+	p.stashResult = false
+	require.NoError(t, p.WriteResultSetRow(rows, 1))
+	require.Nil(t, p.result.resultSet)
+	require.EqualValues(t, 1, p.result.affectedRows)
 }
 
 func TestIeResult(t *testing.T) {

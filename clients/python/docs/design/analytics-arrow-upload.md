@@ -33,7 +33,13 @@ Create one owned unique IPC file in the caller's existing staging directory. Wri
 After staging completes, create a new table (`create=True`) or append (`create=False`) and execute native Arrow `LOAD DATA` in one transaction. Hold UTC, STRICT_ALL_TABLES and TN primary-key checks through COMMIT, then restore session settings.
 
 - Before-commit errors: roll back creation/append; no partial rows.
-- Disconnection during COMMIT: `AnalyticsCommitUnknownError`, `committed=None`; reconcile rather than retry.
+- An acknowledged, non-invalidated PyMySQL/aiomysql duplicate-key (1062)
+  COMMIT reply: `AnalyticsCommitRejectedError`, `committed=False`, with
+  original errno/cause and row count when known. The failed connection is
+  still discarded. File imports share this transaction classification.
+- Other COMMIT errors, cancellation or missing replies: `AnalyticsCommitUnknownError`, `committed=None`; reconcile rather than retry.
+  Cancellation retains its cancellation exception with the same unknown state.
+  The SDK does not infer rollback from arbitrary error codes or retry writes.
 - Acknowledged commit followed by session/staging cleanup failure: `AnalyticsCleanupError`, `committed=True`, with row count.
 - If a primary input/DB error is already active, attach `rollback_error`, `cleanup_error` or `staging_cleanup_error` instead of replacing it.
 

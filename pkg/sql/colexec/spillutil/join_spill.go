@@ -570,7 +570,7 @@ func writeSpillRecordInt64(w io.Writer, value int64) error {
 	}
 	var data [8]byte
 	binary.NativeEndian.PutUint64(data[:], uint64(value))
-	return writeSpillRecordBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeSpillRecordUint64(w io.Writer, value uint64) error {
@@ -579,18 +579,7 @@ func writeSpillRecordUint64(w io.Writer, value uint64) error {
 	}
 	var data [8]byte
 	binary.NativeEndian.PutUint64(data[:], value)
-	return writeSpillRecordBytes(w, data[:])
-}
-
-func writeSpillRecordBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 // writeBucketPayload performs disk/FD admission and one physical write for a
@@ -1499,6 +1488,7 @@ type SpillEngineConfig struct {
 	DedupColName              string
 	DedupColTypes             []plan.Type
 	DedupKeyExprs             []*plan.Expr
+	AuxiliaryRowIdColIdx      int32
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
@@ -2003,6 +1993,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	builder.DedupColName = e.cfg.DedupColName
 	builder.DedupColTypes = e.cfg.DedupColTypes
 	builder.DedupKeyExprs = e.cfg.DedupKeyExprs
+	builder.AuxiliaryRowIdColIdx = e.cfg.AuxiliaryRowIdColIdx
 	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
 		builder.Free(proc)
 		return nil, BucketSkip, err

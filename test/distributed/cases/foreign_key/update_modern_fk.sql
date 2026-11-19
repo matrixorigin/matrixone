@@ -79,6 +79,26 @@ set foreign_key_checks = 1;
 update self_ref set parent_id = 99 where id = 2;
 select * from self_ref order by id;
 
+-- Validate every assignment even when a later assignment replaces it.
+create table self_gen (
+    id int primary key,
+    parent_id int,
+    g int generated always as (id + 1) stored,
+    foreign key (parent_id) references self_gen(id)
+);
+create table self_gen_src (id int primary key);
+insert into self_gen (id, parent_id) values (1, 1);
+insert into self_gen_src values (1);
+update self_gen s join self_gen_src u on s.id = u.id set s.g = 123, s.g = default, s.parent_id = s.parent_id;
+set foreign_key_checks = 0;
+update self_gen s join self_gen_src u on s.id = u.id set s.g = 123, s.g = default, s.parent_id = s.parent_id;
+update self_gen s join self_gen_src u on s.id = u.id set s.g = default, s.g = 123, s.parent_id = s.parent_id;
+update self_gen s join self_gen_src u on s.id = u.id set s.g = default, s.parent_id = s.parent_id;
+select id, parent_id, g from self_gen;
+set foreign_key_checks = 1;
+drop table self_gen_src;
+drop table self_gen;
+
 create table parent_restrict (
     id int primary key
 );

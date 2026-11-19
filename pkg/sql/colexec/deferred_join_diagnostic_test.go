@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -129,4 +130,96 @@ func TestDeferredJoinDiagnosticResetDiscardsLateBuildWarnings(t *testing.T) {
 	require.NoError(t, owner.Activate(proc))
 	require.Zero(t, session.warningCount)
 	owner.Reset()
+}
+
+func TestDeferredJoinTemporalWarningActivation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	src := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+	expr := bindTestCast(t, proc, 0, src, types.T_time.ToType())
+	owner := new(DeferredJoinDiagnostic)
+	owner.Prepare(proc)
+	execs, err := NewJoinBuildExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
+	require.NoError(t, err)
+	defer execs[0].Free()
+	b := batch.New(nil)
+	b.SetRowCount(2)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Zero(t, sink.warningCount)
+	owner.Reset()
+	require.Zero(t, sink.warningCount)
+	execs[0].ResetForNextQuery()
+	owner.Prepare(proc)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Zero(t, sink.warningCount)
+	require.NoError(t, owner.Activate(proc))
+	require.NoError(t, owner.Activate(proc))
+	require.Equal(t, 1, sink.warningCount)
+	owner.Reset()
+}
+
+func TestJoinProbeDiagnosticScopeAcrossSiblings(t *testing.T) {
+	for _, guardedFirst := range []bool{true, false} {
+		name := "guarded-first"
+		if !guardedFirst {
+			name = "guarded-last"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			defer proc.Free()
+			checkExpressionStorageAfterCleanup(t, proc)
+			proc.SetBaseProcessRunningStatus(true)
+			sink := &preparedCastWarningSession{}
+			proc.WarningSink = sink
+			source := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+			bad := bindTestFunction(t, proc, "date", source)
+			flag := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			null := &plan.Expr{Typ: types.T_date.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+			guarded := bindTestFunction(t, proc, "if", flag, bad, null)
+			left, right := guarded, bad
+			if !guardedFirst {
+				left, right = right, left
+			}
+			expr := bindTestFunction(t, proc, "=", left, right)
+			owner := new(DeferredJoinDiagnostic)
+			owner.Prepare(proc)
+			defer owner.Reset()
+			execs, activation, err := NewJoinProbeExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
+			require.NoError(t, err)
+			defer execs[0].Free()
+			require.Len(t, activation, 1, "only the unconditional sibling activates before the residual")
+			b := batch.NewWithSize(1)
+			defer b.Clean(proc.Mp())
+			b.Vecs[0] = testutil.MakeBoolVector([]bool{false, false}, nil, proc.Mp())
+			b.SetRowCount(2)
+			for execution := 0; execution < 2; execution++ {
+				if execution > 0 {
+					execs[0].ResetForNextQuery()
+					owner.Reset()
+					owner.Prepare(proc)
+					require.NoError(t, vector.SetFixedAtNoTypeCheck(b.Vecs[0], 0, false))
+				}
+				_, err = activation[0].Eval(proc, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, execution*2, sink.warningCount, "activation remains captured until both join sides exist")
+				require.NoError(t, owner.Activate(proc))
+				result, err := execs[0].Eval(proc, []*batch.Batch{b}, nil)
+				require.NoError(t, err)
+				require.True(t, result.IsNull(0))
+				require.True(t, result.IsNull(1))
+				require.Equal(t, execution*2+1, sink.warningCount, "the false branch contributes no warning")
+				require.NoError(t, vector.SetFixedAtNoTypeCheck(b.Vecs[0], 0, true))
+				for repeat := 0; repeat < 2; repeat++ {
+					_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+					require.NoError(t, err)
+					require.Equal(t, execution*2+2, sink.warningCount, "the selected constant is reported once per execution")
+				}
+			}
+		})
+	}
 }

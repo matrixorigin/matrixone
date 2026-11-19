@@ -27,7 +27,7 @@ from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import declarative_base
 
 from matrixone import AsyncClient, Client
-
+from matrixone.orm import Query
 
 Base = declarative_base()
 
@@ -60,7 +60,7 @@ def make_query():
                 return client.query(QueryRow)
             client = Client()
             client.execute = execute
-            return client.query(QueryRow)
+            return Query(QueryRow, client) if kind == "legacy" else client.query(QueryRow)
 
         yield build
     finally:
@@ -103,20 +103,23 @@ async def test_count_preserves_filter_parameters(make_query, kind):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["sync", "async"])
-async def test_first_preserves_original_page(make_query, kind):
+@pytest.mark.parametrize("kind", ["sync", "async", "legacy"])
+@pytest.mark.parametrize("terminal", ["first", "scalar"])
+async def test_first_preserves_original_page(make_query, kind, terminal):
     query = make_query(kind).order_by("id").limit(3).offset(1)
-    assert (await resolve(query.first())).id == 20
+    result = await resolve(getattr(query, terminal)())
+    assert (result.id if terminal == "first" else result) == 20
     assert [row.id for row in await resolve(query.all())] == [20, 30, 40]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["sync", "async"])
-async def test_failed_first_preserves_original_page(make_query, kind):
+@pytest.mark.parametrize("kind", ["sync", "async", "legacy"])
+@pytest.mark.parametrize("terminal", ["first", "scalar"])
+async def test_failed_first_preserves_original_page(make_query, kind, terminal):
     query = make_query(kind).order_by("id").limit(3).offset(1)
     with patch.object(query.client, "execute", side_effect=RuntimeError("executor failed")):
         with pytest.raises(RuntimeError, match="executor failed"):
-            await resolve(query.first())
+            await resolve(getattr(query, terminal)())
     assert [row.id for row in await resolve(query.all())] == [20, 30, 40]
 
 

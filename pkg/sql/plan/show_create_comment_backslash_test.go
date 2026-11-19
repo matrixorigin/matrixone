@@ -62,7 +62,7 @@ func TestShowCreateTableCommentBackslashRoundTrip(t *testing.T) {
 				stmt, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, tc.mode)
 				require.NoError(t, err, sql)
 				t.Cleanup(stmt.Free)
-				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				p, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				require.NoError(t, err, sql)
 				return p.GetDdl().GetCreateTable().GetTableDef()
 			}

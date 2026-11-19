@@ -21,12 +21,14 @@ package table_function
 import (
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -38,10 +40,13 @@ type fulltext2CompactState struct {
 	tblcfg     fulltext2.TableConfig
 	capacity   int64
 	postingCap int64
+	policy     *executor.IndexRelationPolicy
 	batch      *batch.Batch
 }
 
 func (u *fulltext2CompactState) reset(tf *TableFunction, proc *process.Process) {
+	u.inited = false
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -106,6 +111,13 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 			}
 		}
 	}
+	policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_compact", u.tblcfg.DbName, "",
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: u.tblcfg.IndexTable},
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: u.tblcfg.MetadataTable})
+	if err != nil {
+		return err
+	}
+	u.policy = policy
 	u.batch = tf.createResultBatch()
 	u.inited = true
 	return nil
@@ -114,12 +126,13 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 // end runs the compaction after the (empty) input is consumed — one txn folds the
 // tail into the base and drops dead docs.
 func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) error {
-	if !u.inited {
+	if !u.inited || u.policy == nil {
 		return nil
 	}
 	// Metadata may be a caller-supplied view. Keep its evaluation under caller
 	// authority; CompactSegments reads its own generated artifacts natively.
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
 	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity, u.postingCap); err != nil {
 		return err
 	}

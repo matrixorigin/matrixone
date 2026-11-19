@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -114,25 +115,12 @@ func groupConcatMaxLenAsUint64(value any) (uint64, bool) {
 }
 
 const (
-	INDEX_TYPE_PRIMARY  = "PRIMARY"
-	INDEX_TYPE_UNIQUE   = "UNIQUE"
-	INDEX_TYPE_MULTIPLE = "MULTIPLE"
-	INDEX_TYPE_FULLTEXT = "FULLTEXT"
-	INDEX_TYPE_SPATIAL  = "SPATIAL"
+	INDEX_TYPE_PRIMARY  = colexec.INDEX_TYPE_PRIMARY
+	INDEX_TYPE_UNIQUE   = colexec.INDEX_TYPE_UNIQUE
+	INDEX_TYPE_MULTIPLE = colexec.INDEX_TYPE_MULTIPLE
+	INDEX_TYPE_FULLTEXT = colexec.INDEX_TYPE_FULLTEXT
+	INDEX_TYPE_SPATIAL  = colexec.INDEX_TYPE_SPATIAL
 )
-
-func indexMetadataType(unique bool, algo string) string {
-	switch {
-	case unique:
-		return INDEX_TYPE_UNIQUE
-	case catalog.IsRTreeIndexAlgo(algo):
-		return INDEX_TYPE_SPATIAL
-	case catalog.IsFullTextIndexAlgo(algo) || catalog.IsFullText2IndexAlgo(algo):
-		return INDEX_TYPE_FULLTEXT
-	default:
-		return INDEX_TYPE_MULTIPLE
-	}
-}
 
 const (
 	INDEX_VISIBLE_YES = 1
@@ -383,7 +371,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.IndexName))
 
 					// 5. index_type
-					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
+					index_type := colexec.IndexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(index_type))
 
 					//6. algorithm

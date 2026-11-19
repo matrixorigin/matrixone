@@ -156,6 +156,8 @@ func TestMinioSDKConditionalObjectIdentityReads(t *testing.T) {
 	require.NoError(t, err)
 	sdk := &MinioSDK{bucket: "bucket", client: client}
 
+	testOrdinaryObjectReadRanges(t, sdk)
+
 	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
 	require.NoError(t, err)
 	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)

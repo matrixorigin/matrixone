@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -303,4 +304,30 @@ func TestVarlenBinarySearchOffsetByValFactoryWithDuplicateNumbers(t *testing.T) 
 	}
 
 	require.Equal(t, expected, fn(vec))
+}
+
+func TestOrderedLinearSearchEqualityAndComparator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	vec := NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+	for _, value := range []float64{-2, math.Copysign(0, -1), 0, math.NaN(), 2, 9} {
+		require.NoError(t, AppendFixed(vec, value, false, mp))
+	}
+	values := []float64{0, 2, 2, math.NaN()}
+	require.Equal(t, []int64{1, 2, 4}, OrderedLinearSearchOffsetByValFactory(values, nil)(vec))
+	// A deliberately asymmetric comparator proves argument order is preserved.
+	compare := func(row, candidate float64) int {
+		if row == candidate-2 {
+			return 0
+		}
+		return 1
+	}
+	require.Equal(t, []int64{0, 1, 2}, OrderedLinearSearchOffsetByValFactory(values, compare)(vec))
+	require.Nil(t, OrderedLinearSearchOffsetByValFactory[float64](nil, nil)(vec))
+	require.Nil(t, OrderedLinearSearchOffsetByValFactory[float64](nil, compare)(vec))
+	empty := NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { empty.Free(mp) })
+	require.Nil(t, OrderedLinearSearchOffsetByValFactory(values, nil)(empty))
+	require.Nil(t, OrderedLinearSearchOffsetByValFactory(values, compare)(empty))
 }

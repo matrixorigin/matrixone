@@ -15,6 +15,7 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -71,6 +72,12 @@ type mergeStats struct {
 	writtenBytes uint32 // object written bytes
 
 	blkRowCnt, objRowCnt, objBlkCnt, objCnt int
+}
+
+// Check the soft byte limit after each appended row so only that row can
+// overshoot the limit, including when a single row is itself oversized.
+func (s *mergeStats) isBlockOversized(bat *batch.Batch) bool {
+	return s.targetObjSize > 0 && bat.Size() > int(s.targetObjSize)*3/2
 }
 
 func (s *mergeStats) needNewObject() bool {

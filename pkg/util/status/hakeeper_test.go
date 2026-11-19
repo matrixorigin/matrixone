@@ -80,6 +80,17 @@ func TestFillHAKeeper(t *testing.T) {
 	assert.Equal(t, 10, len(status.HAKeeperStatus.Nodes))
 	assert.Equal(t, 10, len(status.HAKeeperStatus.DeletedNodes))
 
+	// A failed refresh records the error without discarding existing node data.
+	nodes := append([]NodeStatus(nil), status.HAKeeperStatus.Nodes...)
+	deletedNodes := append([]NodeStatus(nil), status.HAKeeperStatus.DeletedNodes...)
 	client.mode = 1
 	status.HAKeeperStatus.fill(&client)
+	assert.Equal(t, context.DeadlineExceeded.Error(), status.HAKeeperStatus.ErrMsg)
+	assert.Equal(t, nodes, status.HAKeeperStatus.Nodes)
+	assert.Equal(t, deletedNodes, status.HAKeeperStatus.DeletedNodes)
+
+	status.HAKeeperStatus.fill(nil)
+	assert.Equal(t, context.DeadlineExceeded.Error(), status.HAKeeperStatus.ErrMsg)
+	assert.Equal(t, nodes, status.HAKeeperStatus.Nodes)
+	assert.Equal(t, deletedNodes, status.HAKeeperStatus.DeletedNodes)
 }

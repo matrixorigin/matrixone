@@ -325,7 +325,6 @@ func TestKeeper(t *testing.T) {
 				0,
 				newRemoteLockTable(
 					"s1",
-					time.Second,
 					pb.LockTable{
 						Group:       0,
 						Table:       0,
@@ -344,7 +343,6 @@ func TestKeeper(t *testing.T) {
 				1,
 				newRemoteLockTable(
 					"s1",
-					time.Second,
 					pb.LockTable{
 						Group:       0,
 						Table:       1,
@@ -409,7 +407,6 @@ func TestKeepRemoteLockReusesBindScratch(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -503,7 +500,6 @@ func TestKeepRemoteLockIgnoresRouteCacheWithoutActiveRef(t *testing.T) {
 		bind.Table,
 		newRemoteLockTable(
 			"local",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -664,7 +660,6 @@ func TestKeepRemoteLockHasBoundedInflight(t *testing.T) {
 					bind.Table,
 					newRemoteLockTable(
 						"s1",
-						time.Second,
 						bind,
 						tracked,
 						func(pb.LockTable) {},
@@ -742,7 +737,6 @@ func TestKeepRemoteLockSlowPeerDoesNotBlockHealthyPeer(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -820,7 +814,6 @@ func TestKeepRemoteLockHasGlobalInflightBoundAcrossPeers(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -884,7 +877,6 @@ func TestKeepRemoteLockRefreshWindowIsFairAcrossRounds(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -936,7 +928,6 @@ func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -988,7 +979,6 @@ func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				"local",
-				time.Second,
 				bind,
 				client,
 				func(pb.LockTable) {},
@@ -1087,7 +1077,6 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				3,
 				newRemoteLockTable(
 					"s1",
-					time.Second,
 					pb.LockTable{ServiceID: "s2"},
 					c,
 					func(lt pb.LockTable) {},
@@ -1144,7 +1133,6 @@ func TestKeepRemoteLockBindRefreshHonorsContext(t *testing.T) {
 		bind.Table,
 		newRemoteLockTable(
 			svc.serviceID,
-			time.Second,
 			bind,
 			client,
 			svc.handleBindChanged,
@@ -1197,7 +1185,7 @@ func TestKeepRemoteLockEndedRefreshPreservesFencing(t *testing.T) {
 			svc := &service{serviceID: "local", logger: logger}
 			bind := pb.LockTable{Group: 0, Table: 1, OriginTable: 1, ServiceID: "peer", Version: 1, Valid: true}
 			tables := &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
-			tables.set(bind.Group, bind.Table, newRemoteLockTable(svc.serviceID, time.Second, bind, client, func(pb.LockTable) {}, logger))
+			tables.set(bind.Group, bind.Table, newRemoteLockTable(svc.serviceID, bind, client, func(pb.LockTable) {}, logger))
 			svc.tableGroups = tables
 			keeper := &lockTableKeeper{serviceID: svc.serviceID, client: client, groupTables: tables, service: svc}
 			var ctx context.Context
@@ -1276,7 +1264,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 			svc.tableGroups.set(
 				oldBind.Group,
 				oldBind.Table,
-				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+				newRemoteLockTable(svc.serviceID, oldBind, c, svc.handleBindChanged, logger),
 			)
 
 			txnID := []byte("txn1")
@@ -1411,7 +1399,6 @@ func TestKeepRemoteLockRejectedBindInvalidatesOldBind(t *testing.T) {
 							bind.Table,
 							newRemoteLockTable(
 								svc.serviceID,
-								time.Second,
 								bind,
 								c,
 								svc.handleBindChanged,
@@ -1564,7 +1551,6 @@ func TestKeepRemoteLockMissingOwnerFencesActiveTxn(t *testing.T) {
 			newTable := func(bind pb.LockTable) lockTable {
 				return newRemoteLockTable(
 					svc.serviceID,
-					time.Second,
 					bind,
 					client,
 					svc.handleBindChanged,
@@ -1900,7 +1886,7 @@ func TestDetachRejectedRemoteBindPreservesLiveState(t *testing.T) {
 			if test.change != nil {
 				test.change(svc, &currentBind)
 			}
-			table := newRemoteLockTable(svc.serviceID, time.Second, currentBind, nil, nil, logger)
+			table := newRemoteLockTable(svc.serviceID, currentBind, nil, nil, logger)
 			svc.tableGroups.set(currentBind.Group, currentBind.Table, table)
 			beforeRef := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
 			beforeVersion := svc.tableGroups.getVersion()
@@ -1981,7 +1967,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			svc.tableGroups.set(
 				oldBind.Group,
 				oldBind.Table,
-				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+				newRemoteLockTable(svc.serviceID, oldBind, c, svc.handleBindChanged, logger),
 			)
 
 			txnID := []byte("txn1")
@@ -2160,7 +2146,7 @@ func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing
 			svc.tableGroups.set(
 				oldBind.Group,
 				oldBind.Table,
-				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+				newRemoteLockTable(svc.serviceID, oldBind, c, svc.handleBindChanged, logger),
 			)
 			keeper := &lockTableKeeper{
 				serviceID:   svc.serviceID,
@@ -2256,7 +2242,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 			svc.tableGroups.set(
 				oldBind.Group,
 				oldBind.Table,
-				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+				newRemoteLockTable(svc.serviceID, oldBind, c, svc.handleBindChanged, logger),
 			)
 
 			txnID := []byte("txn1")

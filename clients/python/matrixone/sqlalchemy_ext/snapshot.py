@@ -23,101 +23,51 @@ from sqlalchemy import select as sqlalchemy_select
 from sqlalchemy.sql.selectable import Select
 
 
-# Extend Select class to add with_snapshot method
-def _with_snapshot(self, snapshot_name: str):
-    """
-    Add snapshot hint to this select statement.
+def with_snapshot(statement, snapshot_name: str):
+    """Return a snapshot-annotated Select without modifying SQLAlchemy globally.
 
-    This method enables point-in-time queries by attaching a snapshot name
-    to the select statement. The snapshot hint will be injected into the
-    compiled SQL.
-
-    Args:
-        snapshot_name: Name of the snapshot to query
-
-    Returns:
-        A new Select; the original remains unchanged
-
-    Examples::
-
-        # Chain with other query methods
-        stmt = (select(User)
-                .where(User.age > 25)
-                .with_snapshot('backup_20241025')
-                .order_by(User.name))
-
-        # Combine with fulltext search
-        stmt = (select(Article)
-                .where(boolean_match("title", "content").must("python"))
-                .with_snapshot('yesterday_backup')
-                .limit(10))
+    The source statement remains unchanged. Compile/execute through the
+    MatrixOne dialect; unsupported sources fail rather than read live data.
     """
     from .._sql_literals import sql_string_token
 
+    if not isinstance(statement, Select):
+        raise TypeError('Snapshot queries require a SQLAlchemy Select statement')
     if not isinstance(snapshot_name, str) or not snapshot_name:
         raise ValueError('snapshot must be a nonempty string')
     sql_string_token(snapshot_name, context='Snapshot')
-    return self._annotate({'matrixone_snapshot': snapshot_name})
+    return statement._annotate({'matrixone_snapshot': snapshot_name})
 
 
-# Monkey-patch the Select class to add with_snapshot method
-Select.with_snapshot = _with_snapshot
+# Preserve the private callable for existing imports, without installing it.
+_with_snapshot = with_snapshot
+
+
+def enable_snapshot_method():
+    """Opt in to Select.with_snapshot() at application startup.
+
+    This process-wide compatibility method is never installed on import.
+    Repeated calls are harmless; a third-party attribute is never overwritten.
+    Configure before other threads modify SQLAlchemy's Select class.
+    """
+    from inspect import getattr_static
+
+    missing = object()
+    current = getattr_static(Select, 'with_snapshot', missing)
+    if current is with_snapshot:
+        return
+    if current is not missing:
+        raise RuntimeError('Select.with_snapshot is already defined by another owner')
+    Select.with_snapshot = with_snapshot
 
 
 def select(*entities, snapshot=None):
-    """
-    Create a SQLAlchemy select statement with optional MatrixOne snapshot support.
+    """Build an ordinary Select, optionally annotated with a MatrixOne snapshot.
 
-    This is a drop-in replacement for SQLAlchemy's select() that adds
-    MatrixOne's snapshot query capability for point-in-time queries.
-
-    Args:
-        *entities: Tables, columns, or expressions to select (same as SQLAlchemy select())
-        snapshot: Optional snapshot name for querying historical data
-
-    Returns:
-        SQLAlchemy Select statement with snapshot metadata attached and with_snapshot() method
-
-    Examples::
-
-        from matrixone.sqlalchemy_ext import select
-        from matrixone import Client
-
-        client = Client(...)
-
-        # Method 1: Using snapshot parameter
-        stmt = select(User, snapshot='backup_20241025').where(User.age > 25)
-
-        # Method 2: Using with_snapshot() chain (recommended)
-        stmt = (select(User)
-                .where(User.age > 25)
-                .with_snapshot('backup_20241025'))
-
-        # Both methods are equivalent and can be used interchangeably
-
-        # With fulltext search
-        from matrixone.sqlalchemy_ext import boolean_match
-        stmt = (select(Article)
-                .where(boolean_match("title", "content").must("python"))
-                .with_snapshot('yesterday_backup')
-                .order_by(Article.created_at.desc()))
-
-        # Complex query
-        stmt = (select(User.department, func.count(User.id))
-                .group_by(User.department)
-                .having(func.count(User.id) > 5)
-                .with_snapshot('year_end_backup')
-                .order_by(func.count(User.id).desc()))
-
-        # Execute with client
-        sql = compile_select(stmt)
-        results = client.execute(sql)
-
-    Note:
-        - This function is 100% compatible with SQLAlchemy's select()
-        - The snapshot parameter is optional and MatrixOne-specific
-        - When no snapshot is specified, behaves exactly like sqlalchemy.select()
-        - The with_snapshot() method is available on all select statements
+    Use ``select(User, snapshot='nightly')`` or
+    ``with_snapshot(sqlalchemy.select(User), 'nightly')``. Neither changes
+    SQLAlchemy classes. Applications retaining ``stmt.with_snapshot(name)``
+    must explicitly call ``enable_snapshot_method()`` once at startup.
     """
     stmt = sqlalchemy_select(*entities)
 
@@ -149,4 +99,4 @@ def compile_select(stmt, engine=None):
 # Retain the private import for existing callers, with one rewriting authority.
 from .._snapshot_sql import rewrite_snapshot as _inject_snapshot_hint
 
-__all__ = ['select', 'compile_select']
+__all__ = ['select', 'compile_select', 'with_snapshot', 'enable_snapshot_method']

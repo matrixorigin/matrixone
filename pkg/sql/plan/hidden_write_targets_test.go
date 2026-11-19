@@ -113,7 +113,7 @@ func TestHiddenLoadSetTargetsDoNotConsumeAST(t *testing.T) {
 					if legacy {
 						built, err = buildLoad(load, &mock.ctxt, false)
 					} else {
-						built, err = BuildPlan(&mock.ctxt, load, false)
+						built, err = BuildPlan(&mock.ctxt, load, false, nil)
 					}
 					require.Error(t, err)
 					require.Nil(t, built)
@@ -228,13 +228,13 @@ func TestHiddenInsertCopyAuthority(t *testing.T) {
 				if legacy {
 					built, err = buildInsert(stmt.(*tree.Insert), &mock.ctxt, false, false)
 				} else {
-					built, err = BuildPlan(&mock.ctxt, stmt, false)
+					built, err = BuildPlan(&mock.ctxt, stmt, false, nil)
 				}
 				if tc.allowed {
 					require.NoError(t, err)
 					require.NotNil(t, built)
 					mock.ctxt.SetContext(original)
-					_, err = BuildPlan(&mock.ctxt, stmt, false)
+					_, err = BuildPlan(&mock.ctxt, stmt, false, nil)
 				}
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), "%v", err)
 				require.Equal(t, before, tree.String(stmt, dialect.MYSQL), "COPY authority must not persist in the AST")
@@ -289,7 +289,7 @@ func TestLoadSetFilteredColumnLookup(t *testing.T) {
 			if legacy {
 				return buildLoad(statement.(*tree.Load), &mock.ctxt, false)
 			}
-			return BuildPlan(&mock.ctxt, statement, false)
+			return BuildPlan(&mock.ctxt, statement, false, nil)
 		}()
 		require.NoError(t, err, "legacy=%v", legacy)
 		require.NotNil(t, built)

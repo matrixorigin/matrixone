@@ -992,11 +992,7 @@ func (b cdcSQLBuilder) GetTaskWatermarksSQL(
 	accountId uint64,
 	taskId string,
 ) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].SQL,
-		accountId,
-		taskId,
-	)
+	return b.GetWatermarkSQL(accountId, taskId)
 }
 
 func (b cdcSQLBuilder) GetWatermarkWhereSQL(

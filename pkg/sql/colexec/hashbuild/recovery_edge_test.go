@@ -210,6 +210,15 @@ func TestExpressionRecoveryInvalidAndLeafMatrix(t *testing.T) {
 	peak, err = expressionTypePeak(plan.Type{Id: int32(types.T_array_float32), Width: 2}, 2)
 	require.NoError(t, err)
 	require.Positive(t, peak)
+	target := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_T{T: &plan.TargetType{}},
+	}
+	one, err := expressionVectorPeak(nil, target, 1, false)
+	require.NoError(t, err)
+	many, err := expressionVectorPeak(nil, target, 8192, false)
+	require.NoError(t, err)
+	require.Equal(t, one, many, "a CAST type token is one constant NULL, not a batch of strings")
 
 	require.Nil(t, nodeFunctionArgs(column))
 	require.Nil(t, nodeFunctionArgs(functionWithoutBody))
@@ -232,4 +241,32 @@ func TestExpressionRecoveryInvalidAndLeafMatrix(t *testing.T) {
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 	_, _, _, err = serialExpressionPackerBounds(&plan.Function{Args: []*plan.Expr{nil}})
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+}
+
+func TestDictionaryRecoveryAreaProjection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	for i, value := range []string{"a", "a string longer than inline storage", "ignored"} {
+		require.NoError(t, vector.AppendBytes(source, []byte(value), i == 2, mp))
+	}
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { dict.Free(mp) })
+	physical, selected, err := unionBatchAreaProjection(dict, 0, 4)
+	require.NoError(t, err)
+	want := 2 * len("a string longer than inline storage")
+	require.Equal(t, want, physical)
+	require.Equal(t, uint64(want), selected)
+	physical, selected, err = unionBatchAreaProjection(dict, 1, 3)
+	require.NoError(t, err)
+	require.Equal(t, want/2, physical)
+	require.Equal(t, uint64(want/2), selected)
 }

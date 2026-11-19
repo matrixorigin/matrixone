@@ -377,3 +377,38 @@ func TestNullIntervalSlidingCancellationAndReuse(t *testing.T) {
 	require.Equal(t, []int64{6, 6, 6}, vector.MustFixedColWithTypeCheck[int64](result))
 	require.Nil(t, ctr.runningAgg)
 }
+
+func TestWindowIntervalScalarTextLowPrecisionFloats(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, tc := range []struct {
+		name string
+		vec  func() (*vector.Vector, error)
+	}{
+		{"float32", func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_float32.ToType(), float32(1.5), 1, mp)
+		}},
+		{"bf16", func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_bf16.ToType(), types.BF16FromFloat32(1.5), 1, mp)
+		}},
+		{"float16", func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_float16.ToType(), types.Float16FromFloat32(1.5), 1, mp)
+		}},
+		{"float8", func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_float8.ToType(), types.Float8FromFloat32(1.5), 1, mp)
+		}},
+		{"float4", func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_float4.ToType(), types.Float4FromFloat32(1.5), 1, mp)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec, err := tc.vec()
+			require.NoError(t, err)
+			defer vec.Free(mp)
+			text, numeric, err := windowIntervalScalarText(vec)
+			require.NoError(t, err)
+			require.True(t, numeric)
+			require.Equal(t, "1.5", text)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}

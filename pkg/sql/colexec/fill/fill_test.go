@@ -1221,9 +1221,11 @@ func TestResetColRefRecursesIntoFunctionArgs(t *testing.T) {
 	require.Equal(t, int32(-1), outerCol.RelPos)
 	require.Equal(t, int32(0), outerCol.ColPos)
 
+	// The second operand reads the right endpoint even through a wrapper
+	// function such as an implicit cast (#31661).
 	innerCol := expr.GetF().Args[1].GetF().Args[0].GetCol()
 	require.Equal(t, int32(-1), innerCol.RelPos)
-	require.Equal(t, int32(0), innerCol.ColPos)
+	require.Equal(t, int32(1), innerCol.ColPos)
 }
 
 func TestProcessValueFillsNullsWithConstantVector(t *testing.T) {

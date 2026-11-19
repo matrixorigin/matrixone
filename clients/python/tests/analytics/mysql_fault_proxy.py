@@ -50,6 +50,9 @@ class FaultProxy:
             def handle(self):
                 downstream = self.request
                 upstream = socket.create_connection(("127.0.0.1", proxy.target_port), timeout=5)
+                # Forward individual protocol packets without introducing Nagle delays.
+                upstream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                downstream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 upstream.settimeout(None)
                 with proxy._lock:
                     proxy._sockets.update((upstream, downstream))

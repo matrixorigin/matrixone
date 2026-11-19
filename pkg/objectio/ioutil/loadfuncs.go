@@ -156,6 +156,52 @@ func LoadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
+	return loadColumnsDataInto(ctx, columns, typs, fs, location, destinations,
+		sels, visibilityTS, m, policy, false, false, nil)
+}
+
+// LoadColumnsDataIntoReadonly materializes complete, non-appendable columns
+// into empty destinations. Varlen payloads have private retained backing so a
+// local pipeline can snapshot them without making another full payload copy.
+// Selected rows and appendable visibility keep LoadColumnsDataInto's owned path.
+func LoadColumnsDataIntoReadonly(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (fromCache bool, err error) {
+	_, fromCache, err = loadColumnsDataInto(ctx, columns, typs, fs, location,
+		destinations, nil, nil, m, policy, true, false, nil)
+	return
+}
+
+// LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
+// validation capability and an admitted per-column borrow policy. A nil policy
+// preserves full borrowing; an incompatible policy conservatively copies owned.
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true, allowBorrow)
+	return hit, err
+}
+
+func loadColumnsDataInto(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	sels []int64,
+	visibilityTS *types.TS,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+	readonlyArea bool,
+	borrowedColumns bool,
+	allowBorrow []bool,
+) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
 			"object column count %d does not match destination count %d",
@@ -173,6 +219,10 @@ func LoadColumnsDataInto(
 	for i := range destinations {
 		if destinations[i] == nil {
 			err = moerr.NewInvalidInputNoCtxf("nil destination for object column %d", columns[i])
+			return
+		}
+		if readonlyArea && destinations[i].Length() != 0 {
+			err = moerr.NewInvalidInputNoCtxf("readonly destination for object column %d is not empty", columns[i])
 			return
 		}
 	}
@@ -255,8 +305,48 @@ func LoadColumnsDataInto(
 		}
 	}
 
+	publication := objectio.JSONReadSetFromContext(ctx)
 	for i := range columns {
-		if sels == nil {
+		if destinations[i].Length() != 0 && publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
+			publication.Disable()
+		}
+		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
+			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, destinations[i].AllocationAccountSelection(), publication.CachePinAdmission())
+			if openErr != nil {
+				publication.Disable()
+				err = openErr
+				return
+			}
+			if sels != nil {
+				selected, selectErr := reader.Select(sels, m)
+				reader.Close()
+				if selectErr != nil {
+					publication.Disable()
+					err = selectErr
+					return
+				}
+				reader = selected
+			}
+			publication.Publish(columns[i], reader)
+		}
+		if borrowedColumns && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
+			var borrowed bool
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m)
+			if err != nil {
+				publication.Disable()
+				return
+			}
+			if borrowed {
+				continue
+			}
+			err = objectio.CopyCachedVectorAll(destinations[i], ioVectors.Entries[i].CachedData, m)
+		} else if readonlyArea {
+			err = objectio.CopyCachedVectorAllReadonly(
+				destinations[i],
+				ioVectors.Entries[i].CachedData,
+				m,
+			)
+		} else if sels == nil {
 			err = objectio.CopyCachedVectorAll(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,
@@ -271,6 +361,7 @@ func LoadColumnsDataInto(
 			)
 		}
 		if err != nil {
+			publication.Disable()
 			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
 			return
 		}
@@ -730,4 +821,30 @@ func LoadOneBlockWithIndex(
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
 	return bat, sortKey, err
+}
+
+// WithColumnsDataInto keeps one IOVector pinned through consume. Privately
+// validated columns use scoped readonly headers; other formats materialize into
+// the original owned destinations. The callback must publish only owned data
+// and consume any cache aliases before returning, including on error.
+func WithColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	if scope == nil || consume == nil || len(columns) != len(typs) || len(columns) != len(destinations) || m == nil {
+		return false, moerr.NewInvalidInputNoCtx("invalid scoped column read")
+	}
+	ioVector, hit, err := readColumnsData(ctx, columns, typs, fs, location, nil, m, policy)
+	if err != nil {
+		return false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVector)
+	err = scope.With(ioVector.Entries, destinations, func(inputs []*vector.Vector, marked []bool) error {
+		for i := range columns {
+			if !marked[i] {
+				if err := objectio.CopyCachedVectorAll(destinations[i], ioVector.Entries[i].CachedData, m); err != nil {
+					return err
+				}
+			}
+		}
+		return consume(inputs, marked)
+	})
+	return hit, err
 }

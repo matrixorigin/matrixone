@@ -23,6 +23,7 @@ order by algo_table_type;
 ➤ algo_table_type[12,-1,0]  ¦  include_in_params[-5,64,0]  𝄀
 centroids  ¦  1  𝄀
 entries  ¦  1  𝄀
+ignored  ¦  1  𝄀
 metadata  ¦  1
 set experimental_hnsw_index = 1;
 create table t_hnsw(

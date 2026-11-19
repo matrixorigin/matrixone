@@ -61,9 +61,10 @@ type AppendMVCCHandle struct {
 	sealed                bool
 	appendHistoryComplete bool
 	finalizedCommit       atomic.Pointer[appendFinalizedCommit]
-	// rows is the sole AppendNode collection, ordered by physical row. Prepare
-	// timestamps need not follow row order because Freeze applies concurrently.
+	// rows preserves physical order. rangeIndex separately indexes completed
+	// history because concurrent Freeze need not follow prepare timestamp order.
 	rows              []*AppendNode
+	rangeIndex        appendRangeIndex
 	appendListener    func(txnif.AppendNode) error
 	appendMaxListener func(types.TS)
 	// appendMaxStateListener is called after a seal/terminal transition. The
@@ -126,6 +127,7 @@ func (n *AppendMVCCHandle) ReleaseAppends() {
 	if n.finalizedCommit.Load() == nil {
 		n.appendHistoryComplete = false
 	}
+	n.rangeIndex.clear()
 	n.rows = nil
 }
 
@@ -221,6 +223,7 @@ func (n *AppendMVCCHandle) insertRowLocked(node *AppendNode) {
 		return 0
 	})
 	n.rows = slices.Insert(n.rows, off, node)
+	n.rangeIndex.add(node)
 }
 
 // only for internal usage
@@ -277,21 +280,25 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (sele
 	return
 }
 
-// it collects all append nodes in the range [start, end]
-// minRow: is the min row
-// maxRow: is the max row
-// commitTSVec: is the commit ts vector
-// abortVec: is the abort vector
-// aborts: is the aborted bitmap
-// If checkCommit, it ignore all uncommitted nodes
+// CollectAppendLocked collects [start, end] in physical row order. The caller
+// holds the MVCC read lock, which is temporarily released for transaction waits.
 func (n *AppendMVCCHandle) CollectAppendLocked(
 	start, end types.TS, mp *mpool.MPool,
 ) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
-	txns := make([]txnif.TxnReader, 0)
-	for _, node := range n.rows {
+	if end.LT(&start) {
+		return
+	}
+	// Tiny histories are cheaper to scan once than to enumerate and sort an
+	// index. They also need no derived index allocation on their first read.
+	useIndex := false
+	if len(n.rows) > 128 {
+		useIndex = n.refreshAppendRangeIndexLocked()
+	}
+	var txns []txnif.TxnReader
+	checkTxn := func(node *AppendNode) {
 		txn := node.GetTxn()
 		if txn == nil {
-			continue
+			return
 		}
 		// A txn gets its prepare timestamp before AppendNode.PrepareCommit
 		// copies it into the node. Use the txn timestamp here so a range scan
@@ -301,25 +308,71 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 			txns = append(txns, txn)
 		}
 	}
+	if !useIndex {
+		for _, node := range n.rows {
+			if node.GetTxn() != nil {
+				checkTxn(node)
+			}
+		}
+	} else {
+		for node := range n.rangeIndex.pending {
+			checkTxn(node)
+		}
+	}
 	if len(txns) != 0 {
 		n.RUnlock()
 		for _, txn := range txns {
 			txn.GetTxnState(true)
 		}
 		n.RLock()
+		if useIndex {
+			useIndex = n.refreshAppendRangeIndexLocked()
+		}
 	}
-	selection = n.GetRowSelectionInRangeLocked(start, end)
-	if selection.IsEmpty() {
-		return
+	var first *AppendNode
+	var rest []*AppendNode
+	dense := !useIndex
+	if !dense {
+		first, rest, dense = n.rangeIndex.selectNodes(start, end, max(16, len(n.rows)/8))
 	}
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
-	abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
-	for _, node := range n.rows {
-		if in, _ := node.PreparedIn(start, end); in {
-			for i := 0; i < int(node.maxRow-node.startRow); i++ {
-				commitTSVec.Append(node.GetCommitTS(), false)
-				abortVec.Append(node.IsAborted(), false)
+	emit := func(node *AppendNode) {
+		if node.startRow >= node.maxRow {
+			return
+		}
+		if commitTSVec == nil {
+			commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
+			abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
+		}
+		selection.AddRange(node.startRow, node.maxRow)
+		for row := node.startRow; row < node.maxRow; row++ {
+			commitTSVec.Append(node.GetCommitTS(), false)
+			abortVec.Append(node.IsAborted(), false)
+		}
+	}
+	if dense {
+		// Sorting most of the history is more expensive than one row-order pass.
+		for _, node := range n.rows {
+			if in, _ := node.PreparedIn(start, end); in {
+				emit(node)
 			}
+		}
+	} else if len(rest) == 0 {
+		if first != nil {
+			emit(first)
+		}
+	} else {
+		nodes := append(rest, first)
+		slices.SortFunc(nodes, func(a, b *AppendNode) int {
+			if a.startRow < b.startRow {
+				return -1
+			}
+			if a.startRow > b.startRow {
+				return 1
+			}
+			return 0
+		})
+		for _, node := range nodes {
+			emit(node)
 		}
 	}
 	return
@@ -510,6 +563,7 @@ func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 func (n *AppendMVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 	for i, candidate := range n.rows {
 		if candidate == node {
+			n.rangeIndex.remove(node)
 			n.rows = slices.Delete(n.rows, i, i+1)
 			return
 		}
@@ -561,6 +615,7 @@ func (n *AppendMVCCHandle) EstimateMemSizeLocked() int {
 	if n.rows != nil {
 		asize += len(n.rows) * catalog.AppendNodeApproxSize
 	}
+	asize += n.rangeIndex.estimateMemSize()
 	return asize
 }
 

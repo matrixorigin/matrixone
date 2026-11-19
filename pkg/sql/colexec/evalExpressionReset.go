@@ -43,30 +43,26 @@ func (fF *functionFolding) reset(_ *mpool.MPool) {
 }
 
 type functionInformationForEval struct {
-	// basic information for the function.
-	fid        int32
-	overloadID int64
-
-	// whether the function is volatile or time-dependent.
-	// they were used to determine whether the function can be folded.
-	volatile, timeDependent bool
-	// stringToNumericCast is volatile for ordinary text parameters, but a
-	// prepared parameter with integer provenance can be folded safely.
-	stringToNumericCast  bool
-	rowScopedDiagnostics bool
-	// Integer provenance excludes lexical warnings, but cannot prove that an
-	// explicit DECIMAL target has enough precision for the current value.
-	rowScopedDecimalCast bool
-
-	// the function's evalFn and freeFn.
-	evalFn func(
+	// Keep pointers together and pack small execution flags into the tail.
+	// Folding and flow-control state are promoted to the expression as before.
+	dictionaryInput func([]*vector.Vector) bool
+	overloadID      int64
+	evalFn          func(
 		parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		rowCount int,
 		selectList *function.FunctionSelectList) error
-	resetFn func() error
-	freeFn  func() error
+	resetFn                 func() error
+	freeFn                  func() error
+	fid                     int32
+	volatile, timeDependent bool
+	stringToNumericCast     bool
+	rowScopedDiagnostics    bool
+	rowScopedDecimalCast    bool
+	folded                  functionFolding
+	flowControlKind         vector.PrepareParamKind
+	flowControlKindSeen     bool
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -97,6 +93,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	// reset the function information.
 	expr.functionInformationForEval.reset()
 	expr.freeIffNullResults()
+	expr.freeDictionaryParameters()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -311,7 +308,11 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	if err := expr.evalFn(expr.parameterResults, expr.resultVector, evalProc, execLen, nil); err != nil {
+	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults, true)
+	if normalizeErr != nil {
+		return normalizeErr
+	}
+	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen, nil); err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression
 			// executable so an inactive branch never observes a probe failure.

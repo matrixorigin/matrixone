@@ -453,7 +453,7 @@ a
 drop table t7;
 commit;
 drop table t7;
-no such table autocommit_1.t7
+Unknown table 'autocommit_1.t7'
 create table t8(a int);
 insert into t8 values (500);
 rollback;

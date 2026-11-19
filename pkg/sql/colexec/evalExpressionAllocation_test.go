@@ -28,6 +28,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
+	proc, allocation, _ := dependentTestAllocation(t)
+	typ := types.T_varchar.ToType()
+	input := batch.NewWithSize(3)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	args := make([]*plan.Expr, 3)
+	for i, values := range [][]string{{"aa", "bc", "de"}, {"b", "b", "b"}, {"c", "c", "c"}} {
+		input.Vecs[i] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		args[i] = &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}}
+	}
+	input.SetRowCount(3)
+	executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "prefix_between", args...), allocation)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	batches := []*batch.Batch{input}
+	result, err := executor.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true, false}, vector.MustFixedColNoTypeCheck[bool](result))
+	require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Same(t, allocation, result.AllocationAccountSelection())
+	for _, arg := range input.Vecs {
+		arg.GetNulls().Add(1)
+		result, err = executor.Eval(proc, batches, nil)
+		require.NoError(t, err)
+		require.True(t, result.IsNull(1), "a NULL value or bound needs admitted validity storage")
+		arg.GetNulls().Del(1)
+	}
+}
+
+func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_decimal128} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc, allocation, _ := dependentTestAllocation(t)
+			typ := types.New(oid, 18, 0)
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(typ)
+			for row := range 12 {
+				if oid == types.T_int64 {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], -int64(row+1), row == 1, proc.Mp()))
+				} else {
+					value := types.Decimal128{B0_63: uint64(row + 1)}.Minus()
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, row == 1, proc.Mp()))
+				}
+			}
+			input.SetRowCount(12)
+			column := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "abs", column), allocation)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			for index, mask := range [][]bool{
+				{true, true, false, false, false, false, false, false, false, false, false, true},
+				{false, true, true, true, true, true, true, true, true, true, true, false},
+				{false, false, false, false, false, false, false, false, false, false, false, false},
+				{true, true, true, true, true, true, true, true, true, true, true, true},
+				{false, false, true, false, false, false, false, false, false, false, false, true},
+			} {
+				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				if index == 0 {
+					require.Nil(t, executor.(*FunctionExpressionExecutor).selectedNullResult,
+						"sparse fixed output must avoid NULL-placeholder appends")
+				}
+				require.Equal(t, 12, result.Length())
+				for row, selected := range mask {
+					isNull := !selected || row == 1
+					require.Equal(t, isNull, result.IsNull(uint64(row)))
+					if isNull {
+						continue
+					}
+					if oid == types.T_int64 {
+						require.Equal(t, int64(row+1), vector.GetFixedAtNoTypeCheck[int64](result, row))
+					} else {
+						require.Equal(t, types.Decimal128{B0_63: uint64(row + 1)}, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, row))
+					}
+				}
+				require.Same(t, allocation, result.AllocationAccountSelection())
+			}
+		})
+	}
+}
+
 func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	pool := mpool.MustNewZero()
 	t.Cleanup(func() {
@@ -155,12 +237,19 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
+	require.Zero(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity(),
+		"the first non-NULL generation needs no validity reservation")
+	// Establish real nullable storage before probing a stale NULL beyond its
+	// bound. The non-NULL fast path intentionally has no bitmap to exceed.
+	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	require.NoError(t, err)
+	require.True(t, equalResult.IsNull(1))
 	capacityRows := uint64(equalRoot.resultVector.GetResultVector().
 		GetNulls().GetBitmap().ExternalStorageCapacity() * 64)
 	require.GreaterOrEqual(t, capacityRows, uint64(4))
 	second.Vecs[0].GetNulls().Add(capacityRows)
 
-	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	equalResult, err = equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
 	require.NoError(t, err)
 	require.True(t, equalResult.IsNull(1))
 	require.False(t, equalResult.IsNull(capacityRows))

@@ -786,3 +786,15 @@ select row_count();
 select * from t_odku_nested order by k;
 deallocate prepare od_nested;
 drop table t_odku_nested;
+
+-- Source order survives conflict lookup joins before statement-local arbitration.
+drop table if exists t_odku_source_order;
+create table t_odku_source_order(id int primary key,u1 int,u2 int,payload int,unique(u1),unique(u2));
+insert into t_odku_source_order values (1,10,100,0),(4,40,400,0),(5,50,500,0);
+insert into t_odku_source_order values (2,10,200,1),(3,30,100,2) on duplicate key update payload=values(payload);
+select id,u1,u2,payload from t_odku_source_order order by id;
+truncate table t_odku_source_order;
+insert into t_odku_source_order values (1,1,10,0),(4,4,40,0),(5,5,50,0);
+insert into t_odku_source_order values (100,20,200,1),(101,20,10,2) on duplicate key update payload=values(payload);
+select id,u1,u2,payload from t_odku_source_order order by id;
+drop table t_odku_source_order;

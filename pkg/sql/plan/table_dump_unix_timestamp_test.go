@@ -46,7 +46,7 @@ func TestTableDumpHistoricalUnixTimestampDatetimeDefault(t *testing.T) {
 					ctx = tableDumpBindContext{CompilerContext: compiler,
 						ctx: function.WithLegacyUnixTimestampDatetime(compiler.GetContext())}
 				}
-				built, buildErr := BuildPlan(ctx, stmt, false)
+				built, buildErr := BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, buildErr)
 				return built.GetDdl().GetCreateTable().GetTableDef()
 			}

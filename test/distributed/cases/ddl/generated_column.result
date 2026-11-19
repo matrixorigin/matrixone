@@ -10,7 +10,7 @@ t1  ¦  CREATE TABLE `t1` (
   `c` int GENERATED ALWAYS AS ((a + b)) STORED
 )
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -144,13 +144,13 @@ select * from t10;
 5  ¦  10  ¦  15  ¦  30
 create table t11 (a int, b int, c int generated always as (a + b) stored, d varchar(100) as (concat(cast(a as varchar), '-', cast(b as varchar))) virtual);
 desc t11;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
 d  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  
 show full columns from t11;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Collation[12,64,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Privileges[12,154,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 b  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 c  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
@@ -168,7 +168,7 @@ alter table t12 drop column b;
 invalid input: Cannot modify column 'b': generated column 'c' depends on it
 alter table t12 drop column d;
 desc t12;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -176,7 +176,7 @@ create table t13 (a int, b int);
 insert into t13 values (1,2),(3,4);
 alter table t13 add column c int generated always as (a + b) stored;
 desc t13;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -218,13 +218,13 @@ select * from t16 where c > 5 order by c;
 create table t17 (a int, b int, c int, d int generated always as (a + b) stored);
 alter table t17 drop column d;
 desc t17;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table t18 (a int, b int, c int not null generated always as (a + b) stored);
 desc t18;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -240,7 +240,7 @@ alter table t20 rename column a to a2;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it
 alter table t20 rename column c to c2;
 desc t20;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c2  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -249,7 +249,7 @@ alter table t21 change column a a2 int;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it
 alter table t21 change column a a bigint;
 desc t21;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
@@ -262,7 +262,7 @@ select * from t23;
 ➤ a[4,32,0]  ¦  c[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  3  ¦  2
 desc t23;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  

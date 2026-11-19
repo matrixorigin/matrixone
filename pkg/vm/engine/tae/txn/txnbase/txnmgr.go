@@ -135,9 +135,6 @@ type txnWaiter struct {
 func (w *txnWaiter) Add() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.count == 0 {
-		w.emptyCh = make(chan struct{})
-	}
 	w.count++
 }
 
@@ -148,7 +145,7 @@ func (w *txnWaiter) Done() {
 		panic("txn waiter: negative transaction count")
 	}
 	w.count--
-	if w.count == 0 {
+	if w.count == 0 && w.emptyCh != nil {
 		close(w.emptyCh)
 		w.emptyCh = nil
 	}
@@ -159,6 +156,9 @@ func (w *txnWaiter) Wait(ctx context.Context) error {
 	if w.count == 0 {
 		w.mu.Unlock()
 		return nil
+	}
+	if w.emptyCh == nil {
+		w.emptyCh = make(chan struct{})
 	}
 	emptyCh := w.emptyCh
 	w.mu.Unlock()
@@ -909,7 +909,6 @@ func (mgr *TxnManager) Stop() {
 }
 
 func (mgr *TxnManager) onPreWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		if !op.preWalEnqueuedAt.IsZero() {
@@ -924,16 +923,9 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 			panic(err)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onPreWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) onWalStage(items ...any) {
-	now := time.Now()
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
@@ -957,12 +949,6 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 			)
 		}
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onWalStage]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
 
 func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {

@@ -44,7 +44,7 @@ func TestDependentImplicitLockProjection(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, "SELECT n.N_NATIONKEY, (SELECT (SELECT n.N_NATIONKEY)) FROM NATION n", 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 	require.NoError(t, err)
 	q := bound.GetQuery()
 	step := q.MainOutputStep()

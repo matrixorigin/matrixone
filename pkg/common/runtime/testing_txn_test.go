@@ -81,3 +81,17 @@ func TestTxnModeTestConfigConcurrentAccess(t *testing.T) {
 	})
 	wg.Wait()
 }
+
+func TestBeforeLockHookWithoutAdjustHook(t *testing.T) {
+	tc := &TestingContext{}
+	called := false
+	tc.SetBeforeLockFunc(func(_ []byte, tableID uint64) {
+		require.Equal(t, uint64(42), tableID)
+		called = true
+	})
+	tc.GetBeforeLockFunc()(nil, 42)
+	require.True(t, called)
+
+	tc.SetBeforeLockFunc(nil)
+	require.NotPanics(t, func() { tc.GetBeforeLockFunc()(nil, 42) })
+}

@@ -76,7 +76,6 @@ func newLockRPCContext(ctx context.Context, opts pb.LockOptions) (context.Contex
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
 	logger                      *log.MOLogger
-	removeLockTimeout           time.Duration
 	serviceID                   string
 	bind                        pb.LockTable
 	client                      Client
@@ -87,7 +86,6 @@ type remoteLockTable struct {
 
 func newRemoteLockTable(
 	serviceID string,
-	removeLockTimeout time.Duration,
 	binding pb.LockTable,
 	client Client,
 	bindChangedHandler func(pb.LockTable),
@@ -96,7 +94,6 @@ func newRemoteLockTable(
 	logger = logger.With(zap.String("binding", binding.DebugString()))
 	l := &remoteLockTable{
 		logger:             logger,
-		removeLockTimeout:  removeLockTimeout,
 		serviceID:          serviceID,
 		client:             client,
 		bind:               binding,

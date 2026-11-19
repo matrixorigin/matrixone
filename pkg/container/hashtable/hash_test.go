@@ -429,6 +429,30 @@ func TestHashFn(t *testing.T) {
 	}
 }
 
+func TestInt64HashMapFindBatchSegmentLayouts(t *testing.T) {
+	for _, blockBits := range []uint8{4, 3} {
+		t.Run(fmt.Sprintf("block-bits-%d", blockBits), func(t *testing.T) {
+			// The same collision chain crosses the mask boundary in one block
+			// and a physical block boundary in the segmented layout. Tiny Go-
+			// owned cells exercise lookup without allocating native 4 MiB blocks.
+			var cells [16]Int64HashMapCell
+			cells[15] = Int64HashMapCell{Key: 15, Mapped: 1}
+			cells[0] = Int64HashMapCell{Key: 31, Mapped: 2}
+			cells[1] = Int64HashMapCell{Key: 47, Mapped: 3}
+			before := cells
+			ht := Int64HashMap{blockCellCntBits: blockBits, cellCntMask: 15, cellCnt: 16, elemCnt: 3}
+			for start := 0; start < len(cells); start += 1 << blockBits {
+				ht.cells = append(ht.cells, cells[start:start+(1<<blockBits)])
+			}
+			hashes := []uint64{15, 31, 47, 63, 15, 0}
+			got := make([]uint64, len(hashes))
+			ht.FindBatch(len(hashes), hashes, nil, got)
+			require.Equal(t, []uint64{1, 2, 3, 0, 1, 0}, got)
+			require.Equal(t, before, cells, "shared build-side lookup must be read-only")
+		})
+	}
+}
+
 func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
 	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}

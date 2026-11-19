@@ -37,6 +37,13 @@ func getTestConfig() Config {
 	return c
 }
 
+func TestResolveGossipSeedsMalformedAddressPreservesConfiguration(t *testing.T) {
+	original := []string{"127.0.0.1:32001", "missing-port"}
+	cfg := Config{GossipSeedAddresses: append([]string(nil), original...)}
+	require.Error(t, cfg.ResolveGossipSeedAddresses())
+	require.Equal(t, original, cfg.GossipSeedAddresses)
+}
+
 func TestSplitAddress(t *testing.T) {
 	tests := []struct {
 		input  string

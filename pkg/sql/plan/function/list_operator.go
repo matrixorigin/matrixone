@@ -62,6 +62,12 @@ func integerComparisonDomain(inputs []types.Type) (types.Type, bool) {
 }
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if left.Oid.IsArray() && right.Oid.IsArray() && left.Oid != right.Oid {
+		if target, _, ok := commonVectorType([]types.Type{left, right}); ok {
+			return true, target, target
+		}
+		return false, left, right
+	}
 	if target, ok := integerComparisonDomain([]types.Type{left, right}); ok {
 		return left.Oid != target.Oid || right.Oid != target.Oid, target, target
 	}
@@ -180,6 +186,13 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	// arithmetic result.
 	if input.Oid == types.T_bit {
 		return 20, 0, true
+	}
+	// TRUE/FALSE participate in exact numeric coercion as 1/0 with one
+	// integral digit and zero scale, matching the comparison aligner; without
+	// this a full-scale DECIMAL128 operand would miss the Decimal256 widening
+	// an integer operand receives and overflow during execution.
+	if input.Oid == types.T_bool {
+		return 1, 0, true
 	}
 	return 0, 0, false
 }
@@ -380,7 +393,11 @@ func alignDecimalComparisonTypesMode(targets, inputs []types.Type, legacy bool) 
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}
-		if input.Oid.IsDecimal() || input.IsIntOrUint() {
+		// BOOL participates in the decimal comparison domain as a 0/1 value
+		// with one integral digit (MySQL TRUE/FALSE semantics), so its digit
+		// contribution is computed from the operand itself rather than from
+		// the catch-all cast envelope of the fixed rule table.
+		if input.Oid.IsDecimal() || input.IsIntOrUint() || input.Oid == types.T_bool {
 			sources[i] = input
 			if input.Oid.IsDecimal() && input.Width <= 0 {
 				sources[i].Width = input.Oid.ToType().Width
@@ -464,7 +481,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -474,9 +492,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return equalFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return equalFn },
 			},
 		},
 	},
@@ -538,7 +557,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -548,9 +568,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return greatThanFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return greatThanFn },
 			},
 		},
 	},
@@ -585,7 +606,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -595,9 +617,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return greatEqualFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return greatEqualFn },
 			},
 		},
 	},
@@ -632,7 +655,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -642,9 +666,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return lessThanFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return lessThanFn },
 			},
 		},
 	},
@@ -679,7 +704,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -689,9 +715,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return lessEqualFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return lessEqualFn },
 			},
 		},
 	},
@@ -746,7 +773,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryBetweenInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -787,7 +815,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -797,9 +826,10 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				// Appended identity keeps older executors from interpreting mixed vectors.
-				overloadId: 1,
-				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
-				newOp:      func() executeLogicOfOverload { return notEqualFn },
+				dictionaryInput: dictionaryComparisonInputs,
+				overloadId:      1,
+				retType:         func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:           func() executeLogicOfOverload { return notEqualFn },
 			},
 		},
 	},
@@ -895,7 +925,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      0,
 				args: []types.T{
 					types.T_char,
 					types.T_char,
@@ -908,7 +939,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      1,
 				args: []types.T{
 					types.T_varchar,
 					types.T_varchar,
@@ -921,7 +953,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      2,
 				args: []types.T{
 					types.T_text,
 					types.T_text,
@@ -934,7 +967,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 3,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      3,
 				args: []types.T{
 					types.T_char,
 					types.T_char,
@@ -948,7 +982,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      4,
 				args: []types.T{
 					types.T_varchar,
 					types.T_varchar,
@@ -962,7 +997,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      5,
 				args: []types.T{
 					types.T_text,
 					types.T_text,
@@ -987,8 +1023,9 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_uint8, types.T_uint8},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      0,
+				args:            []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -997,8 +1034,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_uint16, types.T_uint16},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      1,
+				args:            []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1007,8 +1045,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
-				args:       []types.T{types.T_uint32, types.T_uint32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      2,
+				args:            []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1017,8 +1056,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 3,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      3,
+				args:            []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1027,8 +1067,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
-				args:       []types.T{types.T_int8, types.T_int8},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      4,
+				args:            []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1037,8 +1078,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
-				args:       []types.T{types.T_int16, types.T_int16},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      5,
+				args:            []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1047,8 +1089,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 6,
-				args:       []types.T{types.T_int32, types.T_int32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      6,
+				args:            []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1057,8 +1100,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 7,
-				args:       []types.T{types.T_int64, types.T_int64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      7,
+				args:            []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1067,8 +1111,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 8,
-				args:       []types.T{types.T_float32, types.T_float32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      8,
+				args:            []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1077,8 +1122,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 9,
-				args:       []types.T{types.T_float64, types.T_float64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      9,
+				args:            []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1087,8 +1133,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 10,
-				args:       []types.T{types.T_decimal64, types.T_decimal64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      10,
+				args:            []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1097,8 +1144,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 11,
-				args:       []types.T{types.T_decimal128, types.T_decimal128},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      11,
+				args:            []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1107,8 +1155,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      100,
+				args:            []types.T{types.T_decimal256, types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1117,8 +1166,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 12,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      12,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1127,8 +1177,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 13,
-				args:       []types.T{types.T_char, types.T_char},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      13,
+				args:            []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1137,8 +1188,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 14,
-				args:       []types.T{types.T_date, types.T_date},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      14,
+				args:            []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1147,8 +1199,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 15,
-				args:       []types.T{types.T_datetime, types.T_datetime},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      15,
+				args:            []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1157,8 +1210,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 16,
-				args:       []types.T{types.T_bool, types.T_bool},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      16,
+				args:            []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1167,8 +1221,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 17,
-				args:       []types.T{types.T_timestamp, types.T_timestamp},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      17,
+				args:            []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1177,8 +1232,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 18,
-				args:       []types.T{types.T_blob, types.T_blob},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      18,
+				args:            []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1187,8 +1243,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 19,
-				args:       []types.T{types.T_uuid, types.T_uuid},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      19,
+				args:            []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1197,8 +1254,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 20,
-				args:       []types.T{types.T_text, types.T_text},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      20,
+				args:            []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1207,8 +1265,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 21,
-				args:       []types.T{types.T_time, types.T_time},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      21,
+				args:            []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1217,8 +1276,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 22,
-				args:       []types.T{types.T_binary, types.T_binary},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      22,
+				args:            []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1227,8 +1287,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 23,
-				args:       []types.T{types.T_varbinary, types.T_varbinary},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      23,
+				args:            []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1237,8 +1298,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 24,
-				args:       []types.T{types.T_year, types.T_year},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      24,
+				args:            []types.T{types.T_year, types.T_year},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1247,8 +1309,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 24,
-				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      24,
+				args:            []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1257,8 +1320,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 25,
-				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      25,
+				args:            []types.T{types.T_array_float64, types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1267,8 +1331,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 101,
-				args:       []types.T{types.T_enum, types.T_enum},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      101,
+				args:            []types.T{types.T_enum, types.T_enum},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1277,13 +1342,60 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 102,
-				args:       []types.T{types.T_bit, types.T_bit},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      102,
+				args:            []types.T{types.T_bit, types.T_bit},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[uint64]().operatorIn
+				},
+			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      103,
+				args:            []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      104,
+				args:            []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      105,
+				args:            []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      106,
+				args:            []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorIn
 				},
 			},
 		},
@@ -1298,8 +1410,9 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_uint8, types.T_uint8},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      0,
+				args:            []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1308,8 +1421,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_uint16, types.T_uint16},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      1,
+				args:            []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1318,8 +1432,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
-				args:       []types.T{types.T_uint32, types.T_uint32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      2,
+				args:            []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1328,8 +1443,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 3,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      3,
+				args:            []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1338,8 +1454,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
-				args:       []types.T{types.T_int8, types.T_int8},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      4,
+				args:            []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1348,8 +1465,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
-				args:       []types.T{types.T_int16, types.T_int16},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      5,
+				args:            []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1358,8 +1476,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 6,
-				args:       []types.T{types.T_int32, types.T_int32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      6,
+				args:            []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1368,8 +1487,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 7,
-				args:       []types.T{types.T_int64, types.T_int64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      7,
+				args:            []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1378,8 +1498,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 8,
-				args:       []types.T{types.T_float32, types.T_float32},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      8,
+				args:            []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1388,8 +1509,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 9,
-				args:       []types.T{types.T_float64, types.T_float64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      9,
+				args:            []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1398,8 +1520,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 10,
-				args:       []types.T{types.T_decimal64, types.T_decimal64},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      10,
+				args:            []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1408,8 +1531,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 11,
-				args:       []types.T{types.T_decimal128, types.T_decimal128},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      11,
+				args:            []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1418,8 +1542,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      100,
+				args:            []types.T{types.T_decimal256, types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1428,8 +1553,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 12,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      12,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1438,8 +1564,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 13,
-				args:       []types.T{types.T_char, types.T_char},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      13,
+				args:            []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1448,8 +1575,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 14,
-				args:       []types.T{types.T_date, types.T_date},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      14,
+				args:            []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1458,8 +1586,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 15,
-				args:       []types.T{types.T_datetime, types.T_datetime},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      15,
+				args:            []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1468,8 +1597,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 16,
-				args:       []types.T{types.T_bool, types.T_bool},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      16,
+				args:            []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1478,8 +1608,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 17,
-				args:       []types.T{types.T_timestamp, types.T_timestamp},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      17,
+				args:            []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1488,8 +1619,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 18,
-				args:       []types.T{types.T_blob, types.T_blob},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      18,
+				args:            []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1498,8 +1630,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 19,
-				args:       []types.T{types.T_uuid, types.T_uuid},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      19,
+				args:            []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1508,8 +1641,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 20,
-				args:       []types.T{types.T_text, types.T_text},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      20,
+				args:            []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1518,8 +1652,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 21,
-				args:       []types.T{types.T_time, types.T_time},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      21,
+				args:            []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1528,8 +1663,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 22,
-				args:       []types.T{types.T_binary, types.T_binary},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      22,
+				args:            []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1538,8 +1674,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 23,
-				args:       []types.T{types.T_varbinary, types.T_varbinary},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      23,
+				args:            []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1548,8 +1685,9 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 24,
-				args:       []types.T{types.T_year, types.T_year},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      24,
+				args:            []types.T{types.T_year, types.T_year},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1559,13 +1697,60 @@ var supportedOperators = []FuncNew{
 			},
 
 			{
-				overloadId: 102,
-				args:       []types.T{types.T_bit, types.T_bit},
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      102,
+				args:            []types.T{types.T_bit, types.T_bit},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      103,
+				args:            []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorNotIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      104,
+				args:            []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorNotIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      105,
+				args:            []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorNotIn
+				},
+			},
+			{
+				dictionaryInput: dictionaryInInputs,
+				overloadId:      106,
+				args:            []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorNotIn
 				},
 			},
 		},
@@ -1610,7 +1795,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					// After type conversion, both parameters may be decimal128
 					// Check both parameters to determine result type
@@ -1624,7 +1810,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      1,
 				retType: func(parameters []types.Type) types.Type {
 					// (Vector + Scalar) or (Scalar + Vector) => Vector
 					if parameters[0].Oid.IsArrayRelate() {
@@ -1638,7 +1825,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      2,
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_uint64, 64, -1)
 				},
@@ -1681,7 +1869,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					if parameters[0].Oid.IsDecimal() {
 						return decimalAddSubReturnType(parameters)
@@ -1696,7 +1885,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      1,
 				retType: func(parameters []types.Type) types.Type {
 					// (Vector - Scalar) => Vector
 					return parameters[0]
@@ -1707,7 +1897,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      2,
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_uint64, 64, -1)
 				},
@@ -1716,7 +1907,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 3,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      3,
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_int64, 64, -1)
 				},
@@ -1786,7 +1978,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					if parameters[0].Oid.IsDecimal() {
 						return decimalMultiplyReturnType(parameters)
@@ -1801,7 +1994,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      1,
 				retType: func(parameters []types.Type) types.Type {
 					// (Vector * Scalar) or (Scalar * Vector) => Vector
 					if parameters[0].Oid.IsArrayRelate() {
@@ -1815,7 +2009,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				dictionaryInput: dictionaryArithmeticInputs,
+				overloadId:      2,
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_uint64, 64, -1)
 				},
@@ -1982,7 +2177,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryPlusMatch,
 
 		Overloads: []overload{
 			{
@@ -2684,6 +2879,62 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.BF16]
+				},
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float16]
+				},
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float8]
+				},
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float4.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float4]
+				},
+			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_array_float8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_array_float4},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 
@@ -2771,6 +3022,22 @@ var supportedOperators = []FuncNew{
 				overloadId: int(TemporalIntegerArgumentCastOverload),
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
+			},
+			{
+				overloadId:      int(TemporalCastIntegerOverload),
+				volatile:        true,
+				executionStable: true,
+				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
+			},
+			{
+				// Internal prepared BIT_COUNT string-to-latched-numeric conversion.
+				// User-written CAST and every other prepared consumer keep their
+				// existing conversion and diagnostic ownership.
+				overloadId:           int(PreparedBitCountCastOverload),
+				rowScopedDiagnostics: true,
+				retType:              func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:                func() executeLogicOfOverload { return NewPreparedBitCountCast },
 			},
 		},
 	},
@@ -2870,6 +3137,102 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `unsigned_decimal_admission`
+	// Plan-internal domain admission for attributed (UNSIGNED/ZEROFILL)
+	// DECIMAL assignment targets. It runs on the raw source value before the
+	// assignment cast quantizes to the target scale; the result type equals
+	// the input type. parameters[1] is the target type carrier, exactly like
+	// cast; parameters[2] is a constant carrying the destination column name
+	// for the 1264 strict/lenient diagnostics. Volatile so prepared
+	// statements resolve sql_mode at execution time, mirroring cast_assign.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmission
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_strict`
+	// Authoring-time entry: always strict, used only inside the DDL DEFAULT
+	// validation composition so a non-strict authoring session cannot route
+	// the check through a clip+warning branch.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_STRICT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionStrict
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_ignore`
+	// INSERT/UPDATE IGNORE entry: always adjusts out-of-domain values with the
+	// truncation diagnostic preceding the 1264 clip diagnostic.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionIgnore
+				},
+			},
+		},
+	},
+
 	// operator `bit_cast`
 	{
 		functionId: BIT_CAST,
@@ -2956,7 +3319,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryNullPredicateInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -2981,7 +3345,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryNullPredicateInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -2997,7 +3362,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3018,7 +3383,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3039,7 +3404,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3060,7 +3425,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3078,10 +3443,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `&`
 	{
-		functionId: OP_BIT_AND,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_AND,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3147,10 +3513,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `|`
 	{
-		functionId: OP_BIT_OR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_OR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3216,10 +3583,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `^`
 	{
-		functionId: OP_BIT_XOR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_XOR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3285,10 +3653,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `<<`
 	{
-		functionId: OP_BIT_SHIFT_LEFT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_LEFT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3384,10 +3753,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `>>`
 	{
-		functionId: OP_BIT_SHIFT_RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_RIGHT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3485,7 +3855,12 @@ var supportedOperators = []FuncNew{
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
-		types.T_int32, types.T_uint32:
+		types.T_int32, types.T_uint32,
+		// DECIMAL targets join the explicit-name allow-list for the
+		// authoring-time unsigned-DECIMAL DEFAULT validation composition
+		// (MEDIUMINT int32/uint32 precedent). No plan-side selector chooses
+		// cast_strict for decimals, so ordinary casts are unaffected.
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false

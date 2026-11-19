@@ -138,8 +138,8 @@ create temporary table temp_ddl_stale.stale (id int primary key);
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 drop table temp_ddl_stale.stale;
--- @regex("no such table", true)
-no such table temp_ddl_stale.stale
+-- @regex("Unknown table 'temp_ddl_stale.stale'", true)
+Unknown table 'temp_ddl_stale.stale'
 create temporary table temp_ddl_stale.stale (id int primary key);
 insert into temp_ddl_stale.stale values (11);
 select id from temp_ddl_stale.stale;
@@ -148,8 +148,8 @@ select id from temp_ddl_stale.stale;
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 drop temporary table temp_ddl_stale.stale;
--- @regex("no such table", true)
-no such table temp_ddl_stale.stale
+-- @regex("Unknown table 'temp_ddl_stale.stale'", true)
+Unknown table 'temp_ddl_stale.stale'
 create temporary table temp_ddl_stale.stale (id int primary key);
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
@@ -168,8 +168,8 @@ create procedure temp_ddl_transactions.drop_missing_temp() 'begin drop temporary
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 call temp_ddl_transactions.drop_missing_temp();
--- @regex("no such table", true)
-no such table temp_ddl_stale.stale
+-- @regex("Unknown table 'temp_ddl_stale.stale'", true)
+Unknown table 'temp_ddl_stale.stale'
 create temporary table temp_ddl_stale.stale (id int primary key);
 insert into temp_ddl_stale.stale values (33);
 select id from temp_ddl_stale.stale;

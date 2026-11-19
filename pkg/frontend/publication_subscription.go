@@ -1987,8 +1987,19 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 		if err != nil {
 			return err
 		}
+		missingAccounts := 0
 		for _, subInfo := range subscribedInfos {
-			subscribedAccountNames = append(subscribedAccountNames, accIdInfoMap[subInfo.SubAccountId].Name)
+			accountInfo := accIdInfoMap[subInfo.SubAccountId]
+			if accountInfo == nil {
+				// A stale subscription must not hide this or other publications.
+				// Do not fall back to the stored name: it may belong to a new ID.
+				missingAccounts++
+				continue
+			}
+			subscribedAccountNames = append(subscribedAccountNames, accountInfo.Name)
+		}
+		if missingAccounts > 0 {
+			ses.Warnf(ctx, "SHOW PUBLICATIONS: publication %q has %d subscribed account IDs absent from the account lookup; omitted from subscribed_accounts", pubInfo.PubName, missingAccounts)
 		}
 		slices.Sort(subscribedAccountNames)
 
@@ -2541,15 +2552,14 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 // runtime resolution keeps the publisher identity for such rows, which
 // fails closed.
 func publicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID uint32, targetAccountIDs []uint32) bool {
-	if publisherAccountID == ownerAccountID || publisherAccountID == sysAccountID {
-		return true
-	}
+	ownerOnly := true
 	for _, targetAccountID := range targetAccountIDs {
 		if targetAccountID != ownerAccountID {
-			return false
+			ownerOnly = false
+			break
 		}
 	}
-	return true
+	return pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID, ownerOnly)
 }
 
 // publicationForeignSourceUnauthorizedError is the stable rejection of a
@@ -2930,11 +2940,16 @@ func batchInsertMoSubs(
 	values := make([]string, 0, len(accIds))
 	// sub_account_id, sub_account_name, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status
 	valuesFormat := "(%d, '%s', %d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
+	escapedAccount := sanitizeSQLInput(pubAccountName)
+	escapedName := sanitizeSQLInput(pubName)
+	escapedDB := sanitizeSQLInput(pubDbName)
+	escapedTables := sanitizeSQLInput(pubTables)
+	escapedComment := sanitizeSQLInput(pubComment)
 	for _, accId := range accIds {
 		values = append(values, fmt.Sprintf(valuesFormat,
 			accId, sanitizeSQLInput(accIdInfoMap[accId].Name),
-			pubAccountId, sanitizeSQLInput(pubAccountName),
-			sanitizeSQLInput(pubName), sanitizeSQLInput(pubDbName), sanitizeSQLInput(pubTables), sanitizeSQLInput(pubComment),
+			pubAccountId, escapedAccount,
+			escapedName, escapedDB, escapedTables, escapedComment,
 			pubsub.SubStatusNormal,
 		))
 	}
@@ -3123,14 +3138,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 			err = dbErr
 			return
 		}
-		resolvePhysicalSource := uint32(accId) == sourceAccountID || accId == sysAccountID
+		resolvePhysicalSource := pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, false)
 		if !resolvePhysicalSource {
 			admitted, admErr := publicationTargetsAdmitForeignSource(newCtx, bh, pubInfo, sourceAccountID)
 			if admErr != nil {
 				err = admErr
 				return
 			}
-			resolvePhysicalSource = admitted
+			resolvePhysicalSource = pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, admitted)
 		}
 		if !resolvePhysicalSource {
 			// Keeping the publisher identity would silently resolve a
@@ -3210,15 +3225,14 @@ func checkSubscriptionValidForCreate(
 		// and owner-only target sets stay admitted, and a general publisher's
 		// row that would expose the owner's database beyond the owner is
 		// rejected here instead of creating an unusable subscription.
-		authorized := uint32(publisherAccountID) == physicalAccountID ||
-			publisherAccountID == sysAccountID
+		authorized := pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, false)
 		if !authorized {
-			var admitErr error
-			authorized, admitErr = publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
+			ownerOnly, admitErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
 			if admitErr != nil {
 				err = admitErr
 				return
 			}
+			authorized = pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, ownerOnly)
 		}
 		if !authorized {
 			err = publicationForeignSourceUnauthorizedError(ctx, uint32(publisherAccountID), physicalAccountID, pubInfo.DbName)
@@ -3294,13 +3308,13 @@ func resolveSubscriptionSourceAccounts(
 			}
 			owners[pubInfo.DbId] = owner
 		}
-		resolveOwner := publisherAccountID == owner || publisherAccountID == sysAccountID
+		resolveOwner := pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, false)
 		if !resolveOwner {
 			admittedByTargets, admErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, owner)
 			if admErr != nil {
 				return nil, admErr
 			}
-			resolveOwner = admittedByTargets
+			resolveOwner = pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, admittedByTargets)
 		}
 		if !resolveOwner {
 			// An unauthorized foreign source must not enumerate through the
@@ -3323,6 +3337,20 @@ func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string, b
 	}
 
 	subInfo := subInfos[0]
+	// The alias was read at data T. Its publication is a current access
+	// boundary, not data: an older SI transaction must not revive membership,
+	// table scope or a withdrawn publication. Reuse the statement's admitted
+	// authorization snapshot and the canonical publication resolver.
+	if owner := upstreamUserSession(ses); owner != nil && authorizationEpochFor(ctx, owner) != nil {
+		authorityCtx := defines.AttachAccountId(ctx, owner.GetTenantInfo().GetTenantID())
+		opts, err := authorizationReadOption(authorityCtx, owner, &BackgroundExecOption{})
+		if err != nil {
+			return nil, err
+		}
+		authority := owner.GetBackgroundExec(authorityCtx, opts)
+		defer authority.Close()
+		bh = authority
+	}
 	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName, bh)
 }
 
@@ -3577,6 +3605,16 @@ func checkUpstreamPublicationCoverage(
 	return nil
 }
 
+func subscriptionSyncLevel(cs *tree.CreateSubscription) string {
+	if !cs.IsDatabase {
+		return "table"
+	}
+	if cs.DbName == "" {
+		return "account"
+	}
+	return "database"
+}
+
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
@@ -3658,17 +3696,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		encryptedUri = fmt.Sprintf("mysql://#%s:%s@%s:%d", user, encodedPassword, host, port)
 	}
 
-	// Determine sync_level
-	var syncLevel string
-	if cs.IsDatabase {
-		if string(cs.DbName) == "" {
-			syncLevel = "account"
-		} else {
-			syncLevel = "database"
-		}
-	} else {
-		syncLevel = "table"
-	}
+	syncLevel := subscriptionSyncLevel(cs)
 
 	// Validate level and corresponding names
 	if syncLevel == "account" {
@@ -4104,7 +4132,9 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
 	}
-	defer cancel()
+	if cancel != nil {
+		defer cancel()
+	}
 	defer result.Close()
 
 	// QueryMoIndexesSQL returns: table_id, name, algo_table_type, index_table_name

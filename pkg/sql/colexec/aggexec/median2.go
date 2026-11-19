@@ -1691,7 +1691,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 	var arithmetic percentileArithmeticScratch
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
-	for i, x := 0, 0; i < groups; i += lim {
+	for i, x := 0, 0; i < groups; i, x = i+lim, x+1 {
 		n := groups - i
 		if n > lim {
 			n = lim
@@ -1733,7 +1733,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
-	for i, x := 0, 0; i < groups; i += lim {
+	for i, x := 0, 0; i < groups; i, x = i+lim, x+1 {
 		n := groups - i
 		if n > lim {
 			n = lim
@@ -1963,28 +1963,6 @@ func markMedianGroupNotEmpty[T types.FixedSizeTExceptStrType](ret *aggResultWith
 	if len(ret.bsFromEmptyList) > x && ret.bsFromEmptyList[x] != nil {
 		ret.bsFromEmptyList[x][y] = false
 	}
-}
-
-func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
-	vals := make([]types.Decimal64, 0, st.argCnt[idx])
-	if err := st.iterWithValue(idx, func(k, stored []byte) error {
-		vals = append(vals, types.DecodeDecimal64(aggPayloadFromKeyValue(info, k, stored)))
-		return nil
-	}); err != nil {
-		return types.Decimal128{}, err
-	}
-	return medianDecimal64Vals(vals)
-}
-
-func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
-	vals := make([]types.Decimal128, 0, st.argCnt[idx])
-	if err := st.iterWithValue(idx, func(k, stored []byte) error {
-		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKeyValue(info, k, stored)))
-		return nil
-	}); err != nil {
-		return types.Decimal128{}, err
-	}
-	return medianDecimal128Vals(vals)
 }
 
 func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {

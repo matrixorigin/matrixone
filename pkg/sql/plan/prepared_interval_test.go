@@ -372,8 +372,8 @@ func TestTimeCalendarIntervalRejectedAcrossSyntaxes(t *testing.T) {
 		{"sub marker", "date_sub(cast('12:00:00' as time), interval ? day_second)", "time interval unit"},
 		{"adddate alias", "adddate(cast('12:00:00' as time), interval ? day)", "time interval unit"},
 		{"subdate alias", "subdate(cast('12:00:00' as time), interval ? day)", "time interval unit"},
-		{"plus operator", "cast('12:00:00' as time) + interval ? day", "bad value [TIME INTERVAL]"},
-		{"minus operator", "cast('12:00:00' as time) - interval ? day", "bad value [TIME INTERVAL]"},
+		{"plus operator", "cast('12:00:00' as time) + interval ? day", "time interval unit"},
+		{"minus operator", "cast('12:00:00' as time) - interval ? day", "time interval unit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,

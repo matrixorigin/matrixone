@@ -15,11 +15,35 @@
 package moerr
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+type txnUnknownAdapter struct{ unknown *Error }
+
+func (e txnUnknownAdapter) Error() string { return "wrapped transaction result" }
+func (e txnUnknownAdapter) As(target any) bool {
+	if out, ok := target.(**Error); ok {
+		*out = e.unknown
+		return true
+	}
+	return false
+}
+
+func TestFindTxnUnknownInWrappedAndJoinedErrors(t *testing.T) {
+	unknown := NewTxnUnknown(context.Background(), "txn")
+	other := NewInternalErrorNoCtx("cleanup")
+	for _, err := range []error{unknown, fmt.Errorf("wrapped: %w", unknown), errors.Join(other, unknown), txnUnknownAdapter{unknown}} {
+		require.Same(t, unknown, FindTxnUnknown(err))
+	}
+	for _, err := range []error{nil, other, errors.Join(other, errors.New("ordinary"))} {
+		require.Nil(t, FindTxnUnknown(err))
+	}
+}
 
 func TestMustRollbackTxnPreservesInfrastructurePolicy(t *testing.T) {
 	fatal := NewLockConflictNoCtx()

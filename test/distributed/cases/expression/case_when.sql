@@ -550,4 +550,29 @@ insert into t_case_nullable_condition values (1, null), (2, 0), (3, 2.5);
 select id, case when cond then 'true' else 'false' end as condition_result
 from t_case_nullable_condition
 order by id;
+
+-- Fixed-width CASE with NULL ELSE preserves NULL conditions and THEN values.
+insert into t_case_nullable_condition values (4, 1);
+select id, case when cond then case when id = 4 then null else id end else null end as case_value
+from t_case_nullable_condition order by id;
+
+-- Invalid casts in unselected THEN branches must not be evaluated.
+select id, case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id < 4 order by id;
+show warnings;
+-- A selected invalid SELECT cast returns zero and a warning, not an error.
+select case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id = 4;
+show warnings;
 drop table t_case_nullable_condition;
+
+-- @case
+-- @desc:searched CASE mixing a string value branch with a BOOL value branch resolves to VARCHAR (issue #31294)
+-- @label:bvt
+select case when 1 then 'x' else false end as case_str_bool_t, case when 0 then 'x' else false end as case_str_bool_f;
+select case when 0 then true else 'y' end as case_bool_str_f;
+drop table if exists t_case_str_bool;
+create table t_case_str_bool (id int primary key, s varchar(10), b bool);
+insert into t_case_str_bool values (1, 'abc', true), (2, 'def', false);
+select id, case when b then s else b end as case_col from t_case_str_bool order by id;
+drop table t_case_str_bool;

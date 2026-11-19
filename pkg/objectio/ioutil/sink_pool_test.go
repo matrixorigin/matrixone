@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -111,6 +112,65 @@ type mockFileSinker struct {
 	closed     atomic.Bool
 	syncStart  chan struct{}
 	syncBlock  chan struct{}
+}
+
+type cancellablePoolSinker struct{ started chan struct{} }
+
+func (s *cancellablePoolSinker) Sink(context.Context, *batch.Batch) error { return nil }
+func (s *cancellablePoolSinker) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	if s.started != nil {
+		close(s.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (*cancellablePoolSinker) Reset()       {}
+func (*cancellablePoolSinker) Close() error { return nil }
+
+func TestCancelAllSinkersBeforeDrainingSharedPool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pool := NewSinkPool(1, 1)
+		ctxA, cancelA := context.WithCancel(context.Background())
+		ctxB, cancelB := context.WithCancel(context.Background())
+		a := &Sinker{}
+		b := &Sinker{}
+		a.pipe.enabled, b.pipe.enabled = true, true
+		a.pipe.result = &pipelineResult{ctx: ctxA, cancel: cancelA}
+		b.pipe.result = &pipelineResult{ctx: ctxB, cancel: cancelB}
+		defer func() {
+			a.CancelPending()
+			b.CancelPending()
+			pool.Close()
+		}()
+		started := make(chan struct{})
+		require.NoError(t, pool.Submit(&poolSinkJob{
+			result: b.pipe.result,
+			factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+				return &cancellablePoolSinker{started: started}
+			},
+		}))
+		<-started // B owns the only sync worker.
+		require.NoError(t, pool.Submit(&poolSinkJob{
+			result: a.pipe.result,
+			factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+				return &cancellablePoolSinker{}
+			},
+		}))
+		synctest.Wait()
+		require.Len(t, pool.syncChan, 1, "A must be queued behind B")
+		a.CancelPending()
+		done := make(chan struct{})
+		go func() { a.AbandonAndRetainableNames(); close(done) }()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("A cannot drain while B owns the only sync worker")
+		default:
+		}
+		b.CancelPending()
+		<-done
+		b.AbandonAndRetainableNames()
+	})
 }
 
 func (m *mockFileSinker) Sink(_ context.Context, bat *batch.Batch) error {

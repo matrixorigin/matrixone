@@ -1,0 +1,44 @@
+drop database if exists issue_31663_flush_ctl;
+create database issue_31663_flush_ctl;
+create table issue_31663_flush_ctl.t(a int);
+insert into issue_31663_flush_ctl.t values (1);
+select mo_ctl('dn', 'flush', 'issue_31663_flush_ctl.t');
+➤ mo_ctl(dn, flush, issue_31663_flush_ctl.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'a');
+invalid input: invalid flush ctl parameter "a", expect "TableId" or "DbName.TableName[.AccountId]", e.g. 2725 or db1.t1
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+select mo_ctl('dn', 'flush', 'issue_31663_flush_ctl.t');
+➤ mo_ctl(dn, flush, issue_31663_flush_ctl.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'issue_31663_flush_ctl.nosuch');
+no such table issue_31663_flush_ctl.nosuch
+select mo_ctl('dn', 'flush', 'nosuch_db_31663.t');
+Unknown database nosuch_db_31663
+select mo_ctl('dn', 'flush', '');
+invalid input: invalid flush ctl parameter "", expect "TableId" or "DbName.TableName[.AccountId]", e.g. 2725 or db1.t1
+select mo_ctl('dn', 'flush', 'a.b.c');
+invalid input: invalid flush ctl parameter "a.b.c", expect "TableId" or "DbName.TableName[.AccountId]", e.g. 2725 or db1.t1
+select mo_ctl('dn', 'flush', 'a.b.c.d');
+invalid input: invalid flush ctl parameter "a.b.c.d", expect "TableId" or "DbName.TableName[.AccountId]", e.g. 2725 or db1.t1
+select mo_ctl('dn', 'flush', 'issue_31663_flush_ctl.');
+invalid input: invalid flush ctl parameter "issue_31663_flush_ctl.", expect "TableId" or "DbName.TableName[.AccountId]", e.g. 2725 or db1.t1
+drop database issue_31663_flush_ctl;

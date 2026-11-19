@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -64,8 +65,8 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	ses.Error(execCtx.reqCtx, execErr.Error())
 	if isTxnCommitResultUnknown(execErr) {
+		ses.Error(execCtx.reqCtx, execErr.Error())
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
@@ -74,6 +75,7 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
+		ses.Error(execCtx.reqCtx, execErr.Error())
 		// A nested fatal error may already have sealed the cleanup owner. Keep
 		// the original typed failure for the client instead of masking it with
 		// that owner's terminal rejection (or a secondary cleanup failure).
@@ -85,12 +87,31 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
 		return txnErr
 	}
-	logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
+	logRolledBackStatement(execCtx.reqCtx, ses, execErr)
 	return execErr
 }
 
+// A successful rollback can produce the same two statement logs on every
+// scheduled firing. Limit those logs only; transaction and panic failures have
+// their own diagnostics and must not share this budget.
+func logRolledBackStatement(ctx context.Context, ses FeSession, err error) {
+	writeLog := true
+	var fields []zap.Field
+	if ctx != nil && ctx.Value(defines.SQLTaskBackgroundKey{}) == true {
+		decision, allowed := logutil.AllowEvent("frontend.sql.task.statement.failed", logutil.DefaultRateLimitConfig)
+		writeLog = allowed
+		if allowed {
+			fields = logutil.EventFieldsWithDecision(fields, decision)
+		}
+	}
+	if writeLog {
+		ses.Error(ctx, err.Error(), fields...)
+	}
+	logStatementStringStatusWithLog(ctx, ses, "", fail, err, writeLog)
+}
+
 func isTxnCommitResultUnknown(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
+	return moerr.FindTxnUnknown(err) != nil
 }
 
 // requestContextErr reports cancellation of the request that owns the
@@ -1141,6 +1162,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
 		return err
 	}
+	if err := th.applySequenceObligationsBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
@@ -1265,6 +1289,15 @@ func (th *TxnHandler) rollback(
 			if err != nil || hasRecovered {
 				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
+			}
+			if sess, ok := execCtx.ses.(*Session); ok {
+				// The statement rollback rewound the failed statement's
+				// workspace writes, including a SETVAL/restart reposition
+				// the statement may have staged: that boundary never
+				// persisted, so restore the issued-value protection the
+				// staged removal hid (J2). Transaction rollback instead
+				// discards both maps via clearSequenceObligations.
+				sess.restoreStagedSequenceObligations()
 			}
 			if owner := upstreamUserSession(execCtx.ses); owner != nil {
 				owner.rollbackTempTableStatement(
@@ -1469,6 +1502,11 @@ func (th *TxnHandler) rollbackUnsafe(
 		if owner := upstreamUserSession(execCtx.ses); owner != nil {
 			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
+	}
+	if sess, ok := execCtx.ses.(*Session); ok {
+		// Issued-value obligations of transaction-local sequence generations
+		// belong to the dying transaction; never let them stamp a later one.
+		sess.clearSequenceObligations()
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])

@@ -53,7 +53,7 @@ func TestPersistedFormatCatalogCompatibility(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					built, err := BuildPlan(ctx, stmt, false)
+					built, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
 					require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestPersistedMediumIntCatalogType(t *testing.T) {
 		"CREATE TABLE mediumint_catalog (m MEDIUMINT, mu MEDIUMINT UNSIGNED, display_int INT(24))", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
@@ -163,7 +163,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 				"create table t(a varchar(64) default ("+call+"), g varchar(64) generated always as ("+call+") stored, check ("+call+" is not null))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
 			require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 			require.False(t, features.IntegerParameterCoercion)
 			require.False(t, features.FormatNumericArguments)
 			def := loaded.Cols[0].Default
-			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString)
+			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString, "col")
 			require.NoError(t, err)
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
@@ -247,7 +247,7 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	update, err := buildOnUpdate(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
-	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)")
+	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)", "col")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name string

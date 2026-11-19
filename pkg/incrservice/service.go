@@ -404,15 +404,24 @@ func tableColumnDemandOnly(cache incrTableCache, name string) bool {
 	return false
 }
 
-func (s *service) Reload(
-	ctx context.Context,
-	tableID uint64,
-) error {
+func (s *service) Reload(ctx context.Context, tableID uint64) error {
+	_, err := s.reload(ctx, tableID, nil, nil)
+	return err
+}
+
+func (s *service) ReloadForPKRetry(ctx context.Context, tableID uint64, expectedEpoch uint32, txnOp client.TxnOperator) (bool, error) {
+	return s.reload(ctx, tableID, &expectedEpoch, txnOp)
+}
+
+func (s *service) reload(ctx context.Context, tableID uint64, expectedEpoch *uint32, txnOp client.TxnOperator) (bool, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		s.mu.Lock()
 		if s.mu.closed {
 			s.mu.Unlock()
-			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			return false, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
 		if pending := s.mu.pendingCommits[tableID]; pending != nil {
 			s.mu.Unlock()
@@ -420,21 +429,51 @@ func (s *service) Reload(
 			case <-pending.ready:
 				continue
 			case <-ctx.Done():
-				return context.Cause(ctx)
+				return false, context.Cause(ctx)
 			}
 		}
-		s.bumpGenerationLocked(tableID)
-		c, ok := s.mu.tables[tableID]
-		if !ok {
-			s.mu.Unlock()
-			return nil
+		c := s.mu.tables[tableID]
+		if expectedEpoch != nil {
+			if txnOp != nil {
+				key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: tableID}
+				if s.mu.private[key] != nil || s.mu.privateCallbacks[key] != nil || s.mu.createdResets[key] != nil {
+					s.mu.Unlock()
+					return false, nil
+				}
+			}
+			// CREATE caches share the tables map with committed caches. Protect every
+			// creator, not just this caller, while holding the publication owner lock.
+			for key := range s.mu.creates {
+				if key.tableID == tableID {
+					s.mu.Unlock()
+					return false, nil
+				}
+			}
+			if owned, ok := c.(interface{ getTxn() client.TxnOperator }); ok && owned.getTxn() != nil {
+				s.mu.Unlock()
+				return false, nil
+			}
+			if _, destroyed := s.mu.destroyed[tableID]; destroyed {
+				s.mu.Unlock()
+				return false, moerr.NewNoSuchTableNoCtx("", fmt.Sprint(tableID))
+			}
+			if c != nil && c.epoch() != *expectedEpoch {
+				s.mu.Unlock()
+				return false, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+			if build := s.mu.committedBuilds[tableID]; build != nil && build.epoch != *expectedEpoch {
+				s.mu.Unlock()
+				return false, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
 		}
-
-		// drop cache, will be reloaded when next query
+		// Also fence an in-flight builder when the cache has not been published.
+		s.bumpGenerationLocked(tableID)
 		delete(s.mu.tables, tableID)
 		s.mu.Unlock()
-		c.retire()
-		return nil
+		if c != nil {
+			c.retire()
+		}
+		return true, nil
 	}
 }
 

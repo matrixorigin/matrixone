@@ -523,14 +523,16 @@ func makeGroupAgg(
 			}
 		}
 	}
-	if extraInformation != nil {
-		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
+	// the account first, as the window and time-window operators bind it, so an aggregate
+	// can admit its configuration's memory before parsing it
+	if allocation != nil {
+		if err := groupExec.SetAllocationAccount(allocation); err != nil {
 			groupExec.Free()
 			return nil, err
 		}
 	}
-	if allocation != nil {
-		if err := groupExec.SetAllocationAccount(allocation); err != nil {
+	if extraInformation != nil {
+		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
 			groupExec.Free()
 			return nil, err
 		}
@@ -639,6 +641,9 @@ func makeSpecialAggExec(
 		return makeHllMerge(mp, id, params[0]), true, nil
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfVectorMatmul:
+		exec, err := makeVectorMatmul(mp, id, isDistinct, params)
 		return exec, true, err
 	case AggIdOfPercentileCont:
 		if len(params) != 1 {

@@ -477,7 +477,8 @@ type resolveErrorCompilerContext struct {
 	err error
 }
 
-func (c *resolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *resolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, c.err
 }
 
@@ -485,7 +486,7 @@ type viewDependencyCompilerContext struct {
 	*MockCompilerContext
 	views    []string
 	snapshot *Snapshot
-	resolve  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	resolve  func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *viewDependencyCompilerContext) GetViews() []string {
@@ -503,9 +504,10 @@ func (c *viewDependencyCompilerContext) GetSnapshot() *Snapshot {
 func (c *viewDependencyCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	return c.resolve(databaseName, tableName, snapshot)
+	borrowOutput.Reset()
+	return c.resolve(databaseName, tableName, snapshot, nil)
 }
 
 func TestCollectPrepareDdlSchemas(t *testing.T) {
@@ -579,6 +581,62 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 			}
 			if testCase.targetSchema != "" {
 				require.Equal(t, testCase.targetSchema, schemas[len(schemas)-1].SchemaName)
+			}
+		})
+	}
+}
+
+func TestCollectPrepareDdlSchemasRenameNamespace(t *testing.T) {
+	lookupErr := errors.New("persisted catalog unavailable")
+	for _, tc := range []struct {
+		name, sql, failName string
+		destinationExists   bool
+		wantIDs             []int64
+		wantNames           []string
+	}{
+		{name: "shadowed source and absent destination", sql: "rename table rn_src to rn_dst", wantIDs: []int64{11, 0}, wantNames: []string{"rn_src", "rn_dst"}},
+		{name: "shadowed existing destination", sql: "rename table rn_src to rn_dst", destinationExists: true, wantIDs: []int64{11, 12}, wantNames: []string{"rn_src", "rn_dst"}},
+		{name: "shadowed chain intermediate", sql: "rename table rn_src to rn_dst, rn_dst to rn_end", wantIDs: []int64{11, 0, 0}, wantNames: []string{"rn_src", "rn_dst", "rn_end"}},
+		{name: "alter keeps temporary dependencies", sql: "alter table rn_src rename to rn_dst", wantIDs: []int64{99, 100}, wantNames: []string{"physical_rn_src", "physical_rn_dst"}},
+		{name: "source lookup error", sql: "rename table rn_src to rn_dst", failName: "rn_src"},
+		{name: "destination lookup error", sql: "rename table rn_src to rn_dst", failName: "rn_dst"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &renameNamespaceCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				temporary: map[string]*TableDef{
+					"rn_src": {Name: "physical_rn_src", TblId: 99, Version: 90, IsTemporary: true},
+					"rn_dst": {Name: "physical_rn_dst", TblId: 100, Version: 90, IsTemporary: true},
+				},
+				failName: tc.failName, failure: lookupErr,
+			}
+			for i, name := range []string{"rn_src", "rn_dst"} {
+				if i == 1 && !tc.destinationExists {
+					continue
+				}
+				ctx.tables[name] = &TableDef{Name: name, TblId: uint64(11 + i), Version: 30}
+				ctx.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name}
+			}
+			statements, err := mysql.Parse(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			schemas, err := collectPrepareDdlSchemas(ctx, statements[0], &planpb.Plan{})
+			if tc.failName != "" {
+				require.ErrorIs(t, err, lookupErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, schemas, len(tc.wantIDs))
+			for i, id := range tc.wantIDs {
+				require.Equal(t, id, schemas[i].Obj)
+				require.Equal(t, tc.wantNames[i], schemas[i].ObjName)
+				if id != 0 {
+					version := int64(30)
+					if id >= 99 {
+						version = 90
+					}
+					require.Equal(t, version, schemas[i].Server)
+				}
 			}
 		})
 	}
@@ -920,7 +978,7 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 			viewKey,
 		},
 	}
-	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src_v", tableName)
 		require.NotSame(t, snapshot, gotSnapshot)
@@ -948,7 +1006,7 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"subscription_one#v", "subscription_two#v"},
 	}
-	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
 			SchemaName:       "publisher_db",
 			ObjName:          tableName,
@@ -1205,7 +1263,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 			ctx := &viewDependencyCompilerContext{
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				views:               []string{testCase.view},
-				resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+				resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 					t.Fatal("invalid dependency must fail before resolution")
 					return nil, nil, nil
 				},
@@ -1221,14 +1279,14 @@ func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"db#v"},
-		resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+		resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 			return nil, nil, resolveErr
 		},
 	}
 	_, err := collectPrepareViewSchemas(ctx)
 	require.ErrorIs(t, err, resolveErr)
 
-	ctx.resolve = func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 		return nil, nil, nil
 	}
 	_, err = collectPrepareViewSchemas(ctx)
@@ -1239,17 +1297,14 @@ func TestBuildPrepareClearsViewsFromPreviousStatement(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"dropped_db#dropped_view"},
-		resolve: func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+		resolve: func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			require.NotEqual(t, "dropped_db", databaseName)
 			require.NotEqual(t, "dropped_view", tableName)
 			return nil, nil, nil
 		},
 	}
 
-	prepared, err := buildPrepare(
-		tree.NewPrepareString("s", "drop table if exists unrelated"),
-		ctx,
-	)
+	prepared, err := buildPrepare(tree.NewPrepareString("s", "drop table if exists unrelated"), ctx, nil)
 	require.NoError(t, err)
 	require.Empty(t, ctx.GetViews())
 	require.Len(t, prepared.GetDcl().GetPrepare().GetSchemas(), 1)

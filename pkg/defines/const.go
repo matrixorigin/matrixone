@@ -170,7 +170,7 @@ const (
 	MORPCVersion132 int64 = 132 // decimal float rounding and strict textual float conversions
 	MORPCVersion133 int64 = 133 // typed JSON MIN/MAX aggregate comparison
 	MORPCVersion134 int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
-	// 135 is claimed by matrixorigin/matrixone#31492 and 136 by the JSON_SEARCH
+	// 135 is claimed by matrixorigin/matrixone#32826 and 136 by the JSON_SEARCH
 	// branch of PR #30833; renumber on merge if one of those lands first.
 	MORPCVersion137    int64 = 137 // JSON aggregate opaque value execution
 	MORPCLatestVersion       = MORPCVersion137

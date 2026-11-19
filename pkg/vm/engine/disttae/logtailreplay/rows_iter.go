@@ -125,13 +125,11 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts                types.TS
-	spec              PrimaryKeyMatchSpec
-	iter              btree.IterG[*PrimaryIndexEntry]
-	rows              *btree.BTreeG[*RowEntry]
-	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
-	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
-	curRow            *RowEntry
+	ts     types.TS
+	spec   PrimaryKeyMatchSpec
+	iter   btree.IterG[*PrimaryIndexEntry]
+	rows   *btree.BTreeG[*RowEntry]
+	curRow *RowEntry
 
 	specHint struct {
 		isDelIter bool
@@ -221,10 +219,13 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 	}
 
 	first := true
-	cnt := 3
+	finished := false
 	spec := PrimaryKeyMatchSpec{
 		Name: "Exact",
 		moveInner: func(p *primaryKeyIter) bool {
+			if finished {
+				return false
+			}
 			var ok bool
 			if first {
 				first = false
@@ -238,27 +239,7 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 
 			} else {
 				ok = p.iter.Next()
-
-				if !p.specHint.isDelIter {
-					cnt--
-				}
-
-				// Note that:
-				// delete a pk may happen twice, means there may have two deletes
-				// for one pk both pushed to CN, and they have different TS.
-				// this happened when an update or delete commit to TN during flush,
-				// the delete target is transferred to a new object, so the extra delete was generated.
-				// the new delete may have bigger TS than the older one.
-				//
-				// update case:
-				//    delete pk  t1
-				//    insert pk  t1
-				//
-				//    flush ----> transfer delete ---> delete pk t2
-				//
-				// if the Exact only consider the latest one records, it may miss the insert!
-				//
-				if !ok || cnt <= 0 {
+				if !ok {
 					return false
 				}
 			}
@@ -274,12 +255,22 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			if p.specHint.isDelIter != p.iter.Item().Deleted {
+			item := p.iter.Item()
+			if !bytes.Equal(item.Bytes, key) {
+				finished = true
+				return false
+			}
+			if p.specHint.isDelIter != item.Deleted {
 				continue
 			}
 
-			item := p.iter.Item()
-			return bytes.Equal(item.Bytes, key)
+			// Transferred deletes can precede the current insertion without a
+			// fixed count limit. For a unique PK, only the newest insertion at
+			// or before ts can be live; isPKItemValid still checks its RowID's
+			// visibility. Older insertions cannot become live again if it was
+			// deleted. Delete iterators must keep visiting all physical RowIDs.
+			finished = !p.specHint.isDelIter
+			return true
 		}
 	}
 
@@ -649,7 +640,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	spec := PrimaryKeyMatchSpec{
 		Name: "InKind",
 		moveInner: func(p *primaryKeyIter) (ret bool) {
-			// TODO: optimize the case where len(encodes) >> p.primaryIndex.Len(), refer to the UT TestPrefixIn
+			// TODO: optimize the case where len(encodes) >> the primary index size, refer to the UT TestPrefixIn
 			for {
 				switch currentPhase {
 				case seek:
@@ -881,11 +872,10 @@ func (p *PartitionState) NewPrimaryKeyIter(
 ) *primaryKeyIter {
 	index := p.rowPrimaryKeyIndex
 	return &primaryKeyIter{
-		ts:           ts,
-		spec:         buildSpec(op, keys),
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows,
+		ts:   ts,
+		spec: buildSpec(op, keys),
+		iter: index.Iter(),
+		rows: p.rows,
 	}
 }
 
@@ -1043,12 +1033,10 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	index := p.rowPrimaryKeyIndex
 	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:                *ts,
-			spec:              buildSpec(op, keys),
-			primaryIndex:      index,
-			iter:              index.Iter(),
-			rows:              p.rows,
-			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex,
+			ts:   *ts,
+			spec: buildSpec(op, keys),
+			iter: index.Iter(),
+			rows: p.rows,
 		},
 		bid: *bid,
 	}
@@ -1085,11 +1073,10 @@ func (p *PartitionState) NewClusterKeyIter(
 ) *primaryKeyIter {
 	index := p.rowClusterIndex
 	return &primaryKeyIter{
-		ts:           ts,
-		spec:         buildClusterSpec(op, keys),
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows,
+		ts:   ts,
+		spec: buildClusterSpec(op, keys),
+		iter: index.Iter(),
+		rows: p.rows,
 	}
 }
 

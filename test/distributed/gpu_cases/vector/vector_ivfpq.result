@@ -39,6 +39,7 @@ where relname='t' and reldatabase='ivfpq_sync')
 order by algo_table_type;
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  𝄀
 PRIMARY  ¦  PRIMARY  ¦    ¦    𝄀
+ix  ¦  MULTIPLE  ¦  ivfpq  ¦  ignored  𝄀
 ix  ¦  MULTIPLE  ¦  ivfpq  ¦  ivfpq_index  𝄀
 ix  ¦  MULTIPLE  ¦  ivfpq  ¦  ivfpq_meta
 set @stbl = (select index_table_name from mo_catalog.mo_indexes

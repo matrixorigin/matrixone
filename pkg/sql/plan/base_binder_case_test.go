@@ -1708,7 +1708,7 @@ func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 		"select case when ? then v else -v end from (select 1 as v) t", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx, queryPlan))
 
@@ -1768,7 +1768,7 @@ func TestBuildSearchedCaseAcceptsImplicitBooleanConditions(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, findPlanFunctionExpr(queryPlan, "case"))
 		})

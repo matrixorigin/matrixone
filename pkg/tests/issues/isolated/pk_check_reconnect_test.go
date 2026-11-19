@@ -148,19 +148,25 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
-	require.NoError(t, err)
+	var snapshot timestamp.Timestamp
 	found := false
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
 			require.True(t, tx.Meta.IsRCIsolation())
-			require.True(t, tx.Meta.SnapshotTS.LessEq(frontier))
+			snapshot = tx.Meta.SnapshotTS
 			return false
 		}
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
+	// RC chooses the latest applied timestamp's successor. A TN read barrier
+	// need not cover that snapshot, so wait for the parked transaction's actual
+	// snapshot before choosing the already-applied conflicting lock frontier.
+	_, err = cn.GetTxnClient().WaitLogTailAppliedAt(ctx, snapshot)
+	require.NoError(t, err)
+	frontier = pushClient.LatestLogtailAppliedTime()
+	require.True(t, snapshot.LessEq(frontier))
 	require.NoError(t, pushClient.Disconnect())
 	select {
 	case <-reconnecting:

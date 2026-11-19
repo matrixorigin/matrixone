@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,17 +33,14 @@ import (
 
 func TestBuildIndexTableName(t *testing.T) {
 	tests := []struct {
-		indexNames     string
 		uniques        bool
 		indexTableName string
 	}{
 		{
-			indexNames:     "a",
 			uniques:        true,
 			indexTableName: catalog.PrefixIndexTableName + "unique_",
 		},
 		{
-			indexNames:     "b",
 			uniques:        false,
 			indexTableName: catalog.PrefixIndexTableName + "secondary_",
 		},
@@ -51,8 +49,9 @@ func TestBuildIndexTableName(t *testing.T) {
 		unique := test.uniques
 		ctx := context.TODO()
 		indexTableName, err := BuildIndexTableName(ctx, unique)
-		require.Equal(t, indexTableName[:len(test.indexTableName)], test.indexTableName)
-		require.Equal(t, err, nil)
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(indexTableName, test.indexTableName), "index name: %q", indexTableName)
+		require.True(t, IsIndexTableName(indexTableName), "invalid index name: %q", indexTableName)
 	}
 }
 

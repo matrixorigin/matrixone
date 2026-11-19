@@ -170,7 +170,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot)
+			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot, nil)
 		if err != nil {
 			return err
 		}
@@ -465,7 +465,7 @@ type ResetParamRefRule struct {
 	// consumes these expressions positionally; rebuilding the outer function
 	// can change its assignment-cast contract even when the predicate needs a
 	// different execute-time overload.
-	preserveRoots map[*plan.Expr]struct{}
+	preserveRoots map[*plan.Expr]plan.Type
 	// specialized is set when execute-time rebinding changes the cached plan's
 	// execution semantics, including value-only rewrites whose overload and
 	// result type remain stable.
@@ -1255,10 +1255,15 @@ func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNu
 	}, true, nil
 }
 
-func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Expr) bool {
+func (rule *ResetParamRefRule) preparedBitCountUsesIntegerRuntime(expr *plan.Expr) bool {
 	for pos := range preparedNumericValueParamPositions(expr) {
 		if pos >= 0 && int(pos) < len(rule.paramValues) {
-			if PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+			value := rule.paramValues[pos]
+			if PreparedParamValueHasNumericRuntime(value) {
+				return true
+			}
+			if param, ok := value.(ParamValue); ok && param.HasRuntimeType &&
+				planfunction.IntegerArgumentUsesTemporalIntegerCast("bit_count", 0, param.RuntimeType.Oid) {
 				return true
 			}
 		}
@@ -2444,6 +2449,12 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		rule.specialized = true
 	} else if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "timestampadd_second_interval" && len(fn.Args) == 1 {
 		rewritten, err = rule.rebindTimestampAddSecondInterval(e)
+	} else if fn := e.GetF(); fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "bit_count") &&
+		len(fn.Args) == 1 && isPreparedNumericFallbackExpr(fn.Args[0]) &&
+		!rule.preparedBitCountUsesIntegerRuntime(fn.Args[0]) {
+		// Source-dependent integer rebinding must not bypass BIT_COUNT's
+		// prepared binary-string default for a nonnumeric runtime value.
+		rewritten, err = rule.applyExpr(e)
 	} else if hasSourceDependentIntegerArguments(e) {
 		fallbackSource = nil
 		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
@@ -2580,6 +2591,28 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	case *plan.Expr_F:
 		if exprImpl.F == nil {
 			return e, nil
+		}
+		if _, _, generated := preparedCalendarResultCast(e); generated {
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			if target := rule.preserveRoots[e]; target.Id != 0 {
+				return appendCastBeforeExpr(rule.ctx, rewritten, target)
+			}
+			return rewritten, nil
+		}
+		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "from_unixtime") &&
+			len(exprImpl.F.Args) == 1 && temporalDirectMarker(exprImpl.F.Args[0]) {
+			// FSP6 can make the consumer itself a positional write root, with
+			// no surrounding assignment cast. Rebind its numeric input anyway;
+			// preserving the PREPARE-time INT64 cast rejects decimal parameters.
+			target := e.Typ
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			return appendCastBeforeExpr(rule.ctx, rewritten, target)
 		}
 		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "inet_ntoa") &&
 			len(exprImpl.F.Args) == 1 {
@@ -2926,17 +2959,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_Dependent:
 		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
+		calendarPosition, calendarOnly, calendarCast := preparedCalendarResultCast(e)
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
 		}
 		if strings.EqualFold(functionName, "bit_count") && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) &&
-			!rule.preparedBitCountUsesNumericRuntime(exprImpl.F.Args[0]) {
+			!rule.preparedBitCountUsesIntegerRuntime(exprImpl.F.Args[0]) {
 			// An unresolved BIT_COUNT marker has a binary-string default in
 			// MySQL. Text/BLOB protocol values therefore keep the prepared
-			// VARBINARY cast; only an actual numeric runtime domain reparses the
-			// function and selects a numeric overload.
+			// VARBINARY cast; only an actual numeric or native temporal runtime
+			// domain reparses the function and selects an integer overload.
 			return e, nil
 		}
 		isDeferredNumeric := isPreparedNumericFallbackFunctionCall(functionName, len(exprImpl.F.Args))
@@ -3193,6 +3227,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
 						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
 							param.SourceType.Oid == types.T_float64)
+					if functionName == "sec_to_time" && param.IsBinaryProtocol && param.HasRuntimeType {
+						// Native temporal parameters carry the same source domain as a
+						// direct temporal expression. Do not leave them behind the
+						// provisional TEXT cast selected while preparing the statement.
+						numericTemporalSource = param.RuntimeType.Oid.IsDateRelate() &&
+							param.RuntimeType.Oid != types.T_year
+					}
 				}
 			}
 			if (functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i])) ||
@@ -3875,6 +3916,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 
+		if calendarCast {
+			// Generic COM_STMT strings intentionally have no concrete runtime
+			// type metadata. They still carry a known text source and value.
+			source, known, sourceErr := rule.preparedRuntimeSourceExpr(calendarPosition, true)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			if known {
+				target := inferPreparedCalendarResult(makeTypeByPlan2Expr(source), true, temporalParamValue(rule.paramValues[calendarPosition]), calendarOnly)
+				rule.specialized = true
+				return appendCastBeforeExpr(rule.ctx, boundArgs[0], makePlan2Type(&target))
+			}
+		}
+
 		// reset function
 		if needResetFunction {
 			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
@@ -3890,7 +3945,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			} else {
 				var originalBoundExpr *Expr
 				switch functionName {
-				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime":
 					// The saved operands already own immutable provenance. Share
 					// them only when rebinding, without copying the tree again.
 					originalFunction := *exprImpl.F
@@ -3910,6 +3965,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if err != nil {
 				return nil, err
+			}
+			// A serialized legacy call with an already-JSON argument keeps that
+			// argument. A new unresolved marker can instead acquire the text
+			// conversion when its actual input domain becomes known.
+			if originalFuncObj == planfunction.EncodeOverloadID(planfunction.CRC32, 0) && rewritten.GetF() != nil {
+				rewritten.GetF().Func.Obj = originalFuncObj
+				rewritten.Typ = originalTyp
+				// A persisted legacy JSON call owns its original binary argument;
+				// rebinding it must not retain the explicit text cast inserted for
+				// new JSON calls. An unresolved parameter is rebound normally so
+				// its actual JSON, text, or binary domain can be selected.
+				if len(originalArgs) == 1 && originalArgs[0] != nil && types.T(originalArgs[0].Typ.Id) == types.T_json {
+					rewritten.GetF().Args = boundArgs
+				}
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
@@ -4393,6 +4462,15 @@ func preparedNumericPrefixArgs(
 	return sources, true, nil
 }
 
+func isPreparedNumericPrefixFunction(name string) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+		return true
+	default:
+		return false
+	}
+}
+
 func preparedNumericPrefixContext(
 	name string,
 	args []*plan.Expr,
@@ -4401,9 +4479,7 @@ func preparedNumericPrefixContext(
 	prefixListArgs [][]bool,
 	prefixListKinds [][]types.StringConversionKind,
 ) bool {
-	switch name {
-	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
-	default:
+	if !isPreparedNumericPrefixFunction(name) {
 		return false
 	}
 

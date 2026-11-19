@@ -21,29 +21,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Exercise #30626 through an actual role login, keeping its existing session
 // across grants/revokes. DATABASE DDL and TABLE db.* DML are distinct scopes.
 func TestLeastPrivilegeApplicationRole(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		admin := openIcebergTestDB(t, c)
-		defer admin.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		cn, err := c.GetCNService(0)
-		require.NoError(t, err)
-		var previous string
-		require.NoError(t, admin.QueryRowContext(ctx, "select @@global.enable_privilege_cache").Scan(&previous))
-		defer func() {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_, err := admin.ExecContext(cleanupCtx, "set global enable_privilege_cache="+previous)
-			require.NoError(t, err)
-		}()
-		for _, cached := range []bool{true, false} {
-			t.Run(fmt.Sprintf("privilege-cache=%t", cached), func(t *testing.T) {
+	for _, cached := range []bool{true, false} {
+		t.Run(fmt.Sprintf("privilege-cache=%t", cached), func(t *testing.T) {
+			RunSingleCNBaseClusterTests(t, func(c Cluster) {
+				admin := openIcebergTestDB(t, c)
+				defer admin.Close()
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
+				cn, err := c.GetCNService(0)
+				require.NoError(t, err)
+				var previous string
+				require.NoError(t, admin.QueryRowContext(ctx, "select @@global.enable_privilege_cache").Scan(&previous))
+				defer func() {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					_, err := admin.ExecContext(cleanupCtx, "set global enable_privilege_cache="+previous)
+					assert.NoError(t, err)
+				}()
 				execAdmin := func(query string) {
 					t.Helper()
 					_, err := admin.ExecContext(ctx, query)
@@ -55,17 +56,17 @@ func TestLeastPrivilegeApplicationRole(t *testing.T) {
 				const role = "application_role_30626"
 				const username = "application_user_30626"
 				execAdmin("create database " + database)
-				t.Cleanup(func() {
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
+				defer func() {
 					for _, query := range []string{
 						"drop database if exists " + database, "drop database if exists " + other,
 						"drop user if exists " + username, "drop role if exists " + role,
 					} {
+						cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 						_, err := admin.ExecContext(cleanupCtx, query)
-						require.NoError(t, err, query)
+						cancel()
+						assert.NoError(t, err, query)
 					}
-				})
+				}()
 				execAdmin("create database " + other)
 				execAdmin("create role " + role)
 				execAdmin("create user " + username + " identified by 'fixture-only'")
@@ -138,6 +139,6 @@ func TestLeastPrivilegeApplicationRole(t *testing.T) {
 					"select count(*) from "+other+".denied where USER_ID='other'").Scan(&count))
 				require.Equal(t, 1, count)
 			})
-		}
-	})
+		})
+	}
 }

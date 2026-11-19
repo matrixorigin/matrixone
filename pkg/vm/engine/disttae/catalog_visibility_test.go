@@ -57,6 +57,7 @@ func TestCatalogVisibilityRejectsActiveMutationAndABA(t *testing.T) {
 	next, stable := txn.CatalogVisibility()
 	require.True(t, stable)
 	require.Greater(t, next, initial)
+	txn.writes = []Entry{{}}
 	txn.UpdateSnapshotWriteOffset()
 	after, _ := txn.CatalogVisibility()
 	require.Greater(t, after, next)
@@ -90,4 +91,49 @@ func TestCatalogVisibilityIgnoresNoopWorkspaceDump(t *testing.T) {
 		require.True(t, stable)
 		require.Equal(t, before, after)
 	}
+}
+
+func TestCatalogVisibilityChangesOnlyForChangedStatementBoundaries(t *testing.T) {
+	for _, input := range []struct {
+		name                     string
+		writes, snapshot, adjust int
+		changed                  bool
+	}{
+		{name: "empty_noop"},
+		{name: "nonempty_noop", writes: 2, snapshot: 2, adjust: 2},
+		{name: "snapshot_only", writes: 2, snapshot: 1, adjust: 2, changed: true},
+		{name: "adjust_only", writes: 2, snapshot: 2, adjust: 1, changed: true},
+		{name: "both", writes: 2, changed: true},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			txn := &Transaction{writes: make([]Entry, input.writes), adjustWriteOffset: input.adjust}
+			txn.snapshotWriteOffset.Store(int64(input.snapshot))
+			before, stable := txn.CatalogVisibility()
+			require.True(t, stable)
+			txn.UpdateSnapshotWriteOffset()
+			after, stable := txn.CatalogVisibility()
+			require.True(t, stable)
+			if input.changed {
+				require.Greater(t, after, before)
+			} else {
+				require.Equal(t, before, after)
+			}
+			require.Equal(t, input.writes, txn.GetSnapshotWriteOffset())
+			require.Equal(t, input.writes, txn.adjustWriteOffset)
+			txn.UpdateSnapshotWriteOffset()
+			again, stable := txn.CatalogVisibility()
+			require.True(t, stable)
+			require.Equal(t, after, again)
+		})
+	}
+	txn := &Transaction{}
+	original, _ := txn.CatalogVisibility()
+	txn.writes = []Entry{{}}
+	txn.UpdateSnapshotWriteOffset()
+	txn.writes = nil
+	txn.UpdateSnapshotWriteOffset()
+	after, stable := txn.CatalogVisibility()
+	require.True(t, stable)
+	require.Zero(t, txn.GetSnapshotWriteOffset())
+	require.Greater(t, after, original, "an actual offset ABA must still invalidate old native sources")
 }

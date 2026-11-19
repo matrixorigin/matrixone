@@ -27,10 +27,58 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func validateDecimalDumpFlushResult(raw string) error {
+	var result struct {
+		Method string `json:"method"`
+		Data   []struct {
+			ReturnStr string `json:"returnStr"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return fmt.Errorf("decode flush result: %w", err)
+	}
+	if result.Method != "Flush" || len(result.Data) == 0 {
+		return fmt.Errorf("flush has no TN success: %s", raw)
+	}
+	for _, response := range result.Data {
+		if response.ReturnStr != "OK" {
+			return fmt.Errorf("flush TN response is not OK: %s", raw)
+		}
+	}
+	return nil
+}
+
+func TestValidateDecimalDumpFlushResult(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		ok        bool
+	}{
+		{"ok", `{"method":"Flush","result":[{"returnStr":"OK"}]}`, true},
+		{"multiple_ok", `{"method":"Flush","result":[{"returnStr":"OK"},{"returnStr":"OK"}]}`, true},
+		{"bad_json", `{`, false},
+		{"wrong_method", `{"method":"Other","result":[{"returnStr":"OK"}]}`, false},
+		{"empty", `{"method":"Flush","result":[]}`, false},
+		{"null", `{"method":"Flush","result":null}`, false},
+		{"missing_response", `{"method":"Flush","result":[{}]}`, false},
+		{"mixed_failure", `{"method":"Flush","result":[{"returnStr":"OK"},{"returnStr":"failed"}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDecimalDumpFlushResult(tc.raw)
+			if tc.ok {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
 
 // Install genuine base-authored expressions through a valid metadata manifest,
 // then exercise real SQL DUMP/LOAD, physical rows and future DML. This is not a
@@ -54,6 +102,10 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		svc, ok := cn.RawService().(cnservice.Service)
+		require.True(t, ok)
+		barrier, ok := svc.GetEngine().(engine.LogtailReadBarrier)
+		require.True(t, ok)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
@@ -124,6 +176,10 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				exec("insert into " + table("source") + "(i,tm) values(1000000000000000000,'00:00:00')")
 				var flush string
 				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+table("source")+"')").Scan(&flush))
+				require.NoError(t, validateDecimalDumpFlushResult(flush))
+				frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+				require.NoError(t, err)
+				require.False(t, frontier.IsEmpty(), "flush logtail barrier must report an applied frontier")
 				exec("dump table " + table("source") + " to '" + dumpPath + "'")
 				exported := readManifest(dumpPath)
 				require.NoError(t, json.Unmarshal(exported["bound_expressions"], &payload))

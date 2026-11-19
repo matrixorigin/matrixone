@@ -76,7 +76,7 @@ func TestTableDumpTimestampDefaults(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(compiler, stmt, false)
+			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			def := built.GetDdl().GetCreateTable().TableDef
 			before := proto.Clone(def)
@@ -197,7 +197,7 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+tc.declaration+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(compiler, stmt, false)
+			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			def := built.GetDdl().GetCreateTable().TableDef
 			before := proto.Clone(def)
@@ -397,7 +397,7 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+tc.declaration+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(compiler, stmt, false)
+			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			def := built.GetDdl().GetCreateTable().TableDef
 			before := proto.Clone(def)
@@ -516,7 +516,7 @@ func TestTableDumpCheapPrecisionCandidatesBeforeSessions(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), sql+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(compiler, stmt, false)
+			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			def := built.GetDdl().GetCreateTable().GetTableDef()
 			before := proto.Clone(def)
@@ -575,13 +575,13 @@ func TestTableDumpZeroTemporalDefaultsAcrossSQLModes(t *testing.T) {
 				stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+typ+" default "+origin+")", 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				built, err := BuildPlan(compiler, stmt, false)
+				built, err := BuildPlan(compiler, stmt, false, nil)
 				require.NoError(t, err)
 				def := built.GetDdl().GetCreateTable().GetTableDef()
 				before := proto.Clone(def)
 				mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
 				proc.GetSessionInfo().SqlMode = mode
-				_, err = BuildPlan(compiler, stmt, false)
+				_, err = BuildPlan(compiler, stmt, false, nil)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 				warnings := &process.WarningProbe{}
 				proc.WarningSink = warnings
@@ -614,7 +614,7 @@ func TestTableDumpZeroTemporalDefaultsAcrossSQLModes(t *testing.T) {
 				require.Equal(t, mode, resolved)
 				require.False(t, warnings.Warned())
 				require.True(t, proto.Equal(before, def))
-				_, err = BuildPlan(compiler, stmt, false)
+				_, err = BuildPlan(compiler, stmt, false, nil)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 			})
 		}
@@ -649,7 +649,7 @@ func TestTableDumpPreZeroTemporalDefault(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table t(a timestamp default "+origin+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			current, err := BuildPlan(ctx, stmt, false)
+			current, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			target := current.GetDdl().GetCreateTable().GetTableDef()
 			require.Equal(t, int64(types.ZeroTimestamp), target.Cols[0].Default.Expr.GetLit().GetTimestampval())

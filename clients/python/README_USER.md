@@ -7,6 +7,10 @@
 
 A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector similarity search, fulltext search, snapshot management, PITR, restore operations, table cloning, and more.
 
+For asynchronous file/Arrow APIs, cancellation and commit outcomes, explicit
+driver-bound parameters, and optional query measurements, see
+[async analytics and execution contracts](docs/async-analytics-and-execution.md).
+
 ---
 
 ## 📚 Documentation
@@ -219,7 +223,7 @@ client.disconnect()
 - ✅ Atomic operations - all succeed or fail together
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
-- ✅ Full SQLAlchemy ORM support
+- ✅ SQLAlchemy mapped models and expressions through the SDK query interface
 
 ### File exploration and Arrow analytics (optional)
 

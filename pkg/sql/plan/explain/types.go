@@ -46,8 +46,6 @@ type NodeElemDescribe interface {
 
 type FormatSettings struct {
 	buffer *ExplainDataBuffer
-	offset int
-	indent int
 	level  int
 }
 

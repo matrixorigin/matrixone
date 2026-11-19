@@ -712,6 +712,58 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	require.True(t, fromCache)
 	require.Equal(t, fmt.Sprintf("%08d", sels[0])+strings.Repeat("c", 111), again[2].GetStringAt(0))
 
+	// Complete materialization has its own private area. Reusing the producing
+	// Vector and COW in an independent view must not affect a later cache read.
+	fullMP := mpool.MustNewZero()
+	full := vector.NewOffHeapVecWithType(typs[3])
+	readonlyCopies := make([]*vector.Vector, 0, 4)
+	readonlyCopies = append(readonlyCopies, full)
+	defer func() {
+		freeDestinations(readonlyCopies, fullMP)
+		require.Zero(t, fullMP.CurrNB())
+		mpool.DeleteMPool(fullMP)
+	}()
+	fromCache, err = LoadColumnsDataIntoReadonly(
+		ctx, []uint16{3}, typs[3:], fs, location, []*vector.Vector{full}, fullMP, 0,
+	)
+	require.NoError(t, err)
+	require.True(t, fromCache)
+	require.True(t, full.HasBorrowedBacking())
+	require.Equal(t, rowCount, full.Length())
+	retained, err := full.RetainedReadonlyViewWithMP(fullMP)
+	require.NoError(t, err)
+	readonlyCopies = append(readonlyCopies, retained)
+	full.CleanOnlyData()
+	_, err = LoadColumnsDataIntoReadonly(
+		ctx, []uint16{3}, typs[3:], fs, location, []*vector.Vector{full}, fullMP, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%08d", rowCount-1)+strings.Repeat("p", 51), retained.GetStringAt(rowCount-1))
+	require.NoError(t, retained.MaterializeOwned(fullMP))
+	retained.GetBytesAt(0)[0] = 'X'
+	require.Equal(t, "00000000"+strings.Repeat("p", 51), full.GetStringAt(0))
+	_, err = LoadColumnsDataIntoReadonly(
+		ctx, []uint16{3}, typs[3:], fs, location, []*vector.Vector{full}, fullMP, 0,
+	)
+	require.Error(t, err, "a published destination cannot be appended through the readonly API")
+	require.Equal(t, rowCount, full.Length())
+	retained.Free(fullMP)
+	full.Free(fullMP)
+
+	readonlyPrefix := []*vector.Vector{
+		vector.NewOffHeapVecWithType(typs[3]),
+		vector.NewOffHeapVecWithType(types.T_int64.ToType()),
+	}
+	readonlyCopies = append(readonlyCopies, readonlyPrefix...)
+	_, err = LoadColumnsDataIntoReadonly(
+		ctx, []uint16{3, 1}, []types.Type{typs[3], typs[1]}, fs, location, readonlyPrefix, fullMP, 0,
+	)
+	require.Error(t, err, "a later column's materialization error leaves an owned prefix")
+	require.True(t, readonlyPrefix[0].HasBorrowedBacking())
+	require.Equal(t, "00000000"+strings.Repeat("p", 51), readonlyPrefix[0].GetStringAt(0))
+	freeDestinations(readonlyPrefix, fullMP)
+	require.Zero(t, fullMP.CurrNB())
+
 	trackingFS := &releaseTrackingFS{FileService: fs}
 	partial := []*vector.Vector{
 		vector.NewOffHeapVecWithType(typs[2]),

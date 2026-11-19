@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,18 +31,21 @@ import (
 // Values outside the resident Top policy, NULL, noncanonical encodings and
 // unproved conversion domains are left to the existing runtime operators.
 func preparedPaginationTopBound(proc *process.Process, expr *plan.Expr) (uint64, bool, bool) {
+	return preparedPaginationBound(proc, expr, mergeTopResidentPlanThreshold)
+}
+
+func preparedPaginationBound(proc *process.Process, expr *plan.Expr, maxValue uint64) (uint64, bool, bool) {
 	if proc == nil || proc.Base == nil || expr == nil || types.T(expr.Typ.Id) != types.T_uint64 {
 		return 0, false, false
 	}
 	if lit := expr.GetLit(); lit != nil {
 		value, ok := lit.Value.(*plan.Literal_U64Val)
-		if !ok || lit.Isnull || lit.Src != nil || value.U64Val > mergeTopResidentPlanThreshold {
+		if !ok || lit.Isnull || lit.Src != nil || value.U64Val > maxValue {
 			return 0, false, false
 		}
 		return value.U64Val, false, true
 	}
 
-	maxValue := mergeTopResidentPlanThreshold
 	for depth := 0; depth < 4; depth++ {
 		if param := expr.GetP(); param != nil {
 			if param.Pos < 0 || proc.GetPrepareParams() == nil || types.T(expr.Typ.Id) == types.T_any {
@@ -68,10 +73,11 @@ func preparedPaginationTopBound(proc *process.Process, expr *plan.Expr) (uint64,
 				if digit < '0' || digit > '9' {
 					return 0, false, false
 				}
-				number = number*10 + uint64(digit-'0')
-				if number > maxValue {
+				part := uint64(digit - '0')
+				if part > maxValue || number > (maxValue-part)/10 {
 					return 0, false, false
 				}
+				number = number*10 + part
 			}
 			return number, true, true
 		}
@@ -100,12 +106,38 @@ func preparedPaginationSourceDomain(typ types.T, maxValue *uint64, allowText boo
 		*maxValue = min(*maxValue, 127)
 	case types.T_uint8:
 		*maxValue = min(*maxValue, 255)
-	case types.T_int16, types.T_uint16, types.T_int32, types.T_uint32, types.T_int64, types.T_uint64:
-		// Every value within the resident threshold fits these integer domains.
+	case types.T_int16:
+		*maxValue = min(*maxValue, math.MaxInt16)
+	case types.T_uint16:
+		*maxValue = min(*maxValue, math.MaxUint16)
+	case types.T_int32:
+		*maxValue = min(*maxValue, math.MaxInt32)
+	case types.T_uint32:
+		*maxValue = min(*maxValue, math.MaxUint32)
+	case types.T_int64:
+		*maxValue = min(*maxValue, math.MaxInt64)
+	case types.T_uint64:
 	default:
 		return false
 	}
 	return true
+}
+
+// preparedPaginationScanBound derives a fresh bound without evaluating an
+// expression or mutating the reusable prepared plan.
+func (c *Compile) preparedPaginationScanBound(node *plan.Node) (uint64, bool) {
+	if c == nil || c.isPrepare || c.pn == nil || !c.pn.IsPrepare || c.proc == nil || node == nil {
+		return 0, false
+	}
+	limit, limitParam, ok := preparedPaginationBound(c.proc, node.Limit, math.MaxUint64)
+	if !ok || limit == 0 {
+		return 0, false
+	}
+	offset, offsetParam, ok := preparedPaginationBound(c.proc, node.Offset, math.MaxUint64)
+	if !ok || (!limitParam && !offsetParam) || offset > math.MaxUint64-limit {
+		return 0, false
+	}
+	return limit + offset, true
 }
 
 func (c *Compile) preparedPaginationTop(node *plan.Node) (uint64, bool) {

@@ -65,41 +65,26 @@ func GenericAscCompare[T OrderedT](x, y T) int {
 // Infinities retain their numeric order. Signed zeroes and all NaN payloads
 // are peers, and NaNs sort after every numeric value.
 func Float32OrderAscCompare(x, y float32) int {
-	if x < y {
-		return -1
-	}
-	if x > y {
-		return 1
-	}
-	if x == y || x != x && y != y {
-		return 0
-	}
-	if x != x {
-		return 1
-	}
-	return -1
+	return floatOrderAscCompare(x, y)
 }
 
 // Float32OrderDescCompare keeps NaNs last while reversing numeric order.
 func Float32OrderDescCompare(x, y float32) int {
-	if x > y {
-		return -1
-	}
-	if x < y {
-		return 1
-	}
-	if x == y || x != x && y != y {
-		return 0
-	}
-	if x != x {
-		return 1
-	}
-	return -1
+	return floatOrderDescCompare(x, y)
 }
 
 // Float64OrderAscCompare is the float64 counterpart of
 // Float32OrderAscCompare.
 func Float64OrderAscCompare(x, y float64) int {
+	return floatOrderAscCompare(x, y)
+}
+
+// Float64OrderDescCompare keeps NaNs last while reversing numeric order.
+func Float64OrderDescCompare(x, y float64) int {
+	return floatOrderDescCompare(x, y)
+}
+
+func floatOrderAscCompare[T ~float32 | ~float64](x, y T) int {
 	if x < y {
 		return -1
 	}
@@ -115,8 +100,7 @@ func Float64OrderAscCompare(x, y float64) int {
 	return -1
 }
 
-// Float64OrderDescCompare keeps NaNs last while reversing numeric order.
-func Float64OrderDescCompare(x, y float64) int {
+func floatOrderDescCompare[T ~float32 | ~float64](x, y T) int {
 	if x > y {
 		return -1
 	}

@@ -78,7 +78,8 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing
 
 	indexDefs, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
 	require.NoError(t, err)
-	require.Len(t, indexDefs, 3)
+	require.Len(t, indexDefs, 4)
+	require.Equal(t, catalog.IndexIgnored_TblType, indexDefs[3].IndexAlgoTableType)
 
 	for _, indexDef := range indexDefs {
 		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
@@ -119,7 +120,7 @@ func TestBuildIvfFlatSecondaryIndexDef_ExtendsEntriesTableWithIncludeColumns(t *
 
 	_, tableDefs, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
 	require.NoError(t, err)
-	require.Len(t, tableDefs, 3)
+	require.Len(t, tableDefs, 4)
 
 	entriesTable := tableDefs[2]
 	require.Len(t, entriesTable.Cols, 7)

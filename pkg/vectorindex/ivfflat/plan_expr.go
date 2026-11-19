@@ -116,7 +116,9 @@ func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, value
 	// this is not a live defect -- but it is the same shape as the prefix_in bug
 	// this file's sibling had, and sorting at the source removes the dependency
 	// on a downstream normalize that this function cannot see.
-	vec.InplaceSortAndCompact()
+	if err := vec.InplaceSortAndCompact(mp); err != nil {
+		return nil, err
+	}
 	data, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err

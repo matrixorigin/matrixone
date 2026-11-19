@@ -17,6 +17,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path"
 	"testing"
 	"time"
@@ -438,71 +439,24 @@ func TestBackupProtectionCheckpointFiltering(t *testing.T) {
 		"Protected checkpoints should still exist after GC")
 }
 
-// TestGetParallelCount tests getParallelCount function with different CPU counts
 func TestGetParallelCount(t *testing.T) {
-	tests := []struct {
-		name     string
-		count    int
-		cpuNum   int
-		expected int
+	for _, tc := range []struct {
+		cpuNum int
+		want   int
 	}{
-		{
-			name:     "custom count in range",
-			count:    100,
-			cpuNum:   4,
-			expected: 100,
-		},
-		{
-			name:     "cpu < 8",
-			count:    0,
-			cpuNum:   4,
-			expected: 50,
-		},
-		{
-			name:     "cpu < 16",
-			count:    0,
-			cpuNum:   12,
-			expected: 80,
-		},
-		{
-			name:     "cpu < 32",
-			count:    0,
-			cpuNum:   24,
-			expected: 128,
-		},
-		{
-			name:     "cpu < 64",
-			count:    0,
-			cpuNum:   48,
-			expected: 256,
-		},
-		{
-			name:     "cpu >= 64",
-			count:    0,
-			cpuNum:   128,
-			expected: 512,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Note: We can't easily mock runtime.NumCPU, so we test the logic
-			// by checking if the function returns the expected value based on count
-			// For CPU-based branches, we'll test with actual CPU count
-			if tt.count > 0 {
-				// Test custom count path
-				result := getParallelCount(tt.count)
-				assert.Equal(t, tt.expected, result)
-			} else {
-				// For CPU-based paths, we can only test with actual CPU count
-				// The actual CPU count will determine which branch is taken
-				result := getParallelCount(tt.count)
-				// Verify it returns a valid value based on actual CPU count
-				assert.Greater(t, result, 0)
-				assert.LessOrEqual(t, result, 512)
-			}
+		{1, 50}, {7, 50}, {8, 80}, {15, 80}, {16, 128},
+		{31, 128}, {32, 256}, {63, 256}, {64, 512}, {128, 512},
+	} {
+		t.Run(fmt.Sprintf("cpu_%d", tc.cpuNum), func(t *testing.T) {
+			assert.Equal(t, tc.want, defaultBackupParallelCount(tc.cpuNum))
 		})
 	}
+	assert.Equal(t, 1, getParallelCount(1))
+	assert.Equal(t, 100, getParallelCount(100))
+	assert.Equal(t, 511, getParallelCount(511))
+	defaultCount := getParallelCount(0)
+	assert.Equal(t, defaultCount, getParallelCount(-1))
+	assert.Equal(t, defaultCount, getParallelCount(512))
 }
 
 // TestCopyFileWithDstDir tests CopyFile with dstDir parameter
@@ -669,7 +623,7 @@ func TestCopyFileAndGetMetaFilesWithFiltering(t *testing.T) {
 		return ioutil.DecodeTSRangeFile(name)
 	}
 
-	taeFiles, metaFiles, dirEntries, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, dirEntries, err := (backupFileCopier{}).copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, "", backupTS, decoder, true,
 	)
 	require.NoError(t, err)
@@ -740,7 +694,7 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -822,7 +776,7 @@ func TestExecBackupWithProtectionMgr(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -866,7 +820,7 @@ func TestExecBackupWithBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -911,7 +865,7 @@ func TestExecBackupWithEmptyBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -965,7 +919,7 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 		return ioutil.DecodeTSRangeFile(name)
 	}
 
-	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, _, err := (backupFileCopier{}).copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, "", backupTS, decoder, true,
 	)
 	require.NoError(t, err)
@@ -976,15 +930,6 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 	assert.Len(t, taeFiles, 0, "Should skip files with start >= backup or end > backup")
 	assert.Len(t, metaFiles, 0, "Should skip files with start >= backup or end > backup")
 }
-
-// TestGetSQLExecutor tests getSQLExecutor function
-//func TestGetSQLExecutor(t *testing.T) {
-//
-//	// Test with empty sid (should return nil)
-//	exec, opts := getSQLExecutor("")
-//	assert.Nil(t, exec)
-//	assert.Equal(t, executor.Options{}, opts)
-//}
 
 // TestBackupProtectionSQLBuilders tests SQL builder functions
 func TestBackupProtectionSQLBuilders(t *testing.T) {

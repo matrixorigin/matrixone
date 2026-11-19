@@ -32,6 +32,8 @@ type MutableFileService interface {
 	OpenFile(ctx context.Context, filePath string) (*os.File, error)
 	CreateFile(ctx context.Context, filePath string) (*os.File, error)
 	RemoveFile(ctx context.Context, filePath string) error
+	// CreateAndRemoveFile returns an open file after removing filePath. The caller must close it.
+	// On error, a created or truncated file may still have a directory entry.
 	CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error)
 }
 

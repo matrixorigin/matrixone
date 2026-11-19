@@ -65,7 +65,7 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -89,7 +89,7 @@ func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -166,7 +166,7 @@ func TestNumericContextModWithoutParametersInPrepareMode(t *testing.T) {
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select mod(2024, 4)", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	require.Empty(t, collectPlanParamTypes(queryPlan))
 }
@@ -176,7 +176,7 @@ func TestNumericContextUsesFunctionSpecificPreparedDomain(t *testing.T) {
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select ? + abs(?)", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 
 	paramTypes := collectPlanParamTypes(queryPlan)
@@ -217,7 +217,7 @@ func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -280,7 +280,7 @@ func TestPreparedNumericContextTreatsBitColumnAsUnsignedBigint(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)
@@ -339,7 +339,7 @@ func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -367,7 +367,7 @@ func TestPreparedNumericContextCoversBinaryOperators(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -402,7 +402,7 @@ func TestNumericContextDoesNotCrossComparisonOrTemporalBoundary(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			require.Equal(t, test.want, collectPlanParamTypes(queryPlan))
 		})
@@ -423,7 +423,7 @@ func TestPreparedNumericContextPreservesTemporalSubtraction(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -438,7 +438,7 @@ func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	require.Equal(t, []types.T{types.T_int64, types.T_int64}, collectPlanParamTypes(queryPlan))
 }
@@ -489,7 +489,7 @@ func TestPreparedNumericContextMergesExactSiblingTypes(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)
@@ -514,7 +514,7 @@ func TestPreparedNumericContextUsesCorrelatedColumnType(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.NotEmpty(t, paramTypes)
@@ -593,7 +593,7 @@ func TestPreparedDirectCastKeepsOriginalParameterPath(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			castPaths := collectPlanParamCastPaths(queryPlan)
 			require.Len(t, castPaths, 1)
@@ -618,7 +618,7 @@ func TestPreparedCastPropagatesContextOnlyIntoArithmetic(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.NotEmpty(t, paramTypes)
@@ -701,7 +701,7 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)

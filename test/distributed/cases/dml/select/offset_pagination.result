@@ -1,0 +1,119 @@
+drop table if exists offset_pagination;
+create table offset_pagination (
+id int primary key,
+ts datetime not null,
+key i_ts (ts)
+);
+insert into offset_pagination values
+(7, '2026-01-01 00:00:00'),
+(2, '2026-01-01 00:00:00'),
+(8, '2026-01-02 00:00:00'),
+(3, '2026-01-02 00:00:00'),
+(5, '2026-01-01 00:00:00'),
+(1, '2026-01-01 00:00:00'),
+(6, '2026-01-02 00:00:00'),
+(4, '2026-01-02 00:00:00');
+select ts from offset_pagination order by ts limit 3;
+➤ ts[93,19,0]  𝄀
+2026-01-01 00:00:00  𝄀
+2026-01-01 00:00:00  𝄀
+2026-01-01 00:00:00
+select ts from offset_pagination order by ts limit 3 offset 3;
+➤ ts[93,19,0]  𝄀
+2026-01-01 00:00:00  𝄀
+2026-01-02 00:00:00  𝄀
+2026-01-02 00:00:00
+select id from offset_pagination order by ts, id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5  𝄀
+7  𝄀
+3  𝄀
+4  𝄀
+6  𝄀
+8
+select id from offset_pagination order by ts, id limit 3;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select id from offset_pagination order by ts, id limit 3 offset 3;
+➤ id[4,32,0]  𝄀
+7  𝄀
+3  𝄀
+4
+select id from offset_pagination order by ts, id limit 3 offset 6;
+➤ id[4,32,0]  𝄀
+6  𝄀
+8
+select id from offset_pagination order by ts, id limit 3 offset 9;
+➤ id[4,32,0]
+select id from offset_pagination order by ts desc, id desc;
+➤ id[4,32,0]  𝄀
+8  𝄀
+6  𝄀
+4  𝄀
+3  𝄀
+7  𝄀
+5  𝄀
+2  𝄀
+1
+select id from offset_pagination order by ts desc, id desc limit 3;
+➤ id[4,32,0]  𝄀
+8  𝄀
+6  𝄀
+4
+select id from offset_pagination order by ts desc, id desc limit 3 offset 3;
+➤ id[4,32,0]  𝄀
+3  𝄀
+7  𝄀
+5
+select id from offset_pagination order by ts desc, id desc limit 3 offset 6;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+select id from offset_pagination
+where ts > '2026-01-01 00:00:00'
+or (ts = '2026-01-01 00:00:00' and id > 5)
+order by ts, id limit 3;
+➤ id[4,32,0]  𝄀
+7  𝄀
+3  𝄀
+4
+select id from offset_pagination
+where ts < '2026-01-02 00:00:00'
+or (ts = '2026-01-02 00:00:00' and id < 4)
+order by ts desc, id desc limit 3;
+➤ id[4,32,0]  𝄀
+3  𝄀
+7  𝄀
+5
+prepare offset_pagination_stmt from 'select id from offset_pagination order by ts, id limit ? offset ?';
+set @offset_pagination_limit = 3;
+set @offset_pagination_skip = 0;
+execute offset_pagination_stmt using @offset_pagination_limit, @offset_pagination_skip;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+set @offset_pagination_skip = 3;
+execute offset_pagination_stmt using @offset_pagination_limit, @offset_pagination_skip;
+➤ id[4,32,0]  𝄀
+7  𝄀
+3  𝄀
+4
+set @offset_pagination_skip = 0;
+execute offset_pagination_stmt using @offset_pagination_limit, @offset_pagination_skip;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+deallocate prepare offset_pagination_stmt;
+set @offset_pagination_limit = null;
+set @offset_pagination_skip = null;
+drop table offset_pagination;
+select count(*) as remaining_tables from information_schema.tables
+where table_schema = database() and table_name = 'offset_pagination';
+➤ remaining_tables[-5,64,0]  𝄀
+0

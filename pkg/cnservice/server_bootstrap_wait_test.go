@@ -134,3 +134,42 @@ func TestCloseCancelsInFlightBootstrap(t *testing.T) {
 		require.NoError(t, reused.Close())
 	})
 }
+
+func TestStartContextCancellationCleansUpInFlightBootstrap(t *testing.T) {
+	runtime.RunTest(t.Name(), func(runtime.Runtime) {
+		entered := make(chan struct{})
+		boot := &testBootService{bootstrapContextHook: func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		}}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		address := listener.Addr().String()
+		ctrl := gomock.NewController(t)
+		ls := mock_lock.NewMockLockService(ctrl)
+		ls.EXPECT().Close().Return(nil).Times(1)
+		s := &service{
+			cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(),
+			stopper: stopper.NewStopper(t.Name()), bootstrapService: boot,
+			mo: &listeningMOServer{listener: listener}, server: closeOnlyRPCServer{}, lockService: ls,
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		started := make(chan error, 1)
+		go func() { started <- s.StartContext(ctx) }()
+		<-entered
+		cancel()
+		select {
+		case err := <-started:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("StartContext did not stop after cancellation")
+		}
+		require.Equal(t, 1, boot.closeCount)
+		require.False(t, s.viewMetadataIngressReady.Load())
+		reused, err := net.Listen("tcp", address)
+		require.NoError(t, err)
+		require.NoError(t, reused.Close())
+	})
+}

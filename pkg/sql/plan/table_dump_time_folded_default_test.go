@@ -35,7 +35,7 @@ func buildFoldedDefaultFixture(t *testing.T, table, ddl string) *plan.TableDef {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ddl, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false)
+	built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false, nil)
 	require.NoError(t, err)
 	return built.GetDdl().GetCreateTable().GetTableDef()
 }
@@ -140,7 +140,7 @@ func TestTableDumpTimeJSONEraDefault(t *testing.T) {
 		CompilerContext: eraCompiler,
 		ctx:             function.WithLegacyTimeNullability(eraCompiler.GetContext()),
 		increment:       4,
-	}, stmt, false)
+	}, stmt, false, nil)
 	require.NoError(t, err)
 	persisted := built.GetDdl().GetCreateTable().GetTableDef()
 	persistedArgs := defaultConcatArgs(t, persisted.Cols[1].Default.GetExpr())

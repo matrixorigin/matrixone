@@ -255,7 +255,7 @@ func TestCachedRightDedupGrowthReplansAtMapBoundary(t *testing.T) {
 	stmts, err := mysql.Parse(ctx.GetContext(), "insert into nation select r_regionkey % 100,r_name,r_regionkey,r_comment from region", 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	cached, err := BuildPlan(ctx, stmts[0], false)
+	cached, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	findDedup := func(p *planpb.Plan) *planpb.Node {
 		for _, n := range p.GetQuery().Nodes {
@@ -274,7 +274,7 @@ func TestCachedRightDedupGrowthReplansAtMapBoundary(t *testing.T) {
 	changed, err = CachedPlanStatsChanged(cached, ctx)
 	require.NoError(t, err)
 	require.True(t, changed)
-	fresh, err := BuildPlan(ctx, stmts[0], false)
+	fresh, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	require.False(t, findDedup(fresh).IsRightJoin, "%s", fresh.String())
 	require.True(t, findDedup(cached).IsRightJoin, "admission must not patch the borrowed generation")

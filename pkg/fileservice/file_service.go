@@ -112,6 +112,10 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	// downloadDeclined is set by the disk cache when some of the entries are in an object
+	// being downloaded, but a range read gets them sooner.
+	downloadDeclined bool
 }
 
 type IOEntry struct {
@@ -150,6 +154,10 @@ type IOEntry struct {
 	// ownership hooks and must move with the entry.
 	admitCachedData   fscache.DataCachePinAdmission
 	releaseCachedData func()
+	// Scoped to one Read and its destination cache. Allocation mode is chosen
+	// before conversion; actual capacity is reserved by the selected allocator.
+	cacheAdmissionOwner *MemCache
+	cacheAllocationMode cacheAllocationMode
 	// CachedDataSize is the expected size of the final cache representation.
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.

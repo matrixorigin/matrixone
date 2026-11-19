@@ -64,11 +64,17 @@ func (update *MultiUpdate) insert_main_table(
 	}
 
 	// preinsert: check not null column
-	for insertIdx, inputIdx := range updateCtx.InsertCols {
-		col := updateCtx.TableDef.Cols[insertIdx]
-		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-			if inputBatch.Vecs[inputIdx].HasNull() {
-				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	filled, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, inputBatch, false, update.insertNotNullFillOwned())
+	if fillErr != nil {
+		return fillErr
+	}
+	if !filled {
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			col := updateCtx.TableDef.Cols[insertIdx]
+			if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+				if inputBatch.Vecs[inputIdx].HasNull() {
+					return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+				}
 			}
 		}
 	}
@@ -135,8 +141,14 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return nil
 	}
 	insertBatch.SetRowCount(newRowCount)
-	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
-		return err
+	filled, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, insertBatch, true, update.insertNotNullFillOwned())
+	if fillErr != nil {
+		return fillErr
+	}
+	if !filled {
+		if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
+			return err
+		}
 	}
 	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
 		return err

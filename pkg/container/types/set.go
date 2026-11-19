@@ -176,10 +176,9 @@ func ParseSetIndex(setStr string, bits uint64) (string, error) {
 }
 
 type setDescriptor struct {
-	values             []string
-	valueToBit         map[string]uint64
-	normalizedToOrigin map[string]string
-	validBitmap        uint64
+	values          []string
+	normalizedToBit map[string]uint64
+	validBitmap     uint64
 }
 
 func getSetDescriptor(setStr string) (*setDescriptor, error) {
@@ -210,21 +209,18 @@ func buildSetDescriptorWithContext(ctx context.Context, setStr string) (*setDesc
 		return nil, err
 	}
 
-	valueToBit := make(map[string]uint64, len(values))
-	normalizedToOrigin := make(map[string]string, len(values))
+	normalizedToBit := make(map[string]uint64, len(values))
 	var validBitmap uint64
 	for i, value := range values {
 		bit := uint64(1) << uint(i)
-		valueToBit[value] = bit
-		normalizedToOrigin[strings.ToLower(value)] = value
+		normalizedToBit[strings.ToLower(value)] = bit
 		validBitmap |= bit
 	}
 
 	return &setDescriptor{
-		values:             values,
-		valueToBit:         valueToBit,
-		normalizedToOrigin: normalizedToOrigin,
-		validBitmap:        validBitmap,
+		values:          values,
+		normalizedToBit: normalizedToBit,
+		validBitmap:     validBitmap,
 	}, nil
 }
 
@@ -244,11 +240,11 @@ func (d *setDescriptor) parseName(name string) (uint64, bool) {
 	for {
 		item, rest, more := strings.Cut(name, ",")
 		normalized := strings.ToLower(item)
-		origin, ok := d.normalizedToOrigin[normalized]
+		bit, ok := d.normalizedToBit[normalized]
 		if !ok {
 			matched = false
 		} else {
-			setBits |= d.valueToBit[origin]
+			setBits |= bit
 		}
 		if !more {
 			return setBits, matched

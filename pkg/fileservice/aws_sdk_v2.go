@@ -29,7 +29,6 @@ import (
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -624,41 +623,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type partBuffer struct {
-		buf    []byte
-		n      int
-		tokens int64
-	}
-
-	releasePartBuffer := func(part *partBuffer) {
-		if part == nil {
-			return
-		}
-		releaseParallelUploadBufferBudget(part.tokens)
-	}
-
-	readChunk := func() (*partBuffer, error) {
-		tokens, err := acquireParallelUploadBufferBudget(ctx, int64(options.PartSize))
-		if err != nil {
-			return nil, err
-		}
-		raw := make([]byte, options.PartSize)
-		n, err := io.ReadFull(r, raw)
-		switch {
-		case errors.Is(err, io.EOF):
-			releaseParallelUploadBufferBudget(tokens)
-			return nil, io.EOF
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			return &partBuffer{buf: raw, n: n, tokens: tokens}, io.EOF
-		case err != nil:
-			releaseParallelUploadBufferBudget(tokens)
-			return nil, err
-		default:
-			return &partBuffer{buf: raw, n: n, tokens: tokens}, nil
-		}
-	}
-
-	firstPart, err := readChunk()
+	firstPart, err := readParallelUploadPart(ctx, r, options.PartSize)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
@@ -670,7 +635,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		data := make([]byte, firstPart.n)
 		copy(data, firstPart.buf[:firstPart.n])
 		size := int64(firstPart.n)
-		releasePartBuffer(firstPart)
+		releaseParallelUploadPart(firstPart)
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
@@ -682,7 +647,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}, maxRetryAttemps, IsRetryableError)
 	if createErr != nil {
-		releasePartBuffer(firstPart)
+		releaseParallelUploadPart(firstPart)
 		return createErr
 	}
 
@@ -693,135 +658,25 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		}
 	}()
 
-	type partJob struct {
-		num  int32
-		part *partBuffer
-	}
-
-	var (
-		partNum   int32
-		parts     []types.CompletedPart
-		partsLock sync.Mutex
-		wg        sync.WaitGroup
-		errOnce   sync.Once
-		firstErr  error
-	)
-
-	setErr := func(e error) {
-		if e == nil {
-			return
-		}
-		errOnce.Do(func() {
-			firstErr = e
-			cancel()
-		})
-	}
-
-	uploadSlots := make(chan struct{}, options.Concurrency)
-	startPartUpload := func(job partJob) bool {
-		select {
-		case uploadSlots <- struct{}{}:
-		case <-ctx.Done():
-			releasePartBuffer(job.part)
-			setErr(ctx.Err())
-			return false
-		}
-		select {
-		case getParallelUploadSemaphore() <- struct{}{}:
-		case <-ctx.Done():
-			<-uploadSlots
-			releasePartBuffer(job.part)
-			setErr(ctx.Err())
-			return false
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				<-getParallelUploadSemaphore()
-				<-uploadSlots
-			}()
-			if options.beforePartUpload != nil {
-				options.beforePartUpload()
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				setErr(ctxErr)
-				releasePartBuffer(job.part)
-				return
-			}
-			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
-				recordS3PutRequest(ctx, a.perfCounterSets...)
-				return a.client.UploadPart(ctx, &s3.UploadPartInput{
-					Bucket:     ptrTo(a.bucket),
-					Key:        ptrTo(key),
-					PartNumber: &job.num,
-					UploadId:   output.UploadId,
-					Body:       bytes.NewReader(job.part.buf[:job.part.n]),
-				})
-			}, maxRetryAttemps, IsRetryableError)
-			if uploadErr != nil {
-				setErr(uploadErr)
-				releasePartBuffer(job.part)
-				return
-			}
-			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
-			releasePartBuffer(job.part)
-			partsLock.Lock()
-			parts = append(parts, types.CompletedPart{
-				ETag:       uploadOutput.ETag,
-				PartNumber: ptrTo(job.num),
+	parts, err := uploadParallelParts(ctx, cancel, r, options, firstPart, func(ctx context.Context, num int32, part *parallelUploadPart) (types.CompletedPart, error) {
+		uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
+			recordS3PutRequest(ctx, a.perfCounterSets...)
+			return a.client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:     ptrTo(a.bucket),
+				Key:        ptrTo(key),
+				PartNumber: &num,
+				UploadId:   output.UploadId,
+				Body:       bytes.NewReader(part.buf[:part.n]),
 			})
-			partsLock.Unlock()
-		}()
-		return true
-	}
-
-	sendJob := func(part *partBuffer) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			releasePartBuffer(part)
-			return false
+		}, maxRetryAttemps, IsRetryableError)
+		if uploadErr != nil {
+			return types.CompletedPart{}, uploadErr
 		}
-		job := partJob{
-			num:  partNum,
-			part: part,
-		}
-		return startPartUpload(job)
-	}
-
-	if sendJob(firstPart) {
-		for {
-			part, readErr := readChunk()
-			if errors.Is(readErr, io.EOF) && part == nil {
-				break
-			}
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				setErr(readErr)
-				releasePartBuffer(part)
-				break
-			}
-			if part == nil || part.n == 0 {
-				releasePartBuffer(part)
-				break
-			}
-			if !sendJob(part) {
-				break
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-		}
-	}
-
-	wg.Wait()
-
-	if firstErr != nil {
-		err = firstErr
+		recordS3AcceptedBytes(ctx, int64(part.n), a.perfCounterSets...)
+		return types.CompletedPart{ETag: uploadOutput.ETag, PartNumber: ptrTo(num)}, nil
+	})
+	if err != nil {
 		return err
-	}
-	if len(parts) != int(partNum) {
-		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
 	}
 
 	slices.SortFunc(parts, func(a, b types.CompletedPart) int {
@@ -853,24 +708,6 @@ func (a *AwsSDKv2) Read(
 	err error,
 ) {
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			min,
-			nil,
-			&s3.GetObjectInput{
-				Bucket: ptrTo(a.bucket),
-				Key:    ptrTo(key),
-			},
-		)
-		err = a.mapError(err, key)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		min,
@@ -883,6 +720,9 @@ func (a *AwsSDKv2) Read(
 	err = a.mapError(err, key)
 	if err != nil {
 		return nil, err
+	}
+	if max == nil {
+		return r, nil
 	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),

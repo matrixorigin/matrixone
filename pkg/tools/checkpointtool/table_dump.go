@@ -114,17 +114,20 @@ type TableColumn struct {
 	Position         int    // SQL ordinal position
 	PhysicalPosition int    // physical/object column position
 	Unsigned         bool
-	NotNull          bool
-	Default          string
-	HasDefault       bool
-	OnUpdate         string
-	Generated        string
-	GeneratedStored  bool
-	Comment          string
-	ConstraintType   string
-	AutoIncrement    bool
-	ClusterBy        bool
-	EnumValues       string
+	// Zerofill is the SECOND numeric attribute bit of a DECIMAL column
+	// (catalog mask 3). It renders only with Unsigned and only on DECIMAL.
+	Zerofill        bool
+	NotNull         bool
+	Default         string
+	HasDefault      bool
+	OnUpdate        string
+	Generated       string
+	GeneratedStored bool
+	Comment         string
+	ConstraintType  string
+	AutoIncrement   bool
+	ClusterBy       bool
+	EnumValues      string
 }
 
 type TableUniqueKey struct {
@@ -502,10 +505,14 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 			sb.WriteString(sqlType)
 			// SET is stored as an unsigned integer in the catalog. Once the
 			// physical type has been restored to SET(...), the unsigned marker
-			// must not leak into the logical DDL.
+			// must not leak into the logical DDL. ZEROFILL is a DECIMAL-only
+			// bit of the same catalog mask and renders with UNSIGNED.
 			if col.Unsigned && !strings.Contains(strings.ToUpper(sqlType), "UNSIGNED") &&
 				!strings.HasPrefix(strings.ToUpper(sqlType), "SET(") {
 				sb.WriteString(" UNSIGNED")
+				if col.Zerofill && strings.HasPrefix(strings.ToUpper(sqlType), "DECIMAL") {
+					sb.WriteString(" ZEROFILL")
+				}
 			}
 		}
 		appendColumnDDLAttributes(&sb, col)
@@ -2891,6 +2898,13 @@ func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 		appendEscapedSQLLoadString(w, types.DecodeJson(vec.GetBytesAt(rowIdx)).String(), '"')
 	case types.T_bit:
 		appendEscapedSQLLoadBytes(w, bitValueToLoadBytes(vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx], vec.GetType().Width), '"')
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text, which LOAD rebuilds into the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(rowIdx))
+		if err != nil {
+			text = vecValueToString(vec, rowIdx)
+		}
+		appendEscapedSQLLoadString(w, text, '"')
 	default:
 		appendEscapedSQLLoadString(w, vecValueToString(vec, rowIdx), '"')
 	}
@@ -3147,6 +3161,7 @@ func shouldQuoteSQLLoadType(typ types.Type) bool {
 		types.T_binary, types.T_varbinary, types.T_datalink, types.T_json,
 		types.T_geometry, types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_bit:
 		return true
 	default:
@@ -3951,7 +3966,9 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.ConstraintType = row[constraintCol]
 		}
 		if unsignedCol >= 0 && unsignedCol < len(row) {
-			col.Unsigned = isTruthyCatalogValue(row[unsignedCol])
+			mask := catalogNumericAttributeMask(row[unsignedCol])
+			col.Unsigned = mask&types.NumericAttributeUnsigned != 0
+			col.Zerofill = mask&types.NumericAttributeZerofill != 0
 		}
 		if autoIncrementCol >= 0 && autoIncrementCol < len(row) {
 			col.AutoIncrement = isTruthyCatalogValue(row[autoIncrementCol])
@@ -5194,6 +5211,24 @@ func quoteDDLString(s string) string {
 
 func isTruthyCatalogValue(s string) bool {
 	return s == "1" || strings.EqualFold(s, "true")
+}
+
+// catalogNumericAttributeMask reads mo_columns.att_is_unsigned. The column is
+// a legacy boolean for unsigned integers and carries the UNSIGNED(bit
+// 0)/ZEROFILL(bit 1) mask (1 or 3 after authoring normalization) for DECIMAL
+// columns. Values outside 0..3 degrade to the legacy boolean read so
+// pre-change and manual rows keep their rendering byte-identically.
+func catalogNumericAttributeMask(s string) uint32 {
+	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 8); err == nil {
+		if n >= 0 && n <= int64(types.NumericAttributeZerofillMask) {
+			return uint32(n)
+		}
+		return 0
+	}
+	if isTruthyCatalogValue(s) {
+		return types.NumericAttributeUnsigned
+	}
+	return 0
 }
 
 // buildCreateTableFromMoColumns reconstructs a CREATE TABLE DDL from mo_columns data.

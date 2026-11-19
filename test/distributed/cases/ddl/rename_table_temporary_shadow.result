@@ -1,0 +1,90 @@
+drop database if exists rename_temp_shadow;
+create database rename_temp_shadow;
+use rename_temp_shadow;
+create table src(x int);
+insert into src values(11);
+create temporary table src(y int);
+insert into src values(22);
+rename table src to dst;
+select y from src;
+➤ y[4,32,0]  𝄀
+22
+select x from dst;
+➤ x[4,32,0]  𝄀
+11
+use rename_temp_shadow;
+select x from dst;
+➤ x[4,32,0]  𝄀
+11
+select * from src;
+SQL parser error: table "src" does not exist
+rename table src to missing;
+no such table rename_temp_shadow.src
+select y from src;
+➤ y[4,32,0]  𝄀
+22
+create temporary table target(z int);
+insert into target values(44);
+rename table dst to target;
+select z from target;
+➤ z[4,32,0]  𝄀
+44
+drop temporary table target;
+select x from target;
+➤ x[4,32,0]  𝄀
+11
+create table occupied(x int);
+insert into occupied values(55);
+create temporary table occupied(y int);
+insert into occupied values(66);
+rename table target to occupied;
+table occupied already exists
+select x from target;
+➤ x[4,32,0]  𝄀
+11
+select y from occupied;
+➤ y[4,32,0]  𝄀
+66
+select x from occupied;
+➤ x[4,32,0]  𝄀
+55
+rename table target to moved, absent to another;
+no such table rename_temp_shadow.absent
+select x from target;
+➤ x[4,32,0]  𝄀
+11
+select * from moved;
+SQL parser error: table "moved" does not exist
+create temporary table intermediate(y int);
+insert into intermediate values(77);
+rename table target to intermediate, intermediate to final_base;
+select y from intermediate;
+➤ y[4,32,0]  𝄀
+77
+select x from final_base;
+➤ x[4,32,0]  𝄀
+11
+prepare r from 'rename table final_base to prepared_base';
+create temporary table final_base(y int);
+insert into final_base values(88);
+execute r;
+deallocate prepare r;
+select y from final_base;
+➤ y[4,32,0]  𝄀
+88
+select x from prepared_base;
+➤ x[4,32,0]  𝄀
+11
+alter table src add column extra int default 7;
+select y, extra from src;
+➤ y[4,32,0]  ¦  extra[4,32,0]  𝄀
+22  ¦  7
+alter table src rename to altered_temp;
+select y, extra from altered_temp;
+➤ y[4,32,0]  ¦  extra[4,32,0]  𝄀
+22  ¦  7
+drop temporary table altered_temp;
+drop temporary table occupied;
+drop temporary table intermediate;
+drop temporary table final_base;
+drop database rename_temp_shadow;

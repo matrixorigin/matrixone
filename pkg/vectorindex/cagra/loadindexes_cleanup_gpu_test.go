@@ -17,9 +17,7 @@
 package cagra
 
 import (
-	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,33 +54,15 @@ func (b testBudget) RowsFitting(dev int, perRow uint64) (int64, uint64, error) {
 	return b.rows(dev, perRow)
 }
 
-// tempArtifacts lists the fetch scratch files admitIndexes creates. FetchArtifact
-// uses os.CreateTemp("", "cagra"), so a leaked download is visible by name.
-func tempArtifacts(t *testing.T) map[string]bool {
-	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "cagra*"))
-	require.NoError(t, err)
-	out := make(map[string]bool, len(matches))
-	for _, m := range matches {
-		out[m] = true
-	}
-	return out
-}
-
-// admitIndexes downloads every sub-index BEFORE it admits the aggregate, so between
-// the first fetch and the gate it owns N tars that nothing else will ever remove:
-// Load returns on error before it assigns s.Indexes or arms its deferred Destroy.
-//
-// Regression: while the download lived inside LoadIndex, LoadIndex's own defer
-// removed the scratch file on every return. Hoisting it into FetchArtifact moved
-// the tars out from under that defer, and an early return -- a failed fetch, an
-// unreadable tar, or a refusal from the aggregate gate -- leaked the whole
-// multi-gigabyte download, again on every retried query.
+// admitIndexes opens every sub-index's tar BEFORE it admits the aggregate, so between
+// the first fetch and the gate it holds N index files that nothing else will release:
+// Load returns on error before it assigns s.Indexes or arms its deferred Destroy. A
+// file left held can never be evicted or collected from the index-file cache.
 //
 // Driven here by failing the SECOND sub-index's fetch, which is the cheapest way
-// to reach the early return with the first one's tar already on disk. The gate's
+// to reach the early return with the first one's file already held. The gate's
 // own refusal takes the identical path.
-func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
+func TestLoadIndexesReleasesFetchedTarsOnError(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -107,28 +87,26 @@ func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
 		}, nil
 	}
 
-	origStream := runSql_streaming
-	t.Cleanup(func() { runSql_streaming = origStream })
-	runSql_streaming = func(_ context.Context, _ *sqlexec.SqlProcess, sql string,
-		ch chan executor.Result, _ chan error) (executor.Result, error) {
-		if strings.Contains(sql, "leak-b") {
-			return executor.Result{}, moerr.NewInternalErrorNoCtx("chunk stream failed")
-		}
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
-	}
-
-	before := tempArtifacts(t)
+	// Only leak-a has an index file, so opening leak-b fails.
+	files := swapIndexFiles(t)
+	files.putFile(t, "leak-a", tarPath)
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	err := s.Load(sqlproc)
-	require.Error(t, err, "a failed fetch must fail the load")
 	t.Cleanup(s.Destroy)
+	indexes, err := LoadMetadata[float32, float32](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	require.NoError(t, err)
+	require.Len(t, indexes, 2)
 
-	// Every scratch tar this load created is gone. A survivor here is the leak:
-	// nothing downstream of admitIndexes ever sees these paths.
-	for p := range tempArtifacts(t) {
-		require.True(t, before[p], "admitIndexes leaked the fetched artifact %s", p)
+	unbounded := func(_ int, _ uint64) (int64, uint64, error) { return 1 << 40, 1 << 62, nil }
+	err = s.admitIndexes(sqlproc, indexes, testBudget{rows: unbounded, max: 1 << 62})
+	require.Error(t, err, "a failed fetch must fail the load")
+	require.Equal(t, 2, files.opens)
+
+	// The file this load fetched is released. A hold left here is the leak: nothing
+	// downstream of admitIndexes ever sees these files.
+	require.Zero(t, files.holds("leak-a"), "admitIndexes leaked its hold on the fetched artifact")
+	for _, idx := range indexes {
+		require.Empty(t, idx.Path, "a failed load must not leave a fetched tar behind")
 	}
 }
 
@@ -171,14 +149,9 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 		return executor.Result{Mp: proc.Mp(), Batches: bats}, nil
 	}
 
-	fetches := 0
-	origStream := runSql_streaming
-	t.Cleanup(func() { runSql_streaming = origStream })
-	runSql_streaming = func(_ context.Context, _ *sqlexec.SqlProcess, _ string,
-		ch chan executor.Result, _ chan error) (executor.Result, error) {
-		fetches++
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
+	files := swapIndexFiles(t)
+	for _, id := range ids {
+		files.putFile(t, id, tarPath)
 	}
 
 	// Stands in for the free-VRAM half of cuvs.BudgetFor: perRow = 1 means the answer IS the
@@ -211,11 +184,64 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 	// downloaded. That early abort is why the PERMANENT check stayed here when the
 	// situational one moved to Load -- a hardware refusal is final, so there is nothing
 	// to gain by fetching the rest.
-	require.Equal(t, 2, fetches,
+	require.Equal(t, 2, files.opens,
 		"admitIndexes must stop at the sub-index that broke the budget, not fetch all %d", len(ids))
 
-	// And the two it did fetch are gone -- an early return owns its downloads.
+	// And the two it did fetch are released -- an early return owns its holds.
 	for _, idx := range indexes {
 		require.Empty(t, idx.Path, "a refused load must not leave a fetched tar behind")
+		require.Zero(t, files.holds(idx.Id), "a refused load must not keep a hold on %s", idx.Id)
+	}
+}
+
+// Once Preload hands the admitted sub-indexes to s, a failure while Load deserializes them
+// releases every held tar and every loaded sub-index through Load's deferred Destroy. Driven
+// by failing the second sub-index's CDC event read, after the first is on the GPU.
+func TestLoadReleasesHeldTarsOnLoadFailure(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	built := buildTestModel(t, "loadfail-a", nil)
+	tarPath := built.Path
+	t.Cleanup(func() { os.Remove(tarPath) })
+	ids := []string{"loadfail-a", "loadfail-b"}
+
+	origRunSql := runSql
+	t.Cleanup(func() { runSql = origRunSql })
+	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") {
+			if strings.Contains(sql, "loadfail-b") {
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("cdc event read failed")
+			}
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
+		bats := make([]*batch.Batch, 0, len(ids))
+		for _, id := range ids {
+			bats = append(bats, makeMetaBatch(proc, id, built.Checksum, 0, built.FileSize))
+		}
+		return executor.Result{Mp: proc.Mp(), Batches: bats}, nil
+	}
+	files := swapIndexFiles(t)
+	for _, id := range ids {
+		files.putFile(t, id, tarPath)
+	}
+
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	t.Cleanup(s.Destroy)
+	indexes, err := LoadMetadata[float32, float32](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	require.NoError(t, err)
+	unbounded := func(_ int, _ uint64) (int64, uint64, error) { return 1 << 40, 1 << 62, nil }
+	require.NoError(t, s.admitIndexes(sqlproc, indexes, testBudget{rows: unbounded, max: 1 << 62}))
+	for _, id := range ids {
+		require.Equal(t, 1, files.holds(id), "admission holds %s", id)
+	}
+	s.Indexes = indexes // what Preload does once admitIndexes succeeds
+
+	require.ErrorContains(t, s.Load(sqlproc), "cdc event read failed")
+	for _, idx := range indexes {
+		require.Zero(t, files.holds(idx.Id), "a failed Load must release the tar of %s", idx.Id)
+		require.Nil(t, idx.Index, "a failed Load must free the loaded sub-index %s", idx.Id)
+		require.Empty(t, idx.Path)
 	}
 }

@@ -120,13 +120,13 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 	summary := map[string]string{
 		"operation":         string(OperationExpireSnapshots),
 		"engine":            "matrixone",
-		"idempotency-key":   firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		"idempotency-key":   api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		"expired-snapshots": strconv.Itoa(len(expired)),
 		"expired-refs":      strconv.Itoa(len(expiredRefs)),
 		"older-than-ms":     strconv.FormatInt(olderThanMS, 10),
 		"retain-last":       strconv.Itoa(retainLast),
 	}
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
 	return &CommitPlan{
 		Catalog: p.Catalog,
 		Attempt: &api.CommitAttempt{
@@ -137,7 +137,7 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 			}},
 			Updates:        updates,
 			Summary:        summary,
-			IdempotencyKey: firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			IdempotencyKey: api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			BaseSnapshotID: baseSnapshotID,
 			TargetRef:      targetRef,
 		},

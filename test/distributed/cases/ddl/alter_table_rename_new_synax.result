@@ -19,7 +19,7 @@ first_name    varchar(50)    NO        null
 last_name    varchar(50)    NO        null        
 department    varchar(50)    YES        null        
 drop table employees;
-no such table alter_table_rename_new_synax.employees
+Unknown table 'alter_table_rename_new_synax.employees'
 drop table staff;
 create database test;
 use test;

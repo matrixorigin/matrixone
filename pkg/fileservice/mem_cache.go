@@ -23,9 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -36,6 +35,7 @@ type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
 	callbacksMu [256]sync.Mutex
+	postGet     []CacheCallbackFunc
 
 	// allocator is dedicated to this cache. Do not use DefaultCacheDataAllocator
 	// here: that would merge unrelated FileService caches into one allocator
@@ -48,12 +48,17 @@ type MemCache struct {
 	lastStatsUpdate     atomic.Int64
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
+	transientDecoder    transientDecodeAllocator
+	nonEvictingDecoder  nonEvictingDecodeAllocator
 
 	// Capacity decisions and the reservation-to-FIFO handoff share this lock.
-	// Releases only decrease reservedBytes and must not reacquire it from the
-	// handoff callback.
+	// Releases only decrease reservedBytes/backingBytes and must not reacquire
+	// the lock from the handoff callback.
 	capacityMu    sync.Mutex
 	reservedBytes atomic.Int64
+	// backingBytes includes pending reservations and every live backing allocation,
+	// even after eviction while a reader still retains its buffer.
+	backingBytes atomic.Int64
 
 	// idleCacheData contains native buffers whose capacity was reserved but
 	// which were released before FIFO insertion. Keeping these exact
@@ -103,9 +108,25 @@ func (r *memoryCacheReservation) commit() {
 	}
 }
 
+func (r *memoryCacheReservation) pending() bool {
+	return r.state.Load() == memoryCacheReservationPending
+}
+
 func (r *memoryCacheReservation) release() {
-	if r.state.CompareAndSwap(memoryCacheReservationPending, memoryCacheReservationReleased) {
-		r.cache.releaseReservedBytes(r.bytes)
+	for {
+		state := r.state.Load()
+		if state == memoryCacheReservationReleased {
+			return
+		}
+		if r.state.CompareAndSwap(state, memoryCacheReservationReleased) {
+			if state == memoryCacheReservationPending {
+				r.cache.releaseReservedBytes(r.bytes)
+			}
+			if r.cache.backingBytes.Add(-r.bytes) < 0 {
+				panic("memory cache backing charge underflow")
+			}
+			return
+		}
 	}
 }
 
@@ -232,12 +253,7 @@ func recomputeMemoryCachePressureTargetLocked(now int64) (int64, int64) {
 }
 
 func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
-	var hasher maphash.Hash
-	hasher.SetSeed(memCacheCallbackSeed)
-	hasher.Write(util.UnsafeToBytes(&key.Offset))
-	hasher.Write(util.UnsafeToBytes(&key.Sz))
-	hasher.WriteString(key.Path)
-	return &m.callbacksMu[hasher.Sum64()%uint64(len(m.callbacksMu))]
+	return &m.callbacksMu[maphash.Comparable(memCacheCallbackSeed, key)%uint64(len(m.callbacksMu))]
 }
 
 func NewMemCache(
@@ -263,7 +279,8 @@ func newMemCacheWithMetricScope(
 	allocatorGauges := metric.GetFsCacheAllocatorStatsGaugesWithScope(metricScope, name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
-	capacityFunc := func() int64 {
+	var ret *MemCache
+	configuredCapacity := func() int64 {
 		// read from global hint
 		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
 			return n
@@ -271,10 +288,11 @@ func newMemCacheWithMetricScope(
 		// fallback
 		return capacity()
 	}
+	capacityFunc := configuredCapacity
 
-	var dataCache *fifocache.DataCache
+	var dataCache *s3fifo.DataCache
 	cacheAllocator, arenaAllocator := newMemoryCacheDataAllocator()
-	ret := &MemCache{
+	ret = &MemCache{
 		counterSets:       counterSets,
 		allocator:         cacheAllocator,
 		uncachedAllocator: newBytesAllocator(ioAllocator()),
@@ -282,104 +300,61 @@ func newMemCacheWithMetricScope(
 		allocatorGauges:   allocatorGauges,
 		metricKey:         memoryCacheMetricKey{scope: metricScope, name: name},
 	}
+	ret.transientDecoder.cache = ret
+	ret.nonEvictingDecoder.cache = ret
 
-	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
-		value.Retain()
-		return func(inserted bool) {
-			if !inserted {
-				value.Release()
-			}
-		}
-	}
-
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
-		// events
-		LogEvent(ctx, str_memory_cache_post_set_begin)
-		defer LogEvent(ctx, str_memory_cache_post_set_end)
-
-		// metrics
-		LogEvent(ctx, str_update_metrics_begin)
+	onInsert := func(key fscache.CacheKey, value s3fifo.DataValue, size int64, seq uint64) {
 		inuseBytes.Add(float64(size))
-		logicalInuseBytes.Add(float64(logicalSize))
-		backingOverheadBytes.Add(float64(size - logicalSize))
+		logicalInuseBytes.Add(float64(value.LogicalSize))
+		backingOverheadBytes.Add(float64(size - value.LogicalSize))
 		capacityBytes.Set(float64(capacityFunc()))
 		ret.refreshAllocatorMetrics(false)
-		LogEvent(ctx, str_update_metrics_end)
-
-		// callbacks
-		if callbacks != nil {
-			callbackLock := ret.callbacksLock(key)
-			callbackLock.Lock()
-			defer callbackLock.Unlock()
-			if dataCache != nil {
-				if currentSeq, ok := dataCache.CurrentSeq(key); !ok || currentSeq != seq {
-					return
-				}
-			}
-			LogEvent(ctx, str_memory_cache_callbacks_begin)
-			for _, fn := range callbacks.PostSet {
-				fn(key, value)
-			}
-			LogEvent(ctx, str_memory_cache_callbacks_end)
+		if callbacks == nil || len(callbacks.PostSet) == 0 {
+			return
+		}
+		// The key's notifications are serialized and given only while this value is still
+		// the cached one, so that a later removal is never notified before it.
+		callbackLock := ret.callbacksLock(key)
+		callbackLock.Lock()
+		defer callbackLock.Unlock()
+		if currentSeq, ok := dataCache.CurrentSeq(key); !ok || currentSeq != seq {
+			return
+		}
+		for _, fn := range callbacks.PostSet {
+			fn(key, value.Data)
 		}
 	}
 
-	postGetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
-		// events
-		LogEvent(ctx, str_memory_cache_post_get_begin)
-		defer LogEvent(ctx, str_memory_cache_post_get_end)
-
-		// retain
-		value.Retain()
-
-		// callbacks
-		if callbacks != nil {
-			LogEvent(ctx, str_memory_cache_callbacks_begin)
-			for _, fn := range callbacks.PostGet {
-				fn(key, value)
-			}
-			LogEvent(ctx, str_memory_cache_callbacks_end)
-		}
-	}
-
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
-		// events
-		LogEvent(ctx, str_memory_cache_post_evict_begin)
-		defer LogEvent(ctx, str_memory_cache_post_evict_end)
-
-		// metrics
-		LogEvent(ctx, str_update_metrics_begin)
+	onRemove := func(key fscache.CacheKey, value s3fifo.DataValue, size int64, seq uint64, _ s3fifo.Reason) {
 		inuseBytes.Add(float64(-size))
-		logicalInuseBytes.Add(float64(-logicalSize))
-		backingOverheadBytes.Add(float64(logicalSize - size))
+		logicalInuseBytes.Add(float64(-value.LogicalSize))
+		backingOverheadBytes.Add(float64(value.LogicalSize - size))
 		capacityBytes.Set(float64(capacityFunc()))
-		LogEvent(ctx, str_update_metrics_end)
-
-		// release
-		value.Release()
 		ret.refreshAllocatorMetrics(false)
-
-		// callbacks
-		if callbacks != nil {
-			callbackLock := ret.callbacksLock(key)
-			callbackLock.Lock()
-			defer callbackLock.Unlock()
-			if dataCache != nil {
-				if currentSeq, ok := dataCache.CurrentSeq(key); ok && currentSeq != seq {
-					return
-				}
-			}
-			LogEvent(ctx, str_memory_cache_callbacks_begin)
-			for _, fn := range callbacks.PostEvict {
-				fn(key, value)
-			}
-			LogEvent(ctx, str_memory_cache_callbacks_end)
+		if callbacks == nil || len(callbacks.PostEvict) == 0 {
+			return
+		}
+		callbackLock := ret.callbacksLock(key)
+		callbackLock.Lock()
+		defer callbackLock.Unlock()
+		if currentSeq, ok := dataCache.CurrentSeq(key); ok && currentSeq != seq {
+			return
+		}
+		for _, fn := range callbacks.PostEvict {
+			fn(key, value.Data)
 		}
 	}
 
-	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
-	dataCache.SetAccountingGuard(&ret.capacityMu)
-	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
+	dataCache = s3fifo.NewDataCache(s3fifo.DataOptions{
+		Capacity:    capacityFunc,
+		Admission:   memoryCachePressureTarget,
+		ChargeGuard: &ret.capacityMu,
+		OnInsert:    onInsert,
+		OnRemove:    onRemove,
+	})
+	if callbacks != nil {
+		ret.postGet = callbacks.PostGet
+	}
 
 	ret.cache = dataCache
 	ret.refreshAllocatorMetrics(true)
@@ -453,6 +428,7 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 		reserved := m.reservedBytes.Load()
 		if want <= capacity-used-reserved {
 			m.reservedBytes.Add(want)
+			m.backingBytes.Add(want)
 			m.capacityMu.Unlock()
 			return &memoryCacheReservation{cache: m, bytes: want}
 		}
@@ -678,6 +654,7 @@ func (m *MemCache) Read(
 ) {
 
 	if vector.Policy.Any(SkipMemoryCacheReads) {
+		m.prepareDecodeAllocation(vector)
 		return nil
 	}
 
@@ -735,12 +712,16 @@ func (m *MemCache) Read(
 		}
 		numRead++
 		if ok {
+			for _, fn := range m.postGet {
+				fn(key, bs)
+			}
 			vector.Entries[i].CachedData = bs
 			vector.Entries[i].done = true
 			vector.Entries[i].fromCache = m
 			numHit++
 		}
 	}
+	m.prepareDecodeAllocation(vector)
 
 	return
 }
@@ -770,6 +751,25 @@ func (m *MemCache) Update(
 		}
 		if !m.cacheAdmissionAllowed(entry.CachedData) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
+		}
+
+		if vector.Policy.Any(MemoryCacheNoEvict) {
+			owned, owns := entry.CachedData.(fscache.DataOwnership)
+			_, reserved := entry.CachedData.(fscache.DataCacheReservation)
+			cache, supports := m.cache.(*s3fifo.DataCache)
+			if !supports || !owns || !reserved || owned.CacheDataOwner() != m.allocator.owner {
+				continue
+			}
+			key := fscache.CacheKey{Path: path.File, Offset: entry.Offset, Sz: entry.Size}
+			_, err := cache.SetWithoutEviction(ctx, key, entry.CachedData, m.nonEvictingPublicationAllowed)
+			if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
+				metric.FSCachePressureMemorySkipCounter.Inc()
+				continue
+			}
+			if err != nil {
+				return err
+			}
 			continue
 		}
 

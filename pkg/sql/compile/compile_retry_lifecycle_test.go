@@ -62,7 +62,7 @@ func TestDefinitionRetryBuildFailureInvalidatesGeneration(t *testing.T) {
 			called := 0
 			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { called++; return nil, sentinel })
 			c.resultMetadataFrozen.Store(frozen)
-			rebuilt, err := c.buildRetryCompile(true)
+			rebuilt, err := c.buildRetryCompile(true, false, nil)
 			require.ErrorIs(t, err, sentinel)
 			require.Nil(t, rebuilt)
 			require.Equal(t, 1, called)

@@ -185,48 +185,6 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		require.Zero(t, next)
 	})
 
-	t.Run("ring scans randomized suffix before wrapping to prefix", func(t *testing.T) {
-		orphan := OrphanPrivilegeKey{
-			RoleID: 2, ObjectType: "database", ObjectID: 2001, PrivilegeID: 1, PrivilegeLevel: "d",
-		}
-		prefix := OrphanPrivilegeKey{RoleID: 1, ObjectType: "account", PrivilegeLevel: "*"}
-		start := orphanPrivilegePhysicalKey(orphan)
-		reads := 0
-		var statements []string
-		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-			statements = append(statements, sql)
-			switch {
-			case strings.Contains(sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc"):
-				return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{orphan}), nil
-			case strings.HasPrefix(sql, "select "+orphanPrivilegeCandidateColumns):
-				reads++
-				if reads == 1 {
-					return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{orphan}), nil
-				}
-				return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{prefix}), nil
-			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
-				return executor.Result{}, nil
-			case strings.HasPrefix(sql, "delete from mo_catalog.mo_role_privs"):
-				return executor.Result{AffectedRows: 1}, nil
-			default:
-				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
-			}
-		}, nil)
-
-		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{Start: start})
-		require.NoError(t, err)
-		require.False(t, complete)
-		require.True(t, next.Wrapped)
-		require.False(t, next.CursorValid)
-		require.Contains(t, statements[1], "__mo_cpkey_col >= unhex('"+start+"')")
-
-		next, complete, err = MaintainOrphanObjectPrivilegesPage(exec, accountID, next)
-		require.NoError(t, err)
-		require.True(t, complete)
-		require.Zero(t, next)
-		require.Contains(t, statements[len(statements)-1], "__mo_cpkey_col < unhex('"+start+"')")
-	})
-
 	t.Run("empty table completes without delete", func(t *testing.T) {
 		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 			require.Contains(t, sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc limit 1")
@@ -254,7 +212,7 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 	})
 
 	t.Run("rejects malformed physical cursor", func(t *testing.T) {
-		_, _, err := MaintainOrphanObjectPrivilegesPage(nil, accountID, OrphanPrivilegeScan{Start: "not-hex"})
+		_, _, err := MaintainOrphanObjectPrivilegesPage(nil, accountID, OrphanPrivilegeScan{Initialized: true, HighWater: "not-hex"})
 		require.ErrorContains(t, err, "invalid orphan privilege physical key")
 	})
 }

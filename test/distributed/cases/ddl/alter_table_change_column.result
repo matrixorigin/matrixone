@@ -1058,7 +1058,7 @@ no such table db2.text01
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 drop table text01;
-no such table db2.text01
+Unknown table 'db2.text01'
 drop table if exists alter03;
 create table alter03 (col1 int, col2 binary, col3 decimal(38,0));
 insert into alter03 values (1, 'e', 324214.2134123);

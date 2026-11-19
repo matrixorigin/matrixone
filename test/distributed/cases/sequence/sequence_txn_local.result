@@ -1,0 +1,288 @@
+drop database if exists stl_base;
+drop database if exists stl_br;
+drop database if exists stl_brd;
+drop database if exists stl_dst;
+drop database if exists stl_dstr;
+drop database if exists stl_dstc;
+drop database if exists stl_dstdc;
+drop database if exists stl_k1;
+drop database if exists stl_j2;
+drop database if exists stl_j2p;
+drop database if exists stl_ctas;
+drop database if exists stl_sh1;
+drop database if exists stl_shd;
+create database stl_base;
+use stl_base;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (10);
+data branch create database stl_br from stl_base;
+insert into stl_br.t(id, v) values (2, 20), (3, 30);
+begin;
+create database stl_dst clone stl_base;
+insert into stl_dst.t(v) values (99);
+data branch merge stl_br.t into stl_dst.t when conflict accept;
+-- @regex("cannot find database", true)
+internal error: cannot find database 272714 (stl_dst) created_time at snapshot 1793250287795609000-1
+select id, v from stl_dst.t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  99
+select last_seq_num, is_called from stl_dst.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+commit;
+use stl_dst;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  99
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into t(v) values (100);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  99  𝄀
+3  ¦  100
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database stl_dst;
+use stl_base;
+begin;
+create database stl_dstr clone stl_base;
+insert into stl_dstr.t(v) values (97);
+data branch merge stl_br.t into stl_dstr.t when conflict accept;
+-- @regex("cannot find database", true)
+internal error: cannot find database 272720 (stl_dstr) created_time at snapshot 1793250288171626000-1
+rollback;
+show databases like 'stl_dstr';
+➤ Database[12,5000,0]
+create database stl_dstc clone stl_base;
+begin;
+data branch merge stl_br.t into stl_dstc.t when conflict accept;
+commit;
+use stl_dstc;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+insert into t(v) values (101);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  101
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+4  ¦  1
+drop database stl_dstc;
+drop database stl_br;
+use stl_base;
+create sequence sd as bigint increment by -1 start with 10 minvalue 1 maxvalue 10 no cycle;
+create table td (id bigint primary key default nextval('sd'), v int);
+insert into td(v) values (1);
+data branch create database stl_brd from stl_base;
+insert into stl_brd.td(id, v) values (9, 90), (8, 80);
+create database stl_dstdc clone stl_base;
+begin;
+data branch merge stl_brd.td into stl_dstdc.td when conflict accept;
+commit;
+use stl_dstdc;
+select id, v from td order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+8  ¦  80  𝄀
+9  ¦  90  𝄀
+10  ¦  1
+select last_seq_num, is_called from sd;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+8  ¦  1
+insert into td(v) values (66);
+select id, v from td order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+7  ¦  66  𝄀
+8  ¦  80  𝄀
+9  ¦  90  𝄀
+10  ¦  1
+select last_seq_num, is_called from sd;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+7  ¦  1
+drop database stl_dstdc;
+drop database stl_brd;
+use stl_base;
+begin;
+create database stl_k1 clone stl_base;
+use stl_k1;
+create table kn (n int);
+insert into kn values (NULL);
+create table tk (id bigint primary key default nextval('s'), v int not null);
+insert into tk(v) values (61);
+select * from tk;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  61
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tk(v) select n from kn;
+-- @regex("null", true)
+constraint violation: Column 'v' cannot be null
+insert into tk(v) values (62);
+select id, v from tk order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  61  𝄀
+4  ¦  62
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+4  ¦  1
+commit;
+use stl_k1;
+select id, v from tk order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  61  𝄀
+4  ¦  62
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+4  ¦  1
+insert into tk(v) values (63);
+select id, v from tk order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  61  𝄀
+4  ¦  62  𝄀
+5  ¦  63
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+5  ¦  1
+use stl_base;
+drop database stl_k1;
+use stl_base;
+begin;
+create database stl_j2 clone stl_base;
+use stl_j2;
+insert into t(v) values (70);
+select setval('s', 40, true);
+➤ setval(s, 40, true)[12,65535,0]  𝄀
+40
+insert into t(v) values (71);
+select setval('s', 50, false);
+➤ setval(s, 50, false)[12,65535,0]  𝄀
+50
+insert into t(v) values (72);
+commit;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  70  𝄀
+41  ¦  71  𝄀
+51  ¦  72
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+51  ¦  1
+use stl_j2;
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+51  ¦  1
+insert into t(v) values (80);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  70  𝄀
+41  ¦  71  𝄀
+51  ¦  72  𝄀
+52  ¦  80
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+52  ¦  1
+use stl_base;
+drop database stl_j2;
+use stl_base;
+begin;
+create database stl_ctas clone stl_base;
+use stl_ctas;
+create table copied as select nextval('s') as id, v from stl_base.t;
+select id, v from copied order by id;
+➤ id[12,65535,0]  ¦  v[4,32,0]  𝄀
+2  ¦  10
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+create table csrc (v int);
+insert into csrc values (7), (7);
+create table cfail (primary key (v)) as select nextval('s') as id, v from csrc;
+-- @regex("Duplicate", true)
+Duplicate entry '7' for key 'v'
+show tables like 'cfail';
+➤ Tables_in_stl_ctas[12,5000,0]
+create table cfix (primary key (v)) as select nextval('s') as id, v from csrc where v = 7 limit 1;
+select id, v from cfix order by id;
+➤ id[12,65535,0]  ¦  v[4,32,0]  𝄀
+5  ¦  7
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+5  ¦  1
+commit;
+use stl_ctas;
+select nextval('s');
+➤ nextval(s)[12,65535,0]  𝄀
+6
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+6  ¦  1
+use stl_base;
+drop database stl_ctas;
+create database stl_sh1;
+use stl_sh1;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (1);
+create database stl_shd clone stl_sh1;
+begin;
+drop database stl_shd;
+create database stl_shd clone stl_sh1;
+use stl_shd;
+insert into t(v) values (2);
+insert into t(v) values (3);
+commit;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+use stl_shd;
+insert into t(v) values (4);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+4  ¦  1
+use stl_base;
+drop database stl_shd;
+drop database stl_sh1;
+use stl_base;
+begin;
+create sequence rejected_seq;
+-- @regex("Only CREATE of DDL is supported in transactions", true)
+internal error: Only CREATE of DDL is supported in transactions
+rollback;
+begin;
+alter sequence stl_base.s start with 5;
+-- @regex("unclassified statement appears in uncommitted transaction", true)
+internal error: unclassified statement appears in uncommitted transaction
+rollback;
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+1  ¦  1
+drop database stl_base;

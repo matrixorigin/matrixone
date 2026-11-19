@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	icebergmetadata "github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergdelete"
@@ -187,8 +188,7 @@ func (external *External) applyIcebergDeletes(ctx context.Context, bat *batch.Ba
 	if len(sels) == bat.RowCount() {
 		return nil
 	}
-	bat.Shrink(sels, false)
-	return nil
+	return bat.Shrink(sels, false, proc.Mp())
 }
 
 func icebergDeleteTaskDataFile(task *pipeline.IcebergDeleteFileTask) string {
@@ -218,13 +218,13 @@ func loadIcebergPositionDeleteFile(ctx context.Context, param *ExternalParam, st
 	if err != nil {
 		return err
 	}
-	filePathCol, ok := parquetColumnIndexByName(file, "file_path", "file")
+	filePathCol, ok := icebergmetadata.ParquetColumnIndexByName(file, "file_path", "file")
 	if !ok {
 		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg position delete file is missing file_path column", map[string]string{
 			"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
 		}))
 	}
-	posCol, ok := parquetColumnIndexByName(file, "pos", "position", "row_position")
+	posCol, ok := icebergmetadata.ParquetColumnIndexByName(file, "pos", "position", "row_position")
 	if !ok {
 		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg position delete file is missing pos column", map[string]string{
 			"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
@@ -387,22 +387,6 @@ func readParquetRows(ctx context.Context, file *parquet.File, visit func(parquet
 	}
 }
 
-func parquetColumnIndexByName(file *parquet.File, names ...string) (int, bool) {
-	if file == nil || file.Root() == nil {
-		return 0, false
-	}
-	wanted := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		wanted[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-	}
-	for _, col := range file.Root().Columns() {
-		if _, ok := wanted[strings.ToLower(strings.TrimSpace(col.Name()))]; ok {
-			return int(col.Index()), true
-		}
-	}
-	return 0, false
-}
-
 type equalityDeleteColumn struct {
 	index       int
 	mapping     *pipeline.IcebergColumnMapping
@@ -488,7 +472,7 @@ func parquetColumnIndexByFieldName(file *parquet.File, fieldID int32, mappings [
 		if mapping == nil || mapping.IcebergFieldId != fieldID {
 			continue
 		}
-		if idx, ok := parquetColumnIndexByName(file, mapping.SnapshotFieldName, mapping.CurrentFieldName); ok {
+		if idx, ok := icebergmetadata.ParquetColumnIndexByName(file, mapping.SnapshotFieldName, mapping.CurrentFieldName); ok {
 			return idx, true
 		}
 	}

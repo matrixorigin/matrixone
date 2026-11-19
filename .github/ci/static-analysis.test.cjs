@@ -40,6 +40,24 @@ test('complete package selection follows production and test imports, not test r
   assert.deepEqual(selectPackages([file('pkg/a/a.go', 'D')], records, root), ['./pkg/a', './pkg/b', './pkg/c']);
 });
 
+test('test dependencies preserve variant identity through the reverse closure', () => {
+  const packages = records.slice(0, 8).map(p => ({ ...p, imports: [] }));
+  const [a, b, c, d] = packages;
+  c.imports = [b.id];
+  d.imports = [c.id];
+  const bTest = { id: `${b.id}_test [${b.id}.test]`, dir: b.dir, imports: [a.id] };
+  const graph = [...packages, bTest];
+  assert.deepEqual(selectPackages([file('pkg/a/a.go')], graph, root), ['./pkg/a', './pkg/b']);
+  assert.deepEqual(selectPackages([file('pkg/b/b.go')], graph, root), ['./pkg/b', './pkg/c', './pkg/d']);
+  assert.deepEqual(selectPackages([file('pkg/a/a_test.go')], graph, root), ['./pkg/a']);
+
+  // A production file also belongs to variants compiled for another owner's tests.
+  const bVariant = { id: `${b.id} [${a.id}.test]`, dir: b.dir, imports: [] };
+  const aTest = { id: `${a.id}_test [${a.id}.test]`, dir: a.dir, imports: [bVariant.id] };
+  const variantGraph = packages.map(p => ({ ...p, imports: [] }));
+  assert.deepEqual(selectPackages([file('pkg/b/b.go')], [...variantGraph, bVariant, aTest], root), ['./pkg/a', './pkg/b']);
+});
+
 test('uncertain inputs and broad changes retain full analysis', () => {
   for (const files of [null, [], [file('README.md')], [file('go.mod')], [file('cgo/x.c')],
     [file('.golangci.yml')], [file('pkg/a/testdata/input.go')], [file('pkg/gone/x.go', 'D')],
@@ -53,7 +71,7 @@ test('uncertain inputs and broad changes retain full analysis', () => {
 
 test('Go JSON inventory is framed without interpreting braces inside strings', () => {
   const p = { ImportPath: 'example.org/pkg/a', Dir: '/repo/pkg/a', Module: { Main: true },
-    Imports: ['external/{quoted}"'], TestImports: ['testing'] };
+    Imports: ['external/{quoted}"'] };
   const parsed = inventory(`${JSON.stringify({ ImportPath: 'fmt' })}\n${JSON.stringify(p)}\n`);
   assert.equal(parsed.length, 1);
   assert.deepEqual(parsed[0].imports, p.Imports);
@@ -107,8 +125,12 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   fs.writeFileSync(path.join(repo, 'go.mod'), 'module example.org/project\n\ngo 1.23.0\n');
   for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
     const p = path.join(repo, 'pkg', name); fs.mkdirSync(p, { recursive: true });
-    fs.writeFileSync(path.join(p, `${name}.go`), `package ${name}\n${name === 'b' ? 'import _ "example.org/project/pkg/a"\n' : ''}func Value() int { return 1 }\n`);
-    if (name === 'c') fs.writeFileSync(path.join(p, 'c_test.go'), 'package c_test\nimport _ "example.org/project/pkg/a"\n');
+    const dependency = { b: 'a', d: 'c', e: 'd' }[name];
+    fs.writeFileSync(path.join(p, `${name}.go`), `package ${name}\n${dependency ? `import _ "example.org/project/pkg/${dependency}"\n` : ''}func Value() int { return 1 }\n`);
+    if (name === 'c') {
+      fs.writeFileSync(path.join(p, 'c_test.go'), 'package c_test\nimport _ "example.org/project/pkg/a"\n');
+      fs.writeFileSync(path.join(p, 'c_internal_test.go'), 'package c\nimport _ "example.org/project/pkg/a"\n');
+    }
   }
   const source = path.resolve(__dirname, '../..');
   fs.mkdirSync(path.join(repo, '.github/ci'), { recursive: true });
@@ -197,4 +219,91 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const missingNodeInvalid = run({ PATH: noNode });
   assert.notEqual(missingNodeInvalid.result.status, 0);
   assert.equal(missingNodeInvalid.commands.length, 0, 'full graph validation must precede either analyzer');
+});
+
+// Exercise the public Make target with the existing downloader boundary stubbed;
+// thirdparties/download_test owns network, checksum and byte-limit validation.
+test('tool installation avoids linter compilation and preserves failure/compatibility paths', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-install-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.resolve(__dirname, '../..');
+  const target = fs.readFileSync(path.join(source, 'Makefile'), 'utf8')
+    .match(/^install-static-check-tools:\n[\s\S]*?(?=\n\n)/m)[0];
+  fs.writeFileSync(path.join(dir, 'Makefile'), target + '\n');
+  const bin = path.join(dir, 'bin'), fixtures = path.join(dir, 'fixtures');
+  fs.mkdirSync(bin); fs.mkdirSync(fixtures); fs.mkdirSync(path.join(dir, 'thirdparties'));
+  const log = path.join(dir, 'commands.log'), gopath = path.join(dir, 'gopath');
+  fs.writeFileSync(path.join(bin, 'go'), `#!/bin/sh
+set -eu
+if [ "$1" = env ]; then
+  case "$2" in
+    GOHOSTOS) echo "$INSTALL_OS" ;;
+    GOHOSTARCH) echo "$INSTALL_ARCH" ;;
+    GOVERSION) echo "$INSTALL_GO" ;;
+    *) exit 2 ;;
+  esac
+else
+  echo "$*" >> "$INSTALL_LOG"
+  case "$*" in *"\${FAIL_TOOL:-not-a-tool}"*) exit 9 ;; esac
+  tool=\${2%@*}; tool=\${tool##*/}
+  mkdir -p "$GOBIN"
+  printf '#!/bin/sh\\nexit 0\\n' > "$GOBIN/$tool"
+  chmod +x "$GOBIN/$tool"
+fi
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'thirdparties/download'), `#!/bin/sh
+set -eu
+printf 'download %s %s\\n' "$1" "$2" >> "$INSTALL_LOG"
+test "\${#2}" -eq 64
+test "$MO_DOWNLOAD_ATTEMPTS/$MO_DOWNLOAD_RETRY_ROUNDS/$MO_DOWNLOAD_MAX_TIME_SECONDS" = 1/1/60
+if [ "\${FAIL_DOWNLOAD:-0}" = 1 ]; then exit 8; fi
+if [ "\${BAD_ARCHIVE:-0}" = 1 ]; then echo corrupt > "$3"; else cp "$INSTALL_FIXTURES/\${1##*/}" "$3"; fi
+`, { mode: 0o755 });
+  for (const platform of ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64']) {
+    const name = `golangci-lint-2.14.0-${platform}`;
+    fs.mkdirSync(path.join(fixtures, name));
+    fs.writeFileSync(path.join(fixtures, name, 'golangci-lint'), '#!/bin/sh\necho prebuilt\n');
+    execFileSync('tar', ['-czf', path.join(fixtures, `${name}.tar.gz`), '-C', fixtures, `${name}/golangci-lint`]);
+  }
+  function run(extra = {}) {
+    fs.writeFileSync(log, '');
+    const result = spawnSync('make', ['--no-print-directory', 'install-static-check-tools', `GOPATH=${gopath}`], {
+      cwd: dir, encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, INSTALL_LOG: log, INSTALL_FIXTURES: fixtures,
+        INSTALL_OS: 'linux', INSTALL_ARCH: 'arm64', INSTALL_GO: 'go1.27.1', ...extra },
+    });
+    return { result, commands: fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
+  }
+  for (const [INSTALL_OS, INSTALL_ARCH] of [['linux', 'amd64'], ['linux', 'arm64'], ['darwin', 'amd64'], ['darwin', 'arm64']]) {
+    const { result, commands } = run({ INSTALL_OS, INSTALL_ARCH });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(commands.length, 3);
+    assert.match(commands[0], new RegExp(`^download https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-${INSTALL_OS}-${INSTALL_ARCH}.tar.gz [a-f0-9]{64}$`));
+    assert.ok(commands[1].startsWith('install github.com/matrixorigin/linter/cmd/molint@'));
+    assert.ok(commands[2].startsWith('install github.com/apache/skywalking-eyes/cmd/license-eye@'));
+    assert.equal(execFileSync(path.join(gopath, 'bin/golangci-lint'), { encoding: 'utf8' }).trim(), 'prebuilt');
+  }
+  for (const extra of [{ INSTALL_GO: 'go1.28.0' }, { INSTALL_OS: 'freebsd' }]) {
+    const { result, commands } = run(extra);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(commands.length, 3);
+    assert.ok(commands.every(command => command.startsWith('install ')));
+    assert.match(commands[0], /golangci-lint\/v2\/cmd\/golangci-lint@v2.14.0$/);
+  }
+  for (const extra of [{ FAIL_DOWNLOAD: '1' }, { BAD_ARCHIVE: '1' }]) {
+    const fallback = run(extra);
+    assert.equal(fallback.result.status, 0, fallback.result.stderr);
+    assert.equal(fallback.commands.length, 4);
+    assert.ok(fallback.commands.slice(1).every(command => command.startsWith('install ')));
+    assert.match(fallback.result.stderr, /installing the pinned version from source/);
+    fs.writeFileSync(path.join(gopath, 'bin/golangci-lint'), 'prior generation');
+    const failed = run({ ...extra, FAIL_TOOL: 'golangci-lint' });
+    assert.notEqual(failed.result.status, 0);
+    assert.equal(failed.commands.length, 2, 'a failed fallback must not install other tools');
+    assert.equal(fs.readFileSync(path.join(gopath, 'bin/golangci-lint'), 'utf8'), 'prior generation');
+    assert.ok(!fs.readdirSync(path.join(gopath, 'bin')).some(name => name.startsWith('.golangci-lint.')));
+  }
+  const failure = run({ FAIL_TOOL: 'molint' });
+  assert.notEqual(failure.result.status, 0);
+  assert.equal(failure.commands.length, 2, 'a failed source tool must stop the installer');
 });

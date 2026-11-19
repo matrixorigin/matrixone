@@ -21,6 +21,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -597,4 +599,52 @@ func Test_handleInternalObjectList_GoodPath(t *testing.T) {
 		// Verify row count
 		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
 	})
+}
+
+func TestObjectListExplicitIndexRootPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		flags      uint64
+		deny       bool
+	}{
+		{catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd", "", 0, true},
+		{"renamed_index_storage", catalog.SystemIndexRel, 0, true},
+		{"plugin_storage", "unregistered_index_kind", 0, true},
+		{"flagged_storage", catalog.SystemOrdinaryRel, features.IndexTable, true},
+		{"ordinary", catalog.SystemOrdinaryRel, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			actor := &Session{}
+			actor.SetFromRealUser(true)
+			actor.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "root", DefaultRole: "public"})
+			ctx := withHiddenIndexCaller(context.Background(), actor)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			mp := mpool.MustNewZero()
+			bat := batch.New(nil)
+			defer bat.Clean(mp)
+			eng.EXPECT().Database(ctx, "app", txnOp).Return(db, nil)
+			db.EXPECT().Relation(ctx, tc.name, nil).Return(rel, nil)
+			def := &plan.TableDef{Name: tc.name, TableType: tc.kind, FeatureFlag: tc.flags}
+			if !tc.deny {
+				def.Indexes = []*plan.IndexDef{{IndexTableName: catalog.SecondaryIndexTableNamePrefix + "child"}}
+				rel.EXPECT().GetTableDef(ctx).Return(def).Times(2)
+				rel.EXPECT().CollectObjectList(ctx, types.MinTs(), types.MaxTs(), bat, mp).Return(nil)
+				child := mock_frontend.NewMockRelation(ctrl)
+				db.EXPECT().Relation(ctx, def.Indexes[0].IndexTableName, nil).Return(child, nil)
+				child.EXPECT().CollectObjectList(ctx, types.MinTs(), types.MaxTs(), bat, mp).Return(nil)
+			} else {
+				rel.EXPECT().GetTableDef(ctx).Return(def)
+			}
+			err := collectObjectListForTable(ctx, types.MinTs(), types.MaxTs(), "app", tc.name, eng, txnOp, bat, mp)
+			if !tc.deny {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "privilege")
+			}
+		})
+	}
 }

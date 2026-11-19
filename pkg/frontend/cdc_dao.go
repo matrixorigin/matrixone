@@ -75,7 +75,7 @@ func NewCDCDao(
 
 func (t *CDCDao) MustGetTaskService() taskservice.TaskService {
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		panic("taskService is nil")
@@ -125,7 +125,7 @@ func (t *CDCDao) CreateTask(
 
 	// Get TaskService - handle nil case gracefully instead of panicking
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")
@@ -593,34 +593,4 @@ func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	return nil
 }
 
-var ForeachQueriedRow = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	onEachRow func(context.Context, *sql.Rows) (bool, error),
-) (cnt int64, err error) {
-	var (
-		ok   bool
-		rows *sql.Rows
-	)
-	if rows, err = tx.QueryContext(ctx, query); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if ok, err = onEachRow(ctx, rows); err != nil {
-			return
-		}
-		if ok {
-			cnt++
-		}
-	}
-	return
-}
+var ForeachQueriedRow = taskservice.ForeachQueriedRow

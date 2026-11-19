@@ -18,8 +18,10 @@ MatrixOne Load Data Manager - Provides high-level LOAD DATA operations
 
 from typing import Optional, List, Dict, Union
 from enum import Enum
+import re
 
 from ._sql_literals import sql_identifier, sql_string_token
+from ._utils import stage_file_uri
 
 
 class LoadDataFormat(str, Enum):
@@ -62,6 +64,48 @@ class BaseLoadDataManager:
         """Initialize base load data manager"""
         self.client = client
 
+    _CSV_ALIASES = {
+        'format': 'read_csv',
+        'fields_terminated_by': 'sep',
+        'fields_enclosed_by': 'quotechar',
+        'fields_optionally_enclosed': 'quoting',
+        'fields_escaped_by': 'escapechar',
+        'ignore_lines': 'skiprows',
+        'columns': 'names',
+        'character_set': 'encoding',
+        'file_path': 'filepath_or_buffer',
+        'table_name_or_model': 'table',
+    }
+    _JSON_ALIASES = {
+        'format': 'read_json',
+        'jsondata': 'orient',
+        'file_path': 'filepath_or_buffer',
+        'table_name_or_model': 'table',
+    }
+    _PARQUET_ALIASES = {'format': 'read_parquet', 'file_path': 'filepath_or_buffer', 'table_name_or_model': 'table'}
+
+    @staticmethod
+    def _reject_wrapper_options(kwargs, aliases):
+        for name, alternative in aliases.items():
+            if name in kwargs:
+                raise ValueError(f"{name} is controlled by {alternative}; use {alternative} or from_file directly")
+
+    @staticmethod
+    def _validate_set_clause(assignments):
+        # The loader can name columns but cannot introduce LOAD row variables.
+        identifier = r"(?:[A-Za-z_][A-Za-z0-9_]*|`(?:``|[^`])+`)"
+        literal = r"(?:'(?:''|[^'\\])*'|\"(?:\"\"|[^\"\\])*\"|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))"
+        pattern = re.compile(r"\s*NULLIF\s*\(\s*(" + identifier + r")\s*,\s*" + literal + r"\s*\)\s*", re.I)
+        if not isinstance(assignments, dict):
+            raise ValueError('set_clause must map columns to NULLIF(column, literal)')
+        for column, expression in assignments.items():
+            match = pattern.fullmatch(expression) if isinstance(expression, str) else None
+            source = match.group(1) if match else ''
+            if source.startswith('`'):
+                source = source[1:-1].replace('``', '`')
+            if not match or not isinstance(column, str) or source.casefold() != column.casefold():
+                raise ValueError('SET supports only NULLIF(target_column, literal); row variables are not supported')
+
     def _build_load_data_sql(
         self,
         file_path,
@@ -82,8 +126,11 @@ class BaseLoadDataManager:
         compression=None,
         set_clause=None,
     ):
-        if local and self.client._connection_params.get('local_infile') is not True:
-            raise ValueError('LOCAL INFILE requires connect(local_infile=True); adopted engines are not certified')
+        if local and (
+            'local_infile' not in self.client._connection_params
+            or self.client._connection_params['local_infile'] is False
+        ):
+            raise ValueError('LOCAL INFILE is disabled or the adopted engine is not certified')
         format = (format or 'csv').lower()
         if format not in ('csv', 'jsonline', 'parquet'):
             raise ValueError('Unsupported LOAD format')
@@ -182,10 +229,10 @@ class BaseLoadDataManager:
             parts.append('IGNORE %d LINES' % ignore_lines)
         if columns is not None:
             parts.append('(' + ', '.join(sql_identifier(c) for c in columns) + ')')
-        if set_clause:
-            if not isinstance(set_clause, dict) or any(not isinstance(v, str) or not v for v in set_clause.values()):
-                raise ValueError('set_clause must map column names to SQL expressions')
-            parts.append('SET ' + ', '.join(sql_identifier(k) + '=' + v for k, v in set_clause.items()))
+        if set_clause is not None:
+            self._validate_set_clause(set_clause)
+            if set_clause:
+                parts.append('SET ' + ', '.join(sql_identifier(k) + '=' + v for k, v in set_clause.items()))
         if parallel:
             parts.append("PARALLEL 'true'")
         return ' '.join(parts)
@@ -354,7 +401,7 @@ class LoadDataManager(BaseLoadDataManager):
             '/path/to/data.csv',
             User,
             columns=['name', 'email', 'age'],
-            set_clause={'created_at': 'NOW()', 'status': "'active'"}
+            set_clause={'status': "NULLIF(status, 'null')"}
         )
 
         # ========================================
@@ -476,7 +523,7 @@ class LoadDataManager(BaseLoadDataManager):
             encoding (str, optional): Character encoding (pandas: encoding)
             parallel (bool): Enable parallel loading. Default: False
             compression (str or CompressionFormat, optional): Compression format
-            set_clause (dict, optional): Column transformations
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported
             inline (bool): If True, treat filepath_or_buffer as inline data. Default: False
 
         Returns:
@@ -507,6 +554,7 @@ class LoadDataManager(BaseLoadDataManager):
             # With ORM model
             client.load_data.read_csv('data.csv', table=User, skiprows=1)
         """
+        self._reject_wrapper_options(kwargs, self._CSV_ALIASES)
         # Handle inline data
         if inline:
             if encoding is not None or parallel or compression is not None or set_clause is not None:
@@ -574,7 +622,7 @@ class LoadDataManager(BaseLoadDataManager):
             encoding (str, optional): Character encoding
             parallel (bool): Enable parallel loading
             compression (str or CompressionFormat, optional): Compression format
-            set_clause (dict, optional): Column transformations
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported
 
         Returns:
             ResultSet: Load results
@@ -589,7 +637,7 @@ class LoadDataManager(BaseLoadDataManager):
                 table='users', sep='\\t', skiprows=1)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to read_csv
         return self.read_csv(
@@ -705,17 +753,15 @@ class LoadDataManager(BaseLoadDataManager):
             json_data = '{"id":1,"name":"Alice"}\\n{"id":2,"name":"Bob"}\\n'
             client.load_data.read_json(json_data, table='users', inline=True)
         """
+        self._reject_wrapper_options(kwargs, self._JSON_ALIASES)
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'  # Default
+        structure_str = _json_structure(orient)
 
         # Convert compression enum if needed
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
@@ -823,6 +869,7 @@ class LoadDataManager(BaseLoadDataManager):
             # With ORM model
             client.load_data.read_parquet('data.parquet', table=User)
         """
+        self._reject_wrapper_options(kwargs, self._PARQUET_ALIASES)
         return self.from_file(
             file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )
@@ -855,7 +902,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_json_stage('s3_stage', 'events.jsonl', table='events')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -887,7 +934,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_parquet_stage('s3_stage', 'data.parquet', table='users')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     def read_json_inline(
@@ -920,12 +967,7 @@ class LoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -1026,7 +1068,7 @@ class LoadDataManager(BaseLoadDataManager):
                 - CompressionFormat.TAR_GZ or 'tar.gz': Tar+Gzip
                 - CompressionFormat.TAR_BZ2 or 'tar.bz2': Tar+Bzip2
 
-            set_clause (dict, optional): Column transformations.
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported.
                 Dictionary of column transformations, e.g.:
                 {'col1': 'NULLIF(col1, "null")', 'col2': 'NULLIF(col2, 1)'}
 
@@ -1193,8 +1235,7 @@ class LoadDataManager(BaseLoadDataManager):
 
         Examples::
 
-            # Enable LOCAL negotiation when creating the connection:
-            # client.connect(database='test', local_infile=True)
+            # Default SDK connections authorize only this file for this statement.
             >>> result = client.load_data.from_local_file(
             ...     '/local/path/to/data.csv',
             ...     'users',
@@ -1210,7 +1251,10 @@ class LoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return self._get_executor().execute(statement)
 
 
 class AsyncLoadDataManager(BaseLoadDataManager):
@@ -1314,7 +1358,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
                 '/path/to/data.csv',
                 User,
                 columns=['name', 'email', 'age'],
-                set_clause={'created_at': 'NOW()'}
+                set_clause={'status': "NULLIF(status, 'null')"}
             )
 
             # Load JSON Lines format asynchronously
@@ -1415,6 +1459,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._CSV_ALIASES)
         # Handle inline data
         if inline:
             if encoding is not None or parallel or compression is not None or set_clause is not None:
@@ -1458,17 +1503,15 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._JSON_ALIASES)
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return await self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'
+        structure_str = _json_structure(orient)
 
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
@@ -1483,6 +1526,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
 
     async def read_parquet(self, filepath_or_buffer: str, table: Union[str, type], **kwargs):
         """Async version of read_parquet (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._PARQUET_ALIASES)
         return await self.from_file(
             file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )
@@ -1505,7 +1549,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_csv(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1533,7 +1577,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1551,7 +1595,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_parquet_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     async def read_csv_inline(
@@ -1596,12 +1640,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -1692,4 +1731,15 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return await self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return await self._get_executor().execute(statement)
+
+
+def _json_structure(orient):
+    if orient == 'records':
+        return 'object'
+    if orient == 'values':
+        return 'array'
+    raise ValueError('JSON orient must be records or values')

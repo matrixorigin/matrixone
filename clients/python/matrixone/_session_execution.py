@@ -40,7 +40,10 @@ class _LiteralSQL(TextClause):
             sql = self._render_on_connection(connection).text
             if connection.dialect.paramstyle in ('format', 'pyformat') and not effective.get('no_parameters', False):
                 sql = sql.replace('%', '%%')
-            return connection.exec_driver_sql(sql, execution_options=effective)
+            from ._local_infile import local_file_authority
+
+            with local_file_authority(connection, effective.get('_matrixone_local_path')):
+                return connection.exec_driver_sql(sql, execution_options=effective)
         except BaseException:
             # Only legacy autocommit connections are result-owned. Preparation
             # can fail before the driver gives that owner control.

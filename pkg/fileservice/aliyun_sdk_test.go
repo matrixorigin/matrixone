@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,10 @@ func TestAliyunSDKConditionalObjectIdentityReads(t *testing.T) {
 	var requests []*http.Request
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Clone(context.Background()))
+		if strings.HasSuffix(r.URL.Path, "/missing") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.URL.Query().Get("versionId") == "gone" {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusNotFound)
@@ -82,6 +87,20 @@ func TestAliyunSDKConditionalObjectIdentityReads(t *testing.T) {
 	bucket, err := client.Bucket("bucket")
 	require.NoError(t, err)
 	sdk := &AliyunSDK{bucket: bucket}
+
+	testOrdinaryObjectReadRanges(t, sdk)
+
+	exists, err := sdk.Exists(context.Background(), "object")
+	require.NoError(t, err)
+	require.True(t, exists)
+	exists, err = sdk.Exists(context.Background(), "missing")
+	require.Error(t, err, "a bare 404 without NoSuchKey is not classified as missing")
+	require.False(t, exists)
+	exists, err = objectExists(context.Background(), "missing", func(context.Context, string) (http.Header, error) {
+		return nil, oss.ServiceError{StatusCode: http.StatusNotFound, Code: "NoSuchKey"}
+	}, sdk.is404)
+	require.NoError(t, err)
+	require.False(t, exists)
 
 	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
 	require.NoError(t, err)

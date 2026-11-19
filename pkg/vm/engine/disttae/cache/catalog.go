@@ -648,6 +648,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -851,6 +853,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
@@ -907,6 +911,11 @@ func decodeColumnAttribute(col catalog.Column) (*engine.AttributeDef, error) {
 	if err := attr.Type.Unmarshal(col.Typ); err != nil {
 		return nil, err
 	}
+	// att_is_unsigned is a legacy boolean for unsigned integers; for DECIMAL
+	// columns it carries the UNSIGNED(bit 0)/ZEROFILL(bit 1) attribute mask.
+	if col.IsUnsigned != 0 && attr.Type.Oid.IsDecimal() {
+		attr.NumericAttributes = uint8(uint32(col.IsUnsigned) & types.NumericAttributeMask)
+	}
 	attr.Default = new(plan.Default)
 	if col.HasDef == 1 {
 		if err := types.Decode(col.DefaultExpr, attr.Default); err != nil {
@@ -958,15 +967,16 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				Name:       name,
 				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
-					Id:               int32(attr.Attr.Type.Oid),
-					Width:            attr.Attr.Type.Width,
-					Scale:            attr.Attr.Type.Scale,
-					AutoIncr:         attr.Attr.AutoIncrement,
-					Table:            tblItem.Name,
-					NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:       attr.Attr.EnumVlaues,
-					Charset:          uint32(attr.Attr.Type.Charset),
-					CollationVersion: uint32(attr.Attr.Type.CollationVersion),
+					Id:                int32(attr.Attr.Type.Oid),
+					Width:             attr.Attr.Type.Width,
+					Scale:             attr.Attr.Type.Scale,
+					AutoIncr:          attr.Attr.AutoIncrement,
+					Table:             tblItem.Name,
+					NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:        attr.Attr.EnumVlaues,
+					Charset:           uint32(attr.Attr.Type.Charset),
+					CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+					NumericAttributes: uint32(attr.Attr.NumericAttributes),
 				},
 				Primary:      attr.Attr.Primary,
 				Default:      attr.Attr.Default,
@@ -1024,7 +1034,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 			}
 		}
 	}

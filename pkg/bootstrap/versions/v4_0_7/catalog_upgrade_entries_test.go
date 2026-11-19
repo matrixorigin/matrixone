@@ -33,6 +33,11 @@ import (
 )
 
 func TestConsolidatedTenantEntriesKeepWriterProtocolGates(t *testing.T) {
+	require.Equal(t, "4.0.7", Handler.Metadata().Version)
+	require.Equal(t, uint32(44), Handler.Metadata().VersionOffset)
+	require.Len(t, tenantUpgEntries, 27)
+	require.Len(t, clusterUpgEntries, 17)
+	require.Contains(t, upgradeInformationSchemaStatistics().UpgSql, "sub_part")
 	for _, tc := range []struct {
 		table   string
 		minimum int64
@@ -244,19 +249,36 @@ func TestDaemonClaimPrecisionCheckUsesStoredType(t *testing.T) {
 	}
 }
 
+func TestColumnsAndTablesAreIncludedInTenantUpgrade(t *testing.T) {
+	want := map[string]string{
+		"COLUMNS": sysview.InformationSchemaColumnsDDL,
+		"TABLES":  sysview.InformationSchemaTablesCurrentDDL,
+	}
+	for _, entry := range tenantUpgEntries {
+		ddl, ok := want[entry.TableName]
+		if !ok || entry.Schema != sysview.InformationDBConst {
+			continue
+		}
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Equal(t, strings.Replace(ddl, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
+		delete(want, entry.TableName)
+	}
+	require.Empty(t, want, "the tenant upgrade must refresh both persisted views")
+}
+
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	views := []struct {
 		entry versions.UpgradeEntry
 		ddl   string
 	}{
-		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesV118DDL},
+		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesCurrentDDL},
 		{versions.InformationSchemaColumnsUpgradeEntry(), sysview.InformationSchemaColumnsDDL},
-		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsDDL},
+		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsPrefixSubPartDDL},
 		{upgradeInformationSchemaTableConstraints(), sysview.InformationSchemaTableConstraintsDDL},
 		{upgradeInformationSchemaKeyColumnUsage(), sysview.InformationSchemaKeyColumnUsageDDL},
 		{upgradeInformationSchemaReferentialConstraints(), sysview.InformationSchemaReferentialConstraintsDDL},
 		{upgradeInformationSchemaCheckConstraints(), sysview.InformationSchemaCheckConstraintsDDL},
-		{upgradeInformationSchemaViews(), sysview.InformationSchemaViewsDDL},
+		{versions.InformationSchemaViewsUpgradeEntry(), sysview.InformationSchemaViewsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL), sysview.InformationSchemaPartitionsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL), sysview.InformationSchemaSchemataDDL},
 	}

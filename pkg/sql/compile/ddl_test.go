@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -3021,8 +3022,8 @@ func Test_isValidFrequency(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := isValidFrequency(c.in); got != c.ok {
-			t.Fatalf("isValidFrequency(%q)=%v, want %v", c.in, got, c.ok)
+		if got := cdc.IsValidFrequency(c.in); got != c.ok {
+			t.Fatalf("cdc.IsValidFrequency(%q)=%v, want %v", c.in, got, c.ok)
 		}
 	}
 }
@@ -3040,8 +3041,8 @@ func Test_transformIntoHours(t *testing.T) {
 		{"", 0},
 	}
 	for _, c := range cases {
-		if got := transformIntoHours(c.in); got != c.hours {
-			t.Fatalf("transformIntoHours(%q)=%d, want %d", c.in, got, c.hours)
+		if got := cdc.FrequencyHours(c.in); got != c.hours {
+			t.Fatalf("cdc.FrequencyHours(%q)=%d, want %d", c.in, got, c.hours)
 		}
 	}
 }

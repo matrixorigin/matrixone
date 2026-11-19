@@ -36,6 +36,14 @@ uint64_t *mo_sorted64_build_fixed(const void *key, size_t len, size_t elemsz,
                                   size_t nullmaplen);
 void mo_sorted64_free(uint64_t *payload);
 
+// Incremental construction owns one final-capacity allocation. Each add reads
+// one bounded vector, then finalize sorts/deduplicates the complete set once.
+uint64_t *mo_sorted64_create(size_t capacity);
+bool mo_sorted64_add_fixed(uint64_t *payload, size_t capacity,
+                           const void *key, size_t len, size_t elemsz,
+                           size_t nitem, const void *nullmap, size_t nullmaplen);
+void mo_sorted64_finalize(uint64_t *payload);
+
 // Probe a fixed-width integer vector in one C call. Integer bytes are decoded
 // by the same zero-extending little-endian contract as cbitmap / CRoaring.
 void mo_sorted64_test_fixed(const void *filter, const void *key, size_t len,

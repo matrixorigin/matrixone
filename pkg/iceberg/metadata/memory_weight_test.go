@@ -49,11 +49,19 @@ func TestMetadataMemoryWeightsAccountNestedRetainedData(t *testing.T) {
 	require.Greater(t, ManifestEntriesMemoryWeight(10, []api.ManifestEntry{{DataFile: file}}), int64(10))
 }
 
+func TestNonnegativeMemoryAddSaturates(t *testing.T) {
+	require.Equal(t, int64(0), api.SaturatingNonnegativeAdd(0, 0))
+	require.Equal(t, int64(7), api.SaturatingNonnegativeAdd(3, 4))
+	require.Equal(t, int64(math.MaxInt64), api.SaturatingNonnegativeAdd(math.MaxInt64, 1))
+	require.Equal(t, int64(math.MaxInt64), api.SaturatingNonnegativeAdd(-1, 0))
+	require.Equal(t, int64(math.MaxInt64), api.SaturatingNonnegativeAdd(0, -1))
+}
+
 func TestMetadataMemoryWeightSaturates(t *testing.T) {
 	require.Equal(t, int64(math.MaxInt64), saturatingMetadataAdd(math.MaxInt64, 1))
 	require.Equal(t, int64(-1), saturatingMetadataAdd(1, -2))
-	require.Zero(t, saturatingMetadataMul(0, 10))
-	require.Zero(t, saturatingMetadataMul(10, -1))
-	require.Equal(t, int64(math.MaxInt64), saturatingMetadataMul(math.MaxInt64, 2))
-	require.Equal(t, int64(12), saturatingMetadataMul(3, 4))
+	require.Zero(t, api.SaturatingMemoryMul(0, 10))
+	require.Zero(t, api.SaturatingMemoryMul(10, -1))
+	require.Equal(t, int64(math.MaxInt64), api.SaturatingMemoryMul(math.MaxInt64, 2))
+	require.Equal(t, int64(12), api.SaturatingMemoryMul(3, 4))
 }

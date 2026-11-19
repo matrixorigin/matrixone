@@ -117,6 +117,20 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return leastGreatestResolution{resultType: types.T_varchar.ToType(), overloadID: leastGreatestNormalOverload}, true
 	}
 
+	if target, hasVector, ok := commonVectorType(nonNull); hasVector {
+		if !ok || !leastGreatestExecutorSupportsOid(target.Oid) {
+			return leastGreatestResolution{}, false
+		}
+		resolution := leastGreatestResolution{resultType: target, overloadID: leastGreatestNormalOverload}
+		for _, input := range nonNull {
+			if input != target {
+				resolution.castTypes = leastGreatestCastTypes(inputs, target)
+				break
+			}
+		}
+		return resolution, true
+	}
+
 	if allLeastGreatestJSON(nonNull) {
 		target := types.T_varchar.ToType()
 		return leastGreatestResolution{
@@ -143,6 +157,10 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return resolution, true
 	}
 
+	if resolution, ok, handled := resolveLeastGreatestMixedBool(inputs, nonNull); handled {
+		return resolution, ok
+	}
+
 	// Fast path: every non-NULL argument already shares the same type Oid. This
 	// preserves the original behavior (including any per-type scale handling) for
 	// the common case where no promotion is needed.
@@ -155,13 +173,6 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
-		if baseOid.IsArrayRelate() {
-			for _, input := range nonNull[1:] {
-				if input.Width != nonNull[0].Width {
-					return leastGreatestResolution{}, false
-				}
-			}
-		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}
@@ -245,6 +256,59 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 	}
 
 	return leastGreatestResolution{}, false
+}
+
+// resolveLeastGreatestMixedBool gives TRUE/FALSE MySQL's numeric meaning (1/0)
+// when BOOL arguments are mixed with other types: GREATEST(2, TRUE) is 2 and
+// GREATEST('a', TRUE) compares 'a' with '1'. The type is resolved as if every
+// BOOL argument were a small integer, and the BOOL arguments are then cast straight to
+// the type chosen for their position. handled is false when there is nothing
+// to do (no BOOL, or only BOOL arguments), so the caller keeps its own rules.
+func resolveLeastGreatestMixedBool(inputs, nonNull []types.Type) (resolution leastGreatestResolution, ok bool, handled bool) {
+	hasBool, hasOther, onlyUnsigned := false, false, true
+	for i := range nonNull {
+		switch {
+		case nonNull[i].Oid == types.T_bool:
+			hasBool = true
+		case nonNull[i].IsUInt() || nonNull[i].Oid == types.T_bit:
+			hasOther = true
+		default:
+			hasOther = true
+			onlyUnsigned = false
+		}
+	}
+	if !hasBool || !hasOther {
+		return leastGreatestResolution{}, false, false
+	}
+	// 0 and 1 fit the narrowest integer; staying unsigned next to unsigned
+	// operands keeps GREATEST(uint64_col, TRUE) out of the DECIMAL widening.
+	boolAs := types.T_int8.ToType()
+	if onlyUnsigned {
+		boolAs = types.T_uint8.ToType()
+	}
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bool {
+			normalized[i] = boolAs
+		}
+	}
+	resolution, ok = resolveLeastGreatestType(normalized)
+	if !ok {
+		return leastGreatestResolution{}, false, true
+	}
+	castTypes := resolution.castTypes
+	if len(castTypes) == 0 {
+		castTypes = leastGreatestCastTypes(inputs, resolution.resultType)
+	} else {
+		castTypes = append([]types.Type(nil), castTypes...)
+	}
+	for i := range inputs {
+		if inputs[i].Oid == types.T_bool && !IfTypeCastSupported(types.T_bool, castTypes[i].Oid) {
+			return leastGreatestResolution{}, false, true
+		}
+	}
+	resolution.castTypes = castTypes
+	return resolution, true, true
 }
 
 func leastGreatestCastTypes(inputs []types.Type, target types.Type) []types.Type {
@@ -401,7 +465,6 @@ func hasUnsupportedLeastGreatestMixedType(inputs []types.Type) bool {
 	for i := range inputs {
 		switch inputs[i].Oid {
 		case types.T_interval, types.T_uuid, types.T_Rowid,
-			types.T_array_float32, types.T_array_float64,
 			types.T_geometry, types.T_geometry32, types.T_datalink:
 			return true
 		}

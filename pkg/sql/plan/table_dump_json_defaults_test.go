@@ -49,7 +49,7 @@ func TestTableDumpHistoricalJSONDefaults(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fixture.SQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			fresh, err := BuildPlan(compiler, stmt, false)
+			fresh, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			target := fresh.GetDdl().GetCreateTable().GetTableDef()
 			for _, pair := range []struct {
@@ -82,7 +82,7 @@ func TestTableDumpHistoricalJSONDefaults(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, fixture.TableDef, after, "verification must not rewrite archived expressions")
 			require.Equal(t, contextBefore, compiler.GetProcess().Ctx)
-			current, err := BuildPlan(compiler, stmt, false)
+			current, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, proto.Equal(target, current.GetDdl().GetCreateTable().GetTableDef()), "legacy verification must not change ordinary DDL")
 		})
@@ -95,7 +95,7 @@ func TestTableDumpRejectsMixedJSONEra(t *testing.T) {
 		"create table mixed_json_era(a int default (ifnull(json_length('null'),0) + ifnull(json_length('null'),0)))", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	target := built.GetDdl().GetCreateTable().GetTableDef()
 	item := tableDumpExpressions(target)[0]

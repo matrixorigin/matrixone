@@ -54,7 +54,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (bool, error) {
@@ -68,7 +68,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 		}
 	}
 	bat.SetRowCount(4)
-	_, err := filter(bat, earlyColumns)
+	_, err := filter.Apply(bat, earlyColumns)
 	return false, err
 }
 
@@ -184,8 +184,8 @@ func TestLateMaterializationCandidateUsesBlockPayload(t *testing.T) {
 	belowThreshold := types.New(types.T_varchar, 95, 0)
 	atThreshold := types.New(types.T_varchar, 96, 0)
 
-	require.False(t, isLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
-	require.True(t, isLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
+	require.False(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
+	require.True(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
 }
 
 func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
@@ -266,32 +266,166 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 }
 
 func TestTableScanUsesLateMaterializationReader(t *testing.T) {
-	proc := testutil.NewProc(t)
 	intType := types.T_int32.ToType()
 	textType := types.T_text.ToType()
-	reader := &lateMaterializationTestReader{}
-	scan := &TableScan{
-		Reader: reader,
-		Attrs:  []string{"filter_col", "payload"},
-		Types:  []pbplan.Type{plan.MakePlan2Type(&intType), plan.MakePlan2Type(&textType)},
-		FilterExprs: []*pbplan.Expr{
-			lateTestCompare(t, ">", 0, 10),
-		},
+	for _, tc := range []struct {
+		name        string
+		latePayload bool
+		op          string
+		bound       int32
+		want        []int32
+	}{
+		{name: "dead late payload", latePayload: true, op: ">", bound: 10},
+		{name: "fully loaded partial result", op: ">", bound: 1, want: []int32{2, 3}},
+		{name: "fully loaded all rows", op: ">=", bound: 0, want: []int32{0, 1, 2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			reader := &lateMaterializationTestReader{}
+			scan := &TableScan{
+				Reader:      reader,
+				Attrs:       []string{"filter_col"},
+				Types:       []pbplan.Type{plan.MakePlan2Type(&intType)},
+				FilterExprs: []*pbplan.Expr{lateTestCompare(t, tc.op, 0, tc.bound)},
+			}
+			t.Cleanup(func() {
+				scan.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.GetMPool().CurrNB())
+			})
+			if tc.latePayload {
+				scan.Attrs = append(scan.Attrs, "payload")
+				scan.Types = append(scan.Types, plan.MakePlan2Type(&textType))
+			}
+			require.NoError(t, scan.Prepare(proc))
+
+			result, err := vm.Exec(scan, proc)
+			require.NoError(t, err)
+			if tc.want == nil {
+				require.Nil(t, result.Batch)
+				require.Zero(t, scan.ctr.buf.Vecs[0].Length())
+				require.Zero(t, scan.ctr.buf.Vecs[1].Length())
+			} else {
+				require.NotNil(t, result.Batch)
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+				require.Equal(t, len(tc.want), result.Batch.RowCount())
+				result, err = vm.Exec(scan, proc)
+				require.NoError(t, err)
+				require.Nil(t, result.Batch)
+			}
+			require.Equal(t, 2, reader.reads)
+			require.False(t, reader.eagerRead)
+			stats := scan.OpAnalyzer.GetOpStats()
+			require.Equal(t, int64(1), stats.InputBlocks)
+			require.Equal(t, int64(4), stats.InputRows)
+			require.Equal(t, int64(16), stats.InputSize)
+			require.Equal(t, int64(16), stats.ScanBytes)
+
+			scan.Reset(proc, false, nil)
+			require.True(t, reader.closed)
+		})
 	}
-	require.NoError(t, scan.Prepare(proc))
+}
 
-	result, err := vm.Exec(scan, proc)
+func TestProjectionColumnUses(t *testing.T) {
+	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "unknown"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			typ := types.T_int32.ToType()
+			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}, OutputAllocation: allocation, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}}
+			scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ), lateTestCompare(t, ">", 1, 3)}
+			if shape == "single-batch-tag" {
+				scan.ProjectList[0].GetCol().RelPos = 7
+				scan.ProjectList[1].GetF().Args[0].GetCol().RelPos = 9
+			}
+			if shape == "forward-priority" {
+				scan.ProjectList = append(scan.ProjectList, lateTestCol(1, typ))
+			}
+			require.NoError(t, scan.PrepareProjection(proc))
+			t.Cleanup(func() { scan.FreeProjection(proc) })
+			if shape == "domain" {
+				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: true}}
+			}
+			if shape == "unknown" {
+				scan.ProjectExecutors[0].Free()
+				scan.ProjectExecutors[0] = nil
+			}
+			consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator()}
+			consumer.AppendChild(scan)
+			vm.ConfigureDictionaryBoundaries(consumer)
+			scan.prepareColumnUses()
+			if shape == "unknown" {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnOwned}, scan.ctr.columnUses)
+				return
+			}
+			want := []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnOwned, engine.ReaderColumnUnused}
+			if shape == "forward-priority" {
+				want[1] = engine.ReaderColumnRetain
+			}
+			if shape == "domain" {
+				want[2] = engine.ReaderColumnOwned
+			}
+			require.Equal(t, want, scan.ctr.columnUses)
+		})
+	}
+}
+
+type ownedColumnUseConsumer struct {
+	*colexec.MockOperator
+	owned bool
+}
+
+func (*ownedColumnUseConsumer) AcceptsDictionary(child int) bool { return child == 0 }
+func (c *ownedColumnUseConsumer) PrefersOwnedDictionaryInput(child int) bool {
+	return child == 0 && c.owned
+}
+
+func TestConsumerOwnedDemandUpdatesColumnUses(t *testing.T) {
+	proc := testutil.NewProc(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
 	require.NoError(t, err)
-	require.Nil(t, result.Batch)
-	require.Equal(t, 2, reader.reads)
-	require.False(t, reader.eagerRead)
-	require.Zero(t, scan.ctr.buf.Vecs[0].Length())
-	require.Zero(t, scan.ctr.buf.Vecs[1].Length())
-	require.Equal(t, int64(4), scan.OpAnalyzer.GetOpStats().InputRows)
-
-	scan.Reset(proc, false, nil)
-	require.True(t, reader.closed)
-	scan.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.GetMPool().CurrNB())
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	require.NoError(t, err)
+	typ := types.T_int32.ToType()
+	scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType()}, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}, OutputAllocation: allocation}
+	scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ)}
+	require.NoError(t, scan.PrepareProjectionWithAllocation(proc, allocation))
+	t.Cleanup(func() { scan.FreeProjection(proc) })
+	consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator(), owned: true}
+	consumer.AppendChild(scan)
+	vm.ConfigureDictionaryBoundaries(consumer)
+	require.True(t, scan.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+	scan.prepareColumnUses()
+	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.columnUses)
+	consumer.owned = false
+	vm.ConfigureDictionaryBoundaries(consumer)
+	scan.prepareColumnUses()
+	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnUnused}, scan.ctr.columnUses)
+	flat := colexec.NewMockOperator()
+	flat.AppendChild(scan)
+	vm.ConfigureDictionaryBoundaries(flat)
+	require.False(t, scan.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+	scan.prepareColumnUses()
+	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.columnUses)
+	vm.ConfigureDictionaryBoundaries(consumer)
+	scan.prepareColumnUses()
+	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnUnused}, scan.ctr.columnUses)
 }

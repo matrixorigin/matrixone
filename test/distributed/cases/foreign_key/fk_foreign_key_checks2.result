@@ -30,7 +30,7 @@ Cannot add or update a child row: a foreign key constraint fails
 delete from fk_foreign_key_checks2_db0.t2 where a = 3;
 Cannot delete or update a parent row: a foreign key constraint fails
 drop table fk_foreign_key_checks2_db0.t2;
-internal error: can not drop table 't2' referenced by some foreign key constraint
+Cannot drop table 't2' referenced by a foreign key constraint 'c1' on table 't1'.
 SET FOREIGN_KEY_CHECKS=0;
 insert into t1 values (5);
 insert into fk_foreign_key_checks2_db1.t3 values (5);
@@ -59,10 +59,10 @@ delete from t1 where b = 3;
 delete from fk_foreign_key_checks2_db1.t3 where b = 3;
 delete from fk_foreign_key_checks2_db0.t2 where a = 3;
 drop table fk_foreign_key_checks2_db0.t2;
-internal error: can not drop table 't2' referenced by some foreign key constraint
+Cannot drop table 't2' referenced by a foreign key constraint 'c1' on table 't1'.
 drop table t1;
 drop table fk_foreign_key_checks2_db0.t2;
-internal error: can not drop table 't2' referenced by some foreign key constraint
+Cannot drop table 't2' referenced by a foreign key constraint 'c1' on table 't3'.
 insert into fk_foreign_key_checks2_db1.t3 values (9);
 Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks2_db1.t3 values (3);
@@ -72,7 +72,7 @@ insert into fk_foreign_key_checks2_db1.t3 values (9);
 Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks2_db1.t3 values (3);
 drop table fk_foreign_key_checks2_db0.t2;
-internal error: can not drop table 't2' referenced by some foreign key constraint
+Cannot drop table 't2' referenced by a foreign key constraint 'c1' on table 't3'.
 SET FOREIGN_KEY_CHECKS=0;
 drop table fk_foreign_key_checks2_db0.t2;
 insert into fk_foreign_key_checks2_db1.t3 values (9);
@@ -86,7 +86,7 @@ insert into fk_foreign_key_checks2_db1.t3 values (10);
 delete from fk_foreign_key_checks2_db0.t2 where a = 10;
 Cannot delete or update a parent row: a foreign key constraint fails
 drop table fk_foreign_key_checks2_db0.t2;
-internal error: can not drop table 't2' referenced by some foreign key constraint
+Cannot drop table 't2' referenced by a foreign key constraint 'c1' on table 't3'.
 drop table fk_foreign_key_checks2_db1.t3;
 delete from fk_foreign_key_checks2_db0.t2 where a = 10;
 drop table fk_foreign_key_checks2_db0.t2;

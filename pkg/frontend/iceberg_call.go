@@ -27,11 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const icebergBuiltinProcedurePrefix = "iceberg_"
 const icebergRegisterAccessProcedure = "iceberg_register_access"
 const icebergUnregisterAccessProcedure = "iceberg_unregister_access"
 const IcebergMaintenanceCallExecutorRuntimeKey = "iceberg.maintenance.call.executor"
@@ -84,23 +82,12 @@ func (e IcebergMaintenanceProcedureExecutor) ExecuteParsedIcebergMaintenanceCall
 }
 
 func parseIcebergBuiltinCall(ctx context.Context, call *tree.CallStmt) (IcebergBuiltinProcedureCall, bool, error) {
-	if !isIcebergBuiltinProcedure(call) {
+	if !sqliceberg.IsBuiltinProcedure(call) {
 		return IcebergBuiltinProcedureCall{}, false, nil
 	}
-	name := strings.TrimSpace(tree.String(call.Name, dialect.MYSQL))
-	if len(call.Args) < 1 || len(call.Args) > 2 {
-		return IcebergBuiltinProcedureCall{}, true, moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires target and optional options string arguments", name)
-	}
-	target, err := icebergBuiltinProcedureStringArg(ctx, name, "target", call.Args[0])
+	name, target, options, err := sqliceberg.BuiltinProcedureArgs(ctx, call)
 	if err != nil {
 		return IcebergBuiltinProcedureCall{}, true, err
-	}
-	options := ""
-	if len(call.Args) == 2 {
-		options, err = icebergBuiltinProcedureStringArg(ctx, name, "options", call.Args[1])
-		if err != nil {
-			return IcebergBuiltinProcedureCall{}, true, err
-		}
 	}
 	if strings.EqualFold(name, icebergRegisterAccessProcedure) || strings.EqualFold(name, icebergUnregisterAccessProcedure) {
 		if options == "" {
@@ -193,13 +180,13 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	if targetAccountID != 0 && roleID == model.PrincipalUnspecifiedID && userID == model.PrincipalUnspecifiedID {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires role_id or user_id")
 	}
-	externalPrincipal := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "external_principal", "principal"))
+	externalPrincipal := firstNonEmptyIcebergAccessOption(opts, "external_principal", "principal")
 	if externalPrincipal == "" {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires external_principal")
 	}
-	endpoint := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "endpoint", "allowed_endpoint"))
-	region := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "region", "allowed_region"))
-	bucket := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "bucket", "allowed_bucket"))
+	endpoint := firstNonEmptyIcebergAccessOption(opts, "endpoint", "allowed_endpoint")
+	region := firstNonEmptyIcebergAccessOption(opts, "region", "allowed_region")
+	bucket := firstNonEmptyIcebergAccessOption(opts, "bucket", "allowed_bucket")
 	if endpoint == "" || region == "" || bucket == "" {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires endpoint, region, and bucket")
 	}
@@ -467,7 +454,7 @@ func icebergAccessUint64Option(ctx context.Context, opts map[string]string, key 
 }
 
 func icebergAccessPolicyState(ctx context.Context, opts map[string]string) (string, error) {
-	state := strings.ToLower(strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "policy_state", "state")))
+	state := strings.ToLower(firstNonEmptyIcebergAccessOption(opts, "policy_state", "state"))
 	if state == "" {
 		return model.ResidencyPolicyEnabled, nil
 	}
@@ -530,30 +517,6 @@ func icebergMaintenanceCallExecutorFromRuntimeExact(service string) (IcebergMain
 	}
 	executor, ok := value.(IcebergMaintenanceCallExecutor)
 	return executor, ok
-}
-
-func isIcebergBuiltinProcedure(call *tree.CallStmt) bool {
-	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() {
-		return false
-	}
-	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
-	return strings.HasPrefix(name, icebergBuiltinProcedurePrefix)
-}
-
-func icebergBuiltinProcedureStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
-	var out string
-	switch value := expr.(type) {
-	case *tree.StrVal:
-		out = strings.TrimSpace(value.String())
-	case *tree.NumVal:
-		if value.Kind() == tree.Str {
-			out = strings.TrimSpace(value.String())
-		}
-	}
-	if out == "" {
-		return "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires %s as a string literal", procedure, argName)
-	}
-	return out, nil
 }
 
 func icebergMaintenanceProcedureResultSet(operation maintenance.Operation, result maintenance.Result) *MysqlResultSet {

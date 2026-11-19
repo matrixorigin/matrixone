@@ -39,6 +39,12 @@ type SQLExecutor interface {
 	ExecTxn(ctx context.Context, execFunc func(txn TxnExecutor) error, opts Options) error
 }
 
+// IndexViewBindingExecutor is a private bind-only operation used to inspect an
+// already-resolved view before index maintenance. The result is never run.
+type IndexViewBindingExecutor interface {
+	BindIndexMaintenanceView(ctx context.Context, sql string, opts Options) error
+}
+
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
 	Use(db string)
@@ -51,32 +57,35 @@ type TxnExecutor interface {
 
 // Options execute options.
 type Options struct {
-	disableIncrStatement    bool
-	txnOp                   client.TxnOperator
-	database                string
-	accountID               uint32
-	hasAccountID            bool
-	minCommittedTS          timestamp.Timestamp
-	innerTxn                bool
-	waitCommittedLogApplied bool
-	timeZone                *time.Location
-	statementOptions        StatementOption
-	txnOpts                 []client.TxnOption
-	lower                   *int64
-	streaming               bool
-	stream_chan             chan Result
-	error_chan              chan error
-	sql                     string
-	forceRebuildPlan        bool
-	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	adjustTableExtraFunc    func(*api.SchemaExtra) error
-	keepTxnAlive            bool
-	lockWaitTimeout         time.Duration
-	lockWaitTimeoutSet      bool
-	txnIsolation            txn.TxnIsolation
-	txnIsolationSet         bool
-	txnMode                 txn.TxnMode
-	txnModeSet              bool
+	indexMaintenanceSpec      *IndexMaintenanceSpec
+	indexMaintenanceValidator IndexMaintenanceValidator
+	indexRelationPolicy       *IndexRelationPolicy
+	disableIncrStatement      bool
+	txnOp                     client.TxnOperator
+	database                  string
+	accountID                 uint32
+	hasAccountID              bool
+	minCommittedTS            timestamp.Timestamp
+	innerTxn                  bool
+	waitCommittedLogApplied   bool
+	timeZone                  *time.Location
+	statementOptions          StatementOption
+	txnOpts                   []client.TxnOption
+	lower                     *int64
+	streaming                 bool
+	stream_chan               chan Result
+	error_chan                chan error
+	sql                       string
+	forceRebuildPlan          bool
+	resolveVariableFunc       func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	adjustTableExtraFunc      func(*api.SchemaExtra) error
+	keepTxnAlive              bool
+	lockWaitTimeout           time.Duration
+	lockWaitTimeoutSet        bool
+	txnIsolation              txn.TxnIsolation
+	txnIsolationSet           bool
+	txnMode                   txn.TxnMode
+	txnModeSet                bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is
@@ -100,6 +109,7 @@ type StatementOption struct {
 	// catalog execution scope and must not be used as SQL file authority.
 	accountName               string
 	roleName                  string
+	userName                  string
 	disableLog                bool
 	ignoreForeignKey          bool
 	ignorePublish             bool

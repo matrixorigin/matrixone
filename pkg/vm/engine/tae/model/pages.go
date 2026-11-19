@@ -103,18 +103,17 @@ type persistedTransferFile struct {
 
 type TransferHashPage struct {
 	common.RefHelper
-	bornTS      atomic.Pointer[time.Time]
-	id          *common.ID // not include blk offset
-	objects     []*objectio.ObjectId
-	hashmap     atomic.Pointer[api.TransferMap]
-	pathMu      sync.Mutex
-	path        Path
-	pathFile    *persistedTransferFile
-	pathClosed  bool
-	isTransient bool
-	fs          fileservice.FileService
-	ttl         time.Duration
-	diskTTL     time.Duration
+	bornTS     atomic.Pointer[time.Time]
+	id         *common.ID // not include blk offset
+	objects    []*objectio.ObjectId
+	hashmap    atomic.Pointer[api.TransferMap]
+	pathMu     sync.Mutex
+	path       Path
+	pathFile   *persistedTransferFile
+	pathClosed bool
+	fs         fileservice.FileService
+	ttl        time.Duration
+	diskTTL    time.Duration
 }
 
 func GetTransferFileName() string {
@@ -156,19 +155,18 @@ func GetTransferFS(fs *fileservice.TmpFileService) (fileservice.FileService, err
 	)
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *fileservice.TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, _ bool, fs *fileservice.TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	transferFS, err := GetTransferFS(fs)
 	if err != nil {
 		panic(err)
 	}
 	page := &TransferHashPage{
-		id:          id,
-		isTransient: isTransient,
-		fs:          transferFS,
-		ttl:         ttl,
-		diskTTL:     diskTTL,
-		objects:     createdObjIDs,
+		id:      id,
+		fs:      transferFS,
+		ttl:     ttl,
+		diskTTL: diskTTL,
+		objects: createdObjIDs,
 	}
 
 	page.bornTS.Store(&ts)

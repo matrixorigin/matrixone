@@ -296,6 +296,106 @@ func TestGetOnFlyClosesCreatedClientWhenPoolClosesConcurrently(t *testing.T) {
 	require.Equal(t, int32(1), closed.Load())
 }
 
+func TestGetOnFlyContextCancelsClientCreationRetry(t *testing.T) {
+	backend := NewMockBackend()
+	var fail atomic.Bool
+	var attempts atomic.Int32
+	started := make(chan struct{})
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			if fail.Load() {
+				if attempts.Add(1) == 1 {
+					close(started)
+				}
+				return nil, moerr.NewInternalErrorNoCtx("client unavailable")
+			}
+			return newMockBackendClient(backend), nil
+		}))
+	cfg.ClientRetryInterval = 2 * time.Second
+	pool := newClientPool(&cfg)
+	defer pool.Close()
+	fail.Store(true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := pool.GetOnFlyContext(ctx)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("client creation retry did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("client creation retry ignored cancellation")
+	}
+	require.EqualValues(t, 1, attempts.Load())
+}
+
+func TestGetOnFlyContextCancelsInFlightFactory(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return newMockBackendClient(backend), nil
+		}),
+		WithConfigOptContextClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+	pool := newClientPool(&cfg)
+	defer pool.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := pool.GetOnFlyContext(ctx)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("context-aware client factory did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("client factory ignored cancellation")
+	}
+}
+
+func TestGetContextStopsWaitingForPoolOnCancellation(t *testing.T) {
+	backend := NewMockBackend()
+	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigMockClient(backend))
+	pool := newClientPool(&cfg)
+	defer pool.Close()
+	checkedOut, err := pool.Get()
+	require.NoError(t, err)
+	defer checkedOut.Putback()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := pool.GetContext(ctx)
+		result <- err
+	}()
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("pool checkout ignored caller cancellation")
+	}
+}
+
 type closeCountingClient struct {
 	logservice.Client
 	closed *atomic.Int32

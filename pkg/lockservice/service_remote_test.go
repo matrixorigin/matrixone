@@ -1192,7 +1192,6 @@ func TestHandleForwardLockRemoteSendCanceledByServiceClose(t *testing.T) {
 				bind.Table,
 				newRemoteLockTable(
 					s.serviceID,
-					time.Second,
 					bind,
 					client,
 					s.handleBindChanged,

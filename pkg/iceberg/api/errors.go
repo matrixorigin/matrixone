@@ -109,6 +109,19 @@ func (e *IcebergError) Unwrap() error {
 	return e.Cause
 }
 
+// ErrorCategory returns the Iceberg error code used by job accounting.
+// An unclassified error is reported as internal; nil has no category.
+func ErrorCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	var icebergErr *IcebergError
+	if stderrors.As(err, &icebergErr) && icebergErr.Code != "" {
+		return string(icebergErr.Code)
+	}
+	return string(ErrInternal)
+}
+
 func ToMOErr(ctx context.Context, err error) error {
 	if err == nil {
 		return nil

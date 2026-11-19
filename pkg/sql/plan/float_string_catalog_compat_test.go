@@ -88,7 +88,7 @@ func TestLegacyFloatStringCatalogExecution(t *testing.T) {
 			var expr *planpb.Expr
 			var err error
 			if tc.name == "default" {
-				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], compiler.GetProcess(), false)
+				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], execution.DbName, compiler.GetProcess(), false)
 			} else {
 				expr, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(execution.Cols[1].GeneratedCol.Expr), false)
 			}
@@ -240,7 +240,7 @@ func TestLegacyFloatStringCatalogNativeProvenance(t *testing.T) {
 		"create table t(a double, g varchar(100) collate utf8mb4_unicode_ci generated always as (concat(a/1) collate utf8mb4_unicode_ci) stored)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	source := built.GetDdl().GetCreateTable().GetTableDef()
 	col := source.Cols[1]
@@ -293,7 +293,7 @@ func TestTableDumpLegacyFloatStringBindings(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, floatDivisionDDL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	target := built.GetDdl().GetCreateTable().GetTableDef()
 	for _, def := range []*planpb.TableDef{source, target} {

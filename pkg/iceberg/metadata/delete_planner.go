@@ -89,7 +89,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 	if memoryUsed != nil {
 		// dataByPath and seen are transient but coexist with the retained task
 		// slices during pairing. Reserve their bucket/header overhead up front.
-		indexMemory := saturatingPlanningMul(int64(len(dataTasks)+len(deleteEntries)), 128)
+		indexMemory := api.SaturatingMemoryMul(int64(len(dataTasks)+len(deleteEntries)), 128)
 		if err := reservePlanningMemory(memoryUsed, indexMemory, memoryLimit, mode); err != nil {
 			return nil, err
 		}
@@ -108,7 +108,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 		if dataPath == "" {
 			return nil
 		}
-		key := deleteTaskIdentity(entry.manifestPath, file.FilePath, dataPath)
+		key := api.LengthPrefixedKey(entry.manifestPath, file.FilePath, dataPath)
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -116,7 +116,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 			return planningLimitExceeded("delete_tasks", len(out)+1, maxTasks, mode)
 		}
 		if memoryUsed != nil {
-			taskMemory := saturatingPlanningAdd(
+			taskMemory := api.SaturatingNonnegativeAdd(
 				planningDataFileMemory(file),
 				int64(192+len(key)+len(entry.manifestPath)+len(dataPath)+len(credentialScope)),
 			)
@@ -204,16 +204,6 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 		}
 	}
 	return out, nil
-}
-
-func deleteTaskIdentity(parts ...string) string {
-	var out strings.Builder
-	for _, part := range parts {
-		out.WriteString(strconv.Itoa(len(part)))
-		out.WriteByte(':')
-		out.WriteString(part)
-	}
-	return out.String()
 }
 
 func addHiddenDeleteColumnMappings(mappings []api.IcebergColumnMapping, schema api.Schema, deleteTasks []api.DeleteFileTask) ([]api.IcebergColumnMapping, error) {
@@ -345,22 +335,4 @@ func unsignedPartitionValueToken(value uint64) string {
 		return "i:" + strconv.FormatInt(int64(value), 10)
 	}
 	return "u:" + strconv.FormatUint(value, 10)
-}
-
-func firstNonZeroInt(values ...int) int {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
-}
-
-func firstNonZeroInt64(values ...int64) int64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
 }

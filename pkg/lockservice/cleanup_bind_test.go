@@ -177,7 +177,7 @@ func TestCleanupBindLookupRetainsLiveOwnerUntilUnlockCompletes(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, owner.activeTxnHolder.hasActiveTxn(txn))
 			client := &failOnceSendClient{Client: origin.remote.client, method: pb.Method_Unlock, err: syscall.EPIPE}
-			remote := newRemoteLockTable(origin.serviceID, time.Second, before, client,
+			remote := newRemoteLockTable(origin.serviceID, before, client,
 				func(pb.LockTable) { t.Fatal("live owner must not be replaced") }, getLogger(""))
 			cleanupTxn := newActiveTxn(txn, string(txn), newFixedSlicePool(8), "")
 			defer reuse.Free(cleanupTxn, nil)

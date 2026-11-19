@@ -426,26 +426,14 @@ func GetRangeShuffleIndexUnsignedMinMax(minVal, maxVal, currentVal uint64, upple
 }
 
 func GetRangeShuffleIndexSignedSlice(val []int64, currentVal int64) uint64 {
-	if currentVal <= val[0] {
-		return 0
-	}
-	left := 0
-	right := len(val) - 1
-	for left < right {
-		mid := (left + right) >> 1
-		if currentVal > val[mid] {
-			left = mid + 1
-		} else {
-			right = mid
-		}
-	}
-	if currentVal > val[right] {
-		right += 1
-	}
-	return uint64(right)
+	return rangeShuffleIndexSlice(val, currentVal)
 }
 
 func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
+	return rangeShuffleIndexSlice(val, currentVal)
+}
+
+func rangeShuffleIndexSlice[T ~int64 | ~uint64](val []T, currentVal T) uint64 {
 	if currentVal <= val[0] {
 		return 0
 	}
@@ -970,6 +958,14 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	resetShuffleStrategy(node.Stats.HashmapStats)
 	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+	// Recursive members exchange a complete frontier each round. A shuffle
+	// dispatch can forward its Last marker while partial bucket batches are
+	// still buffered, letting a member completion overtake its rows. Keep the
+	// recursive subtree on the join's broadcast path so the round marker remains
+	// ordered after all frontier data.
+	if builder.hasRecursiveScan(node) {
 		return
 	}
 

@@ -485,3 +485,29 @@ func TestJSONArrayAggOpaqueValueTypeCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONAggregatesWidenLowPrecisionValues(t *testing.T) {
+	for _, tc := range []struct {
+		input types.Type
+		want  types.Type
+	}{
+		{types.T_float16.ToType(), types.T_float32.ToType()},
+		{types.New(types.T_array_float8, 32, 0), types.New(types.T_array_float32, 32, 0)},
+	} {
+		t.Run(tc.input.Oid.String(), func(t *testing.T) {
+			ctx := context.Background()
+			array, err := GetFunctionByName(ctx, "json_arrayagg", []types.Type{tc.input})
+			require.NoError(t, err)
+			targets, shouldCast := array.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{tc.want}, targets)
+
+			key := types.T_varchar.ToType()
+			object, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{key, tc.input})
+			require.NoError(t, err)
+			targets, shouldCast = object.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{key, tc.want}, targets)
+		})
+	}
+}

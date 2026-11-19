@@ -161,15 +161,10 @@ type branchIdentity struct {
 // or one MERGE/PICK source, with its physical routing resolved by the
 // shared classification boundary.
 type branchOperand struct {
-	userDb    string
-	userTable string
-
 	physAccount uint32
 	physDb      string
-	tableName   string
 
 	ctx context.Context
-	rel engine.Relation
 
 	isSubscription bool
 }

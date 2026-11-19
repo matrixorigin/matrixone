@@ -188,9 +188,27 @@ func (s *service) applyViewMetadataAdmission(
 	if startupWaiting {
 		return nil
 	}
-	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
-		!viewMetadataCatalogFenceRetryable(err, false) {
-		return err
+	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil {
+		s.startMu.Lock()
+		upgradeActive := s.startInProgress && s.startUpgradeActive
+		s.startMu.Unlock()
+		if !viewMetadataCatalogFenceRetryable(err, upgradeActive) {
+			// A delayed response for an older epoch must not terminate the
+			// current startup. Serialize this check with snapshot publication.
+			s.lockViewMetadataAdmission()
+			current := s.viewMetadataAdmission.Load()
+			if current != nil && current.Generation == copy.Generation && current.Epoch == copy.Epoch &&
+				current.RevalidationRequired && current.CatalogFencedEpoch < current.Epoch &&
+				s.viewMetadataCatalogFencedEpoch.Load() < current.Epoch {
+				s.startMu.Lock()
+				if s.startInProgress && s.startCancel != nil {
+					s.startCancel(err)
+				}
+				s.startMu.Unlock()
+			}
+			s.viewMetadataAdmissionMu.Unlock()
+			return err
+		}
 	}
 	s.publishPersistedExpressionAuthoringFloor(&copy)
 	return nil

@@ -119,7 +119,7 @@ create temporary table temp_ddl_stale.stale (id int primary key);
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 -- @session
--- @regex("no such table",true)
+-- @regex("Unknown table 'temp_ddl_stale.stale'",true)
 drop table temp_ddl_stale.stale;
 create temporary table temp_ddl_stale.stale (id int primary key);
 insert into temp_ddl_stale.stale values (11);
@@ -128,7 +128,7 @@ select id from temp_ddl_stale.stale;
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 -- @session
--- @regex("no such table",true)
+-- @regex("Unknown table 'temp_ddl_stale.stale'",true)
 drop temporary table temp_ddl_stale.stale;
 create temporary table temp_ddl_stale.stale (id int primary key);
 -- @session:id=2&user=sys:dump&password=111
@@ -151,7 +151,7 @@ create procedure temp_ddl_transactions.drop_missing_temp() 'begin drop temporary
 drop database temp_ddl_stale;
 create database temp_ddl_stale;
 -- @session
--- @regex("no such table",true)
+-- @regex("Unknown table 'temp_ddl_stale.stale'",true)
 call temp_ddl_transactions.drop_missing_temp();
 create temporary table temp_ddl_stale.stale (id int primary key);
 insert into temp_ddl_stale.stale values (33);

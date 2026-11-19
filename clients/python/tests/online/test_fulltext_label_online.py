@@ -373,7 +373,7 @@ class TestFulltextLabelOnline(unittest.TestCase):
 
         # Verify SQL contains AS clause
         self.assertIn("AS verification_score", sql)
-        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("MATCH(`title`, `content`)", sql)
         self.assertIn("AGAINST(", sql)
 
     def test_matrixone_compatibility_online(self):

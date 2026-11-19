@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,38 +57,7 @@ type worker struct {
 	ctx         context.Context
 	closed      atomic.Bool
 	stopOnce    sync.Once
-	admissions  workerAdmissionGate
-}
-
-type workerAdmissionGate struct {
-	mu sync.RWMutex
-	wg sync.WaitGroup
-}
-
-// enter registers a sender before it can block. seal excludes new senders,
-// cancels blocked ones, and waits until no sender can arrive after draining.
-func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
-	if closed.Load() {
-		return false
-	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	if closed.Load() {
-		return false
-	}
-	g.wg.Add(1)
-	return true
-}
-
-func (g *workerAdmissionGate) leave() {
-	g.wg.Done()
-}
-
-func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
-	g.mu.Lock()
-	cancel()
-	g.mu.Unlock()
-	g.wg.Wait()
+	admissions  stopper.AdmissionGate
 }
 
 func NewWorker(exec *ISCPTaskExecutor, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
@@ -134,10 +104,10 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	if iteration == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil ISCP iteration")
 	}
-	if !w.admissions.enter(&w.closed) {
+	if !w.admissions.Enter(&w.closed) {
 		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
 	}
-	defer w.admissions.leave()
+	defer w.admissions.Leave()
 	select {
 	case w.taskChan <- iteration:
 		return nil
@@ -289,7 +259,7 @@ func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobSt
 func (w *worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
-		w.admissions.seal(w.cancel)
+		w.admissions.Seal(w.cancel)
 		w.wg.Wait()
 		for {
 			select {

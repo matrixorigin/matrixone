@@ -56,7 +56,51 @@ func scanHasFullTextBooleanComposition(scan *plan.Node) bool {
 			return true
 		}
 	}
+	return scanHasUndrivenFullTextScoreFilter(scan)
+}
+
+// scanHasUndrivenFullTextScoreFilter reports a scan predicate such as `MATCH(...) = 0`,
+// `< c` or `>= 0` whose MATCH no AND-reachable bare or membership-implying predicate drives.
+// A relevance of 0 can satisfy it, so an INNER index stream would drop rows; only the
+// composition path, which LEFT-attaches the score, can answer it (#31604).
+func scanHasUndrivenFullTextScoreFilter(scan *plan.Node) bool {
+	var drivers []*plan.Expr
+	for _, expr := range scan.FilterList {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "fulltext_match" {
+			drivers = append(drivers, expr)
+			continue
+		}
+		drivers = collectDrivingFullTextMatches(expr, drivers)
+	}
+	for _, expr := range scan.FilterList {
+		for _, match := range collectNestedFullTextMatches(expr, nil) {
+			driven := false
+			for _, d := range drivers {
+				if sameScanFullTextMatch(match.GetF(), d.GetF()) {
+					driven = true
+					break
+				}
+			}
+			if !driven {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+func sameScanFullTextMatch(a, b *plan.Function) bool {
+	if len(a.Args) != len(b.Args) || len(a.Args) < 2 ||
+		!fullTextMatchArgEqual(a.Args[0], b.Args[0]) || !fullTextMatchArgEqual(a.Args[1], b.Args[1]) {
+		return false
+	}
+	for i := 2; i < len(a.Args); i++ {
+		c1, c2 := a.Args[i].GetCol(), b.Args[i].GetCol()
+		if c1 == nil || c2 == nil || c1.RelPos != c2.RelPos || c1.ColPos != c2.ColPos {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) fullTextBooleanUnsupported() error {

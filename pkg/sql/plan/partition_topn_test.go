@@ -112,7 +112,7 @@ func TestPartitionTopNPreparedPlanFallsBack(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL, formatPartitionTopNSQL("rn <= 2"), 1)
 	require.NoError(t, err)
-	logicPlan, err := BuildPlan(ctx, stmt, true)
+	logicPlan, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	require.Nil(t, findBoundedPartition(logicPlan.GetQuery()))
 }
@@ -128,7 +128,7 @@ func buildPartitionTopNPlan(t *testing.T, predicate string, prepared bool) *plan
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	logicPlan, err := BuildPlan(ctx, stmt, true)
+	logicPlan, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	return logicPlan.GetQuery()
 }

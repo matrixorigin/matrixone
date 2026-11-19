@@ -281,7 +281,7 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			bindCtx := NewBindContext(builder, nil)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx, NewDMLContext())
 			if test.wantRoute == updatePlannerModern {
 				require.NoError(t, err)
 				return
@@ -361,7 +361,7 @@ func TestModernUpdatePlansAvoidPreInsertKeyStaging(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-				_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+				_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 				require.NoError(t, err)
 				query = builder.qry
 			} else {
@@ -443,7 +443,7 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		return err
 	}
 	assertRejected := func(t *testing.T, err error) {
@@ -586,7 +586,7 @@ func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.NoError(t, err)
 
 			query := builder.qry
@@ -690,7 +690,7 @@ func TestUpdateIrregularIndexLockPreservesMultiTargetSelectors(t *testing.T) {
 	defer stmt.Free()
 
 	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 	require.NoError(t, err)
 	builder.qry.Steps = append(builder.qry.Steps, rootID)
 	query, err := builder.createQuery()
@@ -749,7 +749,7 @@ func TestUpdateWithoutIrregularIndexKeepsLockAtDMLInput(t *testing.T) {
 	defer stmt.Free()
 
 	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 	require.NoError(t, err)
 
 	root := builder.qry.Nodes[rootID]
@@ -888,7 +888,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		require.Equal(t, 1, countUpdateFkPlanNodes(builder.qry, planpb.Node_PRE_INSERT))
 		require.Equal(t, 1, countUpdateFkAsserts(builder.qry))
@@ -1090,7 +1090,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.ErrorContains(t, err, "complete child update row closure")
 			route, reason, _ := classifyUpdatePlannerError(err)
 			require.Equal(t, updatePlannerRejected, route)
@@ -1173,7 +1173,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.ErrorContains(t, err, "child column constrained by another foreign key")
 		route, _, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerRejected, route)
@@ -1202,7 +1202,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.ErrorContains(t, err, "optimistic transaction")
 			route, reason, _ := classifyUpdatePlannerError(err)
 			require.Equal(t, updatePlannerRejected, route)
@@ -1226,7 +1226,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		require.True(t, builder.qry.GetHasForeignKeyAction())
 		require.GreaterOrEqual(t, countUpdateFkPlanNodes(builder.qry, planpb.Node_MULTI_UPDATE), 2)
@@ -1288,7 +1288,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 
 		require.True(t, slices.ContainsFunc(builder.qry.Nodes, func(node *planpb.Node) bool {
@@ -1360,7 +1360,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 
 		found := false
@@ -1441,7 +1441,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.ErrorContains(t, err, "multiple parent foreign key actions targeting the same child table")
 		route, reason, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerRejected, route)
@@ -1472,7 +1472,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.NoError(t, err)
 			require.Equal(t, test.ambiguous, updateFkPlanContainsTypedAssert(
 				builder.qry, foreignKeyAmbiguousMappingAssert))
@@ -1922,7 +1922,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		return builder.qry
 	}
@@ -2043,6 +2043,78 @@ func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
 	require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
 	require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+}
+
+func TestRepeatedPhysicalTargetGeneratedProtectedKeyGuard(t *testing.T) {
+	assignment := tree.NewDefaultVal(nil)
+	for _, tc := range []struct {
+		name              string
+		first, second     []string
+		configure         func(*planpb.TableDef)
+		conflict, invalid bool
+	}{
+		{name: "transitive primary", first: []string{"source"}, second: []string{"other"}, conflict: true},
+		{name: "source on second alias", first: []string{"other"}, second: []string{"source"}, conflict: true},
+		{name: "composite primary", first: []string{"source"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Pkey.Names = []string{"tail", "late_generated"} }, conflict: true},
+		{name: "unrelated payload", first: []string{"other"}, second: []string{"other"}},
+		{name: "read only sibling", first: []string{"source"}},
+		{name: "generated DEFAULT sibling is not a writer", first: []string{"source"}, second: []string{"middle"}},
+		{name: "generated DEFAULT alongside payload", first: []string{"source"}, second: []string{"middle", "other"}, conflict: true},
+		{name: "automatic generated input", first: []string{"other"}, second: []string{"other"}, configure: func(d *planpb.TableDef) {
+			d.Cols[0].OnUpdate = &planpb.OnUpdate{Expr: MakePlan2Int64ConstExprWithType(1)}
+		}, conflict: true},
+		{name: "nil automatic expression", first: []string{"other"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Cols[0].OnUpdate = &planpb.OnUpdate{} }},
+		{name: "automatic protected root", first: []string{"source"}, second: []string{"late_source"}, configure: func(d *planpb.TableDef) {
+			d.Pkey.Names = []string{"other"}
+			d.Cols[5].OnUpdate = &planpb.OnUpdate{Expr: MakePlan2Int64ConstExprWithType(1)}
+		}, conflict: true},
+		{name: "generated partition root", first: []string{"source"}, second: []string{"late_source"}, configure: func(d *planpb.TableDef) {
+			d.Pkey = nil
+			d.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: generatedColumnRefExpr(d.Cols[2].Typ, 2, "tail")}}}
+		}, conflict: true},
+		{name: "malformed generated metadata", first: []string{"source"}, second: []string{"other"}, configure: func(d *planpb.TableDef) { d.Cols[2].GeneratedCol.Expr.GetCol().ColPos = 99 }, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := generatedDependencyTestTable()
+			d.TblId = 32827
+			d.Pkey = &planpb.PrimaryKeyDef{Names: []string{"tail"}, PkeyColName: "tail"}
+			if tc.configure != nil {
+				tc.configure(d)
+			}
+			updates := []map[string]tree.Expr{make(map[string]tree.Expr), make(map[string]tree.Expr)}
+			for i, names := range [][]string{tc.first, tc.second} {
+				for _, name := range names {
+					updates[i][name] = assignment
+				}
+			}
+			ctx := &DMLContext{aliases: []string{"a", "b"}, tableDefs: []*planpb.TableDef{d, d}, updateCol2Expr: updates}
+			err := validateRepeatedPhysicalTargetPrimaryKeyUpdate(context.Background(), ctx)
+			if tc.conflict {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict), "%v", err)
+				moErr := err.(*moerr.Error)
+				require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
+				require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+				require.ErrorContains(t, err, "'a' and 'b'")
+			} else if tc.invalid {
+				require.ErrorContains(t, err, "invalid generated column reference position 99")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, ctx.updateCol2Expr[0], len(tc.first), "the guard must not consume assignments")
+			require.Len(t, ctx.updateCol2Expr[1], len(tc.second))
+		})
+	}
+}
+
+func TestRepeatedPhysicalTargetGeneratedPrimaryKeyPlanning(t *testing.T) {
+	for _, keyword := range []string{"UPDATE", "UPDATE IGNORE"} {
+		t.Run(keyword, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			configureMockGeneratedPrimaryKey(t, mock)
+			_, err := runOneStmt(mock, t, keyword+" constraint_test.t_on_update_gen a JOIN constraint_test.t_on_update_gen b ON a.id=b.id SET a.val=2,b.updated_at=NULL")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict), "%v", err)
+		})
+	}
 }
 
 func TestRepeatedPhysicalTargetPartitionKeyUpdateIsRejected(t *testing.T) {

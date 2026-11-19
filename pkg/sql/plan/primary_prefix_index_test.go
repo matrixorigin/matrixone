@@ -114,6 +114,8 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 			}
 			b := makeRangeFilterExpr(tag, 2, op, 2)
 			b.Selectivity = tc.secondarySel
+			bindEncodedIndexCostFilterTypes(t, builder.GetContext(), table, a)
+			bindEncodedIndexCostFilterTypes(t, builder.GetContext(), table, b)
 			node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{a, b}}
 			scan := builder.appendNode(node, NewBindContext(builder, nil))
 			node = builder.qry.Nodes[scan]
@@ -124,7 +126,8 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 			if tc.force {
 				require.NoError(t, builder.recordIndexHints(scan, table, []*tree.IndexHint{{HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"uk_ab"}}}))
 			}
-			got := builder.applyIndicesForFiltersRegularIndex(scan, node, map[[2]int32]int{{tag, 1}: 1, {tag, 2}: 1, {tag, table.Name2ColIndex["payload"]}: 1}, map[[2]int32]*pb.Expr{})
+			got, indexErr := builder.applyIndicesForFiltersRegularIndex(scan, node, map[[2]int32]int{{tag, 1}: 1, {tag, 2}: 1, {tag, table.Name2ColIndex["payload"]}: 1}, map[[2]int32]*pb.Expr{})
+			require.NoError(t, indexErr)
 			if tc.wantIndex {
 				require.NotEqual(t, scan, got)
 				require.Equal(t, pb.Node_INDEX, builder.qry.Nodes[got].JoinType)
@@ -165,7 +168,7 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: table, FilterList: []*pb.Expr{a, c}}}
 			node := builder.qry.Nodes[0]
 			for range 2 {
-				parts, _ := builder.collectCompositePartBlockFilters(0, false)
+				parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 				if tc.indexed {
 					require.Empty(t, parts, "fresh deferred scans must not take discarded early snapshots")
 				}
@@ -183,7 +186,7 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			chosen := &pb.HashMapStats{HashmapSize: 17, Shuffle: true, ShuffleType: pb.ShuffleType_Range}
 			node.Stats = &pb.Stats{HashmapStats: chosen}
 			for range 2 {
-				componentFilters, needsLate := builder.collectCompositePartBlockFilters(0, true)
+				componentFilters, needsLate := builder.collectCompositePartBlockFilters(0, true, nil)
 				require.Equal(t, tc.indexed, needsLate)
 				builder.mergeFiltersOnCompositeKey(0, false)
 				builder.retainConsumedCompositePartBlockFilters(componentFilters)
@@ -196,7 +199,13 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 				require.Empty(t, node.BlockFilterList)
 			} else {
 				requireFuncNames(t, node.BlockFilterList, "prefix_eq", "=")
-				require.Len(t, node.BlockFilterList, 2, "compound and consumed component pruning survive without duplicates")
+				wantFilters := 2
+				if !tc.indexed {
+					// 非延迟路径重算统计时，也应保留普通列 c 的范围裁剪。
+					wantFilters++
+					requireFuncNames(t, node.BlockFilterList, ">")
+				}
+				require.Len(t, node.BlockFilterList, wantFilters, "compound and consumed component pruning survive without duplicates")
 			}
 			refs := make(map[[2]int32]int)
 			builder.countColRefs(0, refs)
@@ -339,10 +348,10 @@ func TestDeferredLogicalNormalization(t *testing.T) {
 		}
 		require.Same(t, chosen, node.Stats.HashmapStats)
 		require.Equal(t, tc.want, node.FilterList[0].GetF().Func.ObjName)
-		early, _ := builder.collectCompositePartBlockFilters(0, false)
+		early, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 		require.Empty(t, early)
 		if fn := node.FilterList[0].GetF(); fn.Func.ObjName == "in" && fn.Args[0].GetCol().ColPos == 0 {
-			late, needsLate := builder.collectCompositePartBlockFilters(0, true)
+			late, needsLate := builder.collectCompositePartBlockFilters(0, true, nil)
 			require.True(t, needsLate)
 			require.Len(t, late[0], 1)
 			require.Equal(t, "in", late[0][0].copy.GetF().Func.ObjName)
@@ -355,13 +364,13 @@ func TestDeferredLogicalNormalization(t *testing.T) {
 	}
 	builder.optimizerHints = &OptimizerHints{blockFilter: 2}
 	builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{a1}}}
-	candidates, needsLate := builder.collectCompositePartBlockFilters(0, true)
+	candidates, needsLate := builder.collectCompositePartBlockFilters(0, true, nil)
 	require.True(t, needsLate)
 	require.Empty(t, candidates)
 	builder.mergeFiltersOnCompositeKey(0, false)
 	requireFuncNames(t, builder.qry.Nodes[0].FilterList, "prefix_eq")
 	table.Indexes = nil
-	candidates, needsLate = builder.collectCompositePartBlockFilters(0, true)
+	candidates, needsLate = builder.collectCompositePartBlockFilters(0, true, nil)
 	require.False(t, needsLate)
 	require.Empty(t, candidates)
 }

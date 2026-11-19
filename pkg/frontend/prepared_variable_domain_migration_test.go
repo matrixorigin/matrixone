@@ -167,7 +167,7 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 				prepared.PrepareStmt, false, &preparedExecutionRetry{
 					bindings: cw.paramBindings, paramVals: cw.paramVals,
 					preparedPlan: prepared.PreparePlan.GetDcl().GetPrepare().Plan,
-				})
+				}, nil)
 			require.NoError(t, err)
 			retryQuery := retryPlan.GetQuery()
 			retryProjects := retryQuery.Nodes[retryQuery.Steps[len(retryQuery.Steps)-1]].ProjectList

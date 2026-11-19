@@ -9,9 +9,15 @@ The existing `CI Required` aggregate enforces the SDK call's result, including
 failures, cancellations and missing results. SDK-only skips do not provide kernel
 coverage or online SDK certification.
 
+The supported SQLAlchemy minimum is **1.4.54**. An exact 1.4.54 cell
+runs the full offline contracts and asserts the installed version; the Python
+3.8 installed-core cell also pins that minimum. SQLAlchemy 1.4.24 fails verified
+escaped expanding-bind and cancelled-connection cleanup contracts.
+
 Offline contracts run on Python 3.10/3.12 with SQLAlchemy 1.4/2.0 and Python
 3.11/3.12 with SQLAlchemy 2.1 (which requires Python >=3.11). An additional Python
-3.12 cell fixes SQLAlchemy at 2.0.43 for the pre-ping regression. Each cell runs
+3.12 cell fixes SQLAlchemy at 2.0.43 with PyMySQL 1.2.3 and aiomysql 0.3.2
+for pre-ping and binary binding, asserting all three distribution versions. Each cell runs
 `scripts/run_contracts.py`, which records source/dependency provenance and rejects
 failures, errors, skips, empty selections and source changes during execution.
 Analytics offline checks run separately; their online-only skips do not weaken

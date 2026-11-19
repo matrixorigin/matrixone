@@ -47,6 +47,8 @@ func installTopTestAllocation(
 ) topTestAllocation {
 	t.Helper()
 	proc.Base.Lim.Size = int64(limit)
+	// Tests that exercise spill need disk capacity independently of the memory limit.
+	proc.Base.Lim.SpillSize = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)

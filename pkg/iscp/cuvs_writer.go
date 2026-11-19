@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -75,6 +76,9 @@ type CuvsCdcWriter struct {
 	colMetaJSON     string
 	includeBytesPer int
 	pendingRecords  []byte
+	// toFloat16 reports that the index stores the vecf32 base as float16.
+	toFloat16 bool
+	ignored   *ignoredRows
 }
 
 // NewCuvsCdcWriter constructs a CuvsCdcWriter from the per-(table,
@@ -91,9 +95,9 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 			"%s cuvs writer: index table only supports one primary key", algoName))
 	}
-	if len(indexdefs) != 2 {
+	if len(indexdefs) < 2 || len(indexdefs) > 3 {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"%s cuvs writer: index table must have 2 secondary tables", algoName))
+			"%s cuvs writer: index table must have 2 or 3 secondary tables", algoName))
 	}
 
 	idxdef := indexdefs[0]
@@ -142,6 +146,8 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 	}
 	w.dimension = vecTyp.Width
 	w.vecBytesPer = int(vecTyp.Width) * baseElemSize
+	w.toFloat16 = w.baseType == types.T_array_float32 &&
+		stringFromAlgoParams(idxdef.IndexAlgoParams, catalog.Quantization) == metric.Quantization_F16_Str
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.
@@ -164,10 +170,16 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 // column names from indexAlgoParams (key catalog.IncludedColumns).
 // Returns "" if absent or unparseable.
 func includedColumnsFromAlgoParams(indexAlgoParams string) string {
+	return stringFromAlgoParams(indexAlgoParams, catalog.IncludedColumns)
+}
+
+// stringFromAlgoParams returns the string value of key in indexAlgoParams, "" if absent or
+// unparseable.
+func stringFromAlgoParams(indexAlgoParams, key string) string {
 	if indexAlgoParams == "" {
 		return ""
 	}
-	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
+	val, err := sonic.Get([]byte(indexAlgoParams), key)
 	if err != nil {
 		return ""
 	}
@@ -220,7 +232,26 @@ func (w *CuvsCdcWriter) Delete(ctx context.Context, row []any) error {
 		return moerr.NewInternalError(ctx, fmt.Sprintf(
 			"%s cuvs writer: invalid delete key type, expected int64", w.algoName))
 	}
+	if w.ignored != nil {
+		w.ignored.indexed(key)
+	}
 	return w.appendDelete(key)
+}
+
+func (w *CuvsCdcWriter) setIgnored(ignored *ignoredRows) {
+	w.ignored = ignored
+}
+
+// unstorable records whether the index cannot store vec, the vector of the row with key.
+func unstorable[T float32 | types.Float16](w *CuvsCdcWriter, key int64, vec []T) (bool, error) {
+	if w.ignored == nil {
+		return false, nil
+	}
+	if err := cuvscdc.CheckStorable(vec, w.toFloat16); err != nil {
+		return true, w.ignored.ignore(key, err)
+	}
+	w.ignored.indexed(key)
+	return false, nil
 }
 
 // ToSql returns a copy of the accumulated event-record bytes. The
@@ -261,21 +292,35 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any, op 
 	// w.vecBytesPer. A typed-nil slice is an actually-absent vector → DELETE;
 	// any other type is a real schema error (mirrors the HNSW sinker).
 	var vecBytes []byte
+	var skip bool
+	var err error
 	switch v := rawVec.(type) {
 	case []float32:
 		if v == nil {
 			return w.appendDelete(key)
 		}
+		skip, err = unstorable(w, key, v)
 		vecBytes = util.UnsafeSliceToBytes(v)
 	case []types.Float16:
 		if v == nil {
 			return w.appendDelete(key)
 		}
+		skip, err = unstorable(w, key, v)
 		vecBytes = util.UnsafeSliceToBytes(v)
 	default:
 		return moerr.NewInternalError(ctx, fmt.Sprintf(
 			"%s cuvs writer: invalid vector type, expected []float32 or []types.Float16, got %T",
 			w.algoName, rawVec))
+	}
+	if err != nil {
+		return err
+	}
+	if skip {
+		if op == cuvscdc.CdcOpUpsert {
+			// remove the version the index holds
+			return w.appendDelete(key)
+		}
+		return nil
 	}
 
 	includeBytes, err := cuvscdc.EncodeIncludeRow(w.includeBindings, row, w.includeBytesPer)
@@ -393,6 +438,9 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 						return injectedISCPIndexErr("cuvs save")
 					}
 					if e := sync.Save(sqlproc); e != nil {
+						return e
+					}
+					if e := c.flushIgnored(sqlproc); e != nil {
 						return e
 					}
 					if datatype == ISCPDataType_Tail {

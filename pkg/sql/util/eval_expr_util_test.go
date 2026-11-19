@@ -413,22 +413,22 @@ func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
 			expected: []byte{0x41, 0x42},
 		},
 		{
-			name:        "binary rejects decoded value over declared width",
-			literal:     "0x4142",
-			typ:         types.New(types.T_binary, 1, 0),
-			expectError: true,
+			name:     "binary leaves overflow to assignment cast",
+			literal:  "0x4142",
+			typ:      types.New(types.T_binary, 1, 0),
+			expected: []byte{0x41, 0x42},
 		},
 		{
-			name:        "varbinary rejects decoded value over declared width",
-			literal:     "0x4142",
-			typ:         types.New(types.T_varbinary, 1, 0),
-			expectError: true,
+			name:     "varbinary leaves overflow to assignment cast",
+			literal:  "0x4142",
+			typ:      types.New(types.T_varbinary, 1, 0),
+			expected: []byte{0x41, 0x42},
 		},
 		{
-			name:        "varbinary counts decoded bytes instead of runes",
-			literal:     "0xC3A9",
-			typ:         types.New(types.T_varbinary, 1, 0),
-			expectError: true,
+			name:     "varbinary preserves decoded bytes for assignment",
+			literal:  "0xC3A9",
+			typ:      types.New(types.T_varbinary, 1, 0),
+			expected: []byte{0xc3, 0xa9},
 		},
 		{
 			name:     "binary accepts odd digit hex literal",
@@ -952,5 +952,20 @@ func TestRejectZeroTemporalWritePolicy(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
+	}
+}
+
+// Issue #31808: BLOB width, like CHAR/VARCHAR/TEXT, is enforced by the runtime
+// assignment cast (ER_DATA_TOO_LONG in strict mode, truncation with a warning
+// otherwise, measured in bytes). The plan-time literal path must not reject an
+// oversized BLOB literal with an internal error that ignores sql_mode.
+func TestSetInsertValueStringDefersBlobWidthToAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		typ := types.New(oid, 3, 0)
+		canInsert, got, err := SetInsertValueString(proc, tree.NewNumVal("abcd", "abcd", false, tree.P_char), &typ)
+		require.NoError(t, err, oid.String())
+		require.True(t, canInsert)
+		require.Equal(t, []byte("abcd"), got, oid.String())
 	}
 }

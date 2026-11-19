@@ -77,30 +77,43 @@ def proxied(proxy):
         host="127.0.0.1",
         port=proxy.port,
         ssl_mode="disabled",  # This local packet proxy deliberately inspects plaintext protocol frames.
-        user="root",
-        password="111",
-        database="mo_analytics_test",
+        user=os.environ.get("MO_USER", "root"),
+        password=os.environ.get("MO_PASSWORD", "111"),
+        database=os.environ.get("MO_DATABASE", "mo_analytics_test"),
         query_timeout=3,
         connection_timeout=3,
         sql_log_mode="off",
     )
 
 
-def test_lost_commit_acknowledgement_is_unknown_not_rollback(trial):
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+async def test_lost_commit_acknowledgement_is_unknown_not_rollback(trial, asynchronous):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from matrixone import AsyncClient
+
     table = trial.table()
     with FaultProxy("drop_commit_ack") as proxy:
-        client = proxied(proxy)
+        if asynchronous:
+            engine = create_async_engine(trial.client._engine.url.set(drivername='mysql+aiomysql', port=proxy.port))
+            client = AsyncClient.from_engine(engine, query_timeout=3, sql_log_mode='off')
+        else:
+            client = proxied(proxy)
         try:
             with pytest.raises(AnalyticsCommitUnknownError) as caught:
-                client.analytics.upload_arrow(table, pa.table({"id": range(1000)}), trial.directory)
+                operation = client.analytics.upload_arrow(table, pa.table({"id": [1, 2]}), trial.directory)
+                if asynchronous:
+                    await operation
             assert proxy.triggered.is_set() and proxy.commit_ack_seen
             assert caught.value.committed is None
-            assert caught.value.rows == 1000
+            assert caught.value.rows == 2
             assert client._engine.pool.checkedout() == 0
         finally:
-            client.disconnect()
-    result = trial.rows(table)
-    assert result.num_rows == 1000 and sum(result['id'].to_pylist()) == 499500
+            if asynchronous:
+                await client.disconnect()
+            else:
+                client.disconnect()
+    assert sorted(trial.rows(table)['id'].to_pylist()) == [1, 2]
 
 
 def test_disconnect_before_commit_leaves_no_partial_create(trial):
@@ -198,3 +211,112 @@ def test_cleanup_failure_does_not_mask_original_reader_error(trial, monkeypatch)
     assert not trial.exists(table)
     for p in trial.directory.glob('mo_py_arrow_*'):
         p.unlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('source', ['arrow', 'file'])
+async def test_duplicate_write_rejection(trial, asynchronous, source):
+    """Use the real shared transaction owner through all four public write paths."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.exc import IntegrityError
+    from matrixone import AsyncClient
+    from matrixone.analytics import AnalyticsCommitRejectedError
+    import pyarrow.parquet as pq
+
+    table = trial.table()
+    trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY, note VARCHAR(20))')
+    trial.client.execute('INSERT INTO ' + table + " VALUES (100, 'sentinel')")
+    client = trial.client
+    if asynchronous:
+        engine = create_async_engine(
+            trial.client._engine.url.set(drivername='mysql+aiomysql'), pool_size=1, max_overflow=0
+        )
+        client = AsyncClient.from_engine(engine, query_timeout=5, sql_log_mode='off')
+    data = pa.table({'id': [200, 100], 'note': ['rollback', 'duplicate']})
+    relation = None
+    try:
+        if source == 'file':
+            path = trial.directory / 'duplicate.parquet'
+            pq.write_table(data, path)
+            relation = (
+                await client.analytics.read_parquet(path) if asynchronous else client.analytics.read_parquet(path)
+            )
+        expected_error = IntegrityError if source == 'file' else AnalyticsCommitRejectedError
+        with pytest.raises(expected_error) as caught:
+            operation = (
+                relation.import_into(table)
+                if relation is not None
+                else client.analytics.upload_arrow(table, data, trial.directory, create=False)
+            )
+            if asynchronous:
+                await operation
+        error = caught.value
+        assert error.committed is False and error.errno == 1062
+        assert error.phase == ('execute' if source == 'file' else 'commit')
+        assert error.rows == (None if source == 'file' else 2)
+        wrapped = error if source == 'file' else error.__cause__
+        assert wrapped.connection_invalidated is False and wrapped.orig.args[0] == 1062
+        assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [(100, 'sentinel')]
+        good = pa.table({'id': [300], 'note': ['control']})
+        operation = client.analytics.upload_arrow(table, good, trial.directory, create=False)
+        assert (await operation if asynchronous else operation) == 1
+        assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [
+            (100, 'sentinel'),
+            (300, 'control'),
+        ]
+        assert client._engine.pool.checkedout() == 0
+    finally:
+        try:
+            if relation is not None:
+                if asynchronous:
+                    await relation.close()
+                else:
+                    relation.close()
+        finally:
+            if asynchronous:
+                await client.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+async def test_duplicate_commit_rejection_survives_staging_cleanup_failure(trial, monkeypatch, asynchronous):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from matrixone import AsyncClient
+    from matrixone.analytics import AnalyticsCommitRejectedError
+    import matrixone.analytics as module
+
+    table = trial.table()
+    trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
+    trial.client.execute('INSERT INTO ' + table + ' VALUES (1)')
+    client = trial.client
+    if asynchronous:
+        client = AsyncClient.from_engine(
+            create_async_engine(trial.client._engine.url.set(drivername='mysql+aiomysql')), query_timeout=5
+        )
+    unlink = os.unlink
+
+    def fail(path, *args, **kwargs):
+        if str(path).startswith(str(trial.directory)) and 'mo_py_arrow_' in str(path):
+            raise PermissionError('staging cleanup failed')
+        return unlink(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(module.os, 'unlink', fail)
+            with pytest.raises(AnalyticsCommitRejectedError) as caught:
+                operation = client.analytics.upload_arrow(
+                    table, pa.table({'id': [2, 1]}), trial.directory, create=False
+                )
+                if asynchronous:
+                    await operation
+        assert caught.value.committed is False and caught.value.errno == 1062 and caught.value.rows == 2
+        assert isinstance(caught.value.staging_cleanup_error, PermissionError)
+        assert trial.client.execute('SELECT * FROM ' + table).rows == [(1,)]
+    finally:
+        try:
+            for path in trial.directory.glob('mo_py_arrow_*'):
+                path.unlink()
+        finally:
+            if asynchronous:
+                await client.disconnect()

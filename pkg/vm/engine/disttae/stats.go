@@ -235,6 +235,9 @@ type GlobalStats struct {
 
 	closeOnce sync.Once
 	workers   sync.WaitGroup
+	// Serializes installing every owned root with Close sealing startup.
+	startMu     sync.Mutex
+	startSealed bool
 
 	// engine is the global Engine instance.
 	engine *Engine
@@ -309,6 +312,9 @@ type GlobalStats struct {
 	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
 	// tests only. It runs after worker admission and before refresh admission.
 	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
+
+	// afterRootsStarted is a deterministic test barrier under startMu.
+	afterRootsStarted func()
 }
 
 func NewGlobalStats(
@@ -340,7 +346,6 @@ func NewGlobalStats(
 			s.Close()
 		}
 	}()
-	publish(s)
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
@@ -349,6 +354,7 @@ func NewGlobalStats(
 	// stop. Register it once per GlobalStats rather than once per cache miss.
 	context.AfterFunc(ownerCtx, s.notifyStatsWaiters)
 	s.initStatsRefreshAdmission()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -359,32 +365,36 @@ func NewGlobalStats(
 	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
-	executorConcurrency := runtime.GOMAXPROCS(0)
-	if s.updateWorkerFactor > 0 {
-		executorConcurrency = executorConcurrency * s.updateWorkerFactor
-	}
-	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
-	if executorConcurrency < MinExecutorConcurrency {
-		executorConcurrency = MinExecutorConcurrency
-	}
-	if executorConcurrency > MaxExecutorConcurrency {
-		executorConcurrency = MaxExecutorConcurrency
-	}
-	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
-	updateWorkerConcurrency := max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
-	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
-	s.concurrentExecutor.Run(ownerCtx)
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.logtailConsumer(ownerCtx)
+	executorConcurrency, updateWorkerConcurrency := globalStatsConcurrency(runtime.GOMAXPROCS(0), s.updateWorkerFactor)
+	started := func() bool {
+		s.startMu.Lock()
+		defer s.startMu.Unlock()
+		if s.startSealed {
+			return false
+		}
+		executor := newConcurrentExecutor(executorConcurrency)
+		executor.Run(ownerCtx)
+		s.concurrentExecutor = executor
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.logtailConsumer(ownerCtx)
+		}()
+		s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency)
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.queueWatcher.run(ownerCtx)
+		}()
+		if s.afterRootsStarted != nil {
+			s.afterRootsStarted()
+		}
+		return true
 	}()
-	s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.queueWatcher.run(ownerCtx)
-	}()
+	if !started {
+		constructed = true
+		return s
+	}
 	logutil.Info(
 		"GlobalStats-Started",
 		zap.Int("exector-num", executorConcurrency),
@@ -395,16 +405,36 @@ func NewGlobalStats(
 	return s
 }
 
+// globalStatsConcurrency bounds the executor pool and sizes its update workers.
+func globalStatsConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
+	executorConcurrency = gomaxprocs
+	if updateWorkerFactor > 0 {
+		executorConcurrency *= updateWorkerFactor
+	}
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	updateWorkerConcurrency = max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
+	return
+}
+
 // Close cancels statistics producers and joins every root and queued-task
 // completion callback owned by this GlobalStats instance.
 func (gs *GlobalStats) Close() {
 	gs.closeOnce.Do(func() {
+		gs.startMu.Lock()
+		gs.startSealed = true
 		if gs.cancel != nil {
 			gs.cancel()
 		}
+		executor := gs.concurrentExecutor
+		gs.startMu.Unlock()
 		gs.notifyStatsWaiters()
 		gs.workers.Wait()
-		if waiter, ok := gs.concurrentExecutor.(interface{ Wait() }); ok {
+		if waiter, ok := executor.(interface{ Wait() }); ok {
 			waiter.Wait()
 		}
 	})
@@ -1313,6 +1343,15 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 		gs.mu.statsInfoMap[key] = stats
 	}
 
+	// Optional row distributions belong to one analyzed generation. Do not
+	// mutate a published object held by lock-free planning readers.
+	if len(stats.ByteRangeMap) > 0 {
+		source := *stats
+		source.ByteRangeMap = nil
+		stats = proto.Clone(&source).(*pb.StatsInfo)
+		gs.mu.statsInfoMap[key] = stats
+	}
+
 	// Apply table-level stats
 	if patch.TableCnt != nil {
 		stats.TableCnt = *patch.TableCnt
@@ -1377,7 +1416,9 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 			sr.Uniform = *update.Uniform
 		}
 		if update.Result != nil {
-			sr.Result = update.Result
+			result := make([]float64, len(update.Result))
+			copy(result, update.Result)
+			sr.Result = result
 		}
 	}
 
@@ -1797,7 +1838,9 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 	}
 	published := plan2.NewStatsInfo()
 	if metadata != nil {
-		published = proto.Clone(metadata).(*pb.StatsInfo)
+		source := *metadata
+		source.ByteRangeMap = nil
+		published = proto.Clone(&source).(*pb.StatsInfo)
 	}
 	if published.NdvMap == nil {
 		published.NdvMap = make(map[string]float64)
@@ -1821,6 +1864,16 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 		published.ShuffleRangeMap = make(map[string]*pb.ShuffleRange)
 	}
 
+	// A partial/manual collection must not inherit another population's sample.
+	published.ByteRangeMap = nil
+	if len(collected.ByteRangeMap) > 0 {
+		published.ByteRangeMap = make(map[string]*pb.ByteRangeDistribution, len(collected.ByteRangeMap))
+		for column, d := range collected.ByteRangeMap {
+			if d != nil {
+				published.ByteRangeMap[column] = proto.Clone(d).(*pb.ByteRangeDistribution)
+			}
+		}
+	}
 	published.TableName = collected.TableName
 	published.TableCnt = collected.TableCnt
 	published.BlockNumber = collected.BlockNumber
@@ -1909,6 +1962,7 @@ func applyStatsRefreshOptions(
 		stats.NdvMap = make(map[string]float64, len(options.ColumnNDVs)+1)
 	}
 	stats.TableName = tableDef.Name
+	stats.ByteRangeMap = nil
 	stats.TableCnt = rowCount
 	if _, hasFakePrimaryKey := knownColumns[catalog.FakePrimaryKeyColName]; options.TableRowCount != nil && hasFakePrimaryKey {
 		stats.NdvMap[catalog.FakePrimaryKeyColName] = rowCount
@@ -2401,8 +2455,7 @@ func collectTableStats(
 				if !zoneMap.IsInited() {
 					continue
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				index.MergeZM(info.ColumnZMs[idx], zoneMap)
 
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {

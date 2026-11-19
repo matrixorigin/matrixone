@@ -81,7 +81,7 @@ func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.T
 			}
 		}
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade success",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade success",
 		zap.String("toVersion", v.Metadata().Version))
 	return nil
 }
@@ -117,7 +117,7 @@ func (v *versionHandle) UpgradeClusterEntryPage(_ context.Context, index int, tx
 		return true, nil
 	}
 	if err := entry.Upgrade(txn, uint32(txn.Txn().TxnOptions().AccountID)); err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
 			zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", entry.String()))
 		return false, err
 	}
@@ -130,7 +130,7 @@ func (v *versionHandle) UpgradeClusterEntryPage(_ context.Context, index int, tx
 			return false, &IndexConflict{fmt.Sprintf("index on %s.%s did not become ready", entry.Schema, entry.TableName)}
 		}
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
 		zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.Metadata().Version))
 	return false, nil
 }

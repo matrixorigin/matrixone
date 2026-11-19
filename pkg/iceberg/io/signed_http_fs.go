@@ -53,7 +53,7 @@ func (b SignedHTTPFileServiceBuilder) Build(ctx context.Context, scope ObjectSco
 	return &signedHTTPFileService{
 		name:                     name,
 		client:                   client,
-		headers:                  cloneStringMap(signed.Headers),
+		headers:                  api.CloneNonEmptyMap(signed.Headers),
 		maxMaterializedReadBytes: maxMaterializedReadBytes,
 	}, strings.TrimSpace(signed.URL), nil
 }
@@ -445,17 +445,6 @@ func contentRangeSize(value string) (int64, bool) {
 		return 0, false
 	}
 	return size, true
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 var _ SignedFileServiceBuilder = SignedHTTPFileServiceBuilder{}.Build

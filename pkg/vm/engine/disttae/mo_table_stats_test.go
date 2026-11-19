@@ -167,49 +167,6 @@ func Test_intsJoin(t *testing.T) {
 	wg.Wait()
 }
 
-func Test_joinAccountDatabase(t *testing.T) {
-	wg := sync.WaitGroup{}
-	for range 100 {
-		wg.Add(1)
-
-		go func() {
-			defer func() {
-				wg.Done()
-			}()
-
-			cnt := int(max(rand.Uint64()%10, uint64(1)))
-			acc := make([]uint64, cnt)
-			db := make([]uint64, cnt)
-
-			for i := range acc {
-				acc[i] = rand.Uint64() % uint64(cnt*2)
-				db[i] = rand.Uint64() % uint64(cnt*2)
-			}
-
-			ret, release := joinAccountDatabase(acc, db)
-
-			andStrs := strings.Split(ret, " OR ")
-			require.Equal(t, int(cnt), len(andStrs), fmt.Sprintf("cnt = %d, andStrs=%s", cnt, andStrs))
-
-			for i, str := range andStrs {
-				str = str[1:]
-				str = str[:len(str)-1]
-
-				equalStr := strings.Split(str, " AND ")
-				ll := fmt.Sprintf("account_id = %d", acc[i])
-				rr := fmt.Sprintf("database_id = %d", db[i])
-
-				require.Equal(t, ll, equalStr[0], fmt.Sprintf("acc: %v, db: %v, ret: %v", acc, db, ret))
-				require.Equal(t, rr, equalStr[1], fmt.Sprintf("acc: %v, db: %v, ret: %v", acc, db, ret))
-			}
-
-			release()
-		}()
-	}
-
-	wg.Wait()
-}
-
 func Test_constructInStmtByTableId(t *testing.T) {
 
 	t.Run("A", func(t *testing.T) {
@@ -240,53 +197,6 @@ func Test_constructInStmtByTableId(t *testing.T) {
 	})
 }
 
-func Test_joinAccountDatabaseTable(t *testing.T) {
-	wg := sync.WaitGroup{}
-	for range 100 {
-		wg.Add(1)
-		go func() {
-
-			defer func() {
-				wg.Done()
-			}()
-
-			cnt := int(max(rand.Uint64()%10, uint64(1)))
-			acc := make([]uint64, cnt)
-			db := make([]uint64, cnt)
-			tbl := make([]uint64, cnt)
-
-			for i := range acc {
-				acc[i] = rand.Uint64() % uint64(cnt*2)
-				db[i] = rand.Uint64() % uint64(cnt*2)
-				tbl[i] = rand.Uint64() % uint64(cnt*2)
-			}
-
-			ret, release := joinAccountDatabaseTable(acc, db, tbl)
-
-			andStrs := strings.Split(ret, " OR ")
-			require.Equal(t, int(cnt), len(andStrs), fmt.Sprintf("cnt = %d, andStrs=%s", cnt, andStrs))
-
-			for i, str := range andStrs {
-				str = str[1:]
-				str = str[:len(str)-1]
-
-				equalStr := strings.Split(str, " AND ")
-				ll := fmt.Sprintf("account_id = %d", acc[i])
-				mm := fmt.Sprintf("database_id = %d", db[i])
-				rr := fmt.Sprintf("table_id = %d", tbl[i])
-
-				require.Equal(t, ll, equalStr[0], fmt.Sprintf("acc: %v, db: %v, tbl: %v, ret: %v", acc, db, tbl, ret))
-				require.Equal(t, mm, equalStr[1], fmt.Sprintf("acc: %v, db: %v, tbl: %v, ret: %v", acc, db, tbl, ret))
-				require.Equal(t, rr, equalStr[2], fmt.Sprintf("acc: %v, db: %v, tbl: %v, ret: %v", acc, db, tbl, ret))
-			}
-
-			release()
-		}()
-	}
-
-	wg.Wait()
-}
-
 func Benchmark_intsJoin(b *testing.B) {
 	item := make([]uint64, 100)
 	for i := range item {
@@ -295,38 +205,6 @@ func Benchmark_intsJoin(b *testing.B) {
 
 	for range b.N {
 		_, f := intsJoin(item, ",")
-		f()
-	}
-}
-
-func Benchmark_joinAccountDatabase(b *testing.B) {
-	acc := make([]uint64, 100*100)
-	db := make([]uint64, 100*100)
-
-	for i := range acc {
-		acc[i] = rand.Uint64()
-		db[i] = rand.Uint64()
-	}
-
-	for range b.N {
-		_, f := joinAccountDatabase(acc, db)
-		f()
-	}
-}
-
-func Benchmark_joinAccountDatabaseTable(b *testing.B) {
-	acc := make([]uint64, 100*100)
-	db := make([]uint64, 100*100)
-	tbl := make([]uint64, 100*100)
-
-	for i := range acc {
-		acc[i] = rand.Uint64()
-		db[i] = rand.Uint64()
-		tbl[i] = rand.Uint64()
-	}
-
-	for range b.N {
-		_, f := joinAccountDatabaseTable(acc, db, tbl)
 		f()
 	}
 }

@@ -174,7 +174,7 @@ func TestIvfflatEntriesTableQuotesIdentifiers(t *testing.T) {
 		},
 	}
 
-	err := ivfIndexEntriesTable(ctx, indexDef, "db`name", tableDef, "meta`tbl", "centroids`tbl")
+	err := ivfIndexEntriesTable(ctx, indexDef, "db`name", tableDef, "meta`tbl", "centroids`tbl", nil)
 	require.NoError(t, err)
 	require.Len(t, ctx.sqls, 3)
 
@@ -188,4 +188,8 @@ func TestIvfflatEntriesTableQuotesIdentifiers(t *testing.T) {
 	require.Contains(t, mappingSQL, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
 	require.NotContains(t, mappingSQL, "`db`name`")
 	require.NotContains(t, mappingSQL, "`"+catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col`")
+}
+
+func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return s.RunSql(sql)
 }

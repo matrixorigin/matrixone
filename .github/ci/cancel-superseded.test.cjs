@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { releaseSupersededRuns, isSuperseded } = require('./cancel-superseded.cjs');
+const { releaseSupersededRuns, releaseClosedPullRequestRuns, isSuperseded } = require('./cancel-superseded.cjs');
 
 const newer = () => ({ id: 200, workflow_id: 42, event: 'pull_request_target',
   head_branch: 'fix/test', head_repository: { id: 7 }, run_attempt: 1,
@@ -20,7 +20,7 @@ const newer = () => ({ id: 200, workflow_id: 42, event: 'pull_request_target',
 const older = (overrides = {}) => ({ ...newer(), id: 100, status: 'queued',
   created_at: '2026-09-11T07:46:44Z', run_started_at: '2026-09-11T07:46:44Z', ...overrides });
 
-function harness({ candidates = [older()], cancel, force, tick, get } = {}) {
+function harness({ candidates = [older()], cancel, force, tick, get, pr, prGet, openPRs = [] } = {}) {
   const runs = new Map([newer(), ...candidates].map(run => [run.id, { ...run }]));
   const calls = [];
   let elapsed = 0;
@@ -48,7 +48,14 @@ function harness({ candidates = [older()], cancel, force, tick, get } = {}) {
   const core = { info: () => {}, summary: {
     addHeading() { return this; }, addRaw() { return this; }, async write() {},
   } };
-  const options = { github: { rest: { actions }, request: async (route, args) => {
+  const options = { github: { rest: { actions, pulls: { list: async args => {
+    assert.equal(args.head, 'author:fix/test');
+    assert.equal(args.state, 'open');
+    return { data: openPRs };
+  }, get: async () => {
+    if (prGet) prGet(pr, calls);
+    return { data: structuredClone(pr) };
+  } } }, request: async (route, args) => {
     assert.equal(route, 'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel');
     calls.push(['force', args.run_id, elapsed]);
     if (force) await force(runs, args.run_id);
@@ -165,10 +172,12 @@ test('controller stays outside producer concurrency and uses only trusted code w
   const workflow = readFileSync(join(__dirname, '../workflows/ci-cancellation.yml'), 'utf8');
   assert.match(workflow, /workflow_run:\n    workflows: \['MatrixOne ALL CI'\]\n    types: \[requested\]/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /pull_request_target:\n    types: \[closed\]/);
+  assert.match(workflow, /pull-requests: read/);
   assert.doesNotMatch(workflow, /^\s*concurrency:/m);
   assert.match(workflow, /actions: write/);
   assert.doesNotMatch(workflow, /checks: write|secrets: inherit|download-artifact/);
-  assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
+  assert.match(workflow, /ref: \$\{\{ github.event_name == 'pull_request_target' && github.event.repository.default_branch \|\| github.workflow_sha \}\}/);
   assert.match(workflow, /github.ref == format\('refs\/heads\/\{0\}', github.event.repository.default_branch\)/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /timeout-minutes: 6/);
@@ -178,4 +187,71 @@ test('controller stays outside producer concurrency and uses only trusted code w
   const gate = entrypoint.split('  ci-required:')[1].split('  matrixone-ci-30:')[0];
   assert.match(gate, /if: \$\{\{ always\(\)/);
   assert.match(gate, /timeout-minutes: 5/);
+});
+
+
+function closedHarness(options = {}) {
+  const pr = { number: 123, state: 'closed', closed_at: '2026-09-11T08:30:00Z',
+    head: { ref: 'fix/test', repo: { id: 7, owner: { login: 'author' } } }, ...options.pr };
+  const h = harness({ ...options, pr });
+  h.options.context.payload = { action: 'closed', pull_request: structuredClone(pr) };
+  h.run = () => releaseClosedPullRequestRuns(h.options);
+  return h;
+}
+
+test('closing a PR cancels all active matching runs, then escalates with the shared grace', async () => {
+  const h = closedHarness({ candidates: [older(), older({ id: 101, status: 'in_progress' })] });
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 100, 0], ['cancel', 101, 0],
+    ['force', 100, 120000], ['force', 101, 120000]]);
+});
+
+test('closed PR discovery excludes other identities, completed runs and post-close reruns', async () => {
+  for (const override of [
+    { head_repository: { id: 8 } }, { head_branch: 'another' }, { workflow_id: 43 },
+    { event: 'push' }, { status: 'completed' }, { head_repository: null },
+    { created_at: '2026-09-11T08:31:00Z' }, { run_started_at: '2026-09-11T08:31:00Z' },
+    { run_started_at: undefined },
+  ]) {
+    const h = closedHarness({ candidates: [older(override)] });
+    await h.run();
+    assert.deepEqual(h.calls, [], JSON.stringify(override));
+  }
+});
+
+test('reopened PRs, missing forks and stale close events never cancel runs', async () => {
+  for (const update of [
+    pr => { pr.state = 'open'; },
+    pr => { pr.closed_at = '2026-09-11T08:32:00Z'; },
+    pr => { pr.head.repo = null; },
+    pr => { pr.head.ref = 'other'; },
+  ]) {
+    const h = closedHarness({ prGet: update });
+    await h.run();
+    assert.deepEqual(h.calls, []);
+  }
+});
+
+test('reopening during grace or rerunning a target prevents stale force cancellation', async () => {
+  for (const reopen of [true, false]) {
+    const h = closedHarness({ tick(runs) { runs.get(100).run_attempt = 2; },
+      prGet(pr, calls) { if (reopen && calls.length) pr.state = 'open'; } });
+    await h.run();
+    assert.deepEqual(h.calls, [['cancel', 100, 0]]);
+  }
+});
+
+test('closed PR cancellation handles normal completion, API errors and malformed events', async () => {
+  const completed = closedHarness({ cancel(runs, id) { runs.get(id).status = 'completed'; } });
+  await completed.run();
+  assert.deepEqual(completed.calls, [['cancel', 100, 0]]);
+  const failed = closedHarness({ cancel() { throw Object.assign(new Error('denied'), { status: 403 }); } });
+  await assert.rejects(failed.run(), /denied/);
+  const shared = closedHarness({ openPRs: [{ number: 124 }] });
+  await shared.run();
+  assert.deepEqual(shared.calls, [], 'another open PR still needs the same branch CI');
+  const invalid = closedHarness();
+  invalid.options.context.payload.action = 'opened';
+  await assert.rejects(invalid.run(), /Expected a closed/);
+  assert.deepEqual(invalid.calls, []);
 });

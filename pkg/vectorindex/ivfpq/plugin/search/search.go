@@ -28,6 +28,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
@@ -198,6 +199,11 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 		metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) == metric.Quantization_F32 {
 		idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_F16)
 	}
+	// A query vector the index cannot store is rejected.
+	if err := cuvscdc.CheckQuery(req.QueryPayload, queryType, queryType == types.T_array_float32 &&
+		metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) == metric.Quantization_F16); err != nil {
+		return nil, err
+	}
 	tblcfg := vectorindex.IndexTableConfig{
 		DbName:             spec.SourceTable.SchemaName,
 		SrcTable:           spec.SourceTableDef.Name,
@@ -235,7 +241,7 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 	}
 	if req.HasMembershipFilter {
 		if s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
-			proc.GetService(), "ivfpq", spec.SourceTableDef, req.MembershipFilter); err != nil {
+			proc.Ctx, proc.GetService(), "ivfpq", spec.SourceTableDef, req.MembershipFilter); err != nil {
 			return nil, err
 		}
 	}

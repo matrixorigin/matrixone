@@ -24,15 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type roleRuleLifecycleSnapshotHooks struct {
+type catalogLifecycleSnapshotHooks struct {
 	acquireReadBarrier func(context.Context) (timestamp.Timestamp, error)
 	currentSnapshot    func() timestamp.Timestamp
 	updateSnapshot     func(context.Context, timestamp.Timestamp) error
 }
 
-func advanceRoleRuleLifecycleSnapshot(ctx context.Context, hooks roleRuleLifecycleSnapshotHooks) error {
+type roleRuleLifecycleSnapshotHooks = catalogLifecycleSnapshotHooks
+
+func advanceCatalogLifecycleSnapshot(ctx context.Context, hooks catalogLifecycleSnapshotHooks, subject string) error {
 	if hooks.acquireReadBarrier == nil || hooks.currentSnapshot == nil || hooks.updateSnapshot == nil {
-		return moerr.NewInternalError(ctx, "incomplete role-rule lifecycle snapshot hooks")
+		return moerr.NewInternalErrorf(ctx, "incomplete %s snapshot hooks", subject)
 	}
 	frontier, err := hooks.acquireReadBarrier(ctx)
 	if err != nil {
@@ -46,13 +48,17 @@ func advanceRoleRuleLifecycleSnapshot(ctx context.Context, hooks roleRuleLifecyc
 			return err
 		}
 		if hooks.currentSnapshot().Less(frontier) {
-			return moerr.NewInternalError(
+			return moerr.NewInternalErrorf(
 				ctx,
-				"role-rule lifecycle snapshot did not advance after the logtail read barrier",
+				"%s snapshot did not advance after the logtail read barrier", subject,
 			)
 		}
 	}
 	return ctx.Err()
+}
+
+func advanceRoleRuleLifecycleSnapshot(ctx context.Context, hooks roleRuleLifecycleSnapshotHooks) error {
+	return advanceCatalogLifecycleSnapshot(ctx, hooks, "role-rule lifecycle")
 }
 
 func lockRoleRuleLifecycleTable(

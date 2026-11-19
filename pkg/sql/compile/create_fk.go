@@ -15,12 +15,15 @@
 package compile
 
 import (
+	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -243,8 +246,18 @@ func (c *Compile) applyReplacementForeignKeyHints(q *plan.CreateTable, database 
 					}
 					parent = rel.CopyTableDef(c.proc.Ctx)
 				}
-				if !plan2.ForeignKeyReferencedIndexMatches(parent, fk.ForeignCols, hint.ReferencedIndexName) {
+				// Tolerate a stale recorded key: the equivalent-key transition moves
+				// the catalog binding while a child's stored ForeignKeyDef keeps the
+				// removed name until the table is re-materialized (TRUNCATE or
+				// recreation). Heal it to the surviving covering key instead of
+				// failing the recreation (review 5691776262).
+				healed, changed, valid := plan2.HealedForeignKeyReferencedIndex(
+					parent, fk.ForeignCols, hint.ReferencedIndexName)
+				if !valid {
 					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+				if changed {
+					hint.ReferencedIndexName = healed
 				}
 			}
 			fk.ReferencedIndexName = hint.ReferencedIndexName
@@ -253,4 +266,124 @@ func (c *Compile) applyReplacementForeignKeyHints(q *plan.CreateTable, database 
 		}
 	}
 	return nil
+}
+
+// syncDurableForeignKeyIndexBindings aligns each referencing child's stored
+// ForeignKeyDef.ReferencedIndexName with the mo_foreign_keys rows this ALTER
+// just updated, inside the same DDL transaction: the catalog rebinding and the
+// durable constraint repair commit or roll back atomically together
+// (review 5691776262). The re-materialization heals stale cached copies of
+// the same defs, but the persisted post-commit state must never diverge.
+func (c *Compile) syncDurableForeignKeyIndexBindings(qry *plan.AlterTable) error {
+	if len(qry.GetUpdateFkSqls()) == 0 || plan2.IsFkBannedDatabase(qry.Database) {
+		return nil
+	}
+	// The zero marker is the durable self-reference sentinel: the referencing
+	// child is this ALTER's own table. Resolve it to the table's real ID so an
+	// INPLACE alter aligns its own stored ForeignKeyDef with the catalog rows
+	// this statement just updated (review 5695003826). A COPY still skips it
+	// below: the in-flight original must not be disturbed mid-transfer, and
+	// the published replacement relation is aligned after the FK state
+	// restore instead.
+	for _, childID := range qry.GetTableDef().GetRefChildTbls() {
+		if childID == 0 && qry.GetTableDef().GetTblId() != 0 {
+			childID = qry.GetTableDef().GetTblId()
+		}
+		if childID == 0 {
+			continue
+		}
+		// A COPY repairs the self-referencing child's durable def through the
+		// replacement relation's post-restore alignment, so the in-flight
+		// original must not be disturbed mid-transfer; an INPLACE alter keeps
+		// the original relation itself, and the same transaction can align its
+		// durable binding directly.
+		if childID == qry.GetTableDef().GetTblId() && qry.AlgorithmType == plan.AlterTable_COPY {
+			continue
+		}
+		if err := c.syncChildDurableForeignKeyIndexBinding(childID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncChildDurableForeignKeyIndexBinding rewrites one child's stored binding
+// to the catalog's authoritative value when they diverge. The read, the
+// rewrite and the mo_foreign_keys update share one transaction, so a failure
+// aborts the statement and rolls both states back together.
+func (c *Compile) syncChildDurableForeignKeyIndexBinding(childID uint64) error {
+	childDb, childTbl, rel, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childID)
+	if err != nil {
+		return err
+	}
+	bindings, err := c.readChildForeignKeyIndexBindings(childDb, childTbl)
+	if err != nil {
+		return err
+	}
+	return alignDurableForeignKeyIndexBindings(c.proc.Ctx, rel, bindings)
+}
+
+// alignDurableForeignKeyIndexBindings rewrites one relation's stored
+// ForeignKeyDef bindings to the catalog's authoritative values when they
+// diverge. The durable read, the rewrite and the UpdateConstraint write all
+// share the caller's transaction, so a failure aborts the statement and rolls
+// the catalog rebinding and the durable repair back together. This is the
+// shared durable-write consumer for cross-table children, the INPLACE self
+// reference, and the COPY post-restore self alignment (review 5695003826).
+func alignDurableForeignKeyIndexBindings(ctx context.Context, rel engine.Relation, bindings map[string]string) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+	latest, err := GetConstraintDef(ctx, rel)
+	if err != nil {
+		return err
+	}
+	changed := false
+	complete := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0, len(latest.Cts))}
+	for _, constraint := range latest.Cts {
+		fks, ok := constraint.(*engine.ForeignKeyDef)
+		if !ok {
+			complete.Cts = append(complete.Cts, constraint)
+			continue
+		}
+		for _, fk := range fks.Fkeys {
+			if want, found := bindings[fk.Name]; found && want != "" && want != fk.ReferencedIndexName {
+				fk.ReferencedIndexName = want
+				changed = true
+			}
+		}
+		complete.Cts = append(complete.Cts, fks)
+	}
+	if !changed {
+		return nil
+	}
+	return rel.UpdateConstraint(ctx, complete)
+}
+
+func (c *Compile) readChildForeignKeyIndexBindings(db, tbl string) (map[string]string, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select constraint_name, referenced_index_name from `mo_catalog`.`mo_foreign_keys` where db_name = %s and table_name = %s",
+			plan2.QuoteSQLStringLiteral(db), plan2.QuoteSQLStringLiteral(tbl)),
+		int32(accountID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	bindings := make(map[string]string)
+	res.ReadRows(func(n int, cols []*vector.Vector) bool {
+		names := executor.GetStringRows(cols[0])
+		referenced := executor.GetStringRows(cols[1])
+		for i := 0; i < n && i < len(names) && i < len(referenced); i++ {
+			bindings[names[i]] = referenced[i]
+		}
+		return true
+	})
+	return bindings, nil
 }

@@ -47,7 +47,9 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
 	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
-	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
+	require.Contains(t, characterSets.UpgSql, "'utf8','utf8_bin'")
+	require.Contains(t, characterSets.UpgSql, "'utf8mb4','utf8mb4_bin'")
+	require.NotContains(t, characterSets.UpgSql, "general_ci")
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
 
 	meta := Handler.Metadata()
@@ -92,7 +94,9 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		executed = append(executed, sql)
 		switch {
-		case sql == sysview.InformationSchemaCharacterSetsCheckSQL():
+		case strings.HasPrefix(sql, "SELECT 1 FROM information_schema.CHARACTER_SETS"):
+			require.Contains(t, sql, "DEFAULT_COLLATE_NAME = 'utf8_bin'")
+			require.Contains(t, sql, "DEFAULT_COLLATE_NAME = 'utf8mb4_bin'")
 			if populated {
 				result := executor.NewMemResult(nil, nil)
 				result.NewBatchWithRowCount(1)
@@ -106,14 +110,14 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 3)
-	require.True(t, executed[0] == sysview.InformationSchemaCharacterSetsCheckSQL())
+	require.Contains(t, executed[0], "DEFAULT_COLLATE_NAME = 'utf8_bin'")
 	require.Equal(t, entry.PreSql, executed[1])
 	require.Equal(t, entry.UpgSql, executed[2])
 
 	executed = nil
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
-	require.True(t, executed[0] == sysview.InformationSchemaCharacterSetsCheckSQL())
+	require.Contains(t, executed[0], "DEFAULT_COLLATE_NAME = 'utf8_bin'")
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -23,8 +24,84 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnionPlainFixedSelectionReuse(t *testing.T) {
+	for _, oid := range []types.T{types.T_uint32, types.T_uint64, types.T_float32, types.T_float64} {
+		for _, backing := range []string{"owned", "window", "lease"} {
+			for _, index32 := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/int32=%t", oid, backing, index32), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+					src, dst := NewOffHeapVecWithType(oid.ToType()), NewOffHeapVecWithType(oid.ToType())
+					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+					require.NoError(t, src.PreExtend(4, mp))
+					src.SetLength(4)
+					width := src.typ.TypeSize()
+					for row := range 4 {
+						if width == 4 {
+							binary.LittleEndian.PutUint32(src.data[row*width:], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else {
+							binary.LittleEndian.PutUint64(src.data[row*width:], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
+					}
+					require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
+					input := src
+					if backing != "owned" {
+						var err error
+						if backing == "window" {
+							input, err = src.Window(0, 4)
+						} else {
+							data, allocErr := mp.Alloc(4*width, true)
+							require.NoError(t, allocErr)
+							copy(data, src.data[:4*width])
+							lease, leaseErr := NewRefCountedBufferLease(data, int64(cap(data)), func() { mp.Free(data) })
+							if leaseErr != nil {
+								mp.Free(data)
+							}
+							require.NoError(t, leaseErr)
+							input, err = NewBorrowedFixedVector(oid.ToType(), 4, data, lease)
+							lease.Release()
+						}
+						require.NoError(t, err)
+						t.Cleanup(func() { input.Free(mp) })
+						require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+					}
+					require.NoError(t, dst.PreExtend(8, mp))
+					for range 2 {
+						dst.CleanOnlyData()
+						before := mp.Stats().NumAlloc.Load()
+						if index32 {
+							require.NoError(t, dst.UnionInt32(input, []int32{3}, mp))
+							require.NoError(t, dst.UnionInt32(input, []int32{2, 0, 1, 1}, mp))
+						} else {
+							require.NoError(t, dst.Union(input, []int64{3}, mp))
+							require.NoError(t, dst.Union(input, []int64{2, 0, 1, 1}, mp))
+						}
+						require.Equal(t, before, mp.Stats().NumAlloc.Load())
+						require.Equal(t, 5, dst.Length())
+						for row, sourceRow := range []int{3, 2, 0, 1, 1} {
+							require.Equal(t, src.data[sourceRow*width:(sourceRow+1)*width], dst.data[row*width:(row+1)*width])
+							require.False(t, dst.IsNull(uint64(row)))
+							require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(row))
+						}
+					}
+					// A later prepared value must not relabel the preceding ordinary rows.
+					parameter := NewVec(oid.ToType())
+					t.Cleanup(func() { parameter.Free(mp) })
+					require.NoError(t, parameter.UnionOne(src, 0, mp))
+					require.NoError(t, parameter.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp))
+					require.NoError(t, dst.UnionOne(parameter, 0, mp))
+					require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
+					require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(5))
+				})
+			}
+		}
+	}
+}
+
 func TestUnionFixedSelection(t *testing.T) {
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp, types.T_decimal64,
 		types.T_TS, types.T_decimal128, types.T_uuid, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
 		for _, index32 := range []bool{false, true} {
 			for _, nullable := range []bool{false, true} {
@@ -42,6 +119,13 @@ func TestUnionFixedSelection(t *testing.T) {
 						for column := range width {
 							expected[row][column] = byte(row*32 + column + 1)
 						}
+						// Include signed zero and NaN payloads: selection copies
+						// physical bits, without numeric conversion.
+						if oid == types.T_float32 {
+							binary.LittleEndian.PutUint32(expected[row], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else if oid == types.T_float64 {
+							binary.LittleEndian.PutUint64(expected[row], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
 						copy(src.data[row*width:(row+1)*width], expected[row])
 					}
 					src.GetGrouping().Add(2)
@@ -56,12 +140,13 @@ func TestUnionFixedSelection(t *testing.T) {
 						dst.CleanOnlyData()
 						// Preserve an existing prefix, then select from a borrowed
 						// source with repetitions, a tail row and reverse order.
-						require.NoError(t, dst.UnionOne(src, 0, mp))
 						if index32 {
+							require.NoError(t, dst.UnionInt32(src, []int32{0}, mp))
 							require.NoError(t, dst.UnionInt32(view, nil, mp))
 							require.Equal(t, 1, dst.Length())
 							require.NoError(t, dst.UnionInt32(view, []int32{2, 1, 1, 0}, mp))
 						} else {
+							require.NoError(t, dst.Union(src, []int64{0}, mp))
 							require.NoError(t, dst.Union(view, nil, mp))
 							require.Equal(t, 1, dst.Length())
 							require.NoError(t, dst.Union(view, []int64{2, 1, 1, 0}, mp))

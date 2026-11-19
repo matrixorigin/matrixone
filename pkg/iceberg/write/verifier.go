@@ -35,7 +35,7 @@ func (v CatalogCommitVerifier) VerifyCommit(ctx context.Context, req api.AppendR
 	if v.Client == nil {
 		return result, false, api.NewError(api.ErrConfigInvalid, "Iceberg append commit verifier requires a catalog client", map[string]string{"table": req.Table})
 	}
-	expected, ok := appendExpectedSnapshot(attempt)
+	expected, ok := api.ExpectedAddedSnapshot(attempt)
 	if !ok {
 		return result, false, api.NewError(api.ErrMetadataInvalid, "Iceberg append commit verifier has no expected snapshot", map[string]string{"table": req.Table})
 	}
@@ -88,18 +88,6 @@ func (v CatalogCommitVerifier) VerifyCommit(ctx context.Context, req api.AppendR
 	verified.Unknown = false
 	verified.Verified = true
 	return &verified, true, nil
-}
-
-func appendExpectedSnapshot(attempt *api.CommitAttempt) (api.Snapshot, bool) {
-	if attempt == nil {
-		return api.Snapshot{}, false
-	}
-	for _, update := range attempt.Updates {
-		if update.Type == "add-snapshot" && update.Snapshot != nil && update.Snapshot.SnapshotID > 0 {
-			return *update.Snapshot, true
-		}
-	}
-	return api.Snapshot{}, false
 }
 
 func appendTargetSnapshot(meta *api.TableMetadata, targetRef string) (api.Snapshot, error) {

@@ -19,6 +19,14 @@ Base client functionality for MatrixOne clients
 # No imports needed for this module
 
 
+def insert_row_values(row, columns):
+    """One batch policy: first-row columns, missing NULL, no extra fields."""
+    unexpected = set(row) - set(columns)
+    if unexpected:
+        raise ValueError('unexpected INSERT columns: ' + ', '.join(sorted(unexpected)))
+    return [row.get(column) for column in columns]
+
+
 class BaseMatrixOneClient:
     """
     Base class for MatrixOne clients with common SQL building logic.
@@ -54,13 +62,30 @@ class BaseMatrixOneClient:
     actual database operations.
     """
 
+    def set_query_observer(self, observer=None):
+        """Set a synchronous, optional callback receiving immutable QueryEvent.
+
+        Events contain timings/outcomes, never SQL, binds or credentials.
+        Missing phase measurements are None, not fabricated zero durations.
+        """
+        import inspect
+
+        if observer is not None and (
+            not callable(observer)
+            or inspect.iscoroutinefunction(observer)
+            or inspect.iscoroutinefunction(getattr(observer, '__call__', None))
+        ):
+            raise TypeError('query observer must be a synchronous callable or None')
+        self._query_observer = observer
+        return self
+
     def _reset_compatibility(self, overrides=None):
         from .capabilities import validate_overrides
         from .version import new_version_manager
 
         checked = validate_overrides(overrides)
         self._compatibility_generation = getattr(self, '_compatibility_generation', 0) + 1
-        self._capability_cache = None
+        self._capability_cache_token = object()
         self._capability_overrides = checked
         self._version_manager = new_version_manager()
         self._backend_version = None
@@ -80,6 +105,14 @@ class BaseMatrixOneClient:
         """
         from ._sql_literals import sql_identifier, sql_literal
 
+        if hasattr(table_name, '__table__'):
+            from sqlalchemy import insert, inspect
+            from ._query_compilation import compile_expression
+
+            mapper = inspect(table_name).mapper
+            values = {mapper.attrs[key].columns[0]: value for key, value in data.items()}
+            return compile_expression(insert(mapper.local_table).values(values))
+
         columns = list(data)
         return "INSERT INTO %s (%s) VALUES (%s)" % (
             sql_identifier(table_name, qualified=True),
@@ -94,9 +127,20 @@ class BaseMatrixOneClient:
         if not data_list:
             return ""
         columns = list(data_list[0])
-        if any(set(row) != set(columns) for row in data_list):
-            raise ValueError("Batch records must have identical column sets")
-        values = ["(" + ", ".join(sql_literal(row[column]) for column in columns) + ")" for row in data_list]
+        if hasattr(table_name, '__table__'):
+            from sqlalchemy import insert, inspect
+            from ._query_compilation import compile_expression
+
+            mapper = inspect(table_name).mapper
+            rows = [
+                {mapper.attrs[key].columns[0]: value for key, value in zip(columns, values)}
+                for values in (insert_row_values(row, columns) for row in data_list)
+            ]
+            return compile_expression(insert(mapper.local_table).values(rows))
+        values = [
+            "(" + ", ".join(sql_literal(value) for value in row) + ")"
+            for row in (insert_row_values(record, columns) for record in data_list)
+        ]
         return "INSERT INTO %s (%s) VALUES %s" % (
             sql_identifier(table_name, qualified=True),
             ", ".join(sql_identifier(column) for column in columns),

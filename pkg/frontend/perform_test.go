@@ -343,6 +343,40 @@ func TestPerformStatusResponseMoreResults(t *testing.T) {
 	}
 }
 
+// Tier-2 retry arming (#30359 review): PERFORM persists its result
+// batches through the saved-result writer without marking the statement
+// published, so the production status-statement executor must arm the
+// transition-time discard before Run can replay a failed generation. The
+// discarded blocks/accounting themselves are proven end to end in
+// TestRetryDiscardOutputAbortsPerformSavedResult; this pin proves the
+// arming point.
+func TestExecutePerformArmsRetryDiscardOutput(t *testing.T) {
+	testPlan := newResultColumnTestPlan(1)
+	stmt := &tree.Select{IsPerform: true}
+	saver := &performTestBinaryWriter{}
+	resper := &MysqlResp{mysqlRrWr: &testMysqlWriter{}, binWr: saver}
+	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}, respr: resper}}
+	ses.proc = &process.Process{Base: &process.BaseProcess{}}
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   stmt,
+		cw:     &TxnComputationWrapper{stmt: stmt, plan: testPlan},
+		runner: &performTestRunner{result: &util.RunResult{}},
+		resper: resper,
+		ses:    ses,
+	}
+
+	require.Nil(t, ses.proc.GetSessionInfo().RetryDiscardOutput)
+	require.NoError(t, executeStatusStmt(ses, execCtx))
+	hook := ses.proc.GetSessionInfo().RetryDiscardOutput
+	require.NotNil(t, hook,
+		"PERFORM never publishes its rows to the client, so an internal retry needs the attempt-output discard")
+	// The armed hook drives the session-level attempt abort; with nothing
+	// retained by this fake-saver run it is a safe no-op.
+	require.NoError(t, hook())
+	require.Same(t, stmt, execCtx.stmt)
+}
+
 func TestPerformUsesSelectPrivileges(t *testing.T) {
 	selectPrivileges := determinePrivilegeSetOfStatement(&tree.Select{})
 	performPrivileges := determinePrivilegeSetOfStatement(&tree.Select{IsPerform: true})

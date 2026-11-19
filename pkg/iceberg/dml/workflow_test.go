@@ -387,9 +387,9 @@ func TestCommitWorkflowVerifierFailureDoesNotReverseCommittedResult(t *testing.T
 }
 
 func TestDMLWorkflowAccountingAndPathHelpers(t *testing.T) {
-	require.Empty(t, dmlErrorCategory(nil))
-	require.Equal(t, string(api.ErrMetadataInvalid), dmlErrorCategory(api.NewError(api.ErrMetadataInvalid, "invalid", nil)))
-	require.Equal(t, string(api.ErrInternal), dmlErrorCategory(context.Canceled))
+	require.Empty(t, api.ErrorCategory(nil))
+	require.Equal(t, string(api.ErrMetadataInvalid), api.ErrorCategory(api.NewError(api.ErrMetadataInvalid, "invalid", nil)))
+	require.Equal(t, string(api.ErrInternal), api.ErrorCategory(context.Canceled))
 	require.Zero(t, presentDataFileCount(api.DataFile{}))
 	require.Equal(t, 1, presentDataFileCount(api.DataFile{FilePath: "path"}))
 	require.Zero(t, positiveRecordCount(api.DataFile{RecordCount: -1}))
@@ -435,8 +435,9 @@ func TestDMLWorkflowAccountingAndPathHelpers(t *testing.T) {
 	cloned[0].Entries[0].SnapshotID = 2
 	require.Equal(t, int64(1), sources[0].Entries[0].SnapshotID)
 	require.Nil(t, clonePreservedManifestSources(nil))
-	require.Equal(t, "value", firstNonEmpty("", "value", "ignored"))
-	require.Empty(t, firstNonEmpty("", " "))
+	require.Equal(t, "value", api.FirstNonBlankPreserveWhitespace("", "value", "ignored"))
+	require.Equal(t, " value ", api.FirstNonBlankPreserveWhitespace("  ", " value ", "ignored"))
+	require.Empty(t, api.FirstNonBlankPreserveWhitespace("", " "))
 }
 
 type fakeManifestObjectWriter struct {

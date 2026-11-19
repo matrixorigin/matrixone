@@ -101,8 +101,8 @@ func TestLogicalOperatorsNonBitOperandsUnchanged(t *testing.T) {
 	_, err = GetFunctionByName(ctx, "xor", []types.Type{boolType, boolType, boolType})
 	require.Error(t, err, "xor() with three arguments must stay a plan-time error")
 	// Types outside the boolean domain still fail.
-	_, err = GetFunctionByName(ctx, "and", []types.Type{types.T_date.ToType(), boolType})
-	require.Error(t, err, "and(date, bool) must stay a plan-time error")
+	_, err = GetFunctionByName(ctx, "and", []types.Type{types.T_uuid.ToType(), boolType})
+	require.Error(t, err, "and(uuid, bool) must stay a plan-time error")
 }
 
 // BIT's implicit-cast rows must keep their documented numeric preferences,

@@ -108,33 +108,31 @@ func TestValidateTableChangesSourceContracts(t *testing.T) {
 			Pkey:      &pbplan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
 		}
 	}
-	require.EqualError(t, validateTableChangesSource(nil, nil),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, nil),
 		"invalid input: table_changes source table does not exist")
-	require.EqualError(t, validateTableChangesSource(
+	require.EqualError(t, catalog.ValidateTableChangesSource(
 		&pbplan.ObjectRef{PubInfo: &pbplan.PubInfo{}}, valid()),
 		"not supported: table_changes does not support subscription tables")
 
 	unsupported := valid()
 	unsupported.TableType = catalog.SystemViewRel
-	require.ErrorContains(t, validateTableChangesSource(nil, unsupported),
+	require.ErrorContains(t, catalog.ValidateTableChangesSource(nil, unsupported),
 		"table_changes does not support table type")
 	partitioned := valid()
 	partitioned.Partition = &pbplan.Partition{}
-	require.EqualError(t, validateTableChangesSource(nil, partitioned),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, partitioned),
 		"not supported: table_changes does not support partitioned tables")
 
 	withoutPK := valid()
 	withoutPK.Pkey = nil
-	require.EqualError(t, validateTableChangesSource(nil, withoutPK),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, withoutPK),
 		"not supported: table_changes requires an explicit primary key")
 	cluster := valid()
 	cluster.TableType = catalog.SystemClusterRel
-	require.EqualError(t, validateTableChangesSource(nil, cluster),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, cluster),
 		"not supported: table_changes requires cluster table primary keys to include account_id")
 	cluster.Pkey.Names = append(cluster.Pkey.Names, "ACCOUNT_ID")
-	require.NoError(t, validateTableChangesSource(nil, cluster))
-	require.True(t, containsChangeKey(cluster.Pkey.Names, "account_id"))
-	require.False(t, containsChangeKey(cluster.Pkey.Names, "missing"))
+	require.NoError(t, catalog.ValidateTableChangesSource(nil, cluster))
 }
 
 func TestTableChangesStringLiteral(t *testing.T) {
@@ -148,7 +146,7 @@ func TestTableChangesStringLiteral(t *testing.T) {
 }
 
 func TestValidateTableChangesSourceTemporaryTable(t *testing.T) {
-	err := validateTableChangesSource(nil, &pbplan.TableDef{
+	err := catalog.ValidateTableChangesSource(nil, &pbplan.TableDef{
 		TableType:   catalog.SystemTemporaryTable,
 		IsTemporary: true,
 	})
@@ -167,7 +165,7 @@ func TestValidateTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTableChangesColumnNames(&pbplan.TableDef{Cols: []*pbplan.ColDef{{
+			err := catalog.ValidateTableChangesSource(nil, &pbplan.TableDef{Cols: []*pbplan.ColDef{{
 				Name: tt.name,
 				Typ:  pbplan.Type{Id: int32(tt.typ)},
 			}}})

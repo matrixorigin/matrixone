@@ -39,35 +39,21 @@ const (
 )
 
 type container struct {
-	localRank    *localRankIndex
-	allocation   colexec.AnalyticAllocation
-	sortMetadata uint64
-	status       int
+	windowAggregateState
+	aggregateStates []windowAggregateState
+	localRank       *localRankIndex
+	allocation      colexec.AnalyticAllocation
+	sortMetadata    uint64
+	status          int
 
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
-
-	// runningAgg retains the one-group aggregate for cumulative and bounded
-	// sliding frames between output chunks. runningNextRow guards against
-	// accidentally reusing the state out of order; runningLeft/runningRight
-	// describe the current half-open sliding frame. For RANGE frames,
-	// runningPeerEnd lets every row in one peer group reuse the same boundaries.
-	runningAgg       aggexec.AggFuncExec
-	runningNextRow   int
-	runningPartition int
-	runningLeft      int
-	runningRight     int
-	runningPeerEnd   int
-
-	// fullPartitionResults caches finalized aggregate values across output chunks.
-	// Ordinary aggregates cache only partitions reached by the current chunk;
-	// ordered-set aggregates retain their eager evaluation behavior.
-	// fullPartition is the global partition and fullPartitionResultIndex its
-	// position in the current cache. Both are reset with the input generation.
-	fullPartitionResults     *vector.Vector
-	fullPartitionNextRow     int
-	fullPartition            int
-	fullPartitionResultIndex int
+	// ewmAggs carries the EWM window-statistics dispatch state, one entry
+	// per window slot: the decoded per-execution configuration, the
+	// staged partition row view, the per-partition accounts and the
+	// generation's absolute publication cursor. Freed at every ownership
+	// boundary beside the running aggregate state (§9 lifecycle).
+	ewmAggs []*ewmAggState
 
 	desc      []bool
 	nullsLast []bool
@@ -91,6 +77,13 @@ type container struct {
 	emitOffset int
 	rBat       *batch.Batch
 
+	// Unordered, unpartitioned ROW_NUMBER borrows one child batch until all chunks
+	// have been consumed. It never owns or materializes that input.
+	streamRowNumber    bool
+	rowNumberInput     *batch.Batch
+	rowNumberCounter   uint64
+	rowNumberChildDone bool
+
 	runtimeFrames []*plan.FrameClause
 
 	// timestampCivilOrder caches the monotonic civil-time spans of a sorted
@@ -101,6 +94,25 @@ type container struct {
 	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
 	civilMetadata       uint64
 	civilSelection      timestampRangeSelection
+}
+
+// Each fused expression owns its resumable aggregate state. Input batches,
+// argument vectors and sorting remain owned once by container.
+type windowAggregateState struct {
+	// Running frames retain one aggregate and their publication/partition
+	// cursor between output chunks; these cursors never cross expressions.
+	runningAgg       aggexec.AggFuncExec
+	runningNextRow   int
+	runningPartition int
+	runningLeft      int
+	runningRight     int
+	runningPeerEnd   int
+
+	// Whole-partition results are finalized once and borrowed by later chunks.
+	fullPartitionResults     *vector.Vector
+	fullPartitionNextRow     int
+	fullPartition            int
+	fullPartitionResultIndex int
 }
 
 type timestampCivilOrderKey struct {
@@ -204,7 +216,9 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeAggregateStates(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeEwmState()
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -221,6 +235,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
+	ctr.resetRowNumber()
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
 	// Free aggregators before the batch so an error exit from Call (which skips
@@ -228,7 +243,9 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeAggregateStates(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeEwmState()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -241,6 +258,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 func (ctr *container) resetParam() {
 	ctr.status = receive
 	ctr.emitOffset = 0
+	ctr.resetRowNumber()
 	ctr.desc = nil
 	ctr.nullsLast = nil
 	ctr.clearSortState()
@@ -313,6 +331,38 @@ func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
 	ctr.fullPartitionNextRow = 0
 	ctr.fullPartition = 0
 	ctr.fullPartitionResultIndex = 0
+}
+
+func (ctr *container) freeAggregateStates(mp *mpool.MPool) {
+	for i := range ctr.aggregateStates {
+		state := &ctr.aggregateStates[i]
+		if state.runningAgg != nil {
+			state.runningAgg.Free()
+		}
+		if state.fullPartitionResults != nil {
+			state.fullPartitionResults.Free(mp)
+		}
+		*state = windowAggregateState{}
+	}
+	ctr.aggregateStates = nil
+}
+
+func (ctr *container) freeEwmState() {
+	// The staged row views borrow the vectors' own backing; the
+	// statement-budget charges admitting them (rows, keys, span
+	// directory and the worst-case per-group scratch) are released
+	// here, mirroring the sort path's metadata teardown.
+	for i, st := range ctr.ewmAggs {
+		if st != nil {
+			ctr.allocation.ReleaseMetadata(st.charge)
+			st.eval = nil
+			st.rows = nil
+			st.spans = nil
+			st.charge = 0
+			ctr.ewmAggs[i] = nil
+		}
+	}
+	ctr.ewmAggs = nil
 }
 
 func (ctr *container) freeExes() {

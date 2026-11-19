@@ -33,7 +33,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-const snapshotDecisionPageSize = 128
+const (
+	// Released catalogs can contain 5,000-character database and table names.
+	// Keep a full page of their UTF-8 values below the retained-result ceiling.
+	snapshotCatalogPageSize  = 32
+	snapshotDecisionPageSize = 128
+)
 
 type catalogSnapshot struct {
 	preimage snapshotDecisionPreimage
@@ -98,7 +103,7 @@ func (s *service) snapshotPage(ctx context.Context, after string) ([]catalogSnap
 // Snapshot name is the existing primary key. Ordered keyset pages cap the
 // retained SQL result; the file remains ordered by that same canonical name.
 func readCatalogSnapshotPage(tx executor.TxnExecutor, after string) ([]catalogSnapshot, error) {
-	return readCatalogSnapshots(tx, fmt.Sprintf("sname > ? order by sname limit %d", snapshotDecisionPageSize), after)
+	return readCatalogSnapshots(tx, fmt.Sprintf("sname > ? order by sname limit %d", snapshotCatalogPageSize), after)
 }
 
 func readCatalogSnapshots(tx executor.TxnExecutor, predicate, parameter string) ([]catalogSnapshot, error) {
@@ -110,7 +115,7 @@ func readCatalogSnapshots(tx executor.TxnExecutor, predicate, parameter string) 
 		return nil, snapshotDecisionLimitError(err)
 	}
 	defer res.Close()
-	page := make([]catalogSnapshot, 0, snapshotDecisionPageSize)
+	page := make([]catalogSnapshot, 0, snapshotCatalogPageSize)
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			var id, name, kind string
@@ -263,7 +268,7 @@ func (s *service) scanSnapshotDecisions(ctx context.Context, visit func(snapshot
 				return &terminalUpgradeError{err}
 			}
 		}
-		if len(page) < snapshotDecisionPageSize {
+		if len(page) < snapshotCatalogPageSize {
 			break
 		}
 	}

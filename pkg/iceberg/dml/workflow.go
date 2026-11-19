@@ -90,7 +90,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, nil)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	materialized, err := BuildManifestCommitAttempt(ctx, ManifestMaterializeRequest{
@@ -113,14 +113,14 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, nil)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	if err := w.writeManifests(ctx, materialized); err != nil {
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	result, err := w.Committer.CommitTable(ctx, dmlCommitRequest(req.Catalog, req.Stream.Base, materialized.Attempt))
@@ -131,7 +131,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 			verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 			if verifyErr != nil {
 				recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-				w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+				w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(verifyErr))
 				return nil, stderrors.Join(verifyErr, recordErr)
 			}
 			if ok {
@@ -140,13 +140,13 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 			}
 			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 			unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+			w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(unknownErr))
 			return nil, stderrors.Join(unknownErr, recordErr)
 		}
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	if result == nil || result.Unknown {
@@ -155,7 +155,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 		if verifyErr != nil {
 			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+			w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(verifyErr))
 			return nil, stderrors.Join(verifyErr, recordErr)
 		}
 		if ok {
@@ -164,7 +164,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		}
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-		w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+		w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(unknownErr))
 		return nil, stderrors.Join(unknownErr, recordErr)
 	}
 	recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
@@ -304,10 +304,10 @@ func (w CommitWorkflow) recordOrphans(ctx context.Context, req CommitWorkflowReq
 		candidates = append(candidates, icebergwrite.OrphanCandidate{
 			AccountID:         req.Catalog.Catalog.AccountID,
 			CatalogID:         req.Catalog.Catalog.CatalogID,
-			JobID:             firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey),
+			JobID:             api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey),
 			Namespace:         strings.Join(req.Stream.Base.Namespace, "."),
 			TableName:         req.Stream.Base.Table,
-			TableLocationHash: api.PathHash(firstNonEmpty(req.TableLocation, req.Stream.Base.Table)),
+			TableLocationHash: api.PathHash(api.FirstNonBlankPreserveWhitespace(req.TableLocation, req.Stream.Base.Table)),
 			FilePath:          path,
 			FilePathHash:      api.PathHash(path),
 			FilePathRedacted:  api.RedactPath(path),
@@ -324,18 +324,18 @@ func dmlCommitRequest(catalog api.CatalogRequest, base CommitBase, attempt *api.
 		CatalogRequest: catalog,
 		Namespace:      base.Namespace,
 		Table:          base.Table,
-		TargetRef:      firstNonEmpty(attempt.TargetRef, base.TargetRef, "main"),
+		TargetRef:      api.FirstNonBlankPreserveWhitespace(attempt.TargetRef, base.TargetRef, "main"),
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
-		IdempotencyKey: firstNonEmpty(attempt.IdempotencyKey, base.IdempotencyKey),
-		Summary:        cloneStringMap(attempt.Summary),
+		IdempotencyKey: api.FirstNonBlankPreserveWhitespace(attempt.IdempotencyKey, base.IdempotencyKey),
+		Summary:        api.CloneNonEmptyMap(attempt.Summary),
 	}
 }
 
 func dmlPublishAudit(req CommitWorkflowRequest, result api.CommitResult, status, category string) icebergwrite.PublishAudit {
 	base := req.Stream.Base
 	return icebergwrite.PublishAudit{
-		JobID:                firstNonEmpty(base.StatementID, base.IdempotencyKey),
+		JobID:                api.FirstNonBlankPreserveWhitespace(base.StatementID, base.IdempotencyKey),
 		AccountID:            req.Catalog.Catalog.AccountID,
 		TargetCatalogID:      req.Catalog.Catalog.CatalogID,
 		TargetNamespace:      strings.Join(base.Namespace, "."),
@@ -369,7 +369,7 @@ func dmlMetricsReport(req CommitWorkflowRequest, intent *CommitIntent, materiali
 		CatalogRequest:       req.Catalog,
 		Namespace:            append(api.Namespace(nil), base.Namespace...),
 		Table:                base.Table,
-		Ref:                  firstNonEmpty(base.TargetRef, "main"),
+		Ref:                  api.FirstNonBlankPreserveWhitespace(base.TargetRef, "main"),
 		SnapshotID:           result.SnapshotID,
 		StatementID:          base.StatementID,
 		Kind:                 api.MetricsReportWrite,
@@ -379,17 +379,6 @@ func dmlMetricsReport(req CommitWorkflowRequest, intent *CommitIntent, materiali
 		Files:                dmlActionFileCount(req.Stream),
 		Extra:                extra,
 	}
-}
-
-func dmlErrorCategory(err error) string {
-	if err == nil {
-		return ""
-	}
-	var icebergErr *api.IcebergError
-	if stderrors.As(err, &icebergErr) && icebergErr.Code != "" {
-		return string(icebergErr.Code)
-	}
-	return string(api.ErrInternal)
 }
 
 func dmlActionRecordCount(stream ActionStream) int64 {
@@ -529,13 +518,4 @@ func clonePreservedManifestSources(in []PreservedManifestSource) []PreservedMani
 		out[i].Entries = append([]api.ManifestEntry(nil), in[i].Entries...)
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

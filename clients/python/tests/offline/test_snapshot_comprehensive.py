@@ -45,6 +45,7 @@ _original_modules = {}
 from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotLevel
 from matrixone.exceptions import (
     SnapshotError,
+    SnapshotNotFound,
     ConnectionError as MatrixOneConnectionError,
     QueryError,
 )
@@ -246,7 +247,7 @@ class TestSnapshotManager(unittest.TestCase):
 
     def test_exists_snapshot_false(self):
         """Test checking if snapshot exists (returns False)"""
-        with patch.object(self.snapshot_manager, 'get', side_effect=SnapshotError("not found")):
+        with patch.object(self.snapshot_manager, 'get', side_effect=SnapshotNotFound("not found")):
             result = self.snapshot_manager.exists("test_snap")
             self.assertFalse(result)
 

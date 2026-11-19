@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,6 +35,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedConsumerKeepsUnaryConversionBeforePrefixAdmission(t *testing.T) {
+	textType := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name      string
+		value     any
+		decimal   bool
+		dependent bool
+	}{
+		{name: "exact", value: "-2.25", decimal: true, dependent: true},
+		{name: "invalid", value: "not-a-number", dependent: true},
+		{name: "null", value: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: textType}},
+				[]any{ParamValue{Value: tc.value, SourceType: textType, HasSourceType: true, EnableNumericPrefix: true}})
+			state := preparedBindingState(ctx)
+			prior := makePlan2Int64ConstExprWithType(42)
+			state.diagnosticCandidates = []*Expr{prior}
+			source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			original := []*Expr{source}
+			args, err := bindPreparedConsumerArguments(ctx, "ABS", original)
+			require.NoError(t, err)
+			require.Same(t, source, original[0])
+			require.NotSame(t, source, args[0])
+			require.Equal(t, tc.decimal, types.T(args[0].Typ.Id).IsDecimal())
+			if !tc.decimal {
+				require.Equal(t, types.T_float64, types.T(args[0].Typ.Id))
+			}
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.True(t, state.diagnosticFree)
+			require.Equal(t, []*Expr{prior}, state.diagnosticCandidates)
+			args[0] = prior
+			require.Same(t, source, original[0], "consumer owns its argument slice")
+		})
+	}
+
+	source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	original := []*Expr{source}
+	args, err := bindPreparedConsumerArguments(context.Background(), "ABS", original)
+	require.NoError(t, err)
+	require.Same(t, source, args[0], "without binding state the existing argument is retained")
+}
 
 func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
 	for _, test := range []struct {
@@ -106,9 +151,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 						"select c from decimal_filters where "+tc.predicate, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-						[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}},
-						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
 					require.NoError(t, err)
 					if tc.binding.IsInteger() && tc.native {
 						require.False(t, bound.ValueDependent, "safe plans reuse the existing per-execution conversion guard")
@@ -603,9 +646,7 @@ func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
 				params.CleanOnlyData()
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 				proc.SetPrepareParams(params)
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
-					[]any{ParamValue{Value: value}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}}, []any{ParamValue{Value: value}})
 				require.NoError(t, err)
 				require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
 				cast := false
@@ -799,9 +840,7 @@ func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
-					[]any{value, value})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}}, []any{value, value})
 				require.NoError(t, err)
 				q := bound.Plan.GetQuery()
 				require.NotNil(t, q.Correlation)
@@ -1001,13 +1040,11 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		typ        types.T
 		valid, bad string
-		badSafe    bool
 	}{
-		{types.T_int64, "12", "12.5", false},
-		{types.T_time, "00:00:01", "900:00:00", false},
-		// Expression DATE casts return NULL without a warning for lexical
-		// errors; conservative classification must still accept that proof.
-		{types.T_date, "2024-01-02", "invalid-date", true},
+		{types.T_int64, "12", "12.5"},
+		{types.T_time, "00:00:01", "900:00:00"},
+		// Invalid expression DATE casts emit a warning and cannot be folded.
+		{types.T_date, "2024-01-02", "invalid-date"},
 	} {
 		t.Run(tc.typ.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -1021,7 +1058,7 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 			for _, binding := range []struct {
 				value      string
 				null, safe bool
-			}{{tc.valid, false, true}, {tc.bad, false, tc.badSafe}, {"", true, true}, {tc.valid, false, true}} {
+			}{{tc.valid, false, true}, {tc.bad, false, false}, {"", true, true}, {tc.valid, false, true}} {
 				func() {
 					params := vector.NewVec(types.T_text.ToType())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -1157,9 +1194,7 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, statement+tc.predicate, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}},
-					[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
 				require.NoError(t, err)
 				found, columnCast := false, false
 				for _, node := range bound.Plan.GetQuery().Nodes {
@@ -1551,11 +1586,26 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 	}
 }
 
+type preparedBitCountWarning struct {
+	code    uint16
+	message string
+}
+
+type preparedBitCountWarningSink struct {
+	warnings []preparedBitCountWarning
+}
+
+func (s *preparedBitCountWarningSink) AppendWarningDiagnostic(code uint16, message string) {
+	s.warnings = append(s.warnings, preparedBitCountWarning{code: code, message: message})
+}
+
 func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
+	decimal256 := types.New(types.T_decimal256, 65, 30)
 	for _, tc := range []struct {
 		name, sql, value, want   string
 		source, numeric, latch   types.Type
 		null, dependent, decimal bool
+		warningType              string
 	}{
 		{name: "prefix absent", sql: "coalesce(?, cast('7' as decimal(6,2)))", value: "abc", want: "abc", source: types.T_varchar.ToType(), dependent: true},
 		{name: "prefix zero", sql: "coalesce(?, cast('7' as decimal(6,2)))", value: "0xx", want: "0.00", source: types.T_varchar.ToType(), dependent: true, decimal: true},
@@ -1573,6 +1623,34 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 		{name: "bit count initial", sql: "bit_count(?)", value: "64", want: "7", source: types.T_varchar.ToType()},
 		{name: "bit count numeric", sql: "bit_count(?)", value: "64", want: "1", source: types.T_int32.ToType(), latch: types.T_int64.ToType()},
 		{name: "bit count latched", sql: "bit_count(?)", value: "65", want: "2", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count latched numeric prefix", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count latched binary numeric prefix", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varbinary.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed exponent", sql: "bit_count(?)", value: "1e2", want: "3", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed fraction", sql: "bit_count(?)", value: "2.5", want: "2", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed negative fraction", sql: "bit_count(?)", value: "-1.9", want: "63", source: types.T_varchar.ToType(), latch: types.T_int64.ToType()},
+		{name: "bit count signed suffix", sql: "bit_count(?)", value: "1.9x", want: "1", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed invalid", sql: "bit_count(?)", value: "abc", want: "0", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed empty", sql: "bit_count(?)", value: "", want: "0", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "INTEGER"},
+		{name: "bit count signed overflow", sql: "bit_count(?)", value: "9223372036854775808", want: "63", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count signed negative overflow", sql: "bit_count(?)", value: "-9223372036854775809", want: "1", source: types.T_varchar.ToType(), latch: types.T_int64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count unsigned negative", sql: "bit_count(?)", value: "-1", want: "64", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType()},
+		{name: "bit count unsigned maximum", sql: "bit_count(?)", value: "18446744073709551615", want: "63", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count unsigned overflow", sql: "bit_count(?)", value: "18446744073709551616", want: "63", source: types.T_varchar.ToType(), latch: types.T_uint64.ToType(), warningType: "DECIMAL"},
+		{name: "bit count double fraction", sql: "bit_count(?)", value: "2.5", want: "1", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		// Extreme values retain the existing numeric DOUBLE consumer's behavior;
+		// changing direct numeric overflow semantics is outside this repair.
+		{name: "bit count double large finite", sql: "bit_count(?)", value: "1e20", want: "64", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		{name: "bit count double positive infinity", sql: "bit_count(?)", value: "1e309", want: "64", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count double negative infinity", sql: "bit_count(?)", value: "-1e309", want: "1", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count double underflow", sql: "bit_count(?)", value: "1e-4000", want: "0", source: types.T_varchar.ToType(), latch: types.T_float64.ToType()},
+		{name: "bit count decimal exponent", sql: "bit_count(?)", value: "1e2", want: "3", source: types.T_varchar.ToType(), latch: decimal256},
+		{name: "bit count decimal fraction", sql: "bit_count(?)", value: "2.5", want: "2", source: types.T_varchar.ToType(), latch: decimal256},
+		{name: "bit count decimal suffix", sql: "bit_count(?)", value: "1.9x", want: "1", source: types.T_varchar.ToType(), latch: decimal256, warningType: "INTEGER"},
+		{name: "bit count decimal invalid", sql: "bit_count(?)", value: "abc", want: "0", source: types.T_varchar.ToType(), latch: decimal256, warningType: "INTEGER"},
+		{name: "bit count latched double fractional time", sql: "bit_count(?)", value: "00:00:00.500000", want: "1", source: types.T_time.ToTypeWithScale(6), latch: types.T_float64.ToType()},
+		{name: "bit count latched double datetime calendar carry", sql: "bit_count(?)", value: "2024-02-29 23:59:59.500000", want: "20", source: types.T_datetime.ToTypeWithScale(6), latch: types.T_float64.ToType()},
+		{name: "bit count latched double text after temporal", sql: "bit_count(?)", value: "2024-01-01", want: "7", source: types.T_varchar.ToType(), latch: types.T_float64.ToType(), warningType: "INTEGER"},
+		{name: "bit count latched double null after temporal", sql: "bit_count(?)", null: true, source: types.T_any.ToType(), latch: types.T_float64.ToType()},
 		{name: "bit count null", sql: "bit_count(?)", null: true, source: types.T_any.ToType(), latch: types.T_int64.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1590,8 +1668,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			previous := mock.ctxt.GetContext()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
 			require.NoError(t, err)
 			require.Equal(t, previous, mock.ctxt.GetContext())
 			require.Equal(t, tc.dependent, bound.ValueDependent, "%s", bound.Plan.String())
@@ -1604,6 +1681,10 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			textType := types.T_varchar.ToType()
 			display, err := makePlan2CastExpr(proc.Ctx, expr, makePlan2Type(&textType))
 			require.NoError(t, err)
+			warnings := &preparedBitCountWarningSink{}
+			if tc.sql == "bit_count(?)" {
+				proc.WarningSink = warnings
+			}
 			result, free, err := colexec.GetReadonlyResultFromExpression(proc, display, []*batch.Batch{batch.EmptyForConstFoldBatch})
 			if free != nil {
 				defer free()
@@ -1612,6 +1693,16 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			require.Equal(t, tc.null, result.IsNull(0))
 			if !tc.null {
 				require.Equal(t, tc.want, result.GetStringAt(0))
+			}
+			if tc.sql == "bit_count(?)" {
+				if tc.warningType == "" {
+					require.Empty(t, warnings.warnings)
+				} else {
+					require.Equal(t, []preparedBitCountWarning{{
+						code:    moerr.ER_TRUNCATED_WRONG_VALUE,
+						message: fmt.Sprintf("Truncated incorrect %s value: '%s'", tc.warningType, tc.value),
+					}}, warnings.warnings)
+				}
 			}
 		})
 	}
@@ -1625,9 +1716,7 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
-				[]any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(bound.Plan, "left")
 			require.NotNil(t, expr)
@@ -1729,6 +1818,84 @@ func TestPreparedExplainSelectClassification(t *testing.T) {
 		}
 	}
 	require.False(t, preparedUnderlyingSelect(nil))
+}
+
+func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
+	for _, predicate := range []string{
+		"cast(id as int)=?", "cast(cast(id as int) as signed)=?",
+		"?<cast(id as signed)", "cast(id as int) between ? and ?", "cast(id as int) in (?,?)",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			proc := mock.ctxt.GetProcess()
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from index_hint_t use index() where "+predicate, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			count := strings.Count(predicate, "?")
+			bindings := make([]PreparedSourceBinding, count)
+			for i := range bindings {
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_int64.ToType()}
+			}
+			for _, tc := range []struct {
+				name, value  string
+				null, native bool
+			}{
+				{"safe", "7", false, true},
+				{"above maximum", "2147483648", false, false},
+				{"below minimum", "-2147483649", false, false},
+				{"null", "", true, false},
+				{"safe again", "9", false, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					params := vector.NewVec(types.T_text.ToType())
+					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+					values := make([]any, count)
+					for i := range values {
+						value := tc.value
+						if i > 0 && !tc.null {
+							value = "11"
+						}
+						require.NoError(t, vector.AppendBytes(params, []byte(value), tc.null, proc.Mp()))
+						if !tc.null {
+							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}
+						}
+					}
+					proc.SetPrepareParams(params)
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+					require.NoError(t, err)
+					var found bool
+					for _, node := range bound.Plan.GetQuery().Nodes {
+						if node.NodeType != planpb.Node_TABLE_SCAN {
+							continue
+						}
+						for _, filter := range node.FilterList {
+							require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+								fn := expr.GetF()
+								if fn == nil || fn.Func == nil || len(fn.Args) != 2 ||
+									(!isPreparedNumericComparison(fn.Func.ObjName) && fn.Func.ObjName != "in" && fn.Func.ObjName != "not_in") {
+									return nil
+								}
+								found = true
+								if tc.native {
+									require.NotNil(t, fn.Args[0].GetCol(), expr.String())
+									require.Equal(t, int32(types.T_int32), fn.Args[0].Typ.Id)
+									require.True(t, function.ContainsParameter(expr), "proof must retain the executable parameter")
+								} else if count == 1 && !tc.null {
+									require.Nil(t, fn.Args[0].GetCol(), "out-of-domain bindings must not be narrowed")
+								}
+								return nil
+							}))
+						}
+					}
+					if tc.native {
+						require.True(t, found, bound.Plan.String())
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
@@ -1898,6 +2065,107 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 			if ok {
 				require.NotNil(t, resolved.GetP())
 				require.NotNil(t, peer.GetCol(), "proof must not mutate execution tree")
+			}
+		})
+	}
+}
+
+func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
+	decimalSource := types.New(types.T_decimal64, 1, 1)
+	type param struct {
+		value   any
+		binding types.Type
+	}
+	sqlDecimal := param{"0.3", decimalSource}
+	for _, tc := range []struct {
+		name      string
+		predicate string
+		params    []param
+		binary    bool
+		narrowed  int
+	}{
+		{"equal sql decimal", "f = ?", []param{sqlDecimal}, false, 1},
+		{"in sql decimal", "f in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"not in sql decimal", "f not in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"less equal sql decimal", "f <= ?", []param{sqlDecimal}, false, 1},
+		{"between sql decimal", "f between ? and ?", []param{sqlDecimal, {"2", decimalSource}}, false, 2},
+		{"equal sql integer", "f = ?", []param{{int64(257), types.T_int64.ToType()}}, false, 1},
+		{"in sql decimal and integer", "f in (?, ?)", []param{sqlDecimal, {int64(6), types.T_int64.ToType()}}, false, 2},
+		{"in binary double", "f in (?, 9)", []param{{"0.3", types.T_float64.ToType()}}, true, 1},
+		{"in binary text", "f in (?, 9)", []param{{"0.3", types.T_varchar.ToType()}}, true, 1},
+		{"equal hex float text", "f = ?", []param{{"0x1p0", types.T_varchar.ToType()}}, true, 0},
+		{"equal out of range", "f = ?", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in one sql value out of range", "f in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		{"not in one sql value out of range", "f not in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		// in range by the value CAST rounds the marker to (to odd, from the exact source)
+		{"float4 above max binary double", "h <= ?", []param{{"6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 below min binary double", "h >= ?", []param{{"-6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 above max binary text", "h <= ?", []param{{"6.0000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 above max beyond float64 binary text", "h <= ?", []param{{"6.0000000000000000000000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 max binary double", "h <= ?", []param{{"6", types.T_float64.ToType()}}, true, 1},
+		{"float4 min binary text", "h >= ?", []param{{"-6", types.T_varchar.ToType()}}, true, 1},
+		{"float8 above max binary double", "g <= ?", []param{{"448.000001", types.T_float64.ToType()}}, true, 0},
+		{"float8 below min binary text", "g >= ?", []param{{"-448.000001", types.T_varchar.ToType()}}, true, 0},
+		{"float8 max binary double", "g <= ?", []param{{"448", types.T_float64.ToType()}}, true, 1},
+		{"float16 above max binary double", "k < ?", []param{{"65505", types.T_float64.ToType()}}, true, 0},
+		{"float16 below min binary text", "k > ?", []param{{"-65505", types.T_varchar.ToType()}}, true, 0},
+		{"float16 above max sql integer", "k < ?", []param{{int64(65505), types.T_int64.ToType()}}, false, 0},
+		{"float16 max binary double", "k <= ?", []param{{"65504", types.T_float64.ToType()}}, true, 1},
+		{"bf16 above max binary double", "f < ?", []param{{"3.39e38", types.T_float64.ToType()}}, true, 0},
+		{"bf16 below min binary text", "f > ?", []param{{"-3.39e38", types.T_varchar.ToType()}}, true, 0},
+		// bf16's printed maximum narrows, as CAST accepts it by its float32 value
+		{"bf16 printed max binary double", "f = ?", []param{{"3.3895314e+38", types.T_float64.ToType()}}, true, 1},
+		{"bf16 printed min binary double", "f = ?", []param{{"-3.3895314e+38", types.T_float64.ToType()}}, true, 1},
+		{"bf16 printed max binary text", "f = ?", []param{{"3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
+		{"bf16 printed min binary text", "f = ?", []param{{"-3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
+		{"bf16 next float32 above max binary double", "f = ?", []param{{"3.3895316e+38", types.T_float64.ToType()}}, true, 0},
+		// as for a literal, only a column narrows the marker
+		{"bf16 expression sql decimal", "cast(id as bf16) = ?", []param{sqlDecimal}, false, 0},
+		{"float4 expression binary double", "cast(id as float4) = ?", []param{{"1.1", types.T_float64.ToType()}}, true, 0},
+		{"bf16 expression in sql decimal", "cast(id as bf16) in (?, 9)", []param{sqlDecimal}, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			bindings := make([]PreparedSourceBinding, len(tc.params))
+			values := make([]any, len(tc.params))
+			for i, p := range tc.params {
+				require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(p.value)), false, proc.Mp()))
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: p.binding}
+				value := ParamValue{Value: p.value, IsBinaryProtocol: tc.binary}
+				if !tc.binary {
+					value.EnableNumericPrefix = true
+					value.SourceType, value.HasSourceType = p.binding, true
+				}
+				values[i] = value
+			}
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from vecblock_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+			require.NoError(t, err)
+			narrowed, filters := 0, 0
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					filters++
+					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
+							types.T(expr.Typ.Id).IsLowPrecisionFloat() && function.ContainsParameter(fn.Args[0]) {
+							narrowed++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Positive(t, filters)
+			require.Equal(t, tc.narrowed, narrowed, bound.Plan.String())
+			if tc.narrowed > 0 {
+				require.True(t, bound.ValueDependent, "a narrowed marker must not enter the type-only cache")
 			}
 		})
 	}

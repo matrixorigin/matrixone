@@ -170,8 +170,8 @@ func (s *sortRollupState) init(group *Group) error {
 			s.levelAggs[level] = list
 		}
 	}
-	// Select one execution path for the complete list and all prefixes. A
-	// capability error during execution must abort, never retry via fallback.
+	// Select reuse for the complete list and all prefixes; input metadata can
+	// later select the ordinary path. Execution errors always abort.
 	s.reuseSingleGroup = len(group.Aggs) > 0
 	for _, list := range s.levelAggs {
 		s.reuseSingleGroup = s.reuseSingleGroup && aggexec.SupportsSingleGroupReuse(list)
@@ -935,6 +935,21 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 		}
 		if err := group.evaluateBuildInput(proc, result.Batch); err != nil {
 			return vm.CancelResult, err
+		}
+		// Check the entire list before closing a previous batch's prefixes:
+		// evaluateBuildInput has already observed this batch's metadata.
+		if s.reuseSingleGroup {
+			for _, level := range s.levelAggs {
+				for i, agg := range level {
+					if !aggexec.SupportsSingleGroupReuseInput(agg, group.ctr.aggArgEvaluate[i].Vec) {
+						s.reuseSingleGroup = false
+						break
+					}
+				}
+				if !s.reuseSingleGroup {
+					break
+				}
+			}
 		}
 		s.input = result.Batch
 		s.inputRow = 0

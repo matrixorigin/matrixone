@@ -1,0 +1,58 @@
+set @sav_wt_global = @@global.wait_timeout;
+set @sav_wt_session = @@wait_timeout;
+set wait_timeout = 86401;
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+86401
+set wait_timeout = 1209600;
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+1209600
+set wait_timeout = 31536000;
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+31536000
+set wait_timeout = 31536001;
+internal error: convert to the system variable int type failed
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+31536000
+set wait_timeout = -1;
+internal error: convert to the system variable int type failed
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+31536000
+set wait_timeout = 'abc';
+internal error: convert to the system variable int type failed
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+31536000
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+set wait_timeout = 1209600;
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+1209600
+set global wait_timeout = 1209600;
+select @@global.wait_timeout;
+➤ @@global.wait_timeout[-1,16383,0]  𝄀
+1209600
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+1209600
+set global wait_timeout = default;
+select @@global.wait_timeout;
+➤ @@global.wait_timeout[-1,16383,0]  𝄀
+86400
+select @@wait_timeout;
+➤ @@wait_timeout[-1,16383,0]  𝄀
+1209600
+set global wait_timeout = @sav_wt_global;
+select @sav_wt_global = @@global.wait_timeout;
+➤ @sav_wt_global = @@global.wait_timeout[-6,8,0]  𝄀
+1
+set wait_timeout = @sav_wt_session;
+select @@wait_timeout = @sav_wt_session;
+➤ @@wait_timeout = @sav_wt_session[-6,8,0]  𝄀
+1

@@ -42,23 +42,6 @@ class _FulltextManagerBase:
     """
 
     @staticmethod
-    def _build_create_sql(table_name: str, name: str, columns: Union[str, List[str]], algorithm: str) -> str:
-        """Build SQL for creating fulltext index."""
-        if isinstance(columns, str):
-            columns = [columns]
-        columns_str = ", ".join(columns)
-
-        # For now, MatrixOne doesn't support algorithm specification in CREATE statement
-        # The algorithm is handled by the FulltextIndex.create_index() call
-        sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-        return sql
-
-    @staticmethod
-    def _build_drop_sql(table_name: str, name: str) -> str:
-        """Build SQL for dropping fulltext index."""
-        return f"DROP INDEX {name} ON {table_name}"
-
-    @staticmethod
     def _build_enable_sql() -> str:
         """Build SQL for enabling fulltext indexing."""
         return "SET experimental_fulltext_index = 1"
@@ -78,19 +61,19 @@ class FulltextIndexManager(_FulltextManagerBase):
 
     Key Features:
     - Fulltext index creation and management
-    - Support for multiple fulltext algorithms (TF-IDF, BM25)
+    - Index creation with query-scoped ranking configured on the search builder
     - Multi-column fulltext indexing
     - Index optimization and maintenance
     - Chain operations for efficient index management
 
     Supported Algorithms:
     - TF-IDF: Term Frequency-Inverse Document Frequency (default)
-    - BM25: Best Matching 25 algorithm for improved relevance scoring
+    - BM25 ranking is selected on a search, never through index DDL
 
     Usage Examples::
 
         # Create fulltext index on single column
-        client.fulltext_index.create("documents", "idx_content", "content", algorithm="BM25")
+        client.fulltext_index.create("documents", "idx_content", "content", algorithm="TF-IDF")
 
         # Create fulltext index on multiple columns
         client.fulltext_index.create("articles", "idx_title_content", ["title", "content"])
@@ -128,7 +111,7 @@ class FulltextIndexManager(_FulltextManagerBase):
             table_name_or_model: Table name (str) or SQLAlchemy model class
             name: Index name
             columns: Column(s) to index (str or List[str])
-            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+            algorithm: Compatibility default TF-IDF only; configure BM25 on the search builder
 
         Returns:
             Self for chaining
@@ -149,12 +132,13 @@ class FulltextIndexManager(_FulltextManagerBase):
             # Use FulltextIndex helper for proper index creation
             from .sqlalchemy_ext import FulltextIndex
 
+            FulltextIndex.validate_algorithm(algorithm)
             # Determine connection based on executor type
             if self.executor is self.client:
                 # Auto-commit mode: create a temporary session internally
                 with self.client.session() as session:
                     conn = session.connection()
-                    success = FulltextIndex.create_index(
+                    FulltextIndex.create_index(
                         bind=conn,
                         table_name=table_name,
                         name=name,
@@ -165,7 +149,7 @@ class FulltextIndexManager(_FulltextManagerBase):
             else:
                 # Transaction context mode: use session's connection directly
                 conn = self.executor.connection()
-                success = FulltextIndex.create_index(
+                FulltextIndex.create_index(
                     bind=conn,
                     table_name=table_name,
                     name=name,
@@ -173,14 +157,11 @@ class FulltextIndexManager(_FulltextManagerBase):
                     algorithm=algorithm,
                 )
 
-            if not success:
-                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}")
-
             return self
         except Exception as e:
-            if "Failed to create" not in str(e):
-                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}: {e}")
-            raise
+            if isinstance(e, QueryError):
+                raise
+            raise QueryError('Failed to create fulltext index', phase='ddl_index') from e
 
     def drop(self, table_name_or_model, name: str) -> "FulltextIndexManager":
         """
@@ -214,21 +195,18 @@ class FulltextIndexManager(_FulltextManagerBase):
                 # Auto-commit mode: create a temporary session internally
                 with self.client.session() as session:
                     conn = session.connection()
-                    success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
+                    FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
                     session.commit()
             else:
                 # Transaction context mode: use session's connection directly
                 conn = self.executor.connection()
-                success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
-
-            if not success:
-                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}")
+                FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
 
             return self
         except Exception as e:
-            if "Failed to drop" not in str(e):
-                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
-            raise
+            if isinstance(e, QueryError):
+                raise
+            raise QueryError('Failed to drop fulltext index', phase='ddl_index') from e
 
     def enable_fulltext(self) -> "FulltextIndexManager":
         """
@@ -276,7 +254,7 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
     Usage Examples::
 
         # Create fulltext index
-        await async_client.fulltext_index.create("documents", "idx_content", "content", algorithm="BM25")
+        await async_client.fulltext_index.create("documents", "idx_content", "content", algorithm="TF-IDF")
 
         # Enable fulltext indexing
         await async_client.fulltext_index.enable_fulltext()
@@ -311,7 +289,7 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
             table_name_or_model: Table name (str) or SQLAlchemy model class
             name: Index name
             columns: Column(s) to index (str or List[str])
-            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+            algorithm: Compatibility default TF-IDF only; configure BM25 on the search builder
 
         Returns:
             Self for chaining
@@ -332,12 +310,13 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
             # Use FulltextIndex helper for proper index creation
             from .sqlalchemy_ext import FulltextIndex
 
+            FulltextIndex.validate_algorithm(algorithm)
             # Determine connection based on executor type
             if self.executor is self.client:
                 # Auto-commit mode: create a temporary session internally
                 async with self.client.session() as session:
                     conn = await session.connection()
-                    success = await conn.run_sync(
+                    await conn.run_sync(
                         lambda sync_conn: FulltextIndex.create_index(
                             bind=sync_conn,
                             table_name=table_name,
@@ -350,7 +329,7 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
             else:
                 # Transaction context mode: use session's connection directly
                 conn = await self.executor.connection()
-                success = await conn.run_sync(
+                await conn.run_sync(
                     lambda sync_conn: FulltextIndex.create_index(
                         bind=sync_conn,
                         table_name=table_name,
@@ -360,14 +339,11 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
                     )
                 )
 
-            if not success:
-                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}")
-
             return self
         except Exception as e:
-            if "Failed to create" not in str(e):
-                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}: {e}")
-            raise
+            if isinstance(e, QueryError):
+                raise
+            raise QueryError('Failed to create fulltext index', phase='ddl_index') from e
 
     async def drop(self, table_name_or_model, name: str) -> "AsyncFulltextIndexManager":
         """
@@ -401,25 +377,22 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
                 # Auto-commit mode: create a temporary session internally
                 async with self.client.session() as session:
                     conn = await session.connection()
-                    success = await conn.run_sync(
+                    await conn.run_sync(
                         lambda sync_conn: FulltextIndex.drop_index(bind=sync_conn, table_name=table_name, name=name)
                     )
                     await session.commit()
             else:
                 # Transaction context mode: use session's connection directly
                 conn = await self.executor.connection()
-                success = await conn.run_sync(
+                await conn.run_sync(
                     lambda sync_conn: FulltextIndex.drop_index(bind=sync_conn, table_name=table_name, name=name)
                 )
 
-            if not success:
-                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}")
-
             return self
         except Exception as e:
-            if "Failed to drop" not in str(e):
-                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
-            raise
+            if isinstance(e, QueryError):
+                raise
+            raise QueryError('Failed to drop fulltext index', phase='ddl_index') from e
 
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
         """

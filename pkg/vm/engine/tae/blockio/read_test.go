@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,6 +43,34 @@ import (
 type blockReadTestDataSource struct {
 	deleted []uint64
 	err     error
+}
+
+type releaseCountingFS struct {
+	fileservice.FileService
+	acquired, released int
+}
+
+type releaseCountingData struct {
+	fscache.Data
+	fs *releaseCountingFS
+}
+
+func (d *releaseCountingData) Release() {
+	d.fs.released++
+	d.Data.Release()
+}
+
+func (fs *releaseCountingFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := fs.FileService.Read(ctx, v); err != nil {
+		return err
+	}
+	for i := range v.Entries {
+		if data := v.Entries[i].CachedData; data != nil {
+			fs.acquired++
+			v.Entries[i].CachedData = &releaseCountingData{Data: data, fs: fs}
+		}
+	}
+	return nil
 }
 
 func (*blockReadTestDataSource) Next(
@@ -122,6 +151,32 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	require.Zero(t, writeMP.CurrNB())
 	mpool.DeleteMPool(writeMP)
 
+	// A failure while copying the pinned cache vectors must still release the
+	// read ticket and its vectors before returning to the caller.
+	countingFS := &releaseCountingFS{FileService: fs}
+	failureMP := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(failureMP) })
+	registryFailure, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	accountFailure, err := registryFailure.Open(1)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, accountFailure.Seal().Used)
+		_, finalizeErr := registryFailure.Finalize(accountFailure)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, failureMP.CurrNB())
+	})
+	selectionFailure, err := vector.NewAllocationAccountSelection(accountFailure, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	failureOutput := batch.NewWithSize(1)
+	failureOutput.Vecs[0] = vector.NewOffHeapVecWithType(typs[0])
+	t.Cleanup(func() { failureOutput.Clean(failureMP) })
+	require.NoError(t, failureOutput.Vecs[0].SetAllocationAccount(selectionFailure))
+	err = CopyBlockData(ctx, info.MetaLocation(), []int64{0}, []uint16{0}, typs[:1], failureOutput, countingFS, failureMP)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Positive(t, countingFS.acquired)
+	require.Equal(t, countingFS.acquired, countingFS.released)
+
 	queryMP := mpool.MustNewZero()
 	defer mpool.DeleteMPool(queryMP)
 	columns := []uint16{0, objectio.SEQNUM_ROWID, 1}
@@ -157,6 +212,7 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	require.Equal(t, "row-value-longer-than-inline-b", output.Vecs[2].GetStringAt(0))
 	require.Equal(t, "row-value-longer-than-inline-h", output.Vecs[2].GetStringAt(1))
 	require.Equal(t, "row-value-longer-than-inline-p", output.Vecs[2].GetStringAt(2))
+	require.False(t, output.Vecs[2].HasBorrowedBacking(), "selected materialization stays owned")
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](output.Vecs[1])
 	for i, sel := range sels {
 		require.Equal(t, uint32(sel), rowids[i].GetRowOffset())
@@ -192,6 +248,23 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	for i := range colTypes {
 		full.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(2048)
+	require.NoError(t, err)
+	defer func() {
+		full.Clean(queryMP)
+		require.Zero(t, account.Seal().Used)
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+	}()
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	require.NoError(t, full.Vecs[2].SetAllocationAccount(selection))
+	// An earlier owned/selected read may leave empty scratch in the reused
+	// output. The next full block fits this account, but staging another copy
+	// alongside unused scratch does not. End that old generation first.
+	require.NoError(t, full.Vecs[2].PreExtendWithArea(16, 1024, queryMP))
 	require.NoError(t, BlockDataReadInner(
 		ctx,
 		&info,
@@ -214,11 +287,19 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		[]int32{0, 10, 30, 40, 50, 60, 70, 80, 100, 110, 120, 130, 140, 150},
 		vector.MustFixedColWithTypeCheck[int32](full.Vecs[0]),
 	)
+	require.True(t, full.Vecs[2].HasBorrowedBacking(), "full persisted read publishes private readonly payload")
+	require.False(t, full.Vecs[0].HasBorrowedBacking(), "fixed-width materialization stays owned")
 	fullRowids := vector.MustFixedColWithTypeCheck[types.Rowid](full.Vecs[1])
 	for i, expected := range []uint32{0, 1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15} {
 		require.Equal(t, expected, fullRowids[i].GetRowOffset())
+		require.Equal(t, "row-value-longer-than-inline-"+string(rune('a'+expected)), full.Vecs[2].GetStringAt(i))
 	}
+	retained, err := full.Vecs[2].RetainedReadonlyViewWithMP(queryMP)
+	require.NoError(t, err)
 	full.Clean(queryMP)
+	require.Equal(t, "row-value-longer-than-inline-p", retained.GetStringAt(13))
+	retained.Free(queryMP)
+	require.Zero(t, account.Snapshot().Used)
 
 	errorOutput := batch.NewWithSize(len(columns))
 	for i := range colTypes {
@@ -555,9 +636,9 @@ func TestCanFuseExactMembershipTopK(t *testing.T) {
 	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2, nil))
 	top.Desc = false
 	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2,
-		func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			return engine.ReaderFilterResult{}, nil
-		}))
+		}}))
 }
 
 func TestBlockDataReadInnerAppendableVectorTopNUsesLegacyPath(t *testing.T) {
@@ -678,10 +759,304 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			filter,
+			&engine.ReaderFilterRequest{Apply: filter},
 		)
 		return err
 	}
+
+	for _, complete := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dictionary late rows", true: "dictionary complete columns"}[complete], func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			output.Clean(queryMP)
+			output = batch.NewOffHeapWithSize(len(colTypes))
+			workspace := make([]*vector.Vector, len(colTypes))
+			headers := make([]*vector.Vector, len(colTypes))
+			t.Cleanup(func() {
+				output.Clean(queryMP)
+				for _, v := range workspace {
+					if v != nil {
+						v.Free(queryMP)
+					}
+				}
+				for _, v := range headers {
+					if v != nil {
+						v.Free(queryMP)
+					}
+				}
+				cacheVectors.Free(queryMP)
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+				output = batch.NewWithSize(len(colTypes))
+				for i := range colTypes {
+					output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+				}
+			})
+			require.NoError(t, output.SetAllocationAccount(selection))
+			for i := range colTypes {
+				output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], selection)
+				require.NoError(t, err)
+			}
+			early := []int{0}
+			if complete {
+				early = []int{0, 1}
+			}
+			calls := 0
+			request := &engine.ReaderFilterRequest{
+				OutputAllocation: selection,
+				Workspace:        workspace,
+				ReusableHeaders:  headers,
+				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("selected read must not rerun Apply")
+					return engine.ReaderFilterResult{}, nil
+				},
+				Select: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					calls++
+					require.Equal(t, early, loaded)
+					require.Equal(t, 7, bat.RowCount())
+					if !complete {
+						require.Zero(t, bat.Vecs[1].Length(), "late payload must remain unloaded")
+					}
+					return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+				},
+			}
+			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
+				objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read", output, cacheVectors, queryMP, fs, early, request)
+			require.NoError(t, err)
+			require.Equal(t, 1, calls)
+			require.Equal(t, 3, output.RowCount())
+			require.True(t, output.Vecs[0].IsDictionary())
+			require.NotNil(t, workspace[0])
+			original := workspace[0].GetData()
+			firstHeader := output.Vecs[0]
+			for col, v := range workspace {
+				if v != nil {
+					output.Vecs[col].CleanOnlyData()
+					headers[col] = output.Vecs[col]
+					output.Vecs[col] = v
+					workspace[col] = nil
+				}
+			}
+			output.CleanOnlyData()
+			require.Equal(t, vector.OwnedMPoolUnique, output.Vecs[0].DataBackingKind())
+			require.Same(t, &original[0], &output.Vecs[0].GetData()[0], "reader must retain native buffer capacity")
+			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read-reuse", output, cacheVectors, queryMP, fs, early, request)
+			require.NoError(t, err)
+			require.Equal(t, 2, calls)
+			require.Same(t, firstHeader, output.Vecs[0], "publication header must be reused after its previous borrow ends")
+			require.True(t, output.Vecs[0].IsDictionary())
+
+			require.Equal(t, complete, output.Vecs[1].IsDictionary())
+			for i, want := range []int32{1, 4, 6} {
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], i))
+				require.Equal(t, []byte("payload-"+string(rune('0'+want))), output.Vecs[1].GetBytesAt(i))
+			}
+		})
+
+	}
+
+	t.Run("immutable-cache-input-before-selection", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(2)
+		require.NoError(t, out.SetAllocationAccount(allocation))
+		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
+		for i := range colTypes {
+			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
+			require.NoError(t, err)
+		}
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			t.Fatal("selected reader must not rerun Apply")
+			return engine.ReaderFilterResult{}, nil
+		}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, 8, b.RowCount())
+			require.False(t, b.Vecs[1].IsDictionary(), "the first predicate must not need an identity dictionary")
+			require.True(t, b.Vecs[1].HasBorrowedBacking(), "sealed cached input must retain its byte owner")
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}}
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "retained-cache-read", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 3, out.RowCount())
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](out.Vecs[0], i))
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+	})
+
+	t.Run("computed input stays owned and predicate-only column drops", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(2)
+		require.NoError(t, out.SetAllocationAccount(allocation))
+		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
+		for i := range colTypes {
+			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
+			require.NoError(t, err)
+		}
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			t.Fatal("selected read must not rerun Apply")
+			return engine.ReaderFilterResult{}, nil
+		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, 8, b.RowCount())
+			require.Equal(t, 8, b.Vecs[1].Length())
+			require.False(t, b.Vecs[1].HasBorrowedBacking(), "owned/unused demand must avoid transient cache leases")
+			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind(), "validated varlen input should stay pinned only in the callback")
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}}
+		scratch := request.SelectionScratch(2)
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "projected-column-use", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 3, out.RowCount())
+		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
+		require.False(t, out.HasDictionary())
+		require.Zero(t, out.Vecs[1].Length())
+		require.Empty(t, scratch.Sources)
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source)
+		}
+		seqStorage := &scratch.Seqnums[:cap(scratch.Seqnums)][0]
+		typeStorage := &scratch.Types[:cap(scratch.Types)][0]
+		out.CleanOnlyData()
+		request.ColumnUses[1] = engine.ReaderColumnOwned
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-owned-payload", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 3, out.RowCount())
+		require.False(t, out.HasDictionary())
+		require.False(t, out.Vecs[1].HasBorrowedBacking())
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+
+		require.Same(t, seqStorage, &scratch.Seqnums[:cap(scratch.Seqnums)][0])
+		require.Same(t, typeStorage, &scratch.Types[:cap(scratch.Types)][0])
+		out.CleanOnlyData()
+		request.Select = func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{0}, loaded)
+			require.Equal(t, 8, b.Vecs[0].Length())
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-reused-late-payload", out, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+		require.Same(t, seqStorage, &scratch.Seqnums[:cap(scratch.Seqnums)][0])
+		require.Same(t, typeStorage, &scratch.Types[:cap(scratch.Types)][0])
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source, "completed reads release all borrowed scratch references")
+		}
+	})
+
+	t.Run("scoped gather failure restores owned headers", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(8)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(2)
+		require.NoError(t, out.SetAllocationAccount(allocation))
+		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
+		for i := range colTypes {
+			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
+			require.NoError(t, err)
+		}
+		original := out.Vecs[1]
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			t.Fatal("scope must use Select")
+			return engine.ReaderFilterResult{}, nil
+		}, Select: func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{1}, loaded)
+			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind())
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}}
+		scratch := request.SelectionScratch(2)
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-gather-failure", out, cacheVectors, queryMP, fs, []int{1}, request)
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source, "failed reads release all borrowed scratch references")
+		}
+		require.Same(t, original, out.Vecs[1])
+		require.False(t, out.Vecs[1].HasBorrowedBacking())
+		require.Equal(t, vector.OwnedMPoolUnique, out.Vecs[1].DataBackingKind())
+		require.Zero(t, account.Snapshot().Used)
+	})
+
+	t.Run("exact selection observes tombstones and owns output", func(t *testing.T) {
+		intType := colTypes[0]
+		target := batch.NewWithSize(1)
+		target.Vecs[0] = vector.NewOffHeapVecWithType(intType)
+		t.Cleanup(func() { target.Clean(queryMP) })
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: intType, Op: objectio.ExactScanGE, Value: 2}}))
+		t.Cleanup(state.Close)
+		genericCalls, observed := 0, 0
+		request := &engine.ReaderFilterRequest{Exact: state, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			genericCalls++
+			return engine.ReaderFilterResult{}, nil
+		}, Observe: func(stats objectio.ExactScanStats) {
+			observed++
+			require.Equal(t, 7, stats.InputRows)
+			require.Equal(t, 5, stats.OutputRows)
+		}}
+		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0}, []types.Type{intType}, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-test", target, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Zero(t, genericCalls)
+		require.Equal(t, 1, observed)
+		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](target.Vecs[0]))
+	})
+	t.Run("exact unsupported projection reuses generic filtering", func(t *testing.T) {
+		output.CleanOnlyData()
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: colTypes[0], Op: objectio.ExactScanGE, Value: 2}}))
+		t.Cleanup(state.Close)
+		calls := 0
+		request := &engine.ReaderFilterRequest{Exact: state, Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			calls++
+			require.Nil(t, loaded)
+			var rows []int64
+			for row, value := range vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]) {
+				if value >= 2 {
+					rows = append(rows, int64(row))
+				}
+			}
+			require.NoError(t, bat.Shrink(rows, false, queryMP))
+			return engine.ReaderFilterResult{}, nil
+		}}
+		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-fallback-test", output, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-2", output.Vecs[1].GetStringAt(0))
+		output.CleanOnlyData()
+	})
 
 	t.Run("partial survivors map through tombstones", func(t *testing.T) {
 		require.NoError(t, read(func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
@@ -694,7 +1069,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					sels = append(sels, int64(i))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}))
@@ -758,9 +1133,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			&engine.ReaderFilterRequest{Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 				return engine.ReaderFilterResult{All: true}, nil
-			},
+			}},
 		)
 		require.ErrorContains(t, err, "column count 2 does not match type count 1")
 	})
@@ -782,12 +1157,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1}
-				bat.Vecs[0].Shrink(sels, false)
+				require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 				bat.SetRowCount(1)
 				return engine.ReaderFilterResult{Sels: sels}, nil
-			},
+			}},
 			nil,
 			nil,
 		))
@@ -863,7 +1238,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		queryMP,
 		fs,
 		[]int{0},
-		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, []int{0}, loaded)
 			require.Zero(t, bat.Vecs[1].Length(), "distance column must remain deferred until after filtering")
 			require.Zero(t, bat.Vecs[2].Length(), "payload must remain deferred until after filtering")
@@ -874,10 +1249,10 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 7, preFilterRows)
@@ -902,7 +1277,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
 		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
 		cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
 			sels := make([]int64, 0, len(ids))
 			for pos, id := range ids {
@@ -910,10 +1285,10 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 		top, &preFilterRows,
 	)
 	require.NoError(t, err)
@@ -939,11 +1314,11 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
 		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
 		cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			bat.Vecs[0].CleanOnlyData()
 			bat.SetRowCount(0)
 			return engine.ReaderFilterResult{Sels: []int64{}}, nil
-		},
+		}},
 		top, &preFilterRows,
 	)
 	require.NoError(t, err)
@@ -963,11 +1338,11 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
 		objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-empty-test",
 		output, cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			bat.Vecs[0].CleanOnlyData()
 			bat.SetRowCount(0)
 			return engine.ReaderFilterResult{}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 7, preFilterRows)
@@ -1018,7 +1393,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 				if tc.filterSels == nil {
 					return engine.ReaderFilterResult{All: true}, nil
 				}
-				bat.Vecs[0].Shrink(tc.filterSels, false)
+				require.NoError(t, bat.Vecs[0].Shrink(tc.filterSels, false, queryMP))
 				bat.SetRowCount(len(tc.filterSels))
 				return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
 			}
@@ -1028,14 +1403,14 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 				readErr = blockDataReadWithFilter(
 					ctx, &info, nil, []uint16{0, 1, 2}, colTypes, -1, types.TS{},
 					tc.storageRows, fileservice.Policy(0), output, cacheVectors, queryMP, fs,
-					[]int{0}, filter, top, &preRows,
+					[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, top, &preRows,
 				)
 			} else {
 				preRows, readErr = BlockDataReadWithFilter(
 					ctx, &info, &blockReadTestDataSource{deleted: tc.deleted},
 					[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
 					objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-test",
-					output, cacheVectors, queryMP, fs, []int{0}, filter,
+					output, cacheVectors, queryMP, fs, []int{0}, &engine.ReaderFilterRequest{Apply: filter},
 				)
 			}
 			require.NoError(t, readErr)
@@ -1333,7 +1708,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		queryMP,
 		fs,
 		[]int{1},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Zero(t, bat.Vecs[0].Length(), "payload must remain deferred")
 			visibleRowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[1])
 			require.Equal(t, []uint32{0, 2}, []uint32{
@@ -1341,10 +1716,10 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 				visibleRowids[1].GetRowOffset(),
 			})
 			sels := []int64{1}
-			bat.Vecs[1].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[1].Shrink(sels, false, queryMP))
 			bat.SetRowCount(1)
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "k2", lateOutput.Vecs[0].GetStringAt(0))
@@ -2020,4 +2395,66 @@ type filterPolicyFS struct {
 func (fs *filterPolicyFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	fs.policies = append(fs.policies, v.Policy)
 	return fs.FileService.Read(ctx, v)
+}
+
+// A persisted constant has a compact on-disk vector, but an ordinary scan
+// still materializes a full output column. The physical lower cost models
+// this output work, not BlockMaxRows independent disk decodes.
+func TestTemporalFullBlockConstantMaterialization(t *testing.T) {
+	ctx := t.Context()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	value := types.DatetimeFromClock(2026, 6, 1, 0, 0, 0, 0)
+	typ := types.T_datetime.ToType()
+	input := batch.NewWithSize(2)
+	var err error
+	input.Vecs[0], err = vector.NewConstFixed(typ, value, objectio.BlockMaxRows, mp)
+	require.NoError(t, err)
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	for i := range objectio.BlockMaxRows {
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, mp))
+	}
+	input.SetRowCount(objectio.BlockMaxRows)
+	arena := objectio.NewArena(0)
+	defer arena.FreeBuffers()
+	id := objectio.NewObjectid()
+	writer, err := objectio.NewObjectWriter(objectio.BuildObjectNameWithObjectID(&id), fs, 0, []uint16{1, 2}, arena)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(mp)
+	for _, early := range []bool{false, true} {
+		output := batch.NewWithSize(2)
+		output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		cache := containers.NewVectors(3)
+		if early {
+			rows, err := BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs, []int{0},
+				&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					require.Equal(t, objectio.BlockMaxRows, bat.RowCount())
+					require.Equal(t, objectio.BlockMaxRows, bat.Vecs[0].Length())
+					require.False(t, bat.Vecs[0].IsConst())
+					return engine.ReaderFilterResult{All: true}, nil
+				}})
+			require.NoError(t, err)
+			require.Equal(t, objectio.BlockMaxRows, rows)
+		} else {
+			require.NoError(t, BlockDataRead(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs))
+		}
+		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+		require.Equal(t, objectio.BlockMaxRows, output.Vecs[0].Length())
+		require.False(t, output.Vecs[0].IsConst())
+		require.Equal(t, value, vector.GetFixedAtWithTypeCheck[types.Datetime](output.Vecs[0], objectio.BlockMaxRows-1))
+		output.Clean(mp)
+		cache.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
 }

@@ -221,10 +221,23 @@ func (Hooks) BuildFullTextIndexDefs(
 		}}},
 	})
 
-	return []*plan.IndexDef{
+	// ignored table: the rows whose text the index cannot read. A composite primary key is
+	// the serial of its parts, absent from colMap.
+	ignoredName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	pkTyp := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	if col, ok := colMap[pkeyName]; ok {
+		pkTyp = col.Typ
+	}
+
+	indexDefs := []*plan.IndexDef{
 		mkIdx(storeName, catalog.FullText2Index_TblType_Storage),
 		mkIdx(metaName, catalog.FullText2Index_TblType_Metadata),
-	}, []*plan.TableDef{storeTbl, metaTbl}, nil
+		mkIdx(ignoredName, catalog.IndexIgnored_TblType),
+	}
+	return indexDefs, []*plan.TableDef{storeTbl, metaTbl, planplugin.IgnoredTableDef(ignoredName, pkTyp)}, nil
 }
 
 // buildFullText2Params records the parser name and max_index_capacity in
@@ -260,6 +273,9 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 		}
 	}
 	if idx.IndexOption != nil {
+		if idx.IndexOption.MaxBadRecordsSet {
+			res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
+		}
 		if idx.IndexOption.MaxIndexCapacity > 0 {
 			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 		}

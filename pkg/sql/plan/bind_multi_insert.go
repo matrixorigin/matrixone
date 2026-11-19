@@ -1110,7 +1110,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			if ok {
 				expr, err = builder.castInsertSourceColumn(expr, expr, colDef)
 			} else {
-				expr, err = getDefaultExprForAssignment(sysCtx, colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+				expr, err = getDefaultExprForAssignment(sysCtx, colDef, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			}
 			if err != nil {
 				return 0, err

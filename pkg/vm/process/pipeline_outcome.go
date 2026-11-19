@@ -25,6 +25,22 @@ import (
 // Only the owner that no longer needs input may use it as a cancellation cause.
 var ErrPipelineStopped error = &pipelineStoppedError{message: "pipeline consumer finished"}
 
+// PipelineContextError preserves the deadline class even when a context has a
+// separate diagnostic cause. Other cancellations retain their original cause.
+func PipelineContextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	cause := context.Cause(ctx)
+	if cause == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return cause
+}
+
 // Keep this control cause outside moerr: dependency receivers recover
 // substantive moerr causes, while a successful stop has no failure to recover.
 type pipelineStoppedError struct{ message string }
@@ -190,7 +206,7 @@ func NormalizePipelineRunError(
 	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isPipelineCancellationFrom(err, pipelineCtx.Err()) {
 		return MarkPipelineFailure(err), false
 	}
-	cause := context.Cause(pipelineCtx)
+	cause := PipelineContextError(pipelineCtx)
 	if cause == ErrPipelineStopped && queryCtx != nil {
 		// A first-wins consumer stop can outlive its query's deadline. It is
 		// successful only while that query remains live.

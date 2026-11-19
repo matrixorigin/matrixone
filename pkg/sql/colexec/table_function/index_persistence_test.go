@@ -20,6 +20,8 @@ import (
 
 	"github.com/golang/mock/gomock"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,4 +50,7 @@ func mockIndexTxn(t *testing.T, proc *process.Process, fn func(string, executor.
 		return fn(sql, opts.StatementOption())
 	}).AnyTimes()
 	txnExec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(fn).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte("index-txn")}).AnyTimes()
+	txnExec.EXPECT().Txn().Return(txnOp).AnyTimes()
 }

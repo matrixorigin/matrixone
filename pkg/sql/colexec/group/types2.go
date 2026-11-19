@@ -81,6 +81,7 @@ const (
 	GroupAllocationSiteSpillRows
 	GroupAllocationSiteDistinctRecord
 	GroupAllocationSiteDistinctCopy
+	GroupAllocationSiteCompactLookup
 )
 
 var _ vm.Operator = &Group{}
@@ -288,7 +289,8 @@ type container struct {
 	groupingAware bool
 
 	// x, y of `group by x, y`.
-	groupByEvaluate colexec.ExprEvalVector
+	dictionaryInputs *colexec.DictionaryInputFrame
+	groupByEvaluate  colexec.ExprEvalVector
 	// m, n of `select agg1(m, n), agg2(m, n)`.
 	aggArgEvaluate []colexec.ExprEvalVector
 
@@ -735,7 +737,10 @@ func (ctr *container) freeGroupingRollups() {
 	ctr.groupingRollup = nil
 }
 
-func (ctr *container) free() {
+func (ctr *container) free(expressionMP *mpool.MPool) {
+	// Expression normalization uses the process pool. Group's private NoLock
+	// pool owns aggregate/hash storage and cannot release those allocations.
+	ctr.dictionaryInputs.Free(expressionMP)
 	// free container stuff, WTH is the Free0?
 	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
@@ -808,26 +813,33 @@ func (ctr *container) refreshGroupConcatSourceRowTrust() {
 	}
 }
 
-func (ctr *container) reset() {
-	ctr.free()
+func (ctr *container) reset(expressionMP *mpool.MPool) {
+	ctr.free(expressionMP)
 }
 
 func (ctr *container) resetForSpill() {
+	ctr.resetSpillState(false)
+}
+
+// resetSpillState releases resident aggregation state after a spill. A build
+// retry must keep the current input vectors until its unpublished chunk has
+// been consumed; other spill callers can release the expression state too.
+func (ctr *container) resetSpillState(retainInput bool) {
 	if ctr.distinctSpill != nil {
 		ctr.distinctGroupReset = true
 	}
 	// Reset also frees the hash related stuff.
 	ctr.hr.Free0()
 
-	ctr.groupByEvaluate.ResetForNextQuery()
-
-	for i := range ctr.aggArgEvaluate {
-		ctr.aggArgEvaluate[i].ResetForNextQuery()
+	if !retainInput {
+		ctr.groupByEvaluate.ResetForNextQuery()
+		for i := range ctr.aggArgEvaluate {
+			ctr.aggArgEvaluate[i].ResetForNextQuery()
+		}
+		// Grouping-set sentinel vectors are owned outside the expression
+		// executors. Release them before recovery reload borrows capacity.
+		ctr.freeGroupingRollups()
 	}
-	// Grouping-set sentinel vectors are owned outside the expression
-	// executors. Release the just-consumed input's sentinels before recovery
-	// reload borrows the same account capacity.
-	ctr.freeGroupingRollups()
 	// free group by batches, agg list and spill buckets, do not reuse for now.
 	ctr.freeGroupByBatches()
 	ctr.currBatchIdx = 0
@@ -875,6 +887,18 @@ func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
+	if bat.HasDictionary() {
+		if group.ctr.dictionaryInputs == nil {
+			group.ctr.dictionaryInputs = &colexec.DictionaryInputFrame{}
+		}
+		group.ctr.dictionaryInputs.Begin(bat, group.ctr.expressionAllocation, proc.Mp())
+		group.ctr.dictionaryInputs.Bind(group.ctr.groupByEvaluate.Executor)
+		for i := range group.ctr.aggArgEvaluate {
+			group.ctr.dictionaryInputs.Bind(group.ctr.aggArgEvaluate[i].Executor)
+		}
+		defer func() { group.ctr.dictionaryInputs.Observe(group.OpAnalyzer); group.ctr.dictionaryInputs.End() }()
+	}
+
 	group.ctr.freeGroupingRollups()
 
 	// group.
@@ -940,7 +964,7 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.free()
+	group.ctr.free(proc.Mp())
 	// free projection stuff,
 	group.FreeProjection(proc)
 }
@@ -950,7 +974,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.reset()
+	group.ctr.reset(proc.Mp())
 	if group.ctr.allocationAccount != nil {
 		// Account selections are immutable per execution attempt, and function
 		// projections retain result capacity across ResetForNextQuery. Destroy
@@ -1086,7 +1110,7 @@ func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, 
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.reset()
+	mergeGroup.ctr.reset(proc.Mp())
 	if mergeGroup.ctr.allocationAccount != nil {
 		mergeGroup.FreeProjection(proc)
 	} else {
@@ -1098,7 +1122,7 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.free()
+	mergeGroup.ctr.free(proc.Mp())
 	mergeGroup.FreeProjection(proc)
 }
 
@@ -1146,14 +1170,28 @@ func (mergeGroup *MergeGroup) Release() {
 	}
 }
 
+// Keep the frame in the same allocation, outside the operator's reset range.
+type groupArgument struct {
+	operator Group
+	frame    colexec.DictionaryInputFrame
+}
+
+func newGroupArgument() *Group {
+	a := new(groupArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetGroupArgument(a *Group) {
+	frame := a.ctr.dictionaryInputs
+	*a = Group{}
+	a.ctr.dictionaryInputs = frame
+}
+
 func init() {
 	reuse.CreatePool(
-		func() *Group {
-			return &Group{}
-		},
-		func(a *Group) {
-			*a = Group{}
-		},
+		newGroupArgument,
+		resetGroupArgument,
 		reuse.DefaultOptions[Group]().
 			WithEnableChecker(),
 	)

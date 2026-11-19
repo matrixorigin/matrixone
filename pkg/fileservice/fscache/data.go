@@ -56,6 +56,13 @@ type DataCacheReservation interface {
 	CommitCacheReservation()
 }
 
+// DataCachePendingReservation is DataCacheReservation data that tells whether it still holds
+// a reservation for CommitCacheReservation to commit.
+type DataCachePendingReservation interface {
+	DataCacheReservation
+	CacheReservationPending() bool
+}
+
 // DataCacheAdmission identifies data that must not be admitted into a
 // particular cache. It is used for a read buffer when that cache cannot grant
 // capacity without blocking the read; the caller still owns and releases it.

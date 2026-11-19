@@ -351,9 +351,7 @@ func (s *server) onMessage(
 	if s.producerAdmitted != nil {
 		s.producerAdmitted()
 	}
-	t := time.Now()
 	req := executor{
-		t:       t,
 		ctx:     ctx,
 		cancel:  msg.Cancel,
 		req:     m,
@@ -519,7 +517,6 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 }
 
 type executor struct {
-	t       time.Time
 	ctx     context.Context
 	cancel  context.CancelFunc
 	req     *txn.TxnRequest

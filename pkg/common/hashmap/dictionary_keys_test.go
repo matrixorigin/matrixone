@@ -1,0 +1,234 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashmap
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/require"
+	"math"
+	"testing"
+)
+
+func TestDictionaryIntegerHashKeys(t *testing.T) {
+	for _, nullable := range []bool{false, true} {
+		for _, wide := range []bool{false, true} {
+			t.Run(map[bool]string{false: "reject-null", true: "match-null"}[nullable]+map[bool]string{false: "-narrow", true: "-wide"}[wide], func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				typ := types.T_int8.ToType()
+				if wide {
+					typ = types.T_int64.ToType()
+					if nullable {
+						typ = types.T_int32.ToType()
+					}
+				}
+				source := vector.NewVec(typ)
+				t.Cleanup(func() { source.Free(mp) })
+				if wide && nullable {
+					require.NoError(t, vector.AppendFixedList(source, []int32{10, 20, 0}, []bool{false, false, true}, mp))
+				} else if wide {
+					require.NoError(t, vector.AppendFixedList(source, []int64{10, 20, 0}, []bool{false, false, true}, mp))
+				} else {
+					require.NoError(t, vector.AppendFixedList(source, []int8{10, 20, 0}, []bool{false, false, true}, mp))
+				}
+				table, err := NewIntHashMap(nullable, mp)
+				require.NoError(t, err)
+				t.Cleanup(table.Free)
+				itr := table.NewIterator()
+				_, _, err = itr.Insert(0, 3, []*vector.Vector{source})
+				require.NoError(t, err)
+				base, err := vector.FreezeVector(source, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(rows.Release)
+				dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { dict.Free(mp) })
+				found, _, err := itr.Find(0, 4, []*vector.Vector{dict})
+				require.NoError(t, err)
+				last := uint64(0)
+				if nullable {
+					last = 3
+				}
+				require.Equal(t, []uint64{2, 1, 2, last}, found)
+				found, _, err = itr.Find(1, 3, []*vector.Vector{dict})
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 2, last}, found)
+
+				// Logical NULL-free selections use the typed loop even when
+				// their physical base contains a NULL outside the selection.
+				cleanRows, err := vector.NewRowSelection([]int64{1, 0, 1}, 3, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(cleanRows.Release)
+				clean, err := vector.NewDictionaryVector(base, cleanRows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { clean.Free(mp) })
+				found, _, err = itr.Find(1, 2, []*vector.Vector{clean})
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 2}, found)
+			})
+		}
+	}
+}
+
+func TestDictionaryCompositeStringHashKeys(t *testing.T) {
+	for _, nullable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reject-null", true: "match-null"}[nullable], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			fixed := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { fixed.Free(mp) })
+			text := vector.NewVec(types.T_char.ToType())
+			t.Cleanup(func() { text.Free(mp) })
+			require.NoError(t, vector.AppendFixedList(fixed, []int64{10, 20, 0}, []bool{false, false, true}, mp))
+			for _, v := range []string{"a ", "a string longer than inline storage", "unused"} {
+				require.NoError(t, vector.AppendBytes(text, []byte(v), false, mp))
+			}
+			table, err := NewStrHashMap(nullable, mp)
+			require.NoError(t, err)
+			t.Cleanup(table.Free)
+			itr := table.NewIterator()
+			_, _, err = itr.Insert(0, 3, []*vector.Vector{fixed, text})
+			require.NoError(t, err)
+			rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+			require.NoError(t, err)
+			t.Cleanup(rows.Release)
+			selected := make([]*vector.Vector, 0, 2)
+			for _, source := range []*vector.Vector{fixed, text} {
+				base, err := vector.FreezeVector(source, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { dict.Free(mp) })
+				selected = append(selected, dict)
+			}
+			found, _, err := itr.Find(0, 4, selected)
+			require.NoError(t, err)
+			last := uint64(0)
+			if nullable {
+				last = 3
+			}
+			require.Equal(t, []uint64{2, 1, 2, last}, found)
+			found, _, err = itr.Find(1, 3, selected)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1, 2, last}, found)
+		})
+	}
+}
+
+func TestDictionaryFloatHashKeysPreserveZeroAndNaN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(source, []float64{math.Copysign(0, -1), 0, math.NaN()}, nil, mp))
+	table, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(table.Free)
+	require.NoError(t, table.SetRejectNaN())
+	itr := table.NewIterator()
+	_, _, err = itr.Insert(0, 3, []*vector.Vector{source})
+	require.NoError(t, err)
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{2, 1, 0}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { dict.Free(mp) })
+	found, _, err := itr.Find(0, 3, []*vector.Vector{dict})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1, 1}, found)
+}
+
+func TestDictionaryConstantHashKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { source.Free(mp) })
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{2, 0, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	selected, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { selected.Free(mp) })
+	h8, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(h8.Free)
+	i8 := h8.NewIterator()
+	_, _, err = i8.Insert(0, 3, []*vector.Vector{source})
+	require.NoError(t, err)
+	found, _, err := i8.Find(0, 3, []*vector.Vector{selected})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1}, found)
+	hs, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(hs.Free)
+	is := hs.NewIterator()
+	_, _, err = is.Insert(0, 3, []*vector.Vector{source})
+	require.NoError(t, err)
+	found, _, err = is.Find(0, 3, []*vector.Vector{selected})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1}, found)
+}
+
+func TestDictionaryH8CompositeOffsets(t *testing.T) {
+	for _, withDomain := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "null-domain"}[withDomain], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			small := vector.NewVec(types.T_int16.ToType())
+			wide := vector.NewVec(types.T_int32.ToType())
+			t.Cleanup(func() { small.Free(mp); wide.Free(mp) })
+			require.NoError(t, vector.AppendFixedList(small, []int16{-2, 4, 7}, nil, mp))
+			require.NoError(t, vector.AppendFixedList(wide, []int32{100, 200, 300}, nil, mp))
+			table, err := NewIntHashMap(withDomain, mp)
+			require.NoError(t, err)
+			t.Cleanup(table.Free)
+			iterator := table.NewIterator()
+			_, _, err = iterator.Insert(0, 3, []*vector.Vector{small, wide})
+			require.NoError(t, err)
+			rows, err := vector.NewRowSelection([]int64{1, 2, 0, 2}, 3, mp, nil)
+			require.NoError(t, err)
+			t.Cleanup(rows.Release)
+			selected := make([]*vector.Vector, 2)
+			for i, source := range []*vector.Vector{small, wide} {
+				base, err := vector.FreezeVector(source, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				selected[i], err = vector.NewDictionaryVector(base, rows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { selected[i].Free(mp) })
+			}
+			found, _, err := iterator.Find(1, 3, selected)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{3, 1, 3}, found)
+			found, _, err = iterator.Find(0, 4, selected)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{2, 3, 1, 3}, found)
+		})
+	}
+}

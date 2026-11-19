@@ -532,34 +532,9 @@ func TestTextMinMaxUTF8mb4BinUsesPadSpace(t *testing.T) {
 	}
 }
 
-func TestTextMinMaxGeneralCIMalformedUTF8IsTransitive(t *testing.T) {
-	values := [][]byte{
-		{0x80},
-		[]byte("z"),
-		[]byte("é"),
-		{0xff},
-		{0xc3},
-		[]byte("A"),
-		[]byte("a "),
-	}
-	for _, a := range values {
-		for _, b := range values {
-			require.Equal(t, -compareUTF8mb4GeneralCI(b, a), compareUTF8mb4GeneralCI(a, b))
-			for _, c := range values {
-				if compareUTF8mb4GeneralCI(a, b) > 0 && compareUTF8mb4GeneralCI(b, c) > 0 {
-					require.Positive(t, compareUTF8mb4GeneralCI(a, c),
-						"non-transitive ordering for %x > %x > %x", a, b, c)
-				}
-			}
-		}
-	}
-
-	// This is the concrete cycle that raw-byte fallback used to create.
-	require.Positive(t, compareUTF8mb4GeneralCI([]byte{0x80}, []byte("z")))
-	require.Positive(t, compareUTF8mb4GeneralCI([]byte("z"), []byte("é")))
-	require.Negative(t, compareUTF8mb4GeneralCI([]byte("é"), []byte{0x80}))
-}
-
+// The malformed-UTF-8 transitivity oracle for the shared comparator lives in
+// pkg/common/collation (TestCompareGeneralCIMalformedUTF8IsTransitive); the
+// min/max-specific weight contract stays in TestTextMinMaxGeneralCIWeights.
 func TestTextMaxGeneralCIDoesNotExpandSharpS(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.New(types.T_varchar, 10, 0)

@@ -19,11 +19,12 @@ or repeated full-suite runs.
    R0-R3 classification from
    [validation-evidence.md](references/validation-evidence.md).
 2. **Classify design work.** Apply the feature/major-refactor gate before
-   implementation. Ordinary focused bug fixes are exempt from a design document,
+   implementation. Ordinary focused bug fixes are exempt from a design record,
    but never from invariant, ownership, cost, or validation reasoning.
-3. **State the contract.** Write the problem evidence, invariant and negation,
-   first owner, affected consumers, state transitions, unhappy paths, and
-   performance/resource budget before choosing the patch.
+3. **State the contract.** Identify the user-visible failure or need, invariant,
+   current owner and affected consumers before choosing the patch. When adding
+   a mechanism, compare it with a direct change at the current owner. Trace
+   reachable failure paths and material runtime costs.
 4. **Load only applicable domain references.** Use the resource map below; do
    not load or restate every specialized workflow.
 5. **Implement the narrowest complete closure.** Change the common ownership or
@@ -32,8 +33,9 @@ or repeated full-suite runs.
 6. **Validate by information value.** Reuse semantically valid evidence, run the
    cheapest discriminating checks first, and escalate only along mapped risk
    dimensions. Do not rerun equivalent author/CI work.
-7. **Review and deliver.** Run `mo-self-review` on the final scope, resolve every
-   blocker, inspect the delivery diff, and report the compact evidence record.
+7. **Review and deliver.** Bring the existing map and valid evidence to
+   `mo-self-review`. Audit the final diff and update changed closures. Resolve
+   blockers and use the same compact record for delivery.
 
 For tests and diagnostic probes, acquire each resource only after its preceding
 step succeeds and schedule its cleanup immediately in the same lexical scope.
@@ -54,25 +56,26 @@ Read a reference when its trigger applies:
 | Change/risk map, efficient validation order, CI/local evidence reuse | [references/validation-evidence.md](references/validation-evidence.md) |
 | Create/update a GitHub PR or issue, or diagnose a PR-description/commit-message check | [references/github-delivery.md](references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [references/race-validation.md](references/race-validation.md) |
-| Large/complex feature or major refactor; design document review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
+| Large/complex feature or major refactor; design review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
 | UT/BVT purpose, orthogonality, fixture reuse, cost/flakiness, result and execution evidence | [references/testing-contract.md](references/testing-contract.md) |
 | CGo compile/link/load/module errors, local wrapper, hang attribution, clean-baseline proof, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
-| Planner/explain/rewrite correctness, public reachability, independent black-/white-box oracles | [references/counterexample-testing.md](references/counterexample-testing.md) |
+| Planner/explain/rewrite correctness or a credible overfit in product behavior | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
-| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
+| Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
 
 ## Enforcement gates
 
 | Gate | Trigger | Required action |
 |---|---|---|
-| **G-FEATURE-DESIGN** | Feature/major refactor reaches the size threshold or any complexity trigger | Read the design contract; require and review an approved, versioned design document before implementation. A failed/missing design makes the review decision `REQUEST_CHANGES`; submit that GitHub review only when the task authorizes the mutation. |
+| **G-FEATURE-DESIGN** | Feature/major refactor reaches the size threshold or any complexity trigger | Follow the design contract for the reviewed revision and approval before implementation. A failed/missing design makes the review decision `REQUEST_CHANGES`; submit that GitHub review only when the task authorizes the mutation. |
 | **G-CHANGE-MAP** | Before non-trivial implementation, validation, or review | Build one complete change map. Every changed hunk and contract must be covered; deep work is routed per closure rather than repeated over the whole diff. |
 | **G-TEST-CONTRACT** | Production behavior changes or any UT/BVT is added, changed, removed, merged, or optimized | Read the testing contract. Map behavior to UT/BVT, inventory existing cases/fixtures, preserve all distinct oracles, and reject unnecessary data, sleeps, processes, or setup. |
 | **G-CGO** | A selected package is CGo-direct/transitive, native/module/link/load errors occur, or GPU mode is involved | Read the CGo reference and use the controlled wrapper/appropriate GPU workflow. Diagnose the failing layer; do not change product code to mask environment failure. |
 | **G-OPERATOR** | Editing/reviewing `colexec`, process signals, pipeline spool/protocol, or a distributed pipeline hang | Read the operator/pipeline reference before editing or concluding. Trace sender and receiver plus reset/cleanup terminal paths. |
-| **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or scenario-overfit risk | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. |
+| **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or a credible overfit in product behavior | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. Use the shared evidence checks for test or CI selection, assertions, and execution mode. |
 | **G-INDEXPLUGIN** | Index algorithm dispatch/plugin/registry/ISCP paths change | Read the index-plugin reference and its review section. New SQL/catalog per-algorithm dispatch is forbidden. |
+| **G-TYPESWITCH** | Adding a `types.T` constant, writing or editing a `switch` over `types.T`, or a `TestTypeSwitchFamilies` failure | Read `pkg/container/types/testdata/README.md`. Handle every member of the family (or of one subfamily) in the switch, or tag it `// typeswitch:partial <reason>`; never add a switch to `typeswitch_baseline.txt`. Regenerate the baseline only to remove fixed/tagged entries, and check its diff only removes lines. |
 | **G-STATIC-INCREMENTAL** | Any Go source/test edit or SCA failure | Derive the changed package closure from the merge base (including local staged/unstaged files), run gofmt/vet/lint only for that closure first, and escalate to the full repository scan only under the rules below. |
 | **G-CI-TRIAGE** | A CI job fails, hangs, is cancelled, or is unexpectedly skipped | Capture the exact job step, SHA, platform/toolchain, and terminal result; classify code/static/test failure separately from network/cache/quota/disk/runner failure before changing code or deciding to rerun. |
 | **G-EVIDENCE** | Before claiming pass/done or attributing a failure | Apply semantic evidence validity. Pending/empty selection/partial output is not a pass; a “pre-existing” claim requires the same failure at the verified clean baseline. |
@@ -87,36 +90,24 @@ Read a reference when its trigger applies:
 3. Prefer deleting duplicated state/transitions/cleanup. Every new stateful
    component needs one effective owner, an explicit bound, admission/publication
    point, all terminal paths, and a generation/restart rule.
-4. Keep mechanisms proportional. A local fix does not justify a framework,
-   cache, worker, retry layer, global, extension point, or generic abstraction.
-   Require multiple independent recurring needs, a stable contract, and lower
-   total runtime/operational/testing/maintenance complexity.
+4. Justify new state, caches, retries, workers and abstractions with the
+   concrete requirement the existing owner cannot meet. Count steady-state
+   and failure costs, including the old paths that still have to be maintained.
 5. Treat per-row/batch/message/transaction/query paths as hot until bounded.
    Account for allocations, copies, scans, synchronization, goroutines, I/O,
    logs, and metric cardinality; benchmark/profile only when cost can be
    material.
-6. Avoid incident overfit. Do not encode issue IDs, one plan layout, exact data
-   shape, or timing coincidence in production logic. Test the invariant,
-   nearest control, and counterexample with minimum data and deterministic
-   control.
+6. Fix the contract shared by the reproducer and equivalent real inputs.
+   Challenge any new branch keyed to the example's SQL, plan shape, data size
+   or timing. Use the discriminating checks in the shared evidence reference.
 7. Preserve user scope and permissions. Read-only review/diagnosis does not
    authorize production changes, GitHub review submission, or other external
    mutations.
 
 ## Efficient validation and completion
 
-Use [validation-evidence.md](references/validation-evidence.md) as the source of
-truth. In particular:
-
-- prove exact package/test/case selection is non-empty;
-- run focused evidence before broader owning-package/group evidence;
-- validate a real consumer when an ownership/API boundary changes;
-- add BVT/topology/restart/upgrade/race/GPU/performance only when the mapped
-  contract requires that dimension;
-- reuse exact-head CI or local evidence whose relevant semantic inputs and mode
-  are unchanged; unrelated docs or PR metadata do not invalidate it;
-- retain real terminal status and diagnose silence by polling the existing
-  process, not by launching duplicates.
+Use [validation-evidence.md](references/validation-evidence.md) for test
+selection, escalation, evidence reuse and the final delivery record.
 
 ### Incremental static checks (default)
 
@@ -232,20 +223,6 @@ For CGo-direct/transitive packages, replace `go test` with:
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=120s ./pkg/target/...
 ```
 
-Before delivery, the record must show:
-
-```text
-□ resolved range/worktree scope and complete per-closure change map
-□ design-gate decision and approved revision when triggered
-□ invariant/root cause/owner/consumer and relevant unhappy paths closed
-□ UT/BVT and specialized-domain decisions recorded
-□ every required proof is validly reused or passed; gaps/pending work are explicit
-□ generated/delivery artifacts, diff stat, and unintended files checked
-□ PR/issue delivery in scope: current-template and LF-body preflight passed; verify remote body after publication
-□ `mo-self-review` has zero unresolved blockers
-```
-
-Never weaken assertions, add sleeps/retries/skips, broaden fixtures, or run an
-unrelated package merely to make a checkbox green. Never claim “systematic”
-from breadth alone: demonstrate one general contract closed across its relevant
-state space with less total complexity than the credible alternatives.
+Before delivery, confirm `mo-self-review` has closed the blockers, inspect the
+final diff for unintended or generated artifacts, and follow the GitHub delivery
+reference for the PR template and body readback when publishing.

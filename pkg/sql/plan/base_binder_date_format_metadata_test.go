@@ -137,7 +137,7 @@ func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	wantName := "date_format(col2, '%W %M %Y')"
 
@@ -197,7 +197,7 @@ func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -288,7 +288,7 @@ func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -346,7 +346,7 @@ func requireCTASColumnName(t *testing.T, ctx *MockCompilerContext, sql, want str
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	var visible []*planpb.ColDef
 	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
@@ -398,7 +398,7 @@ func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testin
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	var visible []*planpb.ColDef
 	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
@@ -493,7 +493,7 @@ func TestCTASRepeatedPlanningPreservesSource(t *testing.T) {
 			source := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
 			var first *Plan
 			for i := 0; i < 3; i++ {
-				got, err := BuildPlan(ctx, stmt, false)
+				got, err := BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
 				require.Equal(t, source, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
@@ -514,7 +514,7 @@ func TestCTASFailedPlanningAndSourceReplacement(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	original := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.Error(t, err)
 	require.Equal(t, original, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
 	replacement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select time_format(time_col, '%H') from time01", 1)
@@ -524,7 +524,7 @@ func TestCTASFailedPlanningAndSourceReplacement(t *testing.T) {
 	oldSource := ctas.AsSource
 	ctas.AsSource = replacement.(*tree.Select)
 	defer func() { ctas.AsSource = oldSource }()
-	got, err := BuildPlan(ctx, ctas, false)
+	got, err := BuildPlan(ctx, ctas, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "time_format(time_col, '%H')", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
 }

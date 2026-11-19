@@ -274,7 +274,7 @@ func TestIvfEntriesTable_QuantizedEntryProjection(t *testing.T) {
 			}
 
 			err := ivfIndexEntriesTable(ctx, entriesDef(params(kv...)), "db",
-				srcTableDef(), "__mo_index_meta", "__mo_index_centroids")
+				srcTableDef(), "__mo_index_meta", "__mo_index_centroids", nil)
 			require.NoError(t, err)
 
 			sql := ctx.joinSQL(t)
@@ -323,7 +323,7 @@ func TestIvfEntriesTable_PartialBoundsFallBackToCast(t *testing.T) {
 			err := ivfIndexEntriesTable(ctx, entriesDef(params(
 				catalog.IndexAlgoParamOpType, "vector_l2_ops",
 				catalog.Quantization, "int8")), "db", srcTableDef(),
-				"__mo_index_meta", "__mo_index_centroids")
+				"__mo_index_meta", "__mo_index_centroids", nil)
 			require.NoError(t, err)
 			sql := ctx.joinSQL(t)
 			require.Contains(t, sql, quantizer.CastSQL("`embedding`", types.T_array_int8, 8))
@@ -353,7 +353,7 @@ func TestIvfEntriesTable_BoundReadErrorPropagates(t *testing.T) {
 			err := ivfIndexEntriesTable(ctx, entriesDef(params(
 				catalog.IndexAlgoParamOpType, "vector_l2_ops",
 				catalog.Quantization, "int8")), "db", srcTableDef(),
-				"__mo_index_meta", "__mo_index_centroids")
+				"__mo_index_meta", "__mo_index_centroids", nil)
 			require.Error(t, err)
 			// The insert must not have been attempted after the failed read.
 			ctx.mu.Lock()
@@ -366,8 +366,9 @@ func TestIvfEntriesTable_BoundReadErrorPropagates(t *testing.T) {
 }
 
 // TestIvfEntriesTable_CompositePrimaryKey: with a composite PK the entry rows key
-// on serial(...) of the parts, not on the hidden __mo_cpkey_col — getting this
-// wrong makes the entries unjoinable back to the source table at re-rank time.
+// on the hidden __mo_cpkey_col, serial(...) of the parts, as the CDC writer does —
+// getting this wrong makes the entries unjoinable back to the source table at
+// re-rank time.
 func TestIvfEntriesTable_CompositePrimaryKey(t *testing.T) {
 	tbl := srcTableDef()
 	tbl.Pkey = &plan.PrimaryKeyDef{
@@ -377,8 +378,8 @@ func TestIvfEntriesTable_CompositePrimaryKey(t *testing.T) {
 	ctx := &scriptedCtx{db: "db", tblDef: tbl}
 	require.NoError(t, ivfIndexEntriesTable(ctx, entriesDef(params(
 		catalog.IndexAlgoParamOpType, "vector_l2_ops")), "db", tbl,
-		"__mo_index_meta", "__mo_index_centroids"))
-	require.Contains(t, ctx.joinSQL(t), "serial(`src`.`a`,`src`.`b`)")
+		"__mo_index_meta", "__mo_index_centroids", nil))
+	require.Contains(t, ctx.joinSQL(t), "`src`.`__mo_cpkey_col`")
 }
 
 // TestReadQuantizeBound_Shapes exercises readQuantizeBound directly for the
@@ -628,3 +629,7 @@ func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex
 
 // BuildTS stubs (fulltext2 async-freshness interface method).
 func (f *fakeCachedIndex) BuildTS() int64 { return 0 }
+
+func (c *scriptedCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return c.RunSql(sql)
+}

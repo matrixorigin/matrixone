@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -41,10 +42,33 @@ type MemPKFilterSpec struct {
 	Keys [][]byte
 }
 
+// workspaceINLookup is pointer-owned because MemPKFilter is copied by value.
+// Candidate bytes are immutable until the filter generation is retired.
+type workspaceINLookup struct {
+	once sync.Once
+	keys [][]byte
+	set  map[string]struct{}
+}
+
+func (l *workspaceINLookup) contains(key []byte) (bool, bool) {
+	l.once.Do(func() {
+		set := make(map[string]struct{}, len(l.keys))
+		for _, candidate := range l.keys {
+			set[string(candidate)] = struct{}{}
+		}
+		l.set = set
+	})
+	if l.set == nil {
+		return false, false
+	}
+	_, ok := l.set[string(key)]
+	return ok, true
+}
+
 type MemPKFilter struct {
 	op        int
 	packed    [][]byte
-	inSet     map[string]struct{}
+	lookup    *workspaceINLookup
 	prefixes  [][]byte
 	disjuncts []MemPKFilter
 	isVec     bool
@@ -215,6 +239,7 @@ func encodeMemSortKeySpecs(
 ) (op int, packed [][]byte, isVec bool, ok bool) {
 	var lbVal, ubVal any
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
+		// typeswitch:partial bf16/float16/float8/float4 are rejected as primary and cluster keys
 		switch basePKFilter.Oid {
 		case types.T_bool:
 			lbVal = types.DecodeBool(basePKFilter.LB)
@@ -460,7 +485,7 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
-	f.inSet = nil
+	f.lookup = nil
 	f.prefixes = nil
 	f.disjuncts = nil
 
@@ -469,11 +494,8 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 			return bytes.Compare(f.packed[i], f.packed[j]) < 0
 		})
 	}
-	if op == function.IN {
-		f.inSet = make(map[string]struct{}, len(f.packed))
-		for _, key := range f.packed {
-			f.inSet[string(key)] = struct{}{}
-		}
+	if op == function.IN && len(f.packed) > 0 {
+		f.lookup = &workspaceINLookup{keys: f.packed}
 	}
 	if op == function.PREFIX_IN {
 		f.prefixes = make([][]byte, 0, len(f.packed))
@@ -502,8 +524,15 @@ func (f *MemPKFilter) matches(key []byte) bool {
 	case function.PREFIX_EQ:
 		return len(f.packed) == 1 && bytes.HasPrefix(key, f.packed[0])
 	case function.IN:
-		_, ok := f.inSet[string(key)]
-		return ok
+		if f.lookup != nil {
+			if matched, valid := f.lookup.contains(key); valid {
+				return matched
+			}
+		}
+		idx := sort.Search(len(f.packed), func(i int) bool {
+			return bytes.Compare(f.packed[i], key) >= 0
+		})
+		return idx < len(f.packed) && bytes.Equal(f.packed[idx], key)
 	case function.PREFIX_IN:
 		idx := sort.Search(len(f.prefixes), func(idx int) bool {
 			return bytes.Compare(f.prefixes[idx], key) > 0
@@ -544,11 +573,17 @@ func (f *MemPKFilter) FilterVector(
 	skipMask *objectio.Bitmap,
 ) {
 	filterVectorRowsForTest.Add(uint64(vec.Length()))
-	keys := EncodePrimaryKeyVector(vec, packer)
-	for i := 0; i < len(keys); i++ {
-		if !f.matches(keys[i]) {
-			skipMask.Add(uint64(i))
+	row := uint64(0)
+	visitEncodedPrimaryKeyVector(vec, packer, func(key []byte, repeats int) {
+		if !f.matches(key) {
+			for i := 0; i < repeats; i++ {
+				skipMask.Add(row + uint64(i))
+			}
 		}
+		row += uint64(repeats)
+	})
+	if row != uint64(vec.Length()) {
+		panic(fmt.Sprintf("bad result, expecting %v, got %v", vec.Length(), row))
 	}
 }
 

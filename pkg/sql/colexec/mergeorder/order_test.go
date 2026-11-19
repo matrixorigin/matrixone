@@ -1749,7 +1749,6 @@ func TestMergeRunsToSpillWithStoredKeys(t *testing.T) {
 		require.NoError(t, err)
 
 		run.batchCount = 1
-		run.rowCount = int64(bat.RowCount())
 		bat.Clean(proc.Mp())
 		return run
 	}
@@ -2351,11 +2350,10 @@ func newCancellationTestSpillRunBatches(
 	writer := bufio.NewWriterSize(run.file, testSpillIOBufferSize)
 	for _, values := range valueBatches {
 		bat := newValuesBatch(proc, values)
-		rows, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, analyzer)
+		_, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, analyzer)
 		bat.Clean(proc.Mp())
 		require.NoError(t, writeErr)
 		run.batchCount++
-		run.rowCount += rows
 	}
 	require.NoError(t, writer.Flush())
 	_, err = run.file.Seek(0, io.SeekStart)

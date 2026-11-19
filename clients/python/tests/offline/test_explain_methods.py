@@ -262,7 +262,10 @@ class TestExplainMethods:
         # Empty query
         query = self.client.query(User)
         sql = query.to_sql()
-        assert "SELECT * FROM users" in sql
+        assert (
+            "SELECT users.id, users.name, users.age, users.department, users.salary, users.created_at, users.active FROM users"
+            in sql
+        )
 
         # Query with only LIMIT
         query = self.client.query(User).limit(10)

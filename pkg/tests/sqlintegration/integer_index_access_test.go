@@ -190,5 +190,51 @@ func TestIntegerIndexAccess(t *testing.T) {
 			require.Equal(t, query("select id from ints where id=(select "+value+")"), query("execute scalar using @value"), value)
 		}
 		exec("deallocate prepare scalar")
+		for _, backfill := range []struct{ name, columns string }{
+			{"backfill_no_pk", "k int,v int"},
+			{"backfill_real_pk", "id bigint unsigned auto_increment primary key,k int,v int"},
+		} {
+			func() {
+				// Reuse this fixture with enough candidates to exercise a multi-key
+				// probe, without putting a performance workload in a SQL regression.
+				exec("create table " + backfill.name + "(" + backfill.columns + ",key ix(k))")
+				exec("insert into " + backfill.name + "(k,v) select result%2,result from generate_series(1,64) g")
+				check := func() {
+					t.Helper()
+					require.Equal(t, [][]string{{"32", "1056"}}, query("select count(*),sum(v) from "+backfill.name+" force index(ix) where k=0"))
+					for _, predicate := range []string{"k=0", "k=1", "k=9", "k in (0,0,1,NULL)"} {
+						require.Equal(t, query("select v from "+backfill.name+" ignore index(ix) where "+predicate+" order by v"), query("select v from "+backfill.name+" force index(ix) where "+predicate+" order by v"), predicate)
+					}
+				}
+				check()
+				query("select mo_ctl('DN','FLUSH','integer_index_access." + backfill.name + "')")
+				check()
+				require.Contains(t, fmt.Sprint(query("explain select sum(v) from "+backfill.name+" force index(ix) where k=0")), "Join Type: INDEX")
+				exec("prepare backfill_probe from 'select count(*),sum(v) from " + backfill.name + " force index(ix) where k=?'")
+				defer exec("deallocate prepare backfill_probe")
+				for _, value := range []string{"0", "9", "1", "0"} {
+					exec("set @backfill_key=" + value)
+					require.Equal(t, query("select count(*),sum(v) from "+backfill.name+" ignore index(ix) where k="+value), query("execute backfill_probe using @backfill_key"), value)
+				}
+				func() {
+					exec("begin")
+					defer func() {
+						rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer rollbackCancel()
+						_, err := conn.ExecContext(rollbackCtx, "rollback")
+						require.NoError(t, err)
+					}()
+					exec("delete from " + backfill.name + " where v=2")
+					exec("update " + backfill.name + " set k=1 where v=4")
+					exec("insert into " + backfill.name + "(k,v) values(0,100),(0,100)")
+					for _, predicate := range []string{"k=0 or k=1", "k in (0,1) or v=100"} {
+						require.Equal(t, query("select v from "+backfill.name+" ignore index(ix) where "+predicate+" order by v"), query("select v from "+backfill.name+" force index(ix) where "+predicate+" order by v"), predicate)
+					}
+					require.Equal(t, [][]string{{"32", "1250"}}, query("select count(*),sum(v) from "+backfill.name+" force index(ix) where k=0"))
+					require.Equal(t, query("select v from "+backfill.name+" ignore index(ix) where k=0 order by v"), query("select v from "+backfill.name+" force index(ix) where k=0 order by v"))
+				}()
+				check()
+			}()
+		}
 	})
 }

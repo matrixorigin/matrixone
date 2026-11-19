@@ -18,6 +18,27 @@ commit;
 select * from target_row;
 id    u    v
 1    10    100
+insert into target_row values (2, 10, 200)
+on duplicate key update v = values(v);
+begin;
+insert into target_row values (3, 20, 300);
+use odku_resolved_target_lock;
+set session lock_wait_timeout = 1;
+begin;
+insert into target_row values (3, 30, 400)
+on duplicate key update v = values(v);
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+insert into target_row values (3, 30, 400)
+on duplicate key update v = values(v);
+insert into target_row values (10001, 10, 500), (4, null, 600)
+on duplicate key update v = values(v);
+select * from target_row order by id;
+id    u    v
+1    10    500
+3    20    400
+4    NULL    600
 create table repeated_target(id int primary key, u int unique, v int) partition by range(id*id) (partition p0 values less than (0), partition p1 values less than maxvalue);
 insert into repeated_target values (1,10,1);
 insert into repeated_target values (-1,10,999) on duplicate key update v=v+1;

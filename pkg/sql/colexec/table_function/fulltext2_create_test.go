@@ -42,11 +42,12 @@ import (
 func ft2CreateCfg(t *testing.T, parser string, positionFree bool) string {
 	t.Helper()
 	b, err := sonic.Marshal(fulltext2.TableConfig{
-		ThreadsBuild: 1,
-		DbName:       "db",
-		IndexTable:   "__idx",
-		Parser:       parser,
-		PositionFree: positionFree,
+		ThreadsBuild:  1,
+		DbName:        "db",
+		IndexTable:    "__idx",
+		MetadataTable: "__meta",
+		Parser:        parser,
+		PositionFree:  positionFree,
 	})
 	require.NoError(t, err)
 	return string(b)
@@ -165,6 +166,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	installOrdinaryMaintenanceRelations(t, proc)
 
 	st := &fulltext2CreateState{}
 	tf, _ := ft2CreateArgVecs(t, mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "hello world")
@@ -196,7 +198,8 @@ func TestFulltext2CreateLongPhysicalIdentity(t *testing.T) {
 		t.Run(suffix, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: strings.Repeat("long_physical_generation_", 8) + suffix, Parser: fulltext2.ParserNgram})
+			installOrdinaryMaintenanceRelations(t, proc)
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: strings.Repeat("long_physical_generation_", 8) + suffix, MetadataTable: "__meta", Parser: fulltext2.ParserNgram})
 			require.NoError(t, err)
 			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "apple")
 			defer func() {
@@ -217,9 +220,10 @@ func TestFulltext2CreateLongPhysicalIdentity(t *testing.T) {
 func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	installOrdinaryMaintenanceRelations(t, proc)
 	cfg, err := sonic.Marshal(fulltext2.TableConfig{
 		ThreadsBuild: 1,
-		DbName:       "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
+		DbName:       "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram,
 		IncludeTypes: []int32{int32(types.T_varchar)},
 	})
 	require.NoError(t, err)
@@ -554,6 +558,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			installOrdinaryMaintenanceRelations(t, proc)
 			proc.Base.SessionInfo.Account = "tenant"
 			proc.Base.SessionInfo.Role = "accountadmin"
 			prev := fulltext2_runSql
@@ -578,11 +583,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
 				require.NoError(t, err)
 				require.Empty(t, files, "the spill is unlinked while its handle serves the insert")
-				if opts.HasParams() {
-					vec, err := opts.Params(mp)
-					require.NoError(t, err)
-					require.NotEmpty(t, vec.GetRawBytesAt(1))
-					vec.Free(mp)
+				if strings.Contains(sql, "index_file_chunks") {
 					return executor.Result{}, tc.err
 				}
 				return executor.Result{}, nil
@@ -637,13 +638,14 @@ type ft2PipelineHarness struct {
 func newFT2PipelineHarness(t *testing.T, writeErr error) *ft2PipelineHarness {
 	h := &ft2PipelineHarness{t: t, mp: mpool.MustNewZero(), dir: t.TempDir(), writeErr: writeErr}
 	h.proc = testutil.NewProcessWithOwnedMPool(t, "", h.mp)
+	installOrdinaryMaintenanceRelations(t, h.proc)
 	h.proc.Base.FileService = nil
 	t.Setenv("TMPDIR", h.dir)
 	prev := fulltext2_runSql
 	t.Cleanup(func() { fulltext2_runSql = prev })
 	fulltext2_runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { return executor.Result{}, nil }
 	mockIndexTxn(t, h.proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
-		if opts.HasParams() {
+		if strings.Contains(sql, "index_file_chunks") {
 			return executor.Result{}, h.writeErr
 		}
 		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "INSERT ") {

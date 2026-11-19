@@ -889,7 +889,6 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				service.serviceID,
-				time.Second,
 				bind,
 				client,
 				service.handleBindChanged,
@@ -955,7 +954,6 @@ func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
 			bind.Table,
 			newRemoteLockTable(
 				service.serviceID,
-				time.Second,
 				bind,
 				client,
 				service.handleBindChanged,

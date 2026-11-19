@@ -225,7 +225,9 @@ func (c *cancelDuringParseContext) Err() error {
 	return c.Context.Err()
 }
 func TestParseLimitsCancelDuringScannerAndRecoverForNextParse(t *testing.T) {
-	for _, sql := range []string{"select 1,2,3,4,5,6", "select /*" + strings.Repeat("x", 8192) + "*/ 1"} {
+	for _, sql := range []string{"select 1,2,3,4,5,6", "select /*" + strings.Repeat("x", 8192) + "*/ 1",
+		"/*!" + strings.Repeat("9", 8192) + " select 99 */ select 1",
+		"/*!99999 " + strings.Repeat("x", 8192) + " */ select 1"} {
 		base, cancel := context.WithCancel(t.Context())
 		ctx := &cancelDuringParseContext{Context: base, cancel: cancel}
 		statements, err := ParseWithSQLMode(WithParseLimits(ctx, ParseLimits{Input: len(sql), Tokens: 100, Work: len(sql) * 4}), sql, 1, "")
@@ -274,5 +276,16 @@ func TestSelectSkipLockedTokenBudget(t *testing.T) {
 		} else {
 			require.NoError(t, err)
 		}
+	}
+}
+
+func TestExecutableCommentParseWorkBudget(t *testing.T) {
+	for _, sql := range []string{
+		"/*!" + strings.Repeat("9", 1024) + " select 99 */ select 1",
+		"/*!99999 " + strings.Repeat("x", 1024) + " */ select 1",
+	} {
+		stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), ParseLimits{Input: len(sql), Tokens: 100, Work: 32}), sql, 1, "")
+		require.ErrorIs(t, err, ErrParseLimit)
+		require.Empty(t, stmts)
 	}
 }

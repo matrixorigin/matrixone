@@ -120,6 +120,17 @@ func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower in
 	return p.lexer.stmts, nil
 }
 
+// ParseWithSQLModeAndFragments returns the statements and their source spans
+// from the same parse. The caller owns the statements just as for ParseWithSQLMode;
+// the fragments do not refer to the parser's reusable lexer state.
+func (p *MySQLParser) ParseWithSQLModeAndFragments(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, []SQLFragment, error) {
+	stmts, err := p.ParseWithSQLMode(ctx, sql, lower, sqlMode)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stmts, statementFragments(&p.lexer, sql, sqlMode), nil
+}
+
 // ParseFirstWithSQLMode parses the first top-level statement and returns the
 // byte offset immediately after its delimiter. It stops the lexer as soon as
 // the first statement is reduced, so compound statements are scanned once.
@@ -467,6 +478,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
+	// ADMIN is contextual to the role-grant clause `WITH ADMIN OPTION`
+	// (MySQL 8.0 GRANT role TO user WITH ADMIN OPTION). Everywhere else the
+	// word stays a plain identifier: users, roles, CTEs, tables and columns
+	// named admin keep parsing unchanged.
+	if typ == ID && l.lastToken == WITH && strings.EqualFold(str, "admin") && l.adminOptionAhead() {
+		typ = ADMIN
+	}
 
 	l.previousToken = l.lastToken
 	l.lastToken = typ
@@ -542,6 +560,29 @@ func (l *Lexer) asofJoinPhraseAhead() bool {
 	}
 	next, _ = lookahead.Scan()
 	return next == JOIN
+}
+
+// adminOptionAhead reports whether the identifier `admin` currently follows
+// WITH and precedes OPTION, i.e. whether the phrase is the role-grant clause
+// `WITH ADMIN OPTION` rather than an identifier use such as a CTE named
+// admin (`WITH admin AS (...)`).
+func (l *Lexer) adminOptionAhead() bool {
+	// Peek from the LIVE scanner's lexical state. A freshly built Scanner{}
+	// drops the executable-comment context (CommentFlag and the comment end
+	// position), so inside `/*!80000 admin */ option` the peek would read the
+	// closing '*' instead of skipping '*/' to OPTION, and the clause would
+	// degenerate into a bare identifier. Copying the live scanner value is the
+	// same peek mechanism the other phrase lookaheads in this file use; the
+	// copy also detaches the MySQL special-comment sub-scanner so the peek can
+	// never move shared state, and a peek never commits the live scanner.
+	lookahead := *l.scanner
+	if lookahead.MysqlSpecialComment != nil {
+		sub := *lookahead.MysqlSpecialComment
+		lookahead.MysqlSpecialComment = &sub
+	}
+
+	next, _ := lookahead.Scan()
+	return next == OPTION
 }
 
 // hasAsofLeftFactorAlias follows the right edge of a table-reference chain,
@@ -722,6 +763,10 @@ func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, lo
 		}
 	}()
 
+	return statementFragments(lexer, sql, sqlMode), nil
+}
+
+func statementFragments(lexer *Lexer, sql string, sqlMode string) []SQLFragment {
 	// Grammar semicolons are real AST boundaries even inside executable comments.
 	// Preserve their raw spans, but balance wrappers so each SQL fragment can be
 	// reparsed independently. Only the final inner delimiter extends to the close.
@@ -757,7 +802,7 @@ func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, lo
 	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
 		appendFragment(len(sql), false)
 	}
-	return fragments, nil
+	return fragments
 }
 
 // validateSelectIntoStatements is the final parser boundary for SELECT INTO

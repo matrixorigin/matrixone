@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -72,7 +73,7 @@ var (
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
 
-	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
+	defaultServerVersionPrefix = version.MySQLCompatibilityVersionString + "-MatrixOne-v"
 
 	defaultVersionComment = "MatrixOne"
 
@@ -131,8 +132,9 @@ var (
 
 	// defaultWaitTimeoutMin default: 1 second
 	defaultWaitTimeoutMin int64 = 1
-	// defaultWaitTimeoutMax default: 24 hours (in seconds)
-	defaultWaitTimeoutMax int64 = 24 * 60 * 60
+	// defaultWaitTimeoutMax default: 1 year (31536000 seconds), matching the
+	// MySQL documented non-Windows wait_timeout ceiling.
+	defaultWaitTimeoutMax int64 = 365 * 24 * 60 * 60
 
 	// defaultInteractiveTimeoutMin default: 1 second
 	defaultInteractiveTimeoutMin int64 = 1

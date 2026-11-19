@@ -46,7 +46,7 @@ func TestCharsetConversionRetainsUnaffectedSubtrees(t *testing.T) {
 				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				p, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: compiler, increment: increment}, stmt, false)
+				p, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: compiler, increment: increment}, stmt, false, nil)
 				require.NoError(t, err)
 				return p
 			}

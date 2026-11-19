@@ -72,6 +72,10 @@ func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *Bind
 		{"attnotnull", types.T_int8}, {"attr_enum", types.T_varchar}, {"att_constraint_type", types.T_varchar},
 		{"att_is_auto_increment", types.T_int8}, {"attr_has_generated", types.T_int8}, {"attr_generated", types.T_varbinary},
 		{"att_comment", types.T_varchar}, {"att_is_hidden", types.T_int8},
+		// code-only contract: no shipped view definition references this
+		// field yet; a later gated template generation consumes it for the
+		// attributed-DECIMAL rendering.
+		{"att_is_unsigned", types.T_int8},
 	}
 	defs := make([]*ColDef, len(columns))
 	for i, c := range columns {

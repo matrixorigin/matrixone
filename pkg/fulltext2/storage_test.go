@@ -16,18 +16,19 @@ package fulltext2
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -97,35 +98,24 @@ func TestSegmentPersistBinary(t *testing.T) {
 	seg.Id = "uid:0"
 	expected, err := seg.Serialize()
 	require.NoError(t, err)
-	var actual []byte
+	files := swapIndexFiles(t)
 	var statements []string
 	installPersistenceExecutor(t, sp, func(sql string, opts executor.StatementOption) (executor.Result, error) {
 		statements = append(statements, sql)
-		if opts.HasParams() {
-			vec, err := opts.Params(mp)
-			require.NoError(t, err)
-			defer vec.Free(mp)
-			for i := 1; i < vec.Length(); i += 2 {
-				actual = append(actual, vec.GetRawBytesAt(i)...)
-			}
-		}
 		return executor.Result{}, nil
 	})
 	require.NoError(t, seg.Persist(sp, cfg, 12345, int(vectorindex.Tag_ModelChunk), 0))
-	require.Equal(t, expected, actual)
+	require.Equal(t, expected, files.get(t, "uid:0", int64(vectorindex.Tag_ModelChunk), 0))
+	require.Len(t, statements, 1)
 	require.Contains(t, statements[0], cfg.MetadataTable)
-	require.NotContains(t, strings.Join(statements, ""), "load_file")
+	require.Contains(t, statements[0], indexfile.Checksum(expected))
+	_ = mp
 }
 
-func TestCreateLocalSpillAndTempFile(t *testing.T) {
-	// nil sqlproc ⇒ the spill dir and temp file fall back to the OS temp dir.
+func TestLocalSpillDirNilProcess(t *testing.T) {
+	// nil sqlproc ⇒ the spill dir falls back to the OS temp dir.
 	require.Equal(t, "", localSpillDir(nil))
 
-	f, path, err := createLocalTempFile(nil, "ft2test")
-	require.NoError(t, err)
-	require.NotEmpty(t, path) // linked file in the OS temp dir
-	require.NoError(t, f.Close())
-	require.NoError(t, os.Remove(path))
 }
 
 func TestLocalSpillDirNilRootFS(t *testing.T) {
@@ -237,69 +227,28 @@ func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
 
 }
 
-// On a metadata table that predates build_ts, the frame rows must OMIT it rather than fail.
-// Naming a column the table does not have fails every CDC flush: the ISCP transaction never
-// commits its watermark and the iteration retries the same statement forever, so the index stops
-// advancing silently. Its sibling writer, Segment.Persist, has always probed for this.
-func TestTailFrameRowsAreWithheldFromALegacyTable(t *testing.T) {
-	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_never_widened"}
-	sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable)
+// Every tail frame has a metadata row: readers list the tail's frames from them. build_ts is
+// named only when the table has the column.
+func TestTailFrameRowsAreAlwaysWritten(t *testing.T) {
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}, {Path: "/tmp/s", Offset: 10, FrameLen: vectorindex.MaxChunkSize + 1}}
 
-	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
-	sqls := tailFrameMetaSqls(nil, cfg, 1, frames, 4242)
+	narrow := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_never_widened"}
+	sqlexec.ForgetProvenanceShape(narrow.DbName, narrow.MetadataTable)
+	sqls := tailFrameMetaSqls(nil, narrow, 1, frames, 4242)
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "'cdc_tail:1'")
+	require.Contains(t, sqls[0], "'cdc_tail:2'")
+	require.NotContains(t, sqls[0], catalog.FullText2Index_TblCol_Metadata_Build_Ts)
+	require.NotContains(t, sqls[0], "4242")
 
-	var meta string
-	for _, s := range sqls {
-		if strings.Contains(s, cfg.MetadataTable) {
-			meta += s
-		}
-	}
-	// Naming build_ts on a table without it fails the flush; writing the row without build_ts
-	// leaves an un-upgraded CN reading 'cdc_tail:1' as a base segment. Neither row is written.
-	require.Empty(t, meta, "no metadata row at all until the table carries the columns")
-
-}
-
-// The tail frame rows are withheld while ANY un-upgraded CN could still be serving this index,
-// separately from whether the table happens to carry the columns. An old CN reads the metadata
-// table with SELECT * and would take 'cdc_tail:1' for a base sub-index and try to load it as one.
-//
-// A widened table used to stand as proof that no such reader was left, because only the gated
-// v4_0_7 migration could widen it. That stopped being true once CREATE INDEX could produce a wide
-// table too, so the deployment is asked directly.
-func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
-	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_mixed_version"}
-	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable) // the table IS wide
-	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
-
-	sp, _ := mockSqlProc(t)
-	rt := moruntime.ServiceRuntime(sp.Proc.GetService())
-	require.NotNil(t, rt)
-	prev, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, prev) })
-
-	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61-1)
-	sqls := tailFrameMetaSqls(sp, cfg, 1, frames, 4242)
-	var meta string
-	for _, s := range sqls {
-		if strings.Contains(s, cfg.MetadataTable) {
-			meta += s
-		}
-	}
-	require.Empty(t, meta, "an old CN could still read this row as a base sub-index")
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61)
-	sqls = tailFrameMetaSqls(sp, cfg, 1, frames, 4242)
-	meta = ""
-	for _, s := range sqls {
-		if strings.Contains(s, cfg.MetadataTable) {
-			meta += s
-		}
-	}
-	require.Contains(t, meta, "'cdc_tail:1'", "once nobody can misread it, the row is written")
-	require.Contains(t, meta, "4242")
+	wide := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_wide"}
+	sqlexec.MarkProvenanceColumns(wide.DbName, wide.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(wide.DbName, wide.MetadataTable) })
+	sqls = tailFrameMetaSqls(nil, wide, 1, frames, 4242)
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], catalog.FullText2Index_TblCol_Metadata_Build_Ts)
+	require.Contains(t, sqls[0], "'cdc_tail:2'")
+	require.Contains(t, sqls[0], "4242")
 }
 
 // The frame's metadata row carries the CRC the frame was SEALED with, read back from its footer
@@ -333,23 +282,43 @@ func TestTailPersistPackedRanges(t *testing.T) {
 	require.NoError(t, err)
 	defer tb.Cleanup()
 	tb.rollCap = 300
+	large := map[int64]bool{100: true, 300: true}
 	for i := int64(1); i <= 503; i++ {
 		cdc := NewCdc(int32(types.T_int64))
-		cdc.Insert(i, "owned chronological frame", nil)
+		body := "owned chronological frame"
+		if large[i] {
+			var sb strings.Builder
+			for w := 0; w < 20000; w++ {
+				fmt.Fprintf(&sb, "w%d_%d ", i, w)
+			}
+			body = sb.String()
+		}
+		cdc.Insert(i, body, nil)
 		require.NoError(t, tb.AddBatch(cdc))
 	}
 	frames, err := tb.Finish()
 	require.NoError(t, err)
 	require.Len(t, frames, 503)
 	require.Greater(t, distinctPaths(frames), 1)
-	expected := make([][]byte, 0, len(frames))
+	var smallFrames [][]byte
+	largeFrames := map[int64][]byte{}
+	start := int64(7)
 	for _, f := range frames {
 		data, err := os.ReadFile(f.Path)
 		require.NoError(t, err)
-		expected = append(expected, append([]byte(nil), data[f.Offset:f.Offset+int64(f.FrameLen)]...))
+		frame := append([]byte(nil), data[f.Offset:f.Offset+int64(f.FrameLen)]...)
+		if smallTailFrame(int64(len(frame))) {
+			smallFrames = append(smallFrames, frame)
+		} else {
+			largeFrames[start] = frame
+		}
+		start += FrameChunkCount(len(frame))
 	}
+	require.Len(t, largeFrames, len(large))
+	files := swapIndexFiles(t)
 	var actual [][]byte
 	var batchRows []int
+	var metadata []string
 	installPersistenceExecutor(t, sp, func(sql string, opt executor.StatementOption) (executor.Result, error) {
 		if opt.HasParams() {
 			v, err := opt.Params(mp)
@@ -361,20 +330,35 @@ func TestTailPersistPackedRanges(t *testing.T) {
 				actual = append(actual, append([]byte(nil), v.GetRawBytesAt(i+1)...))
 			}
 		}
+		metadata = append(metadata, sql)
 		return executor.Result{}, nil
 	})
-	next, err := tb.PersistFinished(sp, testStorageCfg(), 7, 0)
+	check := func() {
+		t.Helper()
+		require.Equal(t, []int{500, 1}, batchRows, "chunk rows of one-chunk frames are batched across frames and file rolls")
+		require.Equal(t, smallFrames, actual)
+		require.Len(t, files.files, len(largeFrames), "only a frame larger than one chunk is an index file")
+		for at, want := range largeFrames {
+			require.Equal(t, want, files.get(t, vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), at))
+		}
+		rows := strings.Count(strings.Join(metadata, ""), TailFrameMetaPrefix)
+		require.Equal(t, len(frames), rows, "every frame has a metadata row")
+		require.Len(t, files.tempDirs, len(largeFrames))
+		for _, dir := range files.tempDirs {
+			require.Equal(t, tb.dir, dir, "an index file is staged in the builder's spill directory")
+		}
+	}
+	next, err := tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(510), next)
-	require.Equal(t, []int{500, 3}, batchRows, "batches span frames and file rolls")
-	require.Equal(t, expected, actual)
+	require.Equal(t, start, next)
+	check()
 	// The finished owner retains its spool for a transaction retry.
-	actual = nil
-	batchRows = nil
-	next, err = tb.PersistFinished(sp, testStorageCfg(), 7, 0)
+	actual, batchRows, metadata = nil, nil, nil
+	files.files, files.tempDirs = make(map[string][]byte), nil
+	next, err = tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(510), next)
-	require.Equal(t, expected, actual)
+	require.Equal(t, start, next)
+	check()
 }
 
 func TestSegmentSpillIsUnlinked(t *testing.T) {

@@ -1,0 +1,288 @@
+drop database if exists alter_seq_start_db;
+create database alter_seq_start_db;
+use alter_seq_start_db;
+create sequence asw_asc as bigint increment by 1 minvalue 1 maxvalue 100000 start with 1 no cycle;
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+1
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+2
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+3
+alter sequence asw_asc start with 500;
+select * from asw_asc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+500  ¦  1  ¦  100000  ¦  500  ¦  1  ¦  0  ¦  0
+use alter_seq_start_db;
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+500
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+501
+select * from asw_asc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+501  ¦  1  ¦  100000  ¦  500  ¦  1  ¦  0  ¦  1
+alter sequence asw_asc start with 300;
+select * from asw_asc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+501  ¦  1  ¦  100000  ¦  501  ¦  1  ¦  0  ¦  1
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+502
+alter sequence asw_asc start with 502;
+select * from asw_asc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+502  ¦  1  ¦  100000  ¦  502  ¦  1  ¦  0  ¦  1
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+503
+select nextval('asw_asc');
+➤ nextval(asw_asc)[12,65535,0]  𝄀
+504
+drop sequence asw_asc;
+create sequence asw_desc as bigint increment by -1 minvalue 1 maxvalue 100 start with 100 no cycle;
+select nextval('asw_desc');
+➤ nextval(asw_desc)[12,65535,0]  𝄀
+100
+select nextval('asw_desc');
+➤ nextval(asw_desc)[12,65535,0]  𝄀
+99
+select nextval('asw_desc');
+➤ nextval(asw_desc)[12,65535,0]  𝄀
+98
+alter sequence asw_desc start with 99;
+select nextval('asw_desc');
+➤ nextval(asw_desc)[12,65535,0]  𝄀
+97
+alter sequence asw_desc start with 50;
+select * from asw_desc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+50  ¦  1  ¦  100  ¦  50  ¦  -1  ¦  0  ¦  0
+use alter_seq_start_db;
+select nextval('asw_desc');
+➤ nextval(asw_desc)[12,65535,0]  𝄀
+50
+drop sequence asw_desc;
+create sequence asw_unc as bigint increment by 1 start with 10 no cycle;
+alter sequence asw_unc start with 30;
+select * from asw_unc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+30  ¦  1  ¦  9223372036854775807  ¦  30  ¦  1  ¦  0  ¦  0
+select nextval('asw_unc');
+➤ nextval(asw_unc)[12,65535,0]  𝄀
+30
+drop sequence asw_unc;
+create sequence asw_replay as bigint increment by 1 minvalue 1 maxvalue 100 start with 1 no cycle;
+select nextval('asw_replay');
+➤ nextval(asw_replay)[12,65535,0]  𝄀
+1
+alter sequence asw_replay minvalue 1 maxvalue 100000 start with 50000;
+select * from asw_replay;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+50000  ¦  1  ¦  100000  ¦  50000  ¦  1  ¦  0  ¦  0
+select relname, rel_createsql from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_replay';
+➤ relname[12,5000,0]  ¦  rel_createsql[-1,16383,0]  𝄀
+asw_replay  ¦  create sequence if not exists `alter_seq_start_db`.`asw_replay` as bigint increment by 1 minvalue 1 maxvalue 100000 start with 50000 no cycle
+select rel_createsql = 'create sequence if not exists `alter_seq_start_db`.`asw_replay` as bigint increment by 1 minvalue 1 maxvalue 100000 start with 50000 no cycle' from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_replay';
+➤ rel_createsql = create sequence if not exists `alter_seq_start_db`.`asw_replay` as bigint increment by 1 minvalue 1 maxvalue 100000 start with 50000 no cycle[-6,8,0]  𝄀
+1
+set @ddl = (select replace(rel_createsql, 'asw_replay', 'asw_replayed') from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_replay');
+prepare asw_replay_stmt from @ddl;
+execute asw_replay_stmt;
+deallocate prepare asw_replay_stmt;
+select (select min_value from asw_replay) = (select min_value from asw_replayed);
+➤ (select min_value from asw_replay) = (select min_value from asw_replayed)[-6,8,0]  𝄀
+1
+select (select max_value from asw_replay) = (select max_value from asw_replayed);
+➤ (select max_value from asw_replay) = (select max_value from asw_replayed)[-6,8,0]  𝄀
+1
+select (select start_value from asw_replay) = (select start_value from asw_replayed);
+➤ (select start_value from asw_replay) = (select start_value from asw_replayed)[-6,8,0]  𝄀
+1
+select (select increment_value from asw_replay) = (select increment_value from asw_replayed);
+➤ (select increment_value from asw_replay) = (select increment_value from asw_replayed)[-6,8,0]  𝄀
+1
+select (select cycle from asw_replay) = (select cycle from asw_replayed);
+➤ (select cycle from asw_replay) = (select cycle from asw_replayed)[-6,8,0]  𝄀
+1
+select relname, rel_createsql from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_replayed';
+➤ relname[12,5000,0]  ¦  rel_createsql[-1,16383,0]  𝄀
+asw_replayed  ¦  create sequence if not exists `alter_seq_start_db`.`asw_replayed` as bigint increment by 1 minvalue 1 maxvalue 100000 start with 50000 no cycle
+select nextval('asw_replayed');
+➤ nextval(asw_replayed)[12,65535,0]  𝄀
+50000
+drop sequence asw_replay;
+drop sequence asw_replayed;
+create sequence asw_inc as int increment by 4 minvalue 1 maxvalue 1000 start with 8 cycle;
+select nextval('asw_inc');
+➤ nextval(asw_inc)[12,65535,0]  𝄀
+8
+alter sequence asw_inc start with 55;
+select * from asw_inc;
+➤ last_seq_num[4,32,0]  ¦  min_value[4,32,0]  ¦  max_value[4,32,0]  ¦  start_value[4,32,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+55  ¦  1  ¦  1000  ¦  55  ¦  4  ¦  1  ¦  0
+select rel_createsql from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_inc';
+➤ rel_createsql[-1,16383,0]  𝄀
+create sequence if not exists `alter_seq_start_db`.`asw_inc` as int increment by 4 minvalue 1 maxvalue 1000 start with 55 cycle
+select rel_createsql = 'create sequence if not exists `alter_seq_start_db`.`asw_inc` as int increment by 4 minvalue 1 maxvalue 1000 start with 55 cycle' from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_inc';
+➤ rel_createsql = create sequence if not exists `alter_seq_start_db`.`asw_inc` as int increment by 4 minvalue 1 maxvalue 1000 start with 55 cycle[-6,8,0]  𝄀
+1
+set @ddl = (select replace(rel_createsql, 'asw_inc', 'asw_inc2') from mo_catalog.mo_tables where reldatabase = 'alter_seq_start_db' and relname = 'asw_inc');
+prepare asw_inc_stmt from @ddl;
+execute asw_inc_stmt;
+deallocate prepare asw_inc_stmt;
+select (select min_value from asw_inc) = (select min_value from asw_inc2);
+➤ (select min_value from asw_inc) = (select min_value from asw_inc2)[-6,8,0]  𝄀
+1
+select (select max_value from asw_inc) = (select max_value from asw_inc2);
+➤ (select max_value from asw_inc) = (select max_value from asw_inc2)[-6,8,0]  𝄀
+1
+select (select start_value from asw_inc) = (select start_value from asw_inc2);
+➤ (select start_value from asw_inc) = (select start_value from asw_inc2)[-6,8,0]  𝄀
+1
+select (select increment_value from asw_inc) = (select increment_value from asw_inc2);
+➤ (select increment_value from asw_inc) = (select increment_value from asw_inc2)[-6,8,0]  𝄀
+1
+select (select cycle from asw_inc) = (select cycle from asw_inc2);
+➤ (select cycle from asw_inc) = (select cycle from asw_inc2)[-6,8,0]  𝄀
+1
+select nextval('asw_inc2');
+➤ nextval(asw_inc2)[12,65535,0]  𝄀
+55
+drop sequence asw_inc;
+drop sequence asw_inc2;
+create sequence asw_oob as bigint increment by 1 minvalue 1 maxvalue 1000 start with 100 no cycle;
+alter sequence asw_oob maxvalue 20 start with 10;
+select * from asw_oob;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  20  ¦  10  ¦  1  ¦  0  ¦  0
+select nextval('asw_oob');
+➤ nextval(asw_oob)[12,65535,0]  𝄀
+10
+select * from asw_oob;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  20  ¦  10  ¦  1  ¦  0  ¦  1
+drop sequence asw_oob;
+create sequence asw_oobd as bigint increment by -1 minvalue 1 maxvalue 1000 start with 900 no cycle;
+alter sequence asw_oobd maxvalue 850 start with 700;
+select * from asw_oobd;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+700  ¦  1  ¦  850  ¦  700  ¦  -1  ¦  0  ¦  0
+select nextval('asw_oobd');
+➤ nextval(asw_oobd)[12,65535,0]  𝄀
+700
+select * from asw_oobd;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+700  ¦  1  ¦  850  ¦  700  ¦  -1  ¦  0  ¦  1
+drop sequence asw_oobd;
+create sequence asw_oobc as bigint increment by 1 minvalue 1 maxvalue 1000 start with 100 cycle;
+alter sequence asw_oobc maxvalue 30 start with 10;
+select * from asw_oobc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  30  ¦  10  ¦  1  ¦  1  ¦  0
+select nextval('asw_oobc');
+➤ nextval(asw_oobc)[12,65535,0]  𝄀
+10
+select nextval('asw_oobc');
+➤ nextval(asw_oobc)[12,65535,0]  𝄀
+11
+select * from asw_oobc;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+11  ¦  1  ¦  30  ¦  10  ¦  1  ¦  1  ¦  1
+drop sequence asw_oobc;
+create sequence asw_oobcd as bigint increment by -1 minvalue 1 maxvalue 1000 start with 900 cycle;
+alter sequence asw_oobcd minvalue 950 start with 980;
+select * from asw_oobcd;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+980  ¦  950  ¦  1000  ¦  980  ¦  -1  ¦  1  ¦  0
+select nextval('asw_oobcd');
+➤ nextval(asw_oobcd)[12,65535,0]  𝄀
+980
+select nextval('asw_oobcd');
+➤ nextval(asw_oobcd)[12,65535,0]  𝄀
+979
+select * from asw_oobcd;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+979  ¦  950  ¦  1000  ¦  980  ¦  -1  ¦  1  ¦  1
+drop sequence asw_oobcd;
+create sequence asw_bound as bigint increment by 1 minvalue 1 maxvalue 100 start with 1 no cycle;
+select nextval('asw_bound');
+➤ nextval(asw_bound)[12,65535,0]  𝄀
+1
+alter sequence asw_bound start with 200;
+invalid input: STARTVALUE (200) for sequence must between MINVALUE (1) and MAXVALUE (100)
+select * from asw_bound;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+1  ¦  1  ¦  100  ¦  1  ¦  1  ¦  0  ¦  1
+select nextval('asw_bound');
+➤ nextval(asw_bound)[12,65535,0]  𝄀
+2
+alter sequence asw_bound minvalue 1 maxvalue 100 start with 2;
+select * from asw_bound;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1  ¦  100  ¦  2  ¦  1  ¦  0  ¦  1
+select nextval('asw_bound');
+➤ nextval(asw_bound)[12,65535,0]  𝄀
+3
+drop sequence asw_bound;
+create sequence asw_rej as bigint increment by 1 minvalue 1 maxvalue 1000 start with 100 no cycle;
+alter sequence asw_rej maxvalue 20 start with 50;
+-- @regex("STARTVALUE", true)
+invalid input: STARTVALUE (50) for sequence must between MINVALUE (1) and MAXVALUE (20)
+select * from asw_rej;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+100  ¦  1  ¦  1000  ¦  100  ¦  1  ¦  0  ¦  0
+select nextval('asw_rej');
+➤ nextval(asw_rej)[12,65535,0]  𝄀
+100
+drop sequence asw_rej;
+create sequence asw_unb as bigint increment by 1 start with 10 no cycle;
+alter sequence asw_unb start with 10;
+select * from asw_unb;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  9223372036854775807  ¦  10  ¦  1  ¦  0  ¦  0
+alter sequence asw_unb start with 5;
+select * from asw_unb;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  9223372036854775807  ¦  5  ¦  1  ¦  0  ¦  0
+use alter_seq_start_db;
+select nextval('asw_unb');
+➤ nextval(asw_unb)[12,65535,0]  𝄀
+10
+select nextval('asw_unb');
+➤ nextval(asw_unb)[12,65535,0]  𝄀
+11
+select * from asw_unb;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+11  ¦  1  ¦  9223372036854775807  ¦  5  ¦  1  ¦  0  ¦  1
+drop sequence asw_unb;
+create sequence asw_undb as bigint increment by -1 minvalue 1 maxvalue 100 start with 10 no cycle;
+alter sequence asw_undb start with 15;
+select * from asw_undb;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+10  ¦  1  ¦  100  ¦  15  ¦  -1  ¦  0  ¦  0
+use alter_seq_start_db;
+select nextval('asw_undb');
+➤ nextval(asw_undb)[12,65535,0]  𝄀
+10
+select nextval('asw_undb');
+➤ nextval(asw_undb)[12,65535,0]  𝄀
+9
+drop sequence asw_undb;
+create sequence asw_unda as bigint increment by -1 minvalue 1 maxvalue 100 start with 10 no cycle;
+alter sequence asw_unda start with 5;
+select * from asw_unda;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+5  ¦  1  ¦  100  ¦  5  ¦  -1  ¦  0  ¦  0
+use alter_seq_start_db;
+select nextval('asw_unda');
+➤ nextval(asw_unda)[12,65535,0]  𝄀
+5
+select nextval('asw_unda');
+➤ nextval(asw_unda)[12,65535,0]  𝄀
+4
+drop sequence asw_unda;
+drop database alter_seq_start_db;

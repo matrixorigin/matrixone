@@ -19,9 +19,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/golang/mock/gomock"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -32,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -254,6 +260,8 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		otherSpec := &plan.RuntimeFilterSpec{Tag: 99}
 		consumer.DataSource.RuntimeFilterSpecs = append(
 			consumer.DataSource.RuntimeFilterSpecs, otherSpec)
+		logical := consumer.DataSource.node
+		logical.RuntimeFilterProbeList = append(logical.RuntimeFilterProbeList, otherSpec)
 		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
@@ -262,8 +270,9 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		require.Equal(t, []*plan.RuntimeFilterSpec{otherSpec},
 			consumer.DataSource.RuntimeFilterSpecs,
 			"an unreachable scalar consumer must keep the no-filter fallback")
-		require.Len(t, consumer.DataSource.node.RuntimeFilterProbeList, 1,
+		require.Len(t, logical.RuntimeFilterProbeList, 2,
 			"physical fallback must not mutate the reusable logical plan")
+		require.Equal(t, []*plan.RuntimeFilterSpec{otherSpec}, consumer.DataSource.node.RuntimeFilterProbeList)
 		require.Nil(t, build.RuntimeFilterSpec,
 			"the unreachable producer must not send a current-CN message")
 	})
@@ -338,6 +347,61 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		require.Nil(t, build1.RuntimeFilterSpec)
 		require.Nil(t, build2.RuntimeFilterSpec)
 	})
+}
+
+func TestOptionalRuntimeFilterFallbackSurvivesDataSourceInitialization(t *testing.T) {
+	const tag int32 = 7
+	proc := newPlanTestProcess(t)
+	ctrl := gomock.NewController(t)
+	tx := mock_frontend.NewMockTxnOperator(ctrl)
+	tx.EXPECT().GetWorkspace().Return(&disttae.Transaction{}).AnyTimes()
+	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	proc.Base.TxnOperator = tx
+	table := &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "k", Typ: types.T_int64.ToType().PlanType()}}}
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().Reset(tx).Return(nil).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
+	consumer := makeRuntimeFilterConsumerScope(tag, engine.Node{Id: "consumer"})
+	logical := consumer.DataSource.node
+	logical.TableDef, logical.ObjRef = table, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}
+	other := &plan.RuntimeFilterSpec{Tag: 99}
+	logical.RuntimeFilterProbeList = append(logical.RuntimeFilterProbeList, other)
+	consumer.DataSource.RuntimeFilterSpecs = append(consumer.DataSource.RuntimeFilterSpecs, other)
+	consumer.DataSource.Rel = rel
+	before := plan2.DeepCopyNode(logical)
+	producer, build := makeRuntimeFilterProducerScope(tag, engine.Node{Id: "unreachable"})
+	t.Cleanup(build.Release)
+	consumer.PreScopes = []*Scope{producer}
+	query := makeRightSingleTopologyPlan(tag)
+	query.Nodes[1].IsRightJoin = false
+	query.Nodes[1].RuntimeFilterBuildList[0].ScalarPredicate = true
+	require.NoError(t, validateLocalRuntimeFilterTopology(query, []int32{1}, []*Scope{consumer}))
+	require.Nil(t, build.RuntimeFilterSpec)
+	c := &Compile{proc: proc}
+	t.Cleanup(func() {
+		for _, executor := range c.filterExprExes {
+			executor.Free()
+		}
+	})
+	for range 2 {
+		require.NoError(t, consumer.resetForReuse(c))
+		require.NoError(t, c.compileTableScanDataSource(consumer))
+		require.Equal(t, []*plan.RuntimeFilterSpec{other}, consumer.DataSource.RuntimeFilterSpecs,
+			"initialization must not restore a consumer whose publisher was removed")
+		require.True(t, proto.Equal(before, logical), "the reusable logical plan must keep both tags")
+	}
+	// Remote representation and subsequent initialization use the per-source
+	// node too, rather than looking up the unchanged logical node by ID.
+	remoteNode, err := sourceNodeForRemoteRun(consumer.DataSource, proc)
+	require.NoError(t, err)
+	wire, err := remoteNode.Marshal()
+	require.NoError(t, err)
+	restored := new(plan.Node)
+	require.NoError(t, restored.Unmarshal(wire))
+	remote := &Scope{DataSource: &Source{node: restored, Rel: rel}}
+	require.NoError(t, c.compileTableScanDataSource(remote))
+	require.Equal(t, []*plan.RuntimeFilterSpec{other}, remote.DataSource.RuntimeFilterSpecs)
 }
 
 func TestCollectRuntimeFilterTopologyVisitsSharedScopeOnce(t *testing.T) {

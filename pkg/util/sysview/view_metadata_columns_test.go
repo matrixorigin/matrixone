@@ -30,6 +30,11 @@ func TestViewMetadataColumnsKnownTemplatesPreserveRelationalContract(t *testing.
 		"v58":         InformationSchemaColumnsV58DDL(),
 		"v100":        InformationSchemaColumnsV100DDL(),
 		"v109":        InformationSchemaColumnsV109DDL(),
+		"v110":        InformationSchemaColumnsV110DDL(),
+		// The base-era current identity (V110 with the #31160 NULL
+		// selector): a derived view-metadata statement that recorded it
+		// keeps binding after the live identity moved on (H1a).
+		"binaryNull": InformationSchemaColumnsBinaryFamilyNullDDL(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			lowerName := strings.Replace(definition, "information_schema.COLUMNS", "information_schema.columns", 1)
@@ -50,7 +55,7 @@ func TestViewMetadataColumnsKnownTemplatesPreserveRelationalContract(t *testing.
 					"mo_subscription_view_columns(mt.reldatabase, mt.relname, mt.rel_id)", "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)",
 				).Replace(adapted)
 				baseline := definition
-				if name != "current" && name != "v100" && name != "v109" {
+				if name != "current" && name != "v100" && name != "v109" && name != "v110" && name != "binaryNull" {
 					baseline, ok = AdaptLegacyInformationSchemaColumnsDDL(definition)
 					require.True(t, ok)
 					readapted, supported := ViewMetadataColumnsDDL(baseline)

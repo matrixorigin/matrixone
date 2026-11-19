@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,36 +31,51 @@ import (
 // HashBuild failure contract to MARK semantics: a failed build is not an empty
 // set (which would produce FALSE markers), and no partial probe row may escape.
 func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
-	tc := newMarkSpillTestCase(t)
-	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
-	tc.arg.Children = nil
-	tc.arg.AppendChild(probe)
-	require.NoError(t, probe.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
+	for _, existenceOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existence=%t", existenceOnly), func(t *testing.T) {
+			tc := newMarkSpillTestCase(t)
+			defer tc.cancel()
+			if existenceOnly {
+				tc.arg.ExistenceOnly = true
+				tc.arg.IsShuffle = false
+				for side := range tc.arg.EqConds {
+					tc.arg.EqConds[side] = append(tc.arg.EqConds[side], tc.arg.EqConds[side][0])
+				}
+			}
+			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			tc.arg.Children = nil
+			tc.arg.AppendChild(probe)
+			var err error
+			defer func() {
+				tc.arg.Reset(tc.proc, true, err)
+				probe.Reset(tc.proc, true, err)
+				tc.arg.Free(tc.proc, true, err)
+				probe.Free(tc.proc, true, err)
+				tc.barg.Free(tc.proc, true, err)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			}()
+			require.NoError(t, probe.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	buildErr := moerr.NewOOM(tc.proc.Ctx)
-	message.SendJoinMapResult(
-		message.NewJoinMapBuildErrorResult(buildErr),
-		tc.arg.JoinMapTag,
-		tc.arg.IsShuffle,
-		tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(),
-	)
+			buildErr := moerr.NewOOM(tc.proc.Ctx)
+			message.SendJoinMapResult(
+				message.NewJoinMapBuildErrorResult(buildErr),
+				tc.arg.JoinMapTag,
+				tc.arg.IsShuffle,
+				tc.arg.ShuffleIdx,
+				tc.proc.GetMessageBoard(),
+			)
 
-	result, err := vm.Exec(tc.arg, tc.proc)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
-	require.Equal(t, buildErr.Error(), err.Error())
-	require.Nil(t, result.Batch, "a terminal build error must not become empty-build FALSE rows")
-	require.Zero(t, probe.calls.Load(), "MARK must fail before consuming probe input")
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Equal(t, buildErr.Error(), err.Error())
+			require.Nil(t, result.Batch, "a terminal build error must not become empty-build FALSE rows")
+			require.Zero(t, probe.calls.Load(), "MARK must fail before consuming probe input")
 
-	tc.arg.Reset(tc.proc, true, err)
-	probe.Reset(tc.proc, true, err)
-	tc.arg.Free(tc.proc, true, err)
-	probe.Free(tc.proc, true, err)
-	tc.barg.Free(tc.proc, true, err)
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
 }
 
 // TestHashMarkJoinBuildCancellationPreservesIdentity verifies that a sibling
@@ -67,62 +83,92 @@ func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
 // by scope error arbitration. It must also stop before probe input, just like a
 // substantive build failure.
 func TestHashMarkJoinBuildCancellationPreservesIdentity(t *testing.T) {
-	tc := newMarkSpillTestCase(t)
-	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
-	tc.arg.Children = nil
-	tc.arg.AppendChild(probe)
-	require.NoError(t, probe.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
+	for _, existenceOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existence=%t", existenceOnly), func(t *testing.T) {
+			tc := newMarkSpillTestCase(t)
+			defer tc.cancel()
+			if existenceOnly {
+				tc.arg.ExistenceOnly = true
+				tc.arg.IsShuffle = false
+				for side := range tc.arg.EqConds {
+					tc.arg.EqConds[side] = append(tc.arg.EqConds[side], tc.arg.EqConds[side][0])
+				}
+			}
+			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			tc.arg.Children = nil
+			tc.arg.AppendChild(probe)
+			var err error
+			defer func() {
+				tc.arg.Reset(tc.proc, true, err)
+				probe.Reset(tc.proc, true, err)
+				tc.arg.Free(tc.proc, true, err)
+				probe.Free(tc.proc, true, err)
+				tc.barg.Free(tc.proc, true, err)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			}()
+			require.NoError(t, probe.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	message.SendJoinMapResult(
-		message.NewJoinMapBuildErrorResult(context.Canceled),
-		tc.arg.JoinMapTag,
-		tc.arg.IsShuffle,
-		tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(),
-	)
+			message.SendJoinMapResult(
+				message.NewJoinMapBuildErrorResult(context.Canceled),
+				tc.arg.JoinMapTag,
+				tc.arg.IsShuffle,
+				tc.arg.ShuffleIdx,
+				tc.proc.GetMessageBoard(),
+			)
 
-	result, err := vm.Exec(tc.arg, tc.proc)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, result.Batch)
-	require.Zero(t, probe.calls.Load())
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, result.Batch)
+			require.Zero(t, probe.calls.Load())
 
-	tc.arg.Reset(tc.proc, true, err)
-	probe.Reset(tc.proc, true, err)
-	tc.arg.Free(tc.proc, true, err)
-	probe.Free(tc.proc, true, err)
-	tc.barg.Free(tc.proc, true, err)
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
 }
 
 // TestHashMarkJoinWaitForBuildHonorsCancellation verifies the unhappy path in
 // which the build never publishes a terminal JoinMap. Cancellation must abort
 // the dependency wait without reading or emitting any probe row.
 func TestHashMarkJoinWaitForBuildHonorsCancellation(t *testing.T) {
-	tc := newMarkSpillTestCase(t)
-	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
-	tc.arg.Children = nil
-	tc.arg.AppendChild(probe)
-	require.NoError(t, probe.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
+	for _, existenceOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existence=%t", existenceOnly), func(t *testing.T) {
+			tc := newMarkSpillTestCase(t)
+			defer tc.cancel()
+			if existenceOnly {
+				tc.arg.ExistenceOnly = true
+				tc.arg.IsShuffle = false
+				for side := range tc.arg.EqConds {
+					tc.arg.EqConds[side] = append(tc.arg.EqConds[side], tc.arg.EqConds[side][0])
+				}
+			}
+			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			tc.arg.Children = nil
+			tc.arg.AppendChild(probe)
+			var err error
+			defer func() {
+				tc.arg.Reset(tc.proc, true, err)
+				probe.Reset(tc.proc, true, err)
+				tc.arg.Free(tc.proc, true, err)
+				probe.Free(tc.proc, true, err)
+				tc.barg.Free(tc.proc, true, err)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			}()
+			require.NoError(t, probe.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	tc.proc.BuildPipelineContext(ctx)
-	started := time.Now()
-	result, err := vm.Exec(tc.arg, tc.proc)
-	elapsed := time.Since(started)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Nil(t, result.Batch)
-	require.Zero(t, probe.calls.Load())
-	require.Less(t, elapsed, time.Second, "MARK dependency wait ignored cancellation")
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			tc.proc.BuildPipelineContext(ctx)
+			started := time.Now()
+			result, err := vm.Exec(tc.arg, tc.proc)
+			elapsed := time.Since(started)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Nil(t, result.Batch)
+			require.Zero(t, probe.calls.Load())
+			require.Less(t, elapsed, time.Second, "MARK dependency wait ignored cancellation")
 
-	tc.arg.Reset(tc.proc, true, err)
-	probe.Reset(tc.proc, true, err)
-	tc.arg.Free(tc.proc, true, err)
-	probe.Free(tc.proc, true, err)
-	tc.barg.Free(tc.proc, true, err)
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
 }

@@ -66,7 +66,7 @@ func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 	if b.builder != nil && b.builder.compCtx != nil {
 		proc = b.builder.compCtx.GetProcess()
 	}
-	return getDefaultExprForAssignment(b.GetContext(), b.tableDef.Cols[colIdx], proc, false)
+	return getDefaultExprForAssignment(b.GetContext(), b.tableDef.Cols[colIdx], b.tableDef.DbName, proc, false)
 }
 
 func (b *ReplaceValueBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

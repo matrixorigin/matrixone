@@ -301,6 +301,24 @@ explain analyze verbose select id from ivf_char_retry where grp<>0
 order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=auto';
 drop table ivf_char_retry;
 
+-- Cross one collected-key chunk with the minimum non-empty tail. The globally
+-- nearest row is excluded; the best eligible row must survive complete PRE
+-- membership and be returned before the candidate limit is applied.
+create table ivf_chunk_domain(id int primary key, grp int, v vecf32(2));
+insert into ivf_chunk_domain
+select result, if(result=1,0,1),
+       cast(case when result=1 then '[0,0]' when result=8194 then '[1,0]' else '[100,0]' end as vecf32(2))
+from generate_series(1,8194) g;
+create index chunk_idx using ivfflat on ivf_chunk_domain(v) lists=1 op_type 'vector_l2_ops';
+select id from ivf_chunk_domain where grp=1
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select id from ivf_chunk_domain where grp=1
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=force';
+select count(*) from (select id from ivf_chunk_domain where grp=2
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre') x;
+select count(*) from ivf_chunk_domain a join ivf_chunk_domain b on a.id=b.id where a.grp=1;
+drop table ivf_chunk_domain;
+
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;

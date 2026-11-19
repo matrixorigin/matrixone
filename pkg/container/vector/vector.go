@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/bits"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -38,9 +40,9 @@ import (
 )
 
 const (
-	FLAT     = iota // flat vector represent a uncompressed vector
-	CONSTANT        // const vector
-	DIST            // dictionary vector
+	FLAT       = iota // flat vector represent a uncompressed vector
+	CONSTANT          // const vector
+	DICTIONARY        // dictionary vector
 )
 
 // PrepareParamKind is the compatibility name for the conversion domain of a
@@ -79,7 +81,7 @@ func PrepareParamKindForType(typ types.T) (PrepareParamKind, bool) {
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum,
 		types.T_geometry, types.T_geometry32, types.T_uuid,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4:
 		return PrepareParamNone, true
 	default:
 		return PrepareParamNone, false
@@ -198,6 +200,7 @@ func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
+	vec.requirePhysical()
 	if vec.IsConst() {
 		*ret = toSliceOfLengthNoTypeCheck[T](vec, 1)
 	} else {
@@ -206,6 +209,7 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	vec.requirePhysical()
 	if vec.IsConst() {
 		return toSliceOfLengthNoTypeCheck[T](vec, 1)
 	} else {
@@ -214,6 +218,7 @@ func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
+	vec.requirePhysical()
 	checkType[T](vec)
 	if vec.IsConst() {
 		*ret = util.UnsafeSliceCastToLength[T](vec.data, 1)
@@ -282,6 +287,7 @@ func (v *Vector) ResetWithSameType() {
 }
 
 func (v *Vector) ResetArea() {
+	v.requirePhysical()
 	v.releaseBorrowedArea()
 	v.area = v.area[:0]
 	v.areaDisjoint = v.length == 0
@@ -310,6 +316,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
+	v.requirePhysical()
 	length := 1
 	if !v.IsConst() {
 		length = v.length
@@ -322,6 +329,9 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) Capacity() int {
+	if v.IsDictionary() {
+		return v.length
+	}
 	typeSize := v.typ.TypeSize()
 	if typeSize == 0 {
 		return 0
@@ -332,6 +342,10 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
+	retained := 0
+	if v.IsDictionary() {
+		retained = int(v.DictionaryRetainedBytes())
+	}
 	binaryStringBytes := 0
 	if v.binaryStringRows != nil {
 		binaryStringBytes = v.binaryStringRows.Size()
@@ -346,7 +360,7 @@ func (v *Vector) Allocated() int {
 		}
 		binaryStringBytes += textStringBytes
 	}
-	return cap(v.data) +
+	return retained + cap(v.data) +
 		cap(v.area) +
 		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
@@ -356,6 +370,9 @@ func (v *Vector) Allocated() int {
 }
 
 func (v *Vector) SetLength(n int) {
+	if v.IsDictionary() && n != v.length {
+		v.requirePhysical()
+	}
 	if n < 0 {
 		panic("negative vector length")
 	}
@@ -482,14 +499,37 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	}
 }
 
-// RollbackAppend restores the logical state captured before an attempted
-// append. attemptedRows is needed because grouping bits can be published
-// before a varlen copy fails and advances length.
-func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
-	if checkpoint.length < 0 || checkpoint.length > v.length ||
+// JoinAppendRollbackError preserves a successful rollback's original error
+// identity, including direct MO errors used at protocol boundaries.
+func JoinAppendRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, rollbackErr)
+}
+
+// RollbackAppend restores an append checkpoint, retaining owned capacity.
+// Invalid checkpoints return a terminal invariant error before any mutation.
+// attemptedRows includes metadata published before a payload append failed.
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) error {
+	invalid := func(message string) error {
+		return errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtx(message))
+	}
+	if v == nil || checkpoint.length < 0 || checkpoint.length > v.length ||
 		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
-		attemptedRows < 0 {
-		panic("invalid vector append checkpoint")
+		attemptedRows < 0 || attemptedRows > math.MaxInt-checkpoint.length {
+		return invalid("invalid vector append checkpoint")
+	}
+	// Validate the complete restoration before changing lengths or metadata.
+	if checkpoint.hadPrepareParamKinds && len(v.prepareParamKinds) < checkpoint.length {
+		return invalid("prepared parameter sidecar lost during append rollback")
+	}
+	metadataLength := v.physicalMetadataRowCountForLength(checkpoint.length)
+	if checkpoint.hadStringSources && len(v.stringSources) < metadataLength {
+		return invalid("string source sidecar lost during append rollback")
+	}
+	if checkpoint.hadBinaryStringRows && !(!v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform) && (v.binaryStringRows == nil || !v.binaryStringRowsActive) {
+		return invalid("binary-string sidecar lost during append rollback")
 	}
 	end := max(v.length, checkpoint.length+attemptedRows)
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
@@ -501,9 +541,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.areaDisjoint = checkpoint.areaDisjoint && v.areaDisjoint
 	v.sorted = checkpoint.sorted
 	if checkpoint.hadPrepareParamKinds {
-		if len(v.prepareParamKinds) < checkpoint.length {
-			panic("prepared parameter sidecar lost during append rollback")
-		}
 		clear(v.prepareParamKinds[checkpoint.length:])
 		v.prepareParamKinds = v.prepareParamKinds[:checkpoint.length]
 	} else {
@@ -513,9 +550,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
 	if checkpoint.hadStringSources {
 		metadataLength := v.physicalMetadataRowCountForLength(checkpoint.length)
-		if len(v.stringSources) < metadataLength {
-			panic("string source sidecar lost during append rollback")
-		}
 		clear(v.stringSources[metadataLength:])
 		v.stringSources = v.stringSources[:metadataLength]
 	} else {
@@ -525,8 +559,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	if checkpoint.hadBinaryStringRows {
 		if !v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform {
 			v.setBinaryStringScalar(checkpoint.binaryString)
-		} else if v.binaryStringRows == nil || !v.binaryStringRowsActive {
-			panic("binary-string sidecar lost during append rollback")
 		} else {
 			v.binaryStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
 			v.textStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
@@ -535,6 +567,7 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	} else {
 		v.setBinaryStringScalar(checkpoint.binaryString)
 	}
+	return nil
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -547,7 +580,11 @@ func (v *Vector) Size() int {
 	if v.textStringRows != nil {
 		binaryStringBytes += v.textStringRows.Size()
 	}
-	return v.length*v.typ.TypeSize() + len(v.area) + binaryStringBytes +
+	area := len(v.area)
+	if v.IsDictionary() {
+		area = v.dictionaryState().logicalArea
+	}
+	return v.length*v.typ.TypeSize() + area + binaryStringBytes +
 		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		len(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0)))
 }
@@ -564,6 +601,7 @@ func (v *Vector) GetType() *types.Type {
 // A nonempty T_json result must already contain valid encoded JSON. Raw text
 // must go through the JSON cast/parser and a checked vector write instead.
 func (v *Vector) SetType(typ types.Type) {
+	v.requirePhysical()
 	if v.typ.IsVarlen() || typ.IsVarlen() {
 		// An empty logical range has no descriptors, even if reusable backing
 		// storage still contains stale bytes.
@@ -588,6 +626,9 @@ func (v *Vector) SetTypeAndFixData(
 		return moerr.NewInvalidInputNoCtx(
 			"SetTypeAndFixData cannot change from or to a varlen type",
 		)
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 
 	oldType := v.typ
@@ -614,6 +655,8 @@ func (v *Vector) SetTypeScale(scale int32) {
 	v.typ.Scale = scale
 }
 
+// GetNulls exposes logical row validity. A dictionary's returned bitmap is
+// read-only; materialize with EnsureWritable before changing it directly.
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
@@ -623,6 +666,7 @@ func (v *Vector) GetGrouping() *nulls.Nulls {
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
+	v.requirePhysical()
 	v.nsp.Clear()
 	if nsp == nil {
 		return
@@ -1499,14 +1543,7 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
-			n,
-			owner,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			v.allocationAccount.dataSite,
-			v.allocationAccount.capacityClass,
-		)
+		kinds, err := makeSelectedSlice[PrepareParamKind](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return kinds, owner, err
 	}
 	if owner == nil {
@@ -1545,9 +1582,7 @@ func (v *Vector) allocateStringSources(
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		sources, err := mpool.MakeSliceAccountedWithCapacityClass[types.StringSource](
-			n, owner, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.dataSite, v.allocationAccount.capacityClass)
+		sources, err := makeSelectedSlice[types.StringSource](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return sources, owner, err
 	}
 	if owner == nil {
@@ -3594,9 +3629,7 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccounted[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite)
+		storage, err = makeSelectedSlice[uint64](v.allocationAccount, words, mp, v.allocationAccount.nullsSite)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -3613,8 +3646,10 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 }
 
 func (v *Vector) releaseRemappedBinaryStringRows(remapped *bitmap.Bitmap, storage []uint64, mp *mpool.MPool) {
-	remapped.ReleaseExternalStorage()
-	mpool.FreeSlice(mp, storage)
+	if storage != nil {
+		remapped.ReleaseExternalStorage()
+		mpool.FreeSlice(mp, storage)
+	}
 }
 
 func (v *Vector) publishRemappedBinaryStringRows(binaryRows, textRows *bitmap.Bitmap) {
@@ -3774,13 +3809,16 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 }
 
 func (v *Vector) NeedDup() bool {
-	return v.AreaBackingKind() != OwnedMPoolUnique ||
+	return v.IsDictionary() || v.AreaBackingKind() != OwnedMPoolUnique ||
 		v.DataBackingKind() != OwnedMPoolUnique ||
 		v.nsp.HasBorrowedValidity()
 }
 
 // make sure the type check is done before calling this function
 func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
+	if v.IsDictionary() {
+		return getDictionaryFixedAt[T](v, idx)
+	}
 	length := v.length
 	if v.IsConst() {
 		idx = 0
@@ -3793,6 +3831,10 @@ func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
 // it is much inefficient than GetFixedAtNoTypeCheck
 // if type check is done before calling this function, use GetFixedAtNoTypeCheck
 func GetFixedAtWithTypeCheck[T any](v *Vector, idx int) T {
+	if v.IsDictionary() {
+		checkType[T](v)
+		return getDictionaryFixedAt[T](v, idx)
+	}
 	if v.IsConst() {
 		idx = 0
 	}
@@ -3809,6 +3851,9 @@ func (v *Vector) CloneBytesAt(i int) []byte {
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
+	if v.IsDictionary() {
+		return getDictionaryBytesAt(v, i)
+	}
 	length := v.length
 	if v.IsConst() {
 		i = 0
@@ -3818,7 +3863,40 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+// GetBytesAtChecked reads mutable varlen input without trusting descriptor
+// offsets. The returned bytes still belong to v; this grants no read-only
+// qualification and does not validate a JSON document's contents.
+func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
+	if v == nil || !v.typ.IsVarlen() || i < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsConst() {
+		i = 0
+	} else if i >= v.length {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsDictionary() {
+		base, physicalRow := v.dictionaryPhysicalRow(i)
+		return base.GetBytesAtChecked(physicalRow)
+	}
+	if i >= len(v.data)/types.VarlenaSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](v, i+1)
+	descriptor := &values[i]
+	if !descriptor.IsSmall() {
+		offset, size := descriptor.OffsetLen()
+		if uint64(offset) > uint64(len(v.area)) || uint64(size) > uint64(len(v.area))-uint64(offset) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+		}
+	}
+	return descriptor.GetByteSlice(v.area), nil
+}
+
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsDictionary() {
+		return v.GetBytesAt(i)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3826,6 +3904,13 @@ func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
 }
 
 func (v *Vector) GetRawBytesAt(i int) []byte {
+	if v.IsDictionary() {
+		base, row := v.dictionaryPhysicalRow(i)
+		if base.IsConstNull() {
+			return nil
+		}
+		return base.GetRawBytesAt(row)
+	}
 	if v.typ.IsVarlen() {
 		return v.GetBytesAt(i)
 	} else {
@@ -3839,6 +3924,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
+	if v.dataLease != nil || v.areaLease != nil {
+		v.ReclaimDictionaryWorkspace()
+	}
 	v.releaseBorrowedBacking()
 	// Constant NULLs have logical rows without a payload allocation.
 	v.length = 0
@@ -3856,6 +3944,9 @@ func (v *Vector) CleanOnlyData() {
 
 // no copy. it is unsafe if the user cannot determine the vector's life
 func (v *Vector) UnsafeGetStringAt(i int) string {
+	if v.IsDictionary() {
+		return util.UnsafeBytesToString(v.GetBytesAt(i))
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3869,6 +3960,9 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 
 // always copy
 func (v *Vector) GetStringAt(i int) string {
+	if v.IsDictionary() {
+		return string(v.GetBytesAt(i))
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3879,6 +3973,13 @@ func (v *Vector) GetStringAt(i int) string {
 
 // GetArrayAt Returns []T at the specific index of the vector
 func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
+	if v.IsDictionary() {
+		base, row := v.dictionaryPhysicalRow(i)
+		if base.IsConstNull() {
+			return nil
+		}
+		return GetArrayAt[T](base, row)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3888,6 +3989,9 @@ func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
 }
 
 func GetArrayAt2[T types.ArrayElement](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsDictionary() {
+		return GetArrayAt[T](v, i)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3923,6 +4027,14 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return GetFixedAtNoTypeCheck[float32](vec, i)
 	case types.T_float64:
 		return GetFixedAtNoTypeCheck[float64](vec, i)
+	case types.T_bf16:
+		return GetFixedAtNoTypeCheck[types.BF16](vec, i)
+	case types.T_float16:
+		return GetFixedAtNoTypeCheck[types.Float16](vec, i)
+	case types.T_float8:
+		return GetFixedAtNoTypeCheck[types.Float8](vec, i)
+	case types.T_float4:
+		return GetFixedAtNoTypeCheck[types.Float4](vec, i)
 	case types.T_date:
 		return GetFixedAtNoTypeCheck[types.Date](vec, i)
 	case types.T_datetime:
@@ -3950,7 +4062,7 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 	case types.T_Blockid:
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		ret := vec.GetBytesAt(i)
 		if deepCopy {
 			copied := make([]byte, len(ret))
@@ -4104,6 +4216,12 @@ func (v *Vector) IsGrouping() bool {
 }
 
 func (v *Vector) SetClass(class int) {
+	if v.IsDictionary() || class == DICTIONARY {
+		v.requirePhysical()
+		if class == DICTIONARY {
+			panic(moerr.NewInvalidStateNoCtx("dictionary construction requires an immutable base and selection"))
+		}
+	}
 	if v.typ.IsVarlen() && class != v.class {
 		v.areaDisjoint = v.length == 0
 	}
@@ -4230,6 +4348,9 @@ func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error 
 }
 
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
+	if v.bytesAlias(bs) {
+		return v.withClonedBytes(bs, mp, func(source []byte) error { return SetBytesAt(v, idx, source, mp) })
+	}
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
@@ -4254,6 +4375,12 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 // provenance as one logical row state. Capacity is admitted before the payload
 // changes, so a metadata allocation failure cannot leave a partial overwrite.
 func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
+	if v.dataAliases(source) {
+		return v.withClonedSource(source, sourceRow, sourceRow+1, mp, func(w *Vector) error { return SetBytesAtFrom(v, idx, w, 0, mp) })
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
 	stringSource := source.GetStringSourceAt(sourceRow)
 	if err := v.preflightStringSourceAt(idx, stringSource, mp); err != nil {
@@ -4280,6 +4407,14 @@ func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool
 func SetBytesAtWithBinaryString(
 	v *Vector, idx int, value []byte, binaryString bool, mp *mpool.MPool,
 ) error {
+	if v.bytesAlias(value) {
+		return v.withClonedBytes(value, mp, func(source []byte) error {
+			return SetBytesAtWithBinaryString(v, idx, source, binaryString, mp)
+		})
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if err := v.preflightBinaryStringCopy(idx, binaryString, mp); err != nil {
 		return err
 	}
@@ -4294,6 +4429,12 @@ func SetBytesAtWithBinaryString(
 }
 
 func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
+	if v.dataAliases(source) {
+		return v.withClonedSource(source, sourceRow, sourceRow+1, mp, func(w *Vector) error { return v.SetRawBytesAtFrom(idx, w, 0, mp) })
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
 	stringSource := source.GetStringSourceAt(sourceRow)
 	if err := v.preflightStringSourceAt(idx, stringSource, mp); err != nil {
@@ -4322,6 +4463,12 @@ func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *m
 // fallible capacity work happens before the NULL bit changes, so callers never
 // expose a partial row on error.
 func (v *Vector) SetRawBytesAtFromAndUnsetNull(idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
+	if v.dataAliases(source) {
+		return v.withClonedSource(source, sourceRow, sourceRow+1, mp, func(w *Vector) error { return v.SetRawBytesAtFromAndUnsetNull(idx, w, 0, mp) })
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
 	stringSource := source.GetStringSourceAt(sourceRow)
 	kind := source.GetPrepareParamKindAt(sourceRow)
@@ -4362,6 +4509,12 @@ func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
 		return SetBytesAt(v, i, bs, mp)
 	} else {
+		if v.bytesAlias(bs) && v.HasBorrowedBacking() {
+			return v.withClonedBytes(bs, mp, func(source []byte) error { return v.SetRawBytesAt(i, source, mp) })
+		}
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
 		return nil
 	}
@@ -4383,6 +4536,7 @@ func (v *Vector) IsConstNull() bool {
 }
 
 func (v *Vector) GetArea() []byte {
+	v.requirePhysical()
 	return v.area
 }
 
@@ -4395,10 +4549,12 @@ func (v *Vector) VarlenaAreaIsDisjoint() bool {
 }
 
 func (v *Vector) GetData() []byte {
+	v.requirePhysical()
 	return v.data
 }
 
 func GetPtrAt[T any](v *Vector, idx int64) *T {
+	v.requirePhysical()
 	if v.IsConst() {
 		idx = 0
 	} else {
@@ -4411,6 +4567,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if v == nil {
 		return
 	}
+	v.releaseDictionary()
 
 	if v.dataLease != nil {
 		v.releaseBorrowedData()
@@ -4484,6 +4641,9 @@ func (p MarshalBinaryPlan) Size() int {
 }
 
 func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
+	if v.IsDictionary() {
+		return MarshalBinaryPlan{}, moerr.NewInvalidStateNoCtx("dictionary vectors must be materialized before serialization")
+	}
 	if v == nil || v.length < 0 {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
 	}
@@ -4652,7 +4812,7 @@ func isVarlenaMarshalType(oid types.T) bool {
 	switch oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4,
 		types.T_datalink, types.T_geometry, types.T_geometry32:
 		return true
 	default:
@@ -4695,7 +4855,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 	if err := writeVectorMarshalByte(w, uint8(v.class)); err != nil {
 		return err
 	}
-	if err := writeVectorMarshalBytes(w, types.EncodeType(&v.typ)); err != nil {
+	if err := types.WriteFull(w, types.EncodeType(&v.typ)); err != nil {
 		return err
 	}
 
@@ -4717,7 +4877,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					canonical.SetOffsetLen(p.canonicalOffset[index], length)
 				}
 				bytes := unsafe.Slice((*byte)(unsafe.Pointer(&canonical)), types.VarlenaSize)
-				if err := writeVectorMarshalBytes(w, bytes); err != nil {
+				if err := types.WriteFull(w, bytes); err != nil {
 					return err
 				}
 			}
@@ -4726,7 +4886,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 			if p.normalizedVarlenData != nil {
 				data = p.normalizedVarlenData
 			}
-			if err := writeVectorMarshalBytes(w, data); err != nil {
+			if err := types.WriteFull(w, data); err != nil {
 				return err
 			}
 		}
@@ -4742,12 +4902,12 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					continue
 				}
 				offset, length := descriptor.OffsetLen()
-				if err := writeVectorMarshalBytes(w, v.area[offset:offset+length]); err != nil {
+				if err := types.WriteFull(w, v.area[offset:offset+length]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := writeVectorMarshalBytes(w, v.area); err != nil {
+			if err := types.WriteFull(w, v.area); err != nil {
 				return err
 			}
 		}
@@ -4779,7 +4939,7 @@ func writeVectorMarshalByte(w io.Writer, value byte) error {
 	}
 	var data [1]byte
 	data[0] = value
-	return writeVectorMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeVectorMarshalUint32(w io.Writer, value uint32) error {
@@ -4788,18 +4948,7 @@ func writeVectorMarshalUint32(w io.Writer, value uint32) error {
 	}
 	var data [4]byte
 	binary.NativeEndian.PutUint32(data[:], value)
-	return writeVectorMarshalBytes(w, data[:])
-}
-
-func writeVectorMarshalBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 // UnmarshalBinary binds a vector to its binary encoding after fully validating
@@ -4831,6 +4980,16 @@ type vectorBinaryLayout struct {
 	area   []byte
 	nulls  []byte
 	sorted bool
+}
+
+// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
+// values are already materialized; the format contains no dictionary base or
+// selection. Decode it as FLAT without rewriting the caller's input bytes.
+func decodedPhysicalClass(class byte) byte {
+	if class == DICTIONARY {
+		return FLAT
+	}
+	return class
 }
 
 type vectorBinaryCursor struct {
@@ -4920,8 +5079,9 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
+	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		class[0],
+		physicalClass,
 		typ,
 		length,
 		vectorData,
@@ -4932,7 +5092,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  class[0],
+		class:  physicalClass,
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -4993,7 +5153,7 @@ func validateVectorBinary(
 	nsp *nulls.Nulls,
 	validateValues bool,
 ) error {
-	if class > DIST {
+	if class > CONSTANT {
 		return moerr.NewInvalidInputNoCtx("invalid vector class")
 	}
 	typeSize, err := canonicalVectorTypeSize(typ)
@@ -5036,6 +5196,11 @@ func validateVectorBinary(
 			}
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
+			}
+			if typ.Oid.IsBlockScaledArray() {
+				if _, err := types.ParseBlockScaledCell(values[i].GetByteSlice(area)); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -5088,6 +5253,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
@@ -5095,7 +5261,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_blob, types.T_text, types.T_datalink,
 		types.T_TS, types.T_Rowid, types.T_Blockid,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4:
 	default:
 		return 0, moerr.NewInvalidInputNoCtx("unknown vector type")
 	}
@@ -5183,9 +5349,11 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	}()
 	var err error
 
-	if v.class, err = types.ReadByteAsInt(r); err != nil {
+	encodedClass, err := types.ReadByteAsInt(r)
+	if err != nil {
 		return err
 	}
+	v.class = int(decodedPhysicalClass(byte(encodedClass)))
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
@@ -5372,6 +5540,7 @@ func (v *Vector) UnmarshalGroupingFromReader(
 }
 
 func (v *Vector) ToConst() {
+	v.requirePhysical()
 	if v.typ.IsVarlen() {
 		// A constant's single physical descriptor is logically broadcast.
 		v.areaDisjoint = false
@@ -5504,8 +5673,7 @@ func (v *Vector) preExtendSelectedBatch(
 	// The preflight proof cannot retain an aliased source for publication.
 	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
 	// after the caller has committed its surrounding state transition.
-	if v.typ.IsVarlen() &&
-		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+	if v == w && w.IsDictionary() || v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
 		return mpool.ErrAllocationAccountInvalid
 	}
 
@@ -5519,6 +5687,16 @@ func (v *Vector) preExtendSelectedBatch(
 	selectedAreaBytes := 0
 	var values []types.Varlena
 	varlen := w.GetType().IsVarlen() && !w.IsConstNull()
+	if varlen && w.IsDictionary() {
+		var err error
+		selectedAreaBytes, err = dictionarySelectedAreaBytes(w, offset, flags)
+		if err != nil {
+			return err
+		}
+		// The generic flag proof/count remains below; payload sizing has used
+		// the immutable selected view instead of a physical descriptor slice.
+		varlen = false
+	}
 	if varlen {
 		ToSliceNoTypeCheck(w, &values)
 	}
@@ -5555,6 +5733,13 @@ func (v *Vector) preExtendSelectedBatch(
 		selectedAreaBytes = int(length)
 	}
 
+	// Even an append that fits existing capacity must finish COW before its
+	// publication proof is admitted; publication cannot allocate or shrink it.
+	if selectedRows > 0 {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	if w.HasNull() {
 		if err := v.PreExtendNulls(targetRows, mp); err != nil {
 			return err
@@ -5706,9 +5891,12 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 	preflightRowCount int,
 	finalize bool,
 ) error {
-	err := v.unionBatch(
-		w, offset, cnt, flags, stringSources, mp,
-		selectedAreaBytes, preflightRowCount, true)
+	var err error
+	if w.IsDictionary() {
+		err = v.admitDictionaryBatch(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
+	} else {
+		err = v.unionBatchFlat(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
+	}
 	if finalize {
 		v.FinalizeStringSourcePreflight()
 	}
@@ -5761,6 +5949,9 @@ func (v *Vector) dup(
 	areaOffHeap bool,
 	selection *AllocationAccountSelection,
 ) (*Vector, error) {
+	if v.IsDictionary() {
+		return v.materializeDictionary(mp, selection)
+	}
 	w := NewVecFromReuse()
 	w.offHeap = offHeap
 	if selection != nil {
@@ -5890,6 +6081,9 @@ func (v *Vector) cloneToFlatCompact(
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
 ) (*Vector, error) {
+	if v.IsDictionary() {
+		return v.materializeDictionary(mp, selection)
+	}
 	var w *Vector
 	if selection == nil {
 		w = NewVec(v.typ)
@@ -6020,85 +6214,135 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 	})
 }
 
-// Shrink use to shrink vectors, sels must be guaranteed to be ordered
-func (v *Vector) Shrink(sels []int64, negate bool) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
+// Shrink compacts a vector. For nonconstant vectors, sels must be ordered.
+func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
 	}
 
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
 	oldSources := v.stringSources
 	oldLength := v.length
 
 	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 		if negate {
 			v.length -= len(sels)
 		} else {
 			v.length = len(sels)
 		}
-		return
+		return nil
+	}
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
+	needsWrite := len(sels) > 0
+	if v.cantFreeData && needsWrite {
+		needsWrite = false
+		if negate {
+			needsWrite = sels[0] < int64(v.length-len(sels))
+		} else {
+			for i, sel := range sels {
+				if int64(i) != sel {
+					needsWrite = true
+					break
+				}
+			}
+		}
+	}
+	skipData := v.cantFreeData && !needsWrite
+	if needsWrite {
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
 	}
 
-	switch v.typ.Oid {
-	case types.T_bool:
-		shrinkFixed[bool](v, sels, negate)
-	case types.T_bit:
-		shrinkFixed[uint64](v, sels, negate)
-	case types.T_int8:
-		shrinkFixed[int8](v, sels, negate)
-	case types.T_int16:
-		shrinkFixed[int16](v, sels, negate)
-	case types.T_int32:
-		shrinkFixed[int32](v, sels, negate)
-	case types.T_int64:
-		shrinkFixed[int64](v, sels, negate)
-	case types.T_uint8:
-		shrinkFixed[uint8](v, sels, negate)
-	case types.T_uint16:
-		shrinkFixed[uint16](v, sels, negate)
-	case types.T_uint32:
-		shrinkFixed[uint32](v, sels, negate)
-	case types.T_uint64:
-		shrinkFixed[uint64](v, sels, negate)
-	case types.T_float32:
-		shrinkFixed[float32](v, sels, negate)
-	case types.T_float64:
-		shrinkFixed[float64](v, sels, negate)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
-		// XXX shrink varlena, but did not shrink area.  For our vector, this
-		// may well be the right thing.  If want to shrink area as well, we
-		// have to copy each varlena value and swizzle pointer.
-		shrinkFixed[types.Varlena](v, sels, negate)
-	case types.T_date:
-		shrinkFixed[types.Date](v, sels, negate)
-	case types.T_datetime:
-		shrinkFixed[types.Datetime](v, sels, negate)
-	case types.T_time:
-		shrinkFixed[types.Time](v, sels, negate)
-	case types.T_timestamp:
-		shrinkFixed[types.Timestamp](v, sels, negate)
-	case types.T_year:
-		shrinkFixed[types.MoYear](v, sels, negate)
-	case types.T_enum:
-		shrinkFixed[types.Enum](v, sels, negate)
-	case types.T_decimal64:
-		shrinkFixed[types.Decimal64](v, sels, negate)
-	case types.T_decimal128:
-		shrinkFixed[types.Decimal128](v, sels, negate)
-	case types.T_decimal256:
-		shrinkFixed[types.Decimal256](v, sels, negate)
-	case types.T_uuid:
-		shrinkFixed[types.Uuid](v, sels, negate)
-	case types.T_TS:
-		shrinkFixed[types.TS](v, sels, negate)
-	case types.T_Rowid:
-		shrinkFixed[types.Rowid](v, sels, negate)
-	case types.T_Blockid:
-		shrinkFixed[types.Blockid](v, sels, negate)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+	// Keep the borrowed prefix in place while still remapping its metadata.
+	// The ordinary path uses the same compact loop as owned data.
+	if skipData {
+		if !negate || len(sels) > 0 {
+			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
+			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
+			if negate {
+				v.length -= len(sels)
+			} else {
+				v.length = len(sels)
+			}
+		}
+	} else {
+		switch v.typ.Oid {
+		case types.T_bool:
+			shrinkFixed[bool](v, sels, negate)
+		case types.T_bit:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_int8:
+			shrinkFixed[int8](v, sels, negate)
+		case types.T_int16:
+			shrinkFixed[int16](v, sels, negate)
+		case types.T_int32:
+			shrinkFixed[int32](v, sels, negate)
+		case types.T_int64:
+			shrinkFixed[int64](v, sels, negate)
+		case types.T_uint8:
+			shrinkFixed[uint8](v, sels, negate)
+		case types.T_uint16:
+			shrinkFixed[uint16](v, sels, negate)
+		case types.T_uint32:
+			shrinkFixed[uint32](v, sels, negate)
+		case types.T_uint64:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_float32:
+			shrinkFixed[float32](v, sels, negate)
+		case types.T_float64:
+			shrinkFixed[float64](v, sels, negate)
+		case types.T_bf16:
+			shrinkFixed[types.BF16](v, sels, negate)
+		case types.T_float16:
+			shrinkFixed[types.Float16](v, sels, negate)
+		case types.T_float8:
+			shrinkFixed[types.Float8](v, sels, negate)
+		case types.T_float4:
+			shrinkFixed[types.Float4](v, sels, negate)
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
+			// XXX shrink varlena, but did not shrink area.  For our vector, this
+			// may well be the right thing.  If want to shrink area as well, we
+			// have to copy each varlena value and swizzle pointer.
+			shrinkFixed[types.Varlena](v, sels, negate)
+		case types.T_date:
+			shrinkFixed[types.Date](v, sels, negate)
+		case types.T_datetime:
+			shrinkFixed[types.Datetime](v, sels, negate)
+		case types.T_time:
+			shrinkFixed[types.Time](v, sels, negate)
+		case types.T_timestamp:
+			shrinkFixed[types.Timestamp](v, sels, negate)
+		case types.T_year:
+			shrinkFixed[types.MoYear](v, sels, negate)
+		case types.T_enum:
+			shrinkFixed[types.Enum](v, sels, negate)
+		case types.T_decimal64:
+			shrinkFixed[types.Decimal64](v, sels, negate)
+		case types.T_decimal128:
+			shrinkFixed[types.Decimal128](v, sels, negate)
+		case types.T_decimal256:
+			shrinkFixed[types.Decimal256](v, sels, negate)
+		case types.T_uuid:
+			shrinkFixed[types.Uuid](v, sels, negate)
+		case types.T_TS:
+			shrinkFixed[types.TS](v, sels, negate)
+		case types.T_Rowid:
+			shrinkFixed[types.Rowid](v, sels, negate)
+		case types.T_Blockid:
+			shrinkFixed[types.Blockid](v, sels, negate)
+		default:
+			panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+		}
 	}
 	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
 	v.remapStringSourcesAfterShrink(oldSources, oldLength, sels, negate)
@@ -6107,19 +6351,52 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		v.textStringRows.RemapOrdered(sels, negate)
 		v.normalizeBinaryStringRows()
 	}
+	return nil
 }
 
-func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
+	}
+	if negate && sels.Count() == 0 {
+		return nil
 	}
 	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 		if negate {
 			v.length -= sels.Count()
 		} else {
 			v.length = sels.Count()
 		}
-		return
+		return nil
+	}
+	needsWrite := sels.Count() > 0
+	if v.cantFreeData && needsWrite {
+		needsWrite = false
+		itr := sels.Iterator()
+		if negate {
+			needsWrite = itr.Next()+offset < uint64(v.length-sels.Count())
+		} else {
+			for i := uint64(0); itr.HasNext(); i++ {
+				if itr.Next()+offset != i {
+					needsWrite = true
+					break
+				}
+			}
+		}
+	}
+	skipData := v.cantFreeData && !needsWrite
+	if needsWrite {
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
 	}
 	oldKinds := v.prepareParamKinds
 	oldSources := v.stringSources
@@ -6127,61 +6404,69 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		shrinkFixedByMask[bool](v, sels, negate, offset)
+		shrinkFixedByMask[bool](v, sels, negate, offset, skipData)
 	case types.T_bit:
-		shrinkFixedByMask[uint64](v, sels, negate, offset)
+		shrinkFixedByMask[uint64](v, sels, negate, offset, skipData)
 	case types.T_int8:
-		shrinkFixedByMask[int8](v, sels, negate, offset)
+		shrinkFixedByMask[int8](v, sels, negate, offset, skipData)
 	case types.T_int16:
-		shrinkFixedByMask[int16](v, sels, negate, offset)
+		shrinkFixedByMask[int16](v, sels, negate, offset, skipData)
 	case types.T_int32:
-		shrinkFixedByMask[int32](v, sels, negate, offset)
+		shrinkFixedByMask[int32](v, sels, negate, offset, skipData)
 	case types.T_int64:
-		shrinkFixedByMask[int64](v, sels, negate, offset)
+		shrinkFixedByMask[int64](v, sels, negate, offset, skipData)
 	case types.T_uint8:
-		shrinkFixedByMask[uint8](v, sels, negate, offset)
+		shrinkFixedByMask[uint8](v, sels, negate, offset, skipData)
 	case types.T_uint16:
-		shrinkFixedByMask[uint16](v, sels, negate, offset)
+		shrinkFixedByMask[uint16](v, sels, negate, offset, skipData)
 	case types.T_uint32:
-		shrinkFixedByMask[uint32](v, sels, negate, offset)
+		shrinkFixedByMask[uint32](v, sels, negate, offset, skipData)
 	case types.T_uint64:
-		shrinkFixedByMask[uint64](v, sels, negate, offset)
+		shrinkFixedByMask[uint64](v, sels, negate, offset, skipData)
 	case types.T_float32:
-		shrinkFixedByMask[float32](v, sels, negate, offset)
+		shrinkFixedByMask[float32](v, sels, negate, offset, skipData)
 	case types.T_float64:
-		shrinkFixedByMask[float64](v, sels, negate, offset)
+		shrinkFixedByMask[float64](v, sels, negate, offset, skipData)
+	case types.T_bf16:
+		shrinkFixedByMask[types.BF16](v, sels, negate, offset, skipData)
+	case types.T_float16:
+		shrinkFixedByMask[types.Float16](v, sels, negate, offset, skipData)
+	case types.T_float8:
+		shrinkFixedByMask[types.Float8](v, sels, negate, offset, skipData)
+	case types.T_float4:
+		shrinkFixedByMask[types.Float4](v, sels, negate, offset, skipData)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
-		shrinkFixedByMask[types.Varlena](v, sels, negate, offset)
+		shrinkFixedByMask[types.Varlena](v, sels, negate, offset, skipData)
 	case types.T_date:
-		shrinkFixedByMask[types.Date](v, sels, negate, offset)
+		shrinkFixedByMask[types.Date](v, sels, negate, offset, skipData)
 	case types.T_datetime:
-		shrinkFixedByMask[types.Datetime](v, sels, negate, offset)
+		shrinkFixedByMask[types.Datetime](v, sels, negate, offset, skipData)
 	case types.T_time:
-		shrinkFixedByMask[types.Time](v, sels, negate, offset)
+		shrinkFixedByMask[types.Time](v, sels, negate, offset, skipData)
 	case types.T_timestamp:
-		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
+		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset, skipData)
 	case types.T_year:
-		shrinkFixedByMask[types.MoYear](v, sels, negate, offset)
+		shrinkFixedByMask[types.MoYear](v, sels, negate, offset, skipData)
 	case types.T_enum:
-		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
+		shrinkFixedByMask[types.Enum](v, sels, negate, offset, skipData)
 	case types.T_decimal64:
-		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset, skipData)
 	case types.T_decimal128:
-		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset, skipData)
 	case types.T_decimal256:
-		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset, skipData)
 	case types.T_uuid:
-		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Uuid](v, sels, negate, offset, skipData)
 	case types.T_TS:
-		shrinkFixedByMask[types.TS](v, sels, negate, offset)
+		shrinkFixedByMask[types.TS](v, sels, negate, offset, skipData)
 	case types.T_Rowid:
-		shrinkFixedByMask[types.Rowid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Rowid](v, sels, negate, offset, skipData)
 	case types.T_Blockid:
-		shrinkFixedByMask[types.Blockid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Blockid](v, sels, negate, offset, skipData)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -6192,6 +6477,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		v.textStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
 		v.normalizeBinaryStringRows()
 	}
+	return nil
 }
 
 func (v *Vector) remapPrepareParamKindsAfterShrink(
@@ -6448,13 +6734,13 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
-	if v.IsConst() {
-		return nil
-	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
 			return err
 		}
+	}
+	if v.IsConst() {
+		return nil
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6470,12 +6756,12 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 	oldKinds := v.prepareParamKinds
 	var preparedKinds []PrepareParamKind
 	var preparedOwner *mpool.MPool
@@ -6511,8 +6797,16 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[float32](v, sels, mp)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheck[types.BF16](v, sels, mp)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheck[types.Float16](v, sels, mp)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheck[types.Float8](v, sels, mp)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheck[types.Float4](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
@@ -6553,7 +6847,15 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
-	v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	if v.allocationAccount != nil && v.binaryStringRowsActive {
+		mpool.FreeSlice(mp, v.binaryStringRows.ReleaseExternalStorage())
+		mpool.FreeSlice(mp, v.textStringRows.ReleaseExternalStorage())
+		*v.binaryStringRows, *v.textStringRows = remappedBinary, remappedText
+		remappedStorage, remappedTextStorage = nil, nil
+		v.normalizeBinaryStringRows()
+	} else {
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -6564,8 +6866,10 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
 	}
 	if v.IsConst() {
 		return nil
@@ -6582,10 +6886,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.cantFreeData || len(sels) != v.length {
 		return v.Shuffle(sels, mp)
 	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
-			return err
-		}
+	// Uniform metadata needs no row remapping. Keep ordinary vectors out of
+	// the temporary sidecar and deferred-cleanup path.
+	if v.stringSources == nil && oldKinds == nil && !v.binaryStringRowsActive {
+		return v.shuffleWithBufData(sels, buf)
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6601,13 +6905,26 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 
+	err = v.shuffleWithBufData(sels, buf)
+	if err == nil {
+		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
+		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
+		releaseRemappedSources = false
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
+	return err
+}
+
+// shuffleWithBufData performs the common payload/bitmap permutation after all
+// fallible metadata preparation, then updates ordering and area properties.
+func (v *Vector) shuffleWithBufData(sels []int64, buf *[]byte) (err error) {
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -6633,8 +6950,16 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.BF16](v, sels, buf)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float16](v, sels, buf)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float8](v, sels, buf)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float4](v, sels, buf)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
@@ -6667,16 +6992,25 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	}
 
 	if err == nil {
-		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
-		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
-		releaseRemappedSources = false
-		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 	}
 	return err
 }
 
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
+	// Preserve an aliased source row before COW or growth can release it.
+	if v.dataAliases(w) && (v.typ.IsVarlen() || v.HasBorrowedBacking()) {
+		return v.withClonedSource(w, int(wi), int(wi)+1, mp, func(source *Vector) error {
+			return v.Copy(source, vi, 0, mp)
+		})
+	}
+	// Area growth must not replace data after we capture a destination header.
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	disjoint := v.areaDisjoint
 	destinationHasValue := vi >= 0 && vi < int64(v.length) && !v.IsNull(uint64(vi))
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
@@ -6745,7 +7079,11 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		v.clearBinaryStringAt(int(vi))
 		return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 	}
-	if v.typ.IsFixedLen() {
+	if w.IsDictionary() {
+		if err := v.copyDictionaryPayload(w, vi, wi, mp); err != nil {
+			return err
+		}
+	} else if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
 		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], w.data[wi*int64(sz):(wi+1)*int64(sz)])
 	} else {
@@ -6787,6 +7125,19 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if w.IsDictionary() {
+			return v.UnionBatch(w, 0, w.length, nil, mp)
+		}
+
+		// A Window retains the area lease but may alias our owned descriptors.
+		if v.dataAliases(w) {
+			return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
+				return GetUnionAllFunction(typ, mp)(v, source)
+			})
+		}
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		if w.IsConst() {
 			// The raw const append helpers classify their input as ordinary data.
 			// UnionMulti copies a source value instead and therefore preserves its
@@ -7061,7 +7412,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
-	case types.T_uint8:
+	case types.T_uint8, types.T_float8, types.T_float4:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7090,7 +7441,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
-	case types.T_uint16:
+	case types.T_uint16, types.T_bf16, types.T_float16:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7585,7 +7936,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7746,7 +8097,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
-	case types.T_uint8:
+	case types.T_uint8, types.T_float8, types.T_float4:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -7757,7 +8108,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
-	case types.T_uint16:
+	case types.T_uint16, types.T_bf16, types.T_float16:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -7945,7 +8296,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -7979,19 +8330,43 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		if v == nil || w == nil || sel < 0 || sel >= int64(w.Length()) || length < 0 {
 			return moerr.NewInvalidInputNoCtx("invalid const vector selection")
 		}
+		if v.dataAliases(w) {
+			return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error { return GetConstSetFunction(typ, mp)(v, source, 0, length) })
+		}
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		grouping := w.gsp.Contains(uint64(sel))
 		if grouping {
 			if err := v.ensureGroupingCapacity(length, mp); err != nil {
 				return err
 			}
 		}
+		if length == 0 {
+			if err := set(v, w, sel, length); err != nil {
+				return err
+			}
+			v.resetPrepareParamKind()
+			v.resetBinaryString()
+			v.resetStringSource()
+			v.gsp.Reset()
+			return nil
+		}
+		// The selected source row is stable through set: aliases were cloned above.
+		// Compute NULL once for both provenance admission and publication.
+		var sourceNull bool
+		if w.IsConst() {
+			sourceNull = w.IsConstNull()
+		} else {
+			sourceNull = w.nsp.Contains(uint64(sel))
+		}
 		domain := types.RuntimeStringInherit
-		if length > 0 && !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+		if !sourceNull {
 			domain = w.GetRuntimeStringDomainAt(int(sel))
 		}
 		// Admit the only fallible provenance allocation before SetConst*
 		// publishes the new payload, const state, and logical length.
-		if domain == types.RuntimeStringText && length > 0 {
+		if domain == types.RuntimeStringText {
 			if err := v.ensureBinaryStringCapacity(1, mp); err != nil {
 				return err
 			}
@@ -8003,7 +8378,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// constant value.  The value and its prepared-parameter provenance are
 		// one state: copy only the selected row's category, never the source
 		// sidecar's whole row layout. NULL retains its independent source.
-		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+		if sourceNull {
 			v.resetPrepareParamKind()
 			v.resetBinaryString()
 		} else {
@@ -8012,13 +8387,11 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
-		if length == 0 {
-			v.resetStringSource()
-		} else if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
+		if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
 			return err
 		}
 		v.gsp.Reset()
-		if grouping && length > 0 {
+		if grouping {
 			v.gsp.AddRange(0, uint64(length))
 		}
 		return nil
@@ -8074,8 +8447,116 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 	return appendOneFixed(v, 0, true, mp)
 }
 
+// FixedSourceRow identifies an immutable source for a single append call.
+type FixedSourceRow struct {
+	Vec *Vector
+	Row int64
+}
+
+// TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
+// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// false result leaves v untouched, allowing the caller to use UnionOne.
+// A true result transfers no source ownership; v owns every copied payload.
+func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
+	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings ||
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
+		v.preflightStringSourceReady {
+		return false, nil
+	}
+	if inlineStrings && (types.IsUnicodeCollation(v.typ.Charset) || v.AreaBackingKind() != OwnedMPoolUnique) {
+		return false, nil
+	}
+	size := v.typ.TypeSize()
+	if size <= 0 || rows[0].Vec == nil {
+		return false, nil
+	}
+	source := rows[0].Vec.stringSource
+	if v.length != 0 && v.stringSource != source {
+		return false, nil
+	}
+
+	hasNulls, hasValues := false, false
+	for _, row := range rows {
+		w := row.Vec
+		if w == nil || w == v || w.class != FLAT || w.typ != v.typ ||
+			w.DataBackingKind() != OwnedMPoolUnique || row.Row < 0 || row.Row >= int64(w.length) ||
+			!w.gsp.EmptyByFlag() || !w.hasPlainFixedMetadata() || w.stringSource != source {
+			return false, nil
+		}
+		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		if inlineStrings && (w.AreaBackingKind() != OwnedMPoolUnique ||
+			!isNull && w.data[int(row.Row)*size] > types.VarlenaInlineSize) {
+			return false, nil
+		}
+		hasNulls = hasNulls || isNull
+		hasValues = hasValues || !isNull
+	}
+	oldLen := v.length
+	if err := extendWithBitmaps(v, len(rows), mp, hasNulls && v.allocationAccount != nil, false); err != nil {
+		return true, err
+	}
+	// Keep the nullable path separate: ordinary fixed columns need neither
+	// row-by-row NULL checks nor scalar append/admission work in the gather loop.
+	if hasNulls {
+		for i, row := range rows {
+			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
+				nulls.Add(&v.nsp, uint64(oldLen+i))
+				if inlineStrings {
+					clear(v.data[(oldLen+i)*size : (oldLen+i+1)*size])
+				}
+				continue
+			}
+			dst, src := (oldLen+i)*size, int(row.Row)*size
+			copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+		}
+	} else {
+		switch size {
+		case 8:
+			for i, row := range rows {
+				*(*uint64)(unsafe.Pointer(&v.data[(oldLen+i)*8])) =
+					*(*uint64)(unsafe.Pointer(&row.Vec.data[row.Row*8]))
+			}
+		case 4:
+			for i, row := range rows {
+				*(*uint32)(unsafe.Pointer(&v.data[(oldLen+i)*4])) =
+					*(*uint32)(unsafe.Pointer(&row.Vec.data[row.Row*4]))
+			}
+		default:
+			for i, row := range rows {
+				dst, src := (oldLen+i)*size, int(row.Row)*size
+				copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+			}
+		}
+	}
+	v.length = oldLen + len(rows)
+	v.stringSource = source
+	if hasValues {
+		if !v.nsp.EmptyByFlag() {
+			v.prepareParamKindAppendStart(oldLen)
+		}
+		v.prepareParamKindSeen = true
+	}
+	return true, nil
+}
+
+func (v *Vector) hasPlainFixedMetadata() bool {
+	return v.prepareParamKinds == nil && v.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !v.binaryString && v.stringSources == nil
+}
+
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return v.unionDictionaryOne(w, sel, mp)
+	}
+	if v.dataAliases(w) {
+		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
+			return v.UnionOne(source, 0, mp)
+		})
+	}
+	preserveAreaDisjoint := v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint &&
+		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
 	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
 	// when the source has no NULL/grouping bits; retain the full append path.
 	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
@@ -8091,6 +8572,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		v.stringSources == nil && w.stringSources == nil && !v.preflightStringSourceReady &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 	if !plainMetadata {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
 			return err
 		}
@@ -8110,8 +8594,6 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		return err
 	}
 	varlen := v.typ.IsVarlen()
-	preserveAreaDisjoint := varlen && !v.IsConst() && v.areaDisjoint &&
-		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
 	if varlen {
 		// Until the new descriptor and its payload are initialized, failure
 		// must leave the visible range without a disjoint-layout proof.
@@ -8217,8 +8699,23 @@ func appendSelectedGrouping[T int32 | int64](
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return v.unionDictionaryMulti(w, sel, cnt, mp)
+	}
+	return v.unionMultiFlat(w, sel, cnt, mp)
+}
+
+func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if cnt == 0 {
 		return nil
+	}
+	if v.dataAliases(w) {
+		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
+			return v.UnionMulti(source, 0, cnt, mp)
+		})
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+cnt,
@@ -8373,12 +8870,52 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return unionDictionaryRows(v, w, sels, mp)
+	}
+
 	if len(sels) == 0 {
 		return nil
+	}
+	if v.dataAliases(w) {
+		// Keep source row indices unchanged, including reordered selections.
+		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
+			return unionT(v, source, sels, mp)
+		})
+	}
+	// Classify the source cheaply before considering a reused destination.
+	// Metadata-bearing, nullable and constant sources keep the ordinary path.
+	if cap(v.data) > 0 && w.class == FLAT && w.nsp.EmptyByFlag() &&
+		w.prepareParamKinds == nil && w.prepareParamKind == PrepareParamNone {
+		width := v.typ.TypeSize()
+		if (width == 4 || width == 8) && v.class == FLAT && v.typ == w.typ &&
+			len(sels) <= cap(v.data)/width-v.length && v.nsp.EmptyByFlag() &&
+			v.gsp.EmptyByFlag() && w.gsp.EmptyByFlag() &&
+			v.DataBackingKind() == OwnedMPoolUnique && !v.HasBorrowedBacking() &&
+			!v.preflightStringSourceReady && v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
+			(v.length == 0 || v.stringSource == w.stringSource) {
+			oldLen := v.length
+			v.data = v.data[:cap(v.data)]
+			if width == 8 {
+				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
+			} else {
+				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
+			}
+			if mp != nil {
+				v.prepareParamKindsMP = mp
+			}
+			v.length = oldLen + len(sels)
+			v.stringSource = w.stringSource
+			v.prepareParamKindSeen = true
+			return nil
+		}
 	}
 	preserveDisjointArea := v.typ.IsVarlen() &&
 		v.AreaBackingKind() == OwnedMPoolUnique &&
 		v.VarlenaAreaIsDisjoint()
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
@@ -8444,8 +8981,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
-			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
+			dst := v.data[oldLen*tlen : v.length*tlen]
+			copy(dst[:tlen], w.data[:tlen])
+			broadcastFixed(dst, tlen)
 		}
 
 		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
@@ -8470,19 +9008,56 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
 		total := 0
 		hasNull := !w.GetNulls().EmptyByFlag()
-		for _, sel := range sels {
-			if hasNull && w.nsp.Contains(uint64(sel)) {
-				continue
+		// With both areas empty, valid non-NULL descriptors are either inline
+		// or empty non-inline values at offset zero. Neither needs area growth
+		// or rebasing, so copy them directly without a separate sizing pass.
+		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0 &&
+			!types.IsUnicodeCollation(v.typ.Charset)
+		if !emptyAreas {
+			for _, sel := range sels {
+				if hasNull && w.nsp.Contains(uint64(sel)) {
+					continue
+				}
+				if !wCol[sel].IsSmall() {
+					_, l := wCol[sel].OffsetLen()
+					total += int(l)
+				}
 			}
-			if !wCol[sel].IsSmall() {
-				_, l := wCol[sel].OffsetLen()
-				total += int(l)
+			if err = pregrowVarlenaArea(v, total, mp); err != nil {
+				return err
 			}
 		}
-		if err = pregrowVarlenaArea(v, total, mp); err != nil {
-			return err
-		}
-		if !w.GetNulls().EmptyByFlag() {
+		// Reuse the area sizing pass to select an inline-copy batch. The small
+		// check still handles non-inline zero-length descriptors correctly.
+		// Mixed/area payloads and Unicode admission keep the original loops.
+		if emptyAreas {
+			target := vCol[oldLen : oldLen+len(sels)]
+			for i, sel := range sels {
+				target[i] = wCol[sel]
+			}
+		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+			if hasNull {
+				for i, sel := range sels {
+					if w.nsp.Contains(uint64(sel)) {
+						nulls.Add(&v.nsp, uint64(oldLen+i))
+						continue
+					}
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i, sel := range sels {
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			}
+		} else if hasNull {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
@@ -8495,7 +9070,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
@@ -8518,19 +9092,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
+			// Cases are payload widths in bytes; len(sels) is the output row count.
+			// Typed carriers copy physical bits without per-row byte offsets.
+			// Logical type and metadata remain owned by this append path.
 			switch tlen {
 			case 8:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*8])
-					p2 := unsafe.Pointer(&w.data[int(sel)*8])
-					*(*int64)(p1) = *(*int64)(p2)
-				}
+				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
 			case 4:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*4])
-					p2 := unsafe.Pointer(&w.data[int(sel)*4])
-					*(*int32)(p1) = *(*int32)(p2)
-				}
+				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
 			case 2:
 				for i, sel := range sels {
 					p1 := unsafe.Pointer(&v.data[(oldLen+i)*2])
@@ -8557,7 +9126,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
-// per row. Keep the existing scalar paths in unionT for narrow values.
+// per row.
 func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
 	// Bound the byte ranges before constructing typed views. The backing
 	// allocation can contain padding, especially for 12/20/24-byte values.
@@ -8592,6 +9161,8 @@ func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []by
 	shuffle.FixedLengthShuffle(src, dst, sels)
 }
 
+// UnionBatch may partially modify the destination on failure. To preserve it
+// for reuse, take an append checkpoint and roll back, or reset the vector.
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
 	return v.unionBatch(w, offset, cnt, flags, nil, mp, 0, 0, false)
 }
@@ -8607,6 +9178,13 @@ func (v *Vector) unionBatch(
 	preflightRowCount int,
 	preflighted bool,
 ) error {
+	if w.IsDictionary() {
+		return v.admitDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+	}
+	return v.unionBatchFlat(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+}
+
+func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8, stringSourceOverrides []types.StringSource, mp *mpool.MPool, selectedAreaBytes, preflightRowCount int, preflighted bool) error {
 	areaWasDisjoint := v.areaDisjoint
 	if selectedAreaBytes < 0 {
 		return mpool.ErrAllocationAccountInvalid
@@ -8637,18 +9215,18 @@ func (v *Vector) unionBatch(
 	// Window into it. Preserve that source before any destination growth: mpool
 	// growth may replace and release both the varlena headers and area backing,
 	// leaving an aliased source slice pointing at returned storage.
-	if v.typ.IsVarlen() && w != nil &&
-		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+	if w != nil && (v.dataAliases(w) ||
+		v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area)) {
 		sourceRows := cnt
 		if flags != nil {
 			sourceRows = len(flags)
 		}
-		preserved, err := w.CloneWindow(int(offset), int(offset)+sourceRows, mp)
-		if err != nil {
-			return err
-		}
-		defer preserved.Free(mp)
-		return v.UnionBatch(preserved, 0, cnt, flags, mp)
+		return v.withClonedSource(w, int(offset), int(offset)+sourceRows, mp, func(source *Vector) error {
+			return v.UnionBatch(source, 0, cnt, flags, mp)
+		})
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 	oldLen := v.length
 	if !preflighted {
@@ -8940,6 +9518,14 @@ func (v *Vector) String() string {
 		return vecToString[float32](v)
 	case types.T_float64:
 		return vecToString[float64](v)
+	case types.T_bf16:
+		return vecToString[types.BF16](v)
+	case types.T_float16:
+		return vecToString[types.Float16](v)
+	case types.T_float8:
+		return vecToString[types.Float8](v)
+	case types.T_float4:
+		return vecToString[types.Float4](v)
 	case types.T_date:
 		return vecToString[types.Date](v)
 	case types.T_datetime:
@@ -9032,6 +9618,8 @@ func (v *Vector) String() string {
 		}
 		str := types.ArraysToString[types.Float16](col, types.DefaultArraysToStringSep)
 		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledVectorString(v)
 	case types.T_array_uint8:
 		col := MustArrayCol[uint8](v)
 		if len(col) == 1 {
@@ -9074,6 +9662,19 @@ func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
 	} else {
 		return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, idx))
 	}
+}
+
+// Low-precision scalar storage contains bit codes; present their numeric values
+// using the same float32 convention as ordinary scalar rows.
+func implLowPrecisionFloatRowToString(v *Vector, idx int) string {
+	if v.IsConst() {
+		idx = 0
+	}
+	if v.IsConstNull() || v.nsp.Contains(uint64(idx)) {
+		return "null"
+	}
+	value, _ := GetLowPrecisionFloatAt(v, idx)
+	return fmt.Sprintf("%v", value)
 }
 
 func implTimestampRowToString(v *Vector, idx int) string {
@@ -9138,6 +9739,46 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 }
 
+// blockScaledCellString renders a vecf8/vecf4 cell; a malformed cell renders its error.
+func blockScaledCellString(cell []byte) string {
+	s, err := types.BlockScaledToString(cell)
+	if err != nil {
+		return err.Error()
+	}
+	return s
+}
+
+func blockScaledRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+	if v.IsConst() {
+		idx = 0
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	}
+	return blockScaledCellString(v.GetBytesAt(idx))
+}
+
+func blockScaledVectorString(v *Vector) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+	n := v.Length()
+	if v.IsConst() {
+		n = 1
+	}
+	strs := make([]string, n)
+	for i := range strs {
+		strs[i] = blockScaledRowToString(v, i)
+	}
+	if n == 1 {
+		return strs[0]
+	}
+	return fmt.Sprintf("%v-%s", strings.Join(strs, types.DefaultArraysToStringSep), v.nsp.GetBitmap().String())
+}
+
 func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
@@ -9183,6 +9824,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float32](v, idx)
 	case types.T_float64:
 		return implFixedRowToString[float64](v, idx)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		return implLowPrecisionFloatRowToString(v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
 	case types.T_year:
@@ -9236,6 +9879,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implArrayRowToString[int8](v, idx)
 	case types.T_array_uint8:
 		return implArrayRowToString[uint8](v, idx)
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledRowToString(v, idx)
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -9275,6 +9920,9 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
+	if vec.bytesAlias(val) {
+		return vec.withClonedBytes(val, mp, func(source []byte) error { return SetConstBytes(vec, source, length, mp) })
+	}
 	if err := vec.MaterializeOwned(mp); err != nil {
 		return err
 	}
@@ -9298,6 +9946,9 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
+	if vec.bytesAlias(bj.Data) {
+		return vec.withClonedBytes(bj.Data, mp, func(source []byte) error { bj.Data = source; return SetConstByteJson(vec, bj, length, mp) })
+	}
 	if err := vec.MaterializeOwned(mp); err != nil {
 		return err
 	}
@@ -9326,6 +9977,13 @@ func SetConstByteJsonEncoded(
 	length int,
 	mp *mpool.MPool,
 ) error {
+	size, err := encodedVarlenaSize(enc)
+	if err != nil {
+		return err
+	}
+	if vec.needsValueStaging(size) {
+		return vec.withOwnedMutation(1, size, mp, func(owned *Vector) error { return SetConstByteJsonEncoded(owned, enc, length, mp) })
+	}
 	if err := vec.MaterializeOwned(mp); err != nil {
 		return err
 	}
@@ -9348,6 +10006,9 @@ func SetConstByteJsonEncoded(
 
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+	if raw := types.ArrayToBytes(val); vec.bytesAlias(raw) {
+		return vec.withClonedBytes(raw, mp, func(source []byte) error { return SetConstArray(vec, types.BytesToArray[T](source), length, mp) })
+	}
 	if err := vec.MaterializeOwned(mp); err != nil {
 		return err
 	}
@@ -9407,6 +10068,14 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(float32), false, mp)
 	case types.T_float64:
 		return appendOneFixed(vec, val.(float64), false, mp)
+	case types.T_bf16:
+		return appendOneFixed(vec, val.(types.BF16), false, mp)
+	case types.T_float16:
+		return appendOneFixed(vec, val.(types.Float16), false, mp)
+	case types.T_float8:
+		return appendOneFixed(vec, val.(types.Float8), false, mp)
+	case types.T_float4:
+		return appendOneFixed(vec, val.(types.Float4), false, mp)
 	case types.T_date:
 		return appendOneFixed(vec, val.(types.Date), false, mp)
 	case types.T_year:
@@ -9434,10 +10103,129 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+// withClonedSource charges a temporary snapshot to the mutation's destination.
+// The callback consumes it synchronously. Keeping cleanup here avoids adding a
+// defer to the common non-aliasing mutation paths.
+func (v *Vector) withClonedSource(w *Vector, start, end int, mp *mpool.MPool, consume func(*Vector) error) error {
+	source, err := w.CloneWindowWithAllocation(start, end, mp, v.allocationAccount)
+	if err != nil {
+		return err
+	}
+	defer source.Free(mp)
+	return consume(source)
+}
+
+// bytesAlias checks physical allocations, including unused capacity that COW
+// or growth can release while a raw input still references it.
+func (v *Vector) bytesAlias(source []byte) bool {
+	return byteSlicesOverlap(v.data[:cap(v.data)], source) || byteSlicesOverlap(v.area[:cap(v.area)], source)
+}
+
+func (v *Vector) withClonedBytes(source []byte, mp *mpool.MPool, consume func([]byte) error) error {
+	if mp == nil {
+		return moerr.NewInternalErrorNoCtx("source preservation requires a mpool")
+	}
+	owned, err := v.allocOwned(mp, len(source), true, false)
+	if err != nil {
+		return err
+	}
+	defer mp.Free(owned)
+	copy(owned, source)
+	return consume(owned)
+}
+
+// Stage aliased batch values before mutating their source backing. Temporary
+// descriptors, metadata and payload all use the destination's account.
+func (v *Vector) withStagedValue(rows int, mp *mpool.MPool, build, consume func(*Vector) error) error {
+	if mp == nil {
+		return moerr.NewInternalErrorNoCtx("source preservation requires a mpool")
+	}
+	staged := NewOffHeapVecWithType(v.typ)
+	defer staged.Free(mp)
+	if err := staged.SetAllocationAccount(v.allocationAccount); err != nil {
+		return err
+	}
+	if rows > 0 {
+		if err := staged.PreExtend(rows, mp); err != nil {
+			return err
+		}
+	}
+	if err := build(staged); err != nil {
+		return err
+	}
+	return consume(staged)
+}
+
+func (v *Vector) needsValueStaging(size int) bool {
+	width := v.typ.TypeSize()
+	return v.HasBorrowedBacking() || width <= 0 || v.length >= cap(v.data)/width ||
+		size > types.VarlenaInlineSize && size > cap(v.area)-len(v.area)
+}
+
+// Preserve the original backing while an opaque writer/encoder consumes its
+// inputs. Admission happens on the private working vector before user code;
+// commit and old-backing cleanup happen only after successful publication.
+func (v *Vector) withOwnedMutation(rows, area int, mp *mpool.MPool, mutate func(*Vector) error) error {
+	if mp == nil {
+		return moerr.NewInternalErrorNoCtx("opaque mutation requires a mpool")
+	}
+	owned, err := v.dup(mp, v.offHeap, v.offHeap, v.allocationAccount)
+	if err != nil {
+		return err
+	}
+	defer owned.Free(mp)
+	owned.isBin = v.isBin
+	owned.prepareParamType = v.prepareParamType
+	class := owned.class
+	owned.class = FLAT
+	reserveRows := max(rows, v.Capacity()-owned.length)
+	if area <= types.VarlenaInlineSize {
+		area = 0
+	}
+	reserveArea := max(area, cap(v.area)-len(owned.area))
+	if err := owned.PreExtendWithArea(reserveRows, reserveArea, mp); err != nil {
+		return err
+	}
+	owned.class = class
+	// Reserved slots can hold unpublished descriptors that rollback must keep.
+	copy(owned.data, v.data)
+	if err := mutate(owned); err != nil {
+		return err
+	}
+	requiredData := owned.length * v.typ.TypeSize()
+	if owned.IsConst() {
+		requiredData = min(len(owned.data), v.typ.TypeSize())
+	}
+	if v.CanDetach(BackingData) && cap(v.data) >= requiredData {
+		// Keep pre-admitted owned descriptors stable for FunctionResult.cols
+		// and other synchronous consumers; only the payload needed replacing.
+		copy(v.data[:cap(v.data)], owned.data)
+		mp.Free(owned.data)
+		owned.data = v.data[:cap(v.data)]
+		v.data = nil
+	}
+	*v, *owned = *owned, *v
+	return nil
+}
+
+func encodedVarlenaSize(enc bytejson.ByteJsonDataEncoder) (int, error) {
+	size := uint64(enc.DataSize()) + 1
+	if size > math.MaxUint32 || size > uint64(math.MaxInt) {
+		return 0, moerr.NewInvalidInputNoCtx("json value is too large")
+	}
+	return int(size), nil
+}
+
+// Distinct unique owners cannot share data. Skip the range check for the
+// common owned-to-owned append; windows and leases mark data as non-owning.
+func (v *Vector) dataAliases(w *Vector) bool {
+	return (v == w || v.cantFreeData || w.cantFreeData) && byteSlicesOverlap(v.data, w.data)
 }
 
 func byteSlicesOverlap(left, right []byte) bool {
@@ -9583,7 +10371,7 @@ func AppendFixedWithStringSource[T any](vec *Vector, val T, isNull bool, source 
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	return appendOneFixedWithSource(vec, val, isNull, &source, mp)
@@ -9637,10 +10425,13 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 	if vec.IsConst() || size < 0 || mp == nil {
 		return moerr.NewInternalErrorNoCtx("invalid direct varlena append")
 	}
+	if vec.needsValueStaging(size) {
+		return vec.withOwnedMutation(1, size, mp, func(owned *Vector) error { return AppendBytesWithWriter(owned, size, mp, writer) })
+	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -9700,12 +10491,20 @@ func AppendByteJsonEncoded(
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 
+	size, err := encodedVarlenaSize(enc)
+	if err != nil {
+		return err
+	}
+	if vec.needsValueStaging(size) {
+		return vec.withOwnedMutation(1, size, mp, func(owned *Vector) error { return AppendByteJsonEncoded(owned, enc, mp) })
+	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	wasNull := vec.nsp.Contains(uint64(vec.length))
 	defer func() {
 		if retErr != nil {
-			vec.RollbackAppend(checkpoint, 1)
-			if wasNull {
+			rollbackErr := vec.RollbackAppend(checkpoint, 1)
+			retErr = JoinAppendRollbackError(retErr, rollbackErr)
+			if wasNull && rollbackErr == nil {
 				vec.nsp.Add(uint64(checkpoint.length))
 			}
 		}
@@ -9866,6 +10665,14 @@ func appendOneBytesWithSource(vec *Vector, val []byte, isNull bool, source *type
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
 	}
+	if !isNull && vec.bytesAlias(val) {
+		return vec.withClonedBytes(val, mp, func(sourceBytes []byte) error { return appendOneBytesWithSource(vec, sourceBytes, false, source, mp) })
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 
 	if isNull {
 		// AppendBytes is also the generic null append used by expression
@@ -9876,7 +10683,7 @@ func appendOneBytesWithSource(vec *Vector, val []byte, isNull bool, source *type
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareSingleAppendMetadata(false, source, mp); err != nil {
@@ -9891,6 +10698,14 @@ func appendOneBytesWithSource(vec *Vector, val []byte, isNull bool, source *type
 }
 
 func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) (err error) {
+	if !isNull && vec.bytesAlias(bj.Data) {
+		return vec.withClonedBytes(bj.Data, mp, func(source []byte) error { bj.Data = source; return appendOneByteJson(vec, bj, false, mp) })
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -9902,7 +10717,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -9918,6 +10733,14 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 
 // appendOneArray mainly used for unit tests
 func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) (err error) {
+	if raw := types.ArrayToBytes(val); !isNull && vec.bytesAlias(raw) {
+		return vec.withClonedBytes(raw, mp, func(source []byte) error { return appendOneArray(vec, types.BytesToArray[T](source), false, mp) })
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -9929,7 +10752,7 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -9995,11 +10818,19 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 }
 
 func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.MPool) (err error) {
+	if !isNull && vec.bytesAlias(val) {
+		return vec.withClonedBytes(val, mp, func(source []byte) error { return appendMultiBytes(vec, source, false, cnt, mp) })
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	// A non-inline value is materialized once and its descriptor is broadcast.
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, cnt)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, cnt))
 		}
 	}()
 	vec.areaDisjoint = false
@@ -10033,6 +10864,9 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 }
 
 func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) error {
+	if raw := types.EncodeSlice(vals); (vec.HasBorrowedBacking() || len(vals) > vec.Capacity()-vec.length) && vec.bytesAlias(raw) {
+		return vec.withClonedBytes(raw, mp, func(source []byte) error { return appendList(vec, types.DecodeSlice[T](source), isNulls, mp) })
+	}
 	if vec.typ.IsVarlen() {
 		vec.areaDisjoint = false
 	}
@@ -10084,10 +10918,38 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 }
 
 func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool) (err error) {
+	mayMove := vec.HasBorrowedBacking() || len(vals) > vec.Capacity()-vec.length
+	if !mayMove {
+		remaining := cap(vec.area) - len(vec.area)
+		for i, value := range vals {
+			if (len(isNulls) == 0 || !isNulls[i]) && len(value) > types.VarlenaInlineSize {
+				if len(value) > remaining {
+					mayMove = true
+					break
+				}
+				remaining -= len(value)
+			}
+		}
+	}
+	for i, value := range vals {
+		if !mayMove {
+			break
+		}
+		if (len(isNulls) == 0 || !isNulls[i]) && vec.bytesAlias(value) {
+			return vec.withStagedValue(len(vals), mp,
+				func(staged *Vector) error { return appendBytesList(staged, vals, isNulls, mp) },
+				func(staged *Vector) error { return vec.UnionBatch(staged, 0, staged.length, nil, mp) })
+		}
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
@@ -10146,10 +11008,38 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 }
 
 func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPool) (err error) {
+	mayMove := vec.HasBorrowedBacking() || len(vals) > vec.Capacity()-vec.length
+	if !mayMove {
+		remaining := cap(vec.area) - len(vec.area)
+		for i, value := range vals {
+			if (len(isNulls) == 0 || !isNulls[i]) && len(value) > types.VarlenaInlineSize {
+				if len(value) > remaining {
+					mayMove = true
+					break
+				}
+				remaining -= len(value)
+			}
+		}
+	}
+	for i, value := range vals {
+		if !mayMove {
+			break
+		}
+		if (len(isNulls) == 0 || !isNulls[i]) && vec.bytesAlias(util.UnsafeStringToBytes(value)) {
+			return vec.withStagedValue(len(vals), mp,
+				func(staged *Vector) error { return appendStringList(staged, vals, isNulls, mp) },
+				func(staged *Vector) error { return vec.UnionBatch(staged, 0, staged.length, nil, mp) })
+		}
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
@@ -10229,10 +11119,39 @@ func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 
 // appendArrayList mainly used for unit tests
 func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) (err error) {
+	mayMove := vec.HasBorrowedBacking() || len(vals) > vec.Capacity()-vec.length
+	if !mayMove {
+		remaining := cap(vec.area) - len(vec.area)
+		for i, value := range vals {
+			size := len(types.ArrayToBytes(value))
+			if (len(isNulls) == 0 || !isNulls[i]) && size > types.VarlenaInlineSize {
+				if size > remaining {
+					mayMove = true
+					break
+				}
+				remaining -= size
+			}
+		}
+	}
+	for i, value := range vals {
+		if !mayMove {
+			break
+		}
+		if (len(isNulls) == 0 || !isNulls[i]) && vec.bytesAlias(types.ArrayToBytes(value)) {
+			return vec.withStagedValue(len(vals), mp,
+				func(staged *Vector) error { return appendArrayList(staged, vals, isNulls, mp) },
+				func(staged *Vector) error { return vec.UnionBatch(staged, 0, staged.length, nil, mp) })
+		}
+	}
+	if vec.HasBorrowedBacking() {
+		if err := vec.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	disjoint := vec.areaDisjoint
@@ -10285,7 +11204,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
-		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
+		for oldIdx, newIdx, selIdx, sel, length := 0, 0, 0, sels[0], v.length; oldIdx < length; oldIdx++ {
 			if oldIdx != int(sel) {
 				vs[newIdx] = vs[oldIdx]
 				newIdx++
@@ -10307,40 +11226,71 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64, skipData bool) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
-	itr := sels.Iterator()
 	if !negate {
-		idx := 0
-		for itr.HasNext() {
-			vs[idx] = vs[itr.Next()+offset]
-			idx++
+		if !skipData {
+			itr := sels.Iterator()
+			idx := 0
+			for itr.HasNext() {
+				vs[idx] = vs[itr.Next()+offset]
+				idx++
+			}
 		}
 		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, false, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
-		sel := itr.Next() + offset
-		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
-			if oldIdx != int(sel) {
-				vs[newIdx] = vs[oldIdx]
-				newIdx++
-			} else {
-				if !itr.HasNext() {
-					for idx := oldIdx + 1; idx < v.length; idx++ {
-						vs[newIdx] = vs[idx]
-						newIdx++
+		if !skipData {
+			itr := sels.Iterator()
+			sel := itr.Next() + offset
+			for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
+				if oldIdx != int(sel) {
+					vs[newIdx] = vs[oldIdx]
+					newIdx++
+				} else {
+					if !itr.HasNext() {
+						for idx := oldIdx + 1; idx < v.length; idx++ {
+							vs[newIdx] = vs[idx]
+							newIdx++
+						}
+						break
 					}
-					break
+					sel = itr.Next() + offset
 				}
-				sel = itr.Next() + offset
 			}
 		}
 		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, true, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, true, offset)
 		v.length -= length
 	}
+}
+
+// shuffleWithSortedProof gathers into independent storage while preserving an
+// existing ordering proof only when the selection is nondecreasing.
+func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sorted bool) (bool, bool) {
+	if !sorted {
+		shuffle.FixedLengthShuffle(src, dst, sels)
+		return false, false
+	}
+	if len(sels) == 0 {
+		return true, true
+	}
+	start := sels[0]
+	k := 1
+	for k < len(sels) && sels[k] == sels[k-1]+1 {
+		k++
+	}
+	copy(dst[:k], src[start:start+int64(k)])
+	for i := k; i < len(sels); i++ {
+		dst[i] = src[sels[i]]
+		if sels[i] < sels[i-1] {
+			shuffle.FixedLengthShuffle(src, dst[i+1:], sels[i+1:])
+			return false, false
+		}
+	}
+	return true, k == len(sels) && start == 0
 }
 
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
@@ -10356,26 +11306,28 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
+	preserved, _ := shuffleWithSortedProof(vs, ws, sels, v.sorted)
 	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
 		mp.Free(data)
 		return err
 	}
-	v.data = data
-	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
-	if v.cantFreeData {
+	// Retire the old lease before installing data: releaseBorrowedData clears v.data.
+	if v.dataLease != nil {
+		v.releaseBorrowedData()
+	} else if v.cantFreeData {
 		v.cantFreeData = false
 	} else {
 		mp.Free(olddata)
 	}
+	v.data = data
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 
 type bitmapRemapScratch struct {
-	destination *bitmap.Bitmap
-	value       bitmap.Bitmap
-	storage     []uint64
+	value   bitmap.Bitmap
+	storage []uint64
 }
 
 func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
@@ -10399,48 +11351,27 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 	}
 
 	targets := [...]struct {
-		destination *bitmap.Bitmap
+		destination *nulls.Nulls
 		site        mpool.AllocationSite
 	}{
-		{v.gsp.GetBitmap(), v.allocationAccount.groupingSite},
-		{v.nsp.GetBitmap(), v.allocationAccount.nullsSite},
+		{&v.gsp, v.allocationAccount.groupingSite},
+		{&v.nsp, v.allocationAccount.nullsSite},
 	}
-	if targets[0].destination.EmptyByFlag() &&
-		targets[1].destination.EmptyByFlag() {
-		return nil
-	}
-	if !targets[0].destination.EmptyByFlag() {
-		if err := v.ensureGroupingCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-	if !targets[1].destination.EmptyByFlag() {
-		if err := v.ensureNullCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-
 	var scratch [2]bitmapRemapScratch
 	for i, target := range targets {
-		if target.destination.EmptyByFlag() {
+		// Mixed string metadata is sorted without an allocator later, so both
+		// row bitmaps need capacity even when currently empty.
+		if target.destination.EmptyByFlag() && !v.binaryStringRowsActive {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words,
-			mp,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			target.site,
-			v.allocationAccount.capacityClass,
-		)
+		storage, err := makeSelectedSlice[uint64](v.allocationAccount, words, mp, target.site)
 		if err != nil {
 			for j := range i {
 				scratch[j].release(mp)
 			}
 			return err
 		}
-		scratch[i].destination = target.destination
 		scratch[i].storage = storage
 		scratch[i].value.InstallExternalStorage(storage)
 		scratch[i].value.InitWithSize(int64(len(sels)))
@@ -10450,15 +11381,16 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			}
 		}
 	}
-
-	for i := range scratch {
-		if scratch[i].destination != nil {
-			scratch[i].destination.InitWith(&scratch[i].value)
+	for i, target := range targets {
+		if scratch[i].value.HasExternalStorage() {
+			target.destination.Reset()
+			dst := target.destination.GetBitmap()
+			mpool.FreeSlice(mp, dst.ReleaseExternalStorage())
+			*dst = scratch[i].value
+			scratch[i].storage = nil
 		}
 	}
-	for i := range scratch {
-		scratch[i].release(mp)
-	}
+
 	return nil
 }
 
@@ -10480,11 +11412,14 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ToFixedColNoTypeCheck(v, &vs)
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
-	copy(v.data[:needed], *buf)
+	preserved, identityProven := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	if !identityProven || byteSlicesOverlap(v.data[:needed], *buf) {
+		copy(v.data[:needed], *buf)
+	}
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 
@@ -10556,12 +11491,26 @@ func (v *Vector) window(
 	selection *AllocationAccountSelection,
 	logicalRows bool,
 ) (*Vector, error) {
+	return v.windowReuse(start, end, mp, selection, logicalRows, nil)
+}
+
+func (v *Vector) windowReuse(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, logicalRows bool, slot *DictionaryVectorSlot) (*Vector, error) {
+	if v.IsDictionary() {
+		return nil, moerr.NewInvalidStateNoCtx("dictionary windows require an accounted logical selection or explicit materialization")
+	}
 	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
-	w := NewVec(v.typ)
+	w := slot.take()
+	if w == nil {
+		w = new(Vector)
+	}
+	return v.windowInto(start, end, mp, selection, w)
+}
+
+func (v *Vector) windowInto(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, w *Vector) (*Vector, error) {
+	*w = Vector{typ: v.typ, areaDisjoint: true, offHeap: selection != nil}
 	if selection != nil {
-		w.offHeap = true
 		if err := w.SetAllocationAccount(selection); err != nil {
 			return nil, err
 		}
@@ -10944,6 +11893,18 @@ func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
 	case types.T_float64:
 		sumVal := FloatGetSum[float64](v)
 		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_bf16:
+		sumVal := LowPrecFloatGetSum[types.BF16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float16:
+		sumVal := LowPrecFloatGetSum[types.Float16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float8:
+		sumVal := LowPrecFloatGetSum[types.Float8](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float4:
+		sumVal := LowPrecFloatGetSum[types.Float4](v)
+		sumv = types.EncodeFloat64(&sumVal)
 	case types.T_decimal64:
 		sumVal := Decimal64GetSum(v)
 		sumv = types.EncodeDecimal64(&sumVal)
@@ -11058,6 +12019,42 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		}
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
+
+	case types.T_bf16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.BF16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float8:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float8](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float4:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float4](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
 		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
@@ -11341,6 +12338,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		_minv, _maxv := ArrayElementGetMinMax[uint8](v)
 		minv = types.ArrayToBytes[uint8](_minv)
 		maxv = types.ArrayToBytes[uint8](_maxv)
+	case types.T_array_float8, types.T_array_float4:
+		// Block-scaled cells have no value order and vector zonemaps are not used for
+		// pruning (ZM.IsArray); flush still records byte-wise bounds.
+		minv, maxv = VarlenGetMinMax(v)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
@@ -11351,12 +12352,23 @@ func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
 	return cmp.Compare(GetFixedAtNoTypeCheck[T](v, left), GetFixedAtNoTypeCheck[T](v, right))
 }
 
+// compareFloatRows orders two low-precision float rows (bf16/float16/float8/float4)
+// by widened float VALUE. Raw bits do not order floats (the sign bit inverts), so
+// the values are compared through ToFloat32 with cmp.Compare (NaN-aware ordering).
+func compareFloatRows[T types.LowPrecFloat](v *Vector, left, right int) int {
+	return cmp.Compare(
+		GetFixedAtNoTypeCheck[T](v, left).ToFloat32(),
+		GetFixedAtNoTypeCheck[T](v, right).ToFloat32(),
+	)
+}
+
 func supportsInplaceSort(oid types.T) bool {
 	switch oid {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_date, types.T_year, types.T_datetime, types.T_time, types.T_timestamp, types.T_enum,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_TS, types.T_uuid, types.T_Rowid,
@@ -11403,6 +12415,14 @@ func compareVectorRows(v *Vector, left, right int) int {
 		return compareOrderedRows[float32](v, left, right)
 	case types.T_float64:
 		return compareOrderedRows[float64](v, left, right)
+	case types.T_bf16:
+		return compareFloatRows[types.BF16](v, left, right)
+	case types.T_float16:
+		return compareFloatRows[types.Float16](v, left, right)
+	case types.T_float8:
+		return compareFloatRows[types.Float8](v, left, right)
+	case types.T_float4:
+		return compareFloatRows[types.Float4](v, left, right)
 	case types.T_date:
 		return compareOrderedRows[types.Date](v, left, right)
 	case types.T_year:
@@ -11463,6 +12483,8 @@ func compareVectorRows(v *Vector, left, right int) int {
 	case types.T_array_uint8:
 		return types.ArrayElementCompare[uint8](
 			types.BytesToArray[uint8](v.GetBytesAt(left)), types.BytesToArray[uint8](v.GetBytesAt(right)))
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(v.GetBytesAt(left), v.GetBytesAt(right), false)
 	default:
 		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right))
 	}
@@ -11584,7 +12606,7 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 }
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && !v.HasStringSourceMetadata()) ||
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && !v.HasStringSourceMetadata() && !v.nsp.Any() && !v.gsp.Any()) ||
 		v.IsConst() || !supportsInplaceSort(v.typ.Oid) {
 		return false
 	}
@@ -11653,15 +12675,70 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	return true
 }
 
-// InplaceSortAndCompact @todo optimization in the future
-func (v *Vector) InplaceSortAndCompact() {
-	if v.inplaceSortRowMetadata(true) {
-		return
+// sortLowPrecFloatCol sorts a low-precision float column (bf16/float16/float8/float4)
+// by widened float value; raw uint bits do not order floats (the sign bit inverts).
+func sortLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+}
+
+// sortAndCompactLowPrecFloatCol sorts by float value then removes value-duplicates.
+// Equality is by ToFloat32 (so +0/-0 collapse and NaN never compacts), matching the
+// native float32 slices.Sort+Compact path.
+func sortAndCompactLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+	newCol := slices.CompactFunc(col, func(a, b T) bool {
+		return a.ToFloat32() == b.ToFloat32()
+	})
+	if len(newCol) != len(col) {
+		v.CleanOnlyData()
+		v.SetSorted(true)
+		appendList(v, newCol, nil, nil)
 	}
-	cleanDataNotResetArea := func() {
-		if v.data != nil {
-			v.length = 0
+}
+
+// InplaceSortAndCompact prepares writable data and row metadata before sorting.
+// A leased varlen payload can remain readonly: only descriptors are reordered.
+func (v *Vector) InplaceSortAndCompact(mp *mpool.MPool) error {
+	if !supportsInplaceSort(v.typ.Oid) {
+		return nil
+	}
+	if v.IsConst() || v.length <= 1 {
+		v.SetSorted(true)
+		return nil
+	}
+	{
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
 		}
+		if !v.nsp.IsEmpty() {
+			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if !v.gsp.IsEmpty() {
+			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if v.binaryStringRowsActive && (!v.binaryStringRows.IsEmpty() || !v.textStringRows.IsEmpty()) {
+			if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+	}
+	if v.inplaceSortRowMetadata(true) {
+		return nil
+	}
+	publishCompactedLength := func(length int) {
+		// Compact already wrote the result into the descriptor prefix. Do not
+		// re-append it: that can require COW/admission, but this API has no pool.
+		v.SetLength(length)
 		v.nsp.Reset()
 		v.sorted = true
 	}
@@ -11680,9 +12757,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_bit:
@@ -11690,9 +12765,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int8:
@@ -11700,9 +12773,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int16:
@@ -11710,9 +12781,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int32:
@@ -11720,9 +12789,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int64:
@@ -11730,9 +12797,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint8:
@@ -11740,9 +12805,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint16:
@@ -11750,9 +12813,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint32:
@@ -11760,9 +12821,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint64:
@@ -11770,9 +12829,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float32:
@@ -11780,9 +12837,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float64:
@@ -11790,19 +12845,24 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
+
+	case types.T_bf16:
+		sortAndCompactLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortAndCompactLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortAndCompactLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortAndCompactLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_year:
@@ -11810,9 +12870,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_datetime:
@@ -11820,9 +12878,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_time:
@@ -11830,9 +12886,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_timestamp:
@@ -11840,9 +12894,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_enum:
@@ -11850,9 +12902,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal64:
@@ -11870,9 +12920,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal128:
@@ -11890,9 +12938,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal256:
@@ -11910,9 +12956,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_TS:
@@ -11930,9 +12974,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Equal(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uuid:
@@ -11944,9 +12986,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
@@ -11963,9 +13003,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.EQ(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
@@ -11978,8 +13016,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_array_float32:
@@ -11997,8 +13034,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_array_float64:
@@ -12016,28 +13052,28 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 	case types.T_array_bf16:
-		inplaceSortAndCompactArrayElement[types.BF16](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[types.BF16](v, publishCompactedLength)
 	case types.T_array_float16:
-		inplaceSortAndCompactArrayElement[types.Float16](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[types.Float16](v, publishCompactedLength)
 	case types.T_array_int8:
-		inplaceSortAndCompactArrayElement[int8](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[int8](v, publishCompactedLength)
 	case types.T_array_uint8:
-		inplaceSortAndCompactArrayElement[uint8](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[uint8](v, publishCompactedLength)
 	default:
-		return
+		return nil
 	}
 	// Sorting happened even when compaction did not change the vector length.
 	// Keep the metadata invariant aligned with the physical ordering.
 	v.SetSorted(true)
+	return nil
 }
 
 // inplaceSortAndCompactArrayElement sorts+dedups a narrow-typed vector using the
 // float32-bridged comparator (so bf16/f16 order by value, not by raw bits).
-func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDataNotResetArea func()) {
+func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, publishCompactedLength func(int)) {
 	col, area := MustVarlenaRawData(v)
 	sort.Slice(col, func(i, j int) bool {
 		return types.ArrayElementCompare[T](
@@ -12052,17 +13088,43 @@ func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDat
 		) == 0
 	})
 	if len(newCol) != len(col) {
-		cleanDataNotResetArea()
-		appendList(v, newCol, nil, nil)
+		publishCompactedLength(len(newCol))
 	}
 }
 
 // InplaceSort orders every supported vector type without compacting duplicate
 // values and marks that order in the vector metadata. Unsupported types remain
 // untouched and unflagged.
-func (v *Vector) InplaceSort() {
+func (v *Vector) InplaceSort(mp *mpool.MPool) error {
+	if !supportsInplaceSort(v.typ.Oid) {
+		return nil
+	}
+	if v.IsConst() || v.length <= 1 {
+		v.SetSorted(true)
+		return nil
+	}
+	{
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+		if !v.nsp.IsEmpty() {
+			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if !v.gsp.IsEmpty() {
+			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if v.binaryStringRowsActive && (!v.binaryStringRows.IsEmpty() || !v.textStringRows.IsEmpty()) {
+			if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+	}
 	if v.inplaceSortRowMetadata(false) {
-		return
+		return nil
 	}
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -12120,6 +13182,15 @@ func (v *Vector) InplaceSort() {
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
 		slices.Sort(col)
+
+	case types.T_bf16:
+		sortLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
@@ -12242,9 +13313,10 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_uint8:
 		sortArrayElement[uint8](v)
 	default:
-		return
+		return nil
 	}
 	v.SetSorted(true)
+	return nil
 }
 
 // sortArrayElement sorts a narrow-typed vector in place using the
@@ -12278,6 +13350,9 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 // buildVarlenaNoInline copies bytes already admitted by a raw boundary or
 // borrowed from an immutable source vector of the same type.
 func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before payload write")
+	}
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
@@ -12316,6 +13391,9 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 }
 
 func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before payload write")
+	}
 	vlen := len(bj.Data) + 1
 	area1 := vec.GetArea()
 	voff := len(area1)
@@ -12348,6 +13426,9 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before descriptor write")
+	}
 	// Legacy domains need no collation admission. Check the domain before
 	// extracting bytes, especially for inline values copied in merge loops.
 	if types.IsUnicodeCollation(vec.typ.Charset) {
@@ -12365,6 +13446,9 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 }
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before descriptor write")
+	}
 	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
@@ -12386,6 +13470,9 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 }
 
 func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before descriptor write")
+	}
 	if err := validateJSONValue(vec.typ, bj); err != nil {
 		return err
 	}
@@ -12414,6 +13501,9 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 func BuildVarlenaFromByteJsonEncoded(
 	vec *Vector, v *types.Varlena, enc bytejson.ByteJsonDataEncoder, m *mpool.MPool,
 ) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before encoding")
+	}
 	if validator, ok := enc.(bytejson.ByteJsonDataValidator); ok {
 		if err := validator.ValidateData(); err != nil {
 			return err
@@ -12491,6 +13581,9 @@ func BuildVarlenaFromByteJsonEncoded(
 
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector
 func BuildVarlenaFromArray[T types.ArrayElement](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
+	if vec.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("varlena destination must be materialized before descriptor write")
+	}
 	_bs := types.ArrayToBytes[T](*array)
 	bs := &_bs
 	vlen := len(*bs)
@@ -12729,4 +13822,30 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+}
+
+// copyDictionaryPayload runs after the caller's ordinary validation/admission.
+// Only payload coordinates become physical; NULL/grouping and provenance stay
+// with the caller's logical row. Flat callers keep their original address flow.
+func (v *Vector) copyDictionaryPayload(w *Vector, target, logical int64, mp *mpool.MPool) error {
+	base, physical := w.dictionaryPhysicalRow(int(logical))
+	if v.typ.IsVarlen() {
+		var dst, src []types.Varlena
+		ToSliceNoTypeCheck(v, &dst)
+		ToSliceNoTypeCheck(base, &src)
+		return BuildVarlenaFromVarlena(v, &dst[target], &src[physical], &base.area, mp)
+	}
+	switch width := v.typ.TypeSize(); width {
+	case 8:
+		*(*uint64)(unsafe.Pointer(&v.data[target*8])) = *(*uint64)(unsafe.Pointer(&base.data[physical*8]))
+	case 4:
+		*(*uint32)(unsafe.Pointer(&v.data[target*4])) = *(*uint32)(unsafe.Pointer(&base.data[physical*4]))
+	case 2:
+		*(*uint16)(unsafe.Pointer(&v.data[target*2])) = *(*uint16)(unsafe.Pointer(&base.data[physical*2]))
+	case 1:
+		v.data[target] = base.data[physical]
+	default:
+		copy(v.data[int(target)*width:(int(target)+1)*width], base.data[physical*width:(physical+1)*width])
+	}
+	return nil
 }

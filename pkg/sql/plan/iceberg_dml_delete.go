@@ -64,6 +64,22 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 		return nil, err
 	}
 
+	qualifier := target.alias
+	if qualifier == "" {
+		qualifier = target.tableName
+	}
+	for _, assignment := range stmt.Exprs {
+		for _, lhs := range assignment.Names {
+			binding, bindErr := resolveUpdateAssignmentTarget(builder.GetContext(), bindCtx, lhs)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			if binding.table != qualifier || binding.tableID != target.tableDef.TblId {
+				return nil, moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
+			}
+		}
+	}
+
 	insertNode := &plan.Node{
 		NodeType:     plan.Node_INSERT,
 		Children:     []int32{lastNodeID},
@@ -194,7 +210,7 @@ func resolveIcebergUpdateTarget(ctx CompilerContext, stmt *tree.Update) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg UPDATE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}
@@ -299,7 +315,7 @@ func resolveIcebergDeleteTarget(ctx CompilerContext, stmt *tree.Delete) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg DELETE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}
@@ -704,7 +720,7 @@ func buildIcebergUpdateReplacementProjects(ctx context.Context, query *plan.Quer
 		if astExpr, ok := updates[strings.ToLower(col.Name)]; ok {
 			var expr *plan.Expr
 			if _, isDefault := astExpr.(*tree.DefaultVal); isDefault {
-				expr, err = getDefaultExprForAssignment(ctx, col, builder.compCtx.GetProcess(), stmt.Ignore)
+				expr, err = getDefaultExprForAssignment(ctx, col, tableDef.DbName, builder.compCtx.GetProcess(), stmt.Ignore)
 			} else {
 				expr, err = binder.BindExpr(astExpr, 0, true)
 			}

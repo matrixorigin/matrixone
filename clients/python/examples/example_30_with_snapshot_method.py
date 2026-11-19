@@ -480,5 +480,8 @@ class WithSnapshotExample:
 
 
 if __name__ == '__main__':
+    from matrixone import enable_snapshot_method
+
+    enable_snapshot_method()
     example = WithSnapshotExample()
     example.run()

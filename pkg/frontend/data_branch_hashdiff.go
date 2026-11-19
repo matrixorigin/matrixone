@@ -588,7 +588,9 @@ func handleDelsOnLCA(
 		tBat.SetRowCount(0)
 	} else {
 		for i := range tBat.Vecs {
-			tBat.Vecs[i].Shrink(sels, false)
+			if err := tBat.Vecs[i].Shrink(sels, false, ses.proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
@@ -740,7 +742,9 @@ func runLCAProbeWithReaderFallback(
 	if err = filterVec.UnionBatch(pkVec, 0, rowCount, nil, mp); err != nil {
 		return executor.Result{}, err
 	}
-	filterVec.InplaceSort()
+	if err := filterVec.InplaceSort(mp); err != nil {
+		return executor.Result{}, err
+	}
 	pkFilterExpr, err := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
 	if err != nil {
 		return executor.Result{}, err
@@ -1084,13 +1088,36 @@ func hashDiffIfHasLCA(
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	// Resolve per-side LCA snapshots once: each side's tombstone
-	// resolution probes the LCA at "the moment THIS side forked off
-	// the LCA" (or, when the side IS the LCA, at the OTHER side's
-	// snapshot — see branchMetaInfo helper docs).
+	// Resolve per-side LCA snapshots once. Both sides must resolve
+	// their collected changes against the shared divergence point of
+	// the two lineages: the earlier of the two per-side fork anchors
+	// (see branchMetaInfo helper docs). The side that forked off the
+	// LCA later inherits the LCA's writes between the two forks, and
+	// those writes are exactly the divergence its collect range
+	// gathered (buildSideCollectRange clamps the LCA window up to
+	// otherFork.Next()). Resolving that side against its own fork
+	// absorbs the divergence into the fork baseline — handleDelsOnLCA
+	// returns the post-fork rows, the collected inserts compare equal
+	// and are dropped — erasing real both-sides conflicts: WHEN
+	// CONFLICT FAIL and SKIP would silently behave like ACCEPT and
+	// DATA BRANCH DIFF would hide the destination rows. The
+	// earlier-forked side keeps its own fork as the anchor, and when
+	// both sides anchor identically (e.g. the other endpoint IS the
+	// LCA) the mutual anchor equals that moment.
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
-	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
-	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
+	var tarLCAProbe, baseLCAProbe types.TS
+	if copt.preservePickConflicts {
+		// PICK keeps the per-side fork anchors. Its conflict rule counts
+		// only writes each side made after its own fork: state the
+		// destination inherited from the LCA between the two forks is
+		// part of its baseline, and such picks must apply without a
+		// conflict (the byte-chain pick in branch_binary_pk.sql).
+		tarLCAProbe = dagInfo.tarLCASnapshot(baseSP)
+		baseLCAProbe = dagInfo.baseLCASnapshot(tarSP)
+	} else {
+		mutualProbe := dagInfo.lcaProbeSnapshot(tarSP, baseSP)
+		tarLCAProbe, baseLCAProbe = mutualProbe, mutualProbe
+	}
 	// A parent created earlier in the same explicit transaction has no
 	// catalog state at the pre-commit CloneTS recorded by its child.  Both
 	// tables become visible together, so the parent's creation commit is the
@@ -1198,7 +1225,10 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			wrapped.batch.Shrink(keep, true)
+			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return err
+			}
 		}
 		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 			copt.expandUpdate && wrapped.kind == diffInsert && wrapped.fromUpdate &&
@@ -1321,8 +1351,8 @@ func hashDiffIfHasLCA(
 							return
 						}
 
-						err3 = moerr.NewInternalErrorNoCtxf(
-							"conflict: %s %s and %s %s on pk(%v)",
+						err3 = moerr.NewDataBranchConflictNoCtxf(
+							"%s %s and %s %s on pk(%v)",
 							tarWrapped.name, tarWrapped.logicalOperation(),
 							baseWrapped.name, baseWrapped.logicalOperation(), key,
 						)
@@ -1350,11 +1380,15 @@ func hashDiffIfHasLCA(
 					return
 				} else {
 					if len(sels1) != 0 {
-						wrapped.batch.Shrink(sels1, true)
+						if err3 = wrapped.batch.Shrink(sels1, true, ses.proc.Mp()); err3 != nil {
+							return
+						}
 					}
 
 					if len(sels2) != 0 {
-						baseWrapped.batch.Shrink(sels2, true)
+						if err3 = baseWrapped.batch.Shrink(sels2, true, ses.proc.Mp()); err3 != nil {
+							return
+						}
 					}
 				}
 
@@ -1777,7 +1811,10 @@ func splitDataBranchBatchForNativeUpdate(
 	}
 
 	nativeBat.SetRowCount(nativeBat.Vecs[0].Length())
-	bat.Shrink(nativeRowIdxes, true)
+	if err := bat.Shrink(nativeRowIdxes, true, ses.proc.Mp()); err != nil {
+		tblStuff.retPool.releaseRetBatch(nativeBat, false)
+		return nil, err
+	}
 	return nativeBat, nil
 }
 
@@ -2296,6 +2333,7 @@ func normalizeTupleColumnValue(val any, typ types.Type) (any, error) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
@@ -2334,8 +2372,8 @@ func checkConflictAndAppendToBat(
 
 			msg := buf.String()
 			releaseBuffer(tblStuff.bufPool, buf)
-			return moerr.NewInternalErrorNoCtxf(
-				"conflict: %s %s and %s %s on pk(%v) with different values",
+			return moerr.NewDataBranchConflictNoCtxf(
+				"%s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
 				tblStuff.baseRel.GetTableName(), diffInsert,
 				msg,
@@ -2825,7 +2863,10 @@ func buildHashmapForTable(
 						return // all rows filtered out
 					}
 					if len(sels) < bat.RowCount() {
-						bat.Shrink(sels, false)
+						if taskErr = bat.Shrink(sels, false, mp); taskErr != nil {
+							atomicErr.Store(taskErr)
+							return
+						}
 						ll = bat.VectorCount()
 					}
 				}

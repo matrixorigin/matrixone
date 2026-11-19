@@ -107,7 +107,7 @@ func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			logicPlan, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			logicPlan, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			cols := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.NotEmpty(t, cols)
@@ -123,7 +123,7 @@ func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
 			roundTripStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, roundTripSQL, 1)
 			require.NoError(t, err)
 			defer roundTripStmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), roundTripStmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), roundTripStmt, false, nil)
 			require.NoError(t, err)
 		})
 	}

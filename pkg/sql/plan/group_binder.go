@@ -139,6 +139,18 @@ func elideStableLiteralGroupBy(ctx *BindContext) {
 	remapElidedGroupByPositions(ctx.groupByAst, oldToNew)
 	remapElidedGroupByPositions(ctx.groupByCanonicalAst, oldToNew)
 	remapElidedGroupByPositions(ctx.groupByParamAst, oldToNew)
+	if ctx.mysqlSpecialGroupStorageSlots != nil {
+		// A visible ENUM/SET display key and its hidden storage slot always
+		// elide or survive together (neither is a stable literal), but their
+		// positions can both shift when an earlier literal is elided.
+		remapped := make(map[int32]int32, len(ctx.mysqlSpecialGroupStorageSlots))
+		for displayPos, storagePos := range ctx.mysqlSpecialGroupStorageSlots {
+			if oldToNew[displayPos] >= 0 && oldToNew[storagePos] >= 0 {
+				remapped[oldToNew[displayPos]] = oldToNew[storagePos]
+			}
+		}
+		ctx.mysqlSpecialGroupStorageSlots = remapped
+	}
 }
 
 // preserveElidedGroupByForSample remembers only logical GROUP BY identities
@@ -196,6 +208,39 @@ func NewGroupBinder(
 	return b
 }
 
+// appendMySQLSpecialGroupStorageSlot appends a hidden storage-identity group
+// slot beside a visible ENUM/SET display group key. MySQL groups an ENUM/SET
+// column by its stored ordinal/bitmap, so the composite key reproduces MySQL
+// group identity: the zero sentinel and a valid member that display
+// identically (an empty label) stay separate groups, every other declaration
+// keeps the same groups because display and storage are then bijective. The
+// hidden slot is the only binding-time carrier of stored truth across the
+// grouping boundary, so grouped IF/CASE/logical-operator/HAVING truth never
+// re-parses display text.
+func (bc *BindContext) appendMySQLSpecialGroupStorageSlot(expr *plan.Expr) {
+	if bc == nil || !bc.mysqlConditionalBooleanContracts {
+		// Native mode keeps base's grouping identity exactly: no hidden
+		// storage sibling, no composite key, base's merged display partition.
+		return
+	}
+	if !isEnumOrSetDisplayValueExpr(expr) {
+		return
+	}
+	raw, ok := storedMySQLSpecialTypeExpr(expr)
+	if !ok || raw == nil {
+		return
+	}
+	displayPos := int32(len(bc.groups)) - 1
+	if displayPos < 0 {
+		return
+	}
+	if bc.mysqlSpecialGroupStorageSlots == nil {
+		bc.mysqlSpecialGroupStorageSlots = make(map[int32]int32)
+	}
+	bc.mysqlSpecialGroupStorageSlots[displayPos] = int32(len(bc.groups))
+	bc.groups = append(bc.groups, raw)
+}
+
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	var numericTarget *plan.Type
 	reusesProjection := false
@@ -214,30 +259,27 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	// Do not interpret a numeric literal inside that expression as an ordinal a
 	// second time.
 	if isRoot && !reusesProjection {
-		if numVal, ok := astExpr.(*tree.NumVal); ok {
-			switch numVal.Kind() {
-			case tree.Int:
-				reusesProjection = true
-				colPos, _ := numVal.Int64()
-				if colPos < 1 || int(colPos) > len(b.selectList) {
-					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
-				}
+		// A bare integer literal is a positional reference into the select list
+		// (MySQL ordinal). Every other literal -- string, decimal, float,
+		// boolean, NULL, ... -- is a legal constant GROUP BY key and falls
+		// through to the regular expression binding below, exactly like its
+		// parenthesized form and like a selected alias.
+		if numVal, ok := astExpr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+			reusesProjection = true
+			colPos, _ := numVal.Int64()
+			if numVal.Negative() {
+				colPos = -colPos
+			}
+			if colPos < 1 || int(colPos) > len(b.selectList) {
+				return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
+			}
 
-				astExpr = b.selectList[colPos-1].Expr
-				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
-					target := b.ctx.numericProjectionTypes[colPos-1]
-					if isNumericAssignmentTarget(target) {
-						numericTarget = &target
-					}
+			astExpr = b.selectList[colPos-1].Expr
+			if int(colPos) <= len(b.ctx.numericProjectionTypes) {
+				target := b.ctx.numericProjectionTypes[colPos-1]
+				if isNumericAssignmentTarget(target) {
+					numericTarget = &target
 				}
-
-			case tree.Unknown:
-				if numVal.ValType != tree.P_null {
-					return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
-				}
-
-			default:
-				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
 		}
 	}
@@ -285,9 +327,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		}
 		if !registerAst {
 			b.ctx.groups = append(b.ctx.groups, expr)
+			b.ctx.appendMySQLSpecialGroupStorageSlot(expr)
 			return nil, nil
 		}
 		b.ctx.groups = append(b.ctx.groups, expr)
+		b.ctx.appendMySQLSpecialGroupStorageSlot(expr)
 	}
 
 	if isRoot && b.ctx.isGroupingSet {
@@ -300,6 +344,16 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			return nil, moerr.NewInternalErrorf(b.GetContext(), "grouping expression position not found: %s", astStr)
 		}
 		b.ctx.groupingFlag[pos] = true
+		// D6 joint activation: the hidden storage sibling beside this visible
+		// arm key carries the SAME active flag. Rollup/grouping-set execution
+		// replaces every flag-false slot with the rollup NULL const on every
+		// arm, so a sibling left false would NULL the storage value even for
+		// this arm's active groups and every boolean consumer above the GROUP
+		// BY would read the synthetic arm's truth instead (probe 3).
+		if storagePos, hasSibling := b.ctx.mysqlSpecialGroupStorageSlots[pos]; hasSibling &&
+			int(storagePos) < len(b.ctx.groupingFlag) {
+			b.ctx.groupingFlag[storagePos] = true
+		}
 	}
 
 	return expr, err
