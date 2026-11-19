@@ -336,7 +336,12 @@ type rewriteRuleMergeShape struct {
 	stmt       *tree.Select
 	clause     *tree.SelectClause
 	selectList string
-	table      string
+	table      rewriteRuleSource
+}
+
+// Keep each identifier separate: a quoted name can itself contain dots or AS.
+type rewriteRuleSource struct {
+	catalog, schema, table, alias string
 }
 
 // Rewrite rules from active roles are a source-row visibility union: if any
@@ -371,7 +376,8 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 	mergedClause.Where = mergeRewriteRuleWhere(leftShape.clause.Where, rightShape.clause.Where)
 	merged.Select = &mergedClause
 
-	return tree.String(&merged, dialect.MYSQL), true, nil
+	// The merged rule is reparsed by both the next merge and the query planner.
+	return formatRewriteRuleSQL(&merged, nil), true, nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
@@ -416,7 +422,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: normalizeRewriteSQL(tree.String(&clause.Exprs, dialect.MYSQL)),
+		selectList: rewriteRuleProjectionKey(&clause.Exprs),
 		table:      table,
 	}, true
 }
@@ -453,39 +459,35 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+func rewriteRuleSingleTableSource(from *tree.From) (rewriteRuleSource, bool) {
 	if from == nil || len(from.Tables) != 1 {
-		return "", false
+		return rewriteRuleSource{}, false
 	}
-
-	tableExpr, ok := rewriteRuleSingleTableExpr(from.Tables[0])
-	if !ok {
-		return "", false
-	}
-
-	return normalizeRewriteSQL(tree.String(tableExpr, dialect.MYSQL)), true
-}
-
-func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
+	expr := from.Tables[0]
 	if joinExpr, ok := expr.(*tree.JoinTableExpr); ok {
 		// The MySQL parser wraps a lone table reference as a CROSS JoinTableExpr.
 		if joinExpr.Right != nil || joinExpr.Cond != nil || joinExpr.Option != "" {
-			return nil, false
+			return rewriteRuleSource{}, false
 		}
 		expr = joinExpr.Left
 	}
 
 	tableExpr, ok := expr.(*tree.AliasedTableExpr)
 	if !ok || tableExpr.As.Cols != nil || len(tableExpr.IndexHints) > 0 {
-		return nil, false
+		return rewriteRuleSource{}, false
 	}
 
 	tableName, ok := tableExpr.Expr.(*tree.TableName)
 	if !ok || tableName.AtTsExpr != nil {
-		return nil, false
+		return rewriteRuleSource{}, false
 	}
 
-	return tableExpr, true
+	return rewriteRuleSource{
+		catalog: strings.ToLower(string(tableName.CatalogName)),
+		schema:  strings.ToLower(string(tableName.SchemaName)),
+		table:   strings.ToLower(string(tableName.ObjectName)),
+		alias:   strings.ToLower(string(tableExpr.As.Alias)),
+	}, true
 }
 
 func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
@@ -505,6 +507,32 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 			),
 		}
 	}
+}
+
+func formatRewriteRuleSQL(node tree.NodeFormatter, literals *[]tree.StringLiteralPosition) string {
+	return tree.StringWithOpts(node, dialect.MYSQL,
+		tree.WithRewriteRuleSQL(), tree.WithStringLiteralPositions(literals))
+}
+
+// Fold SQL syntax as before, but keep identifiers distinct from string literals
+// and retain the case of literal values.
+func rewriteRuleProjectionKey(exprs *tree.SelectExprs) string {
+	var literals []tree.StringLiteralPosition
+	sql := formatRewriteRuleSQL(exprs, &literals)
+	if len(literals) == 0 {
+		return normalizeRewriteSQL(sql)
+	}
+
+	var key strings.Builder
+	key.Grow(len(sql))
+	start := 0
+	for _, literal := range literals {
+		key.WriteString(strings.ToLower(sql[start:literal.Start]))
+		key.WriteString(sql[literal.Start:literal.End])
+		start = literal.End
+	}
+	key.WriteString(strings.ToLower(sql[start:]))
+	return strings.TrimSpace(key.String())
 }
 
 func normalizeRewriteSQL(sql string) string {

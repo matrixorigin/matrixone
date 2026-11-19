@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -187,6 +188,23 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if ctx.rewriteRuleSQL {
+		if node.ValType == P_ScoreBinary {
+			// Keep the original AST type and bytes on reparse, without raw bytes in JSON.
+			ctx.WriteString("_binary (X'")
+			ctx.WriteString(hex.EncodeToString([]byte(node.origString)))
+			ctx.WriteString("')")
+			return
+		}
+		if node.ValType == P_hexnum && node.origString == "0x" {
+			ctx.WriteString("X''")
+			return
+		}
+		if node.ValType == P_bit && node.origString == "0b" {
+			ctx.WriteString("B''")
+			return
+		}
+	}
 	if strings.Contains(node.origString, "\\") {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return

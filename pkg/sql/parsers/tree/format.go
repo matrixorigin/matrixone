@@ -29,6 +29,13 @@ type FmtCtx struct {
 	quoteString       bool
 	singleQuoteString bool
 	quoteIdentifier   bool
+	literalPositions  *[]StringLiteralPosition
+	rewriteRuleSQL    bool
+}
+
+// StringLiteralPosition is the byte range of a single-quoted SQL literal.
+type StringLiteralPosition struct {
+	Start, End int
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -58,6 +65,21 @@ func WithSingleQuoteString() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.singleQuoteString = true
 	})
+}
+
+// WithStringLiteralPositions records byte ranges emitted by WithSingleQuoteString.
+func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
+	return func(ctx *FmtCtx) { ctx.literalPositions = positions }
+}
+
+// WithRewriteRuleSQL renders SQL for reparse by MatrixOne's rewrite-rule consumer.
+// It is not a generic quoting option or a cross-dialect formatter.
+func WithRewriteRuleSQL() FmtCtxOption {
+	return func(ctx *FmtCtx) {
+		ctx.rewriteRuleSQL = true
+		ctx.singleQuoteString = true
+		ctx.quoteIdentifier = true
+	}
 }
 
 func WithQuoteIdentifier() FmtCtxOption {
@@ -147,7 +169,12 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		}
 	}
 	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		start := ctx.Len()
+		n, err := ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		if ctx.literalPositions != nil {
+			*ctx.literalPositions = append(*ctx.literalPositions, StringLiteralPosition{Start: start, End: ctx.Len()})
+		}
+		return n, err
 	}
 	return ctx.WriteString(v)
 }

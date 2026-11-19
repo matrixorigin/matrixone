@@ -367,6 +367,22 @@ func TestRewriteEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRewriteTablesForGPUPreservesGroupConcatArguments(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{}
+	ses.ReplaceResponser(&NullResp{})
+	for _, tc := range []struct{ query, want string }{
+		{"select group_concat(v) from db.t", "group_concat(v, ',')"},
+		{"select group_concat(v separator '|') from db.t", "group_concat(v, '|')"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			sql, err := rewriteTablesForGPU(ctx, ses, tc.query, "http://mo:6060")
+			require.NoError(t, err)
+			require.Contains(t, sql, tc.want)
+		})
+	}
+}
+
 func TestFixMOSyntaxForDuckDB(t *testing.T) {
 	cases := []struct {
 		name, in, out string

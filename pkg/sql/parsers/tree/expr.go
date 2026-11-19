@@ -311,7 +311,13 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.PrintExpr(node, node.Left, true)
 		ctx.WriteByte(' ')
 	}
-	ctx.WriteString(node.Op.ToString())
+	if ctx.rewriteRuleSQL && node.Op == REG_MATCH {
+		ctx.WriteString("regexp")
+	} else if ctx.rewriteRuleSQL && node.Op == NOT_REG_MATCH {
+		ctx.WriteString("not regexp")
+	} else {
+		ctx.WriteString(node.Op.ToString())
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {
@@ -960,15 +966,18 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
-		ctx.WriteString("INTERVAL ")
-		node.Exprs[0].Format(ctx)
-		ctx.WriteByte(' ')
-		if nv, ok := node.Exprs[1].(*NumVal); ok {
-			ctx.WriteString(nv.String())
-		} else {
-			node.Exprs[1].Format(ctx)
+		_, timeUnit := node.Exprs[1].(*TimeUnitExpr)
+		if !ctx.rewriteRuleSQL || timeUnit {
+			ctx.WriteString("INTERVAL ")
+			node.Exprs[0].Format(ctx)
+			ctx.WriteByte(' ')
+			if nv, ok := node.Exprs[1].(*NumVal); ok {
+				ctx.WriteString(nv.String())
+			} else {
+				node.Exprs[1].Format(ctx)
+			}
+			return
 		}
-		return
 	}
 
 	if funcName != "" {
@@ -982,14 +991,29 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	var separator Expr
+	switch name := node.Func.FunctionReference.(*UnresolvedName).ColName(); {
+	case name == "trim":
 		trimExprsFormat(ctx, node.Exprs)
-	} else {
+	case ctx.rewriteRuleSQL && strings.EqualFold(name, "group_concat") && len(node.Exprs) >= 2:
+		// The parser stores SEPARATOR as the last expression for binding,
+		// but SQL must render it as a clause, not an aggregate input.
+		last := len(node.Exprs) - 1
+		node.Exprs[:last].Format(ctx)
+		separator = node.Exprs[last]
+	default:
 		formatFuncExprs(ctx, node)
 	}
 
-	if node.OrderBy != nil {
+	if len(node.OrderBy) != 0 {
+		if separator != nil {
+			ctx.WriteByte(' ')
+		}
 		node.OrderBy.Format(ctx)
+	}
+	if separator != nil {
+		ctx.WriteString(" separator ")
+		separator.Format(ctx)
 	}
 
 	ctx.WriteByte(')')
@@ -1006,14 +1030,49 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 		return
 	}
 
-	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	name := strings.ToLower(node.FuncName.Origin())
+	if ctx.rewriteRuleSQL && len(node.Exprs) == 2 {
+		switch name {
+		case "position":
+			node.Exprs[0].Format(ctx)
+			ctx.WriteString(" in ")
+			node.Exprs[1].Format(ctx)
+			return
+		case "extract":
+			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
+			ctx.WriteString(" from ")
+			node.Exprs[1].Format(ctx)
+			return
+		}
+	}
+
+	switch name {
+	case "convert":
+		// CONVERT(expr, type) parses as a CastExpr. Here the second argument
+		// is a charset name, for which the grammar also accepts a string.
+		if ctx.rewriteRuleSQL && len(node.Exprs) == 2 {
+			node.Exprs[0].Format(ctx)
+			ctx.WriteString(" using ")
+			// A charset name is case-insensitive syntax even when spelled as a string.
+			charsetCtx := *ctx
+			charsetCtx.literalPositions = nil
+			node.Exprs[1].Format(&charsetCtx)
+		} else {
+			node.Exprs.Format(ctx)
+		}
+	case "timestampdiff", "timestampadd", "extract", "get_format":
+		// The first argument is a grammar keyword, not a string literal.
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
 			node.Exprs[1:].Format(ctx)
 		}
 	case "interval":
+		if ctx.rewriteRuleSQL {
+			// The time-unit syntax was handled above. These are value arguments.
+			node.Exprs.Format(ctx)
+			return
+		}
 		node.Exprs[0].Format(ctx)
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
@@ -1084,11 +1143,11 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "2":
-		exprs[1].Format(ctx)
+		formatExprWithSingleQuoteDisabled(ctx, exprs[1])
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "3":
-		exprs[1].Format(ctx)
+		formatExprWithSingleQuoteDisabled(ctx, exprs[1])
 		ctx.WriteString(" ")
 		exprs[2].Format(ctx)
 		ctx.WriteString(" from ")
@@ -1947,7 +2006,11 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	if ctx.rewriteRuleSQL {
+		ctx.WriteValue(P_char, FormatString(node.Pattern))
+	} else {
+		ctx.WriteString(node.Pattern)
+	}
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
