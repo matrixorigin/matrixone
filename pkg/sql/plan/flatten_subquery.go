@@ -4506,6 +4506,50 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 		preds = []*plan.Expr{pred}
 
+	case plan.Node_UNION:
+		left := builder.qry.Nodes[node.Children[0]]
+		right := builder.qry.Nodes[node.Children[1]]
+		pos := int32(len(node.ProjectList))
+		if len(left.ProjectList) == int(pos) && len(right.ProjectList) == int(pos) {
+			break
+		}
+		// A distinct UNION combines both arms under one shared dedup
+		// domain. When each arm carries the same depth-1 hidden identity
+		// slot materialized for the same outer equality key, that slot
+		// must also leave the UNION: keep it as an ordinary output column
+		// and collapse the two correlation predicates into a single
+		// predicate on the shared slot. For a fixed outer row the key
+		// value is constant, so DISTINCT over (tuple, key) preserves
+		// DISTINCT over the user tuple alone. Misaligned identities stay
+		// explicitly unsupported here rather than being silently dropped.
+		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated local CTE: UNION without matching row identities")
+		}
+		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
+		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
+		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
+		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
+		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
+			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
+			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
+			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
+			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
+			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated local CTE: UNION branch identities differ")
+		}
+		node.ProjectList = append(node.ProjectList,
+			GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
+		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
+		pred := DeepCopyExpr(preds[0])
+		for _, arg := range pred.GetF().Args {
+			if arg.GetCol() != nil {
+				*arg = *key
+			}
+		}
+		preds = []*plan.Expr{pred}
+
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr
 		for _, cond := range node.FilterList {
