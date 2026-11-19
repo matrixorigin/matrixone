@@ -185,12 +185,49 @@ func (tableScan *TableScan) batchColumnView(
 }
 
 func (tableScan *TableScan) recordFilterInput(bat *batch.Batch, loadedColumns []int) {
-	view := tableScan.batchColumnView(bat, loadedColumns, bat.RowCount())
-	tableScan.OpAnalyzer.InputBlock()
+	var view *batch.Batch
+	if tableScan.ctr.membershipApplied {
+		// Membership already counted rows and key bytes. Build a private
+		// metadata view even for eager callbacks, which pass loadedColumns=nil.
+		if tableScan.ctr.metricView == nil {
+			tableScan.ctr.metricView = batch.NewWithSize(len(tableScan.Types))
+		}
+		view = tableScan.ctr.metricView
+		view.Vecs = view.Vecs[:0]
+		for column, v := range bat.Vecs {
+			if (loadedColumns == nil || slices.Contains(loadedColumns, column)) &&
+				!slices.Contains(tableScan.ctr.readerFilter.Membership.Columns, column) {
+				view.Vecs = append(view.Vecs, v)
+			}
+		}
+		view.SetRowCount(0)
+	} else {
+		view = tableScan.batchColumnView(bat, loadedColumns, bat.RowCount())
+		tableScan.OpAnalyzer.InputBlock()
+	}
 	tableScan.OpAnalyzer.Input(view)
 	tableScan.OpAnalyzer.ScanBytes(view)
 	tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, bat.Size())
 	tableScan.ctr.filterReadMetrics = true
+}
+
+// Generic membership follows the original predicates. Count only key columns
+// not already read by that stage, without adding the same rows or block twice.
+func (tableScan *TableScan) recordMembershipKeyInput(bat *batch.Batch, loaded, predicates []int) {
+	if tableScan.ctr.metricView == nil {
+		tableScan.ctr.metricView = batch.NewWithSize(len(tableScan.Types))
+	}
+	view := tableScan.ctr.metricView
+	view.Vecs = view.Vecs[:0]
+	for _, column := range loaded {
+		if !slices.Contains(predicates, column) {
+			view.Vecs = append(view.Vecs, bat.Vecs[column])
+		}
+	}
+	view.SetRowCount(0)
+	tableScan.OpAnalyzer.Input(view)
+	tableScan.OpAnalyzer.ScanBytes(view)
+	tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, bat.Size())
 }
 
 func (tableScan *TableScan) recordLateInput(bat *batch.Batch) {
