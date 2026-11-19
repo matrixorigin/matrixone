@@ -607,7 +607,8 @@ UT_HEARTBEAT_INTERVAL ?= 60
 # fall back before any prebuilt binary executes.
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
-# Split issues roots under one shared package deadline.
+# Split issues roots into bounded processes. The parallel pool starts a fresh
+# test deadline per admitted binary under the outer UT lifecycle budget.
 # Shorter process lifetimes bound catalog and race-detector retention. The
 # eight-batch pool gives each process two Go execution cores. Linux runners
 # requesting at least eight tasks use four complete clusters; smaller budgets

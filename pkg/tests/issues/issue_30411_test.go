@@ -42,6 +42,10 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 		const database = "load_duplicate_primary_keys"
 		execSQLRequire(t, ctx, db, "create database "+database)
 		defer func() {
+			if t.Failed() {
+				// The shared fixture retires this generation on failure.
+				return
+			}
 			cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
 			defer stop()
 			execSQLRequire(t, cleanup, db, "drop database "+database)
@@ -81,7 +85,16 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			return fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", path, table)
 		}
 
-		t.Run("session policy and cached statements", func(t *testing.T) {
+		// Each phase gets a new budget. The nested procedure cases deliberately
+		// share one pinned session and must stop if that session is lost.
+		runPhase := func(name string, run func(*testing.T)) bool {
+			var stop context.CancelFunc
+			ctx, stop = context.WithTimeout(t.Context(), 2*time.Minute)
+			defer stop()
+			return t.Run(name, run)
+		}
+		cancel()
+		if !runPhase("session policy and cached statements", func(t *testing.T) {
 			var enabled int
 			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
 			require.Zero(t, enabled)
@@ -135,9 +148,10 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 				require.Equal(t, uint16(1062), duplicate.Number)
 				require.Zero(t, count(t, "switch_load"), "prepared INSERT keeps validation and rollback across SETs")
 			}
-		})
-		t.Run("procedure session policy and rollback", func(t *testing.T) {
-			defer func() { _, _ = conn.ExecContext(ctx, "set session mo_pk_check_by_cn=off") }()
+		}) {
+			return
+		}
+		if !runPhase("procedure session policy and rollback", func(t *testing.T) {
 			exec(t, "create table procedure_load(id bigint primary key,name varchar(20))")
 			// Reuse fixed procedure definitions across SETs. Only the owning
 			// connection's current policy may determine LOAD validation.
@@ -152,7 +166,7 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			for round, on := range []bool{true, false, true} {
 				exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
 				for i, query := range duplicate {
-					t.Run(fmt.Sprintf("round=%d/on=%t/%s", round, on, modes[i]), func(t *testing.T) {
+					if !t.Run(fmt.Sprintf("round=%d/on=%t/%s", round, on, modes[i]), func(t *testing.T) {
 						exec(t, "truncate table procedure_load")
 						if on {
 							requireDuplicate(t, query)
@@ -161,13 +175,15 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 							exec(t, query)
 							require.Equal(t, 2, count(t, "procedure_load"), "OFF with TN OFF bypasses CN validation at every call depth")
 						}
-					})
+					}) {
+						return
+					}
 				}
 			}
 			conflicts := procedure("load_target_conflict", "2,new\n1,conflict\n", "")
 			valid := procedure("load_valid", "2,new\n3,new\n", "")
 			for i, query := range conflicts {
-				t.Run("target conflict and recovery/"+modes[i], func(t *testing.T) {
+				if !t.Run("target conflict and recovery/"+modes[i], func(t *testing.T) {
 					exec(t, "truncate table procedure_load")
 					exec(t, "insert into procedure_load values(1,'old')")
 					requireDuplicate(t, query)
@@ -177,7 +193,9 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 					require.Equal(t, "old", payload)
 					exec(t, valid[i])
 					require.Equal(t, 3, count(t, "procedure_load"), "same call depth remains usable after rejection")
-				})
+				}) {
+					return
+				}
 			}
 			for i, declaration := range []string{
 				"declare mo_pk_check_by_cn int; ",
@@ -188,7 +206,7 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 				for _, on := range []bool{true, false} {
 					exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
 					for depth, query := range queries[1:] {
-						t.Run(fmt.Sprintf("local collision=%d/on=%t/%s", i, on, modes[depth+1]), func(t *testing.T) {
+						if !t.Run(fmt.Sprintf("local collision=%d/on=%t/%s", i, on, modes[depth+1]), func(t *testing.T) {
 							exec(t, "truncate table procedure_load")
 							if on {
 								requireDuplicate(t, query)
@@ -197,22 +215,31 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 								exec(t, query)
 								require.Equal(t, 2, count(t, "procedure_load"))
 							}
-						})
+						}) {
+							return
+						}
 					}
 				}
 			}
-		})
-		// The existing correctness suite exercises the explicitly enabled policy.
+		}) {
+			return
+		}
+		// The remaining independent cases use an explicitly enabled policy.
+		ctx, cancel = context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
 		exec(t, "set session mo_pk_check_by_cn=on")
 		exec(t, "create table t(id bigint primary key, name varchar(256))")
-		t.Run("input duplicate and rollback", func(t *testing.T) {
+		cancel()
+		if !runPhase("input duplicate and rollback", func(t *testing.T) {
 			path := writeInput(t, "duplicate.csv", "1,a\n1,b\n")
 			requireDuplicate(t, load(path, "t"))
 			require.Zero(t, count(t, "t"))
 			requireDuplicate(t, "insert into t values(1,'a'),(1,'b')")
 			require.Zero(t, count(t, "t"))
-		})
-		t.Run("existing row collision and rollback", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("existing row collision and rollback", func(t *testing.T) {
 			exec(t, "insert into t values(1,'old')")
 			path := writeInput(t, "existing.csv", "2,new\n1,conflict\n3,new\n")
 			requireDuplicate(t, load(path, "t"))
@@ -222,15 +249,19 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			require.Equal(t, "old", payload)
 			exec(t, load(writeInput(t, "valid.csv", "2,new\n3,new\n"), "t"))
 			require.Equal(t, 3, count(t, "t"), "connection and table remain reusable after rejection")
-		})
-		t.Run("composite tuple identity", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("composite tuple identity", func(t *testing.T) {
 			exec(t, "create table composite(a int,b int,primary key(a,b))")
 			requireDuplicate(t, load(writeInput(t, "composite_dup.csv", "1,1\n1,1\n"), "composite"))
 			require.Zero(t, count(t, "composite"))
 			exec(t, load(writeInput(t, "composite_valid.csv", "1,1\n1,2\n"), "composite"))
 			require.Equal(t, 2, count(t, "composite"))
-		})
-		t.Run("shared prepared image and index rollback", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("shared prepared image and index rollback", func(t *testing.T) {
 			exec(t, "create table indexed(id int auto_increment primary key, u int unique key, v int, key idx_v(v))")
 			path := writeInput(t, "indexed.csv", "10,100\n20,200\n")
 			exec(t, load(path, "indexed")+" (u,v)")
@@ -247,8 +278,10 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			require.Zero(t, visible, "rejected LOAD leaves no unique-index rows")
 			exec(t, load(writeInput(t, "indexed_reuse.csv", "3,30,300\n"), "indexed"))
 			require.Equal(t, 3, count(t, "indexed"))
-		})
-		t.Run("foreign key fallback", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("foreign key fallback", func(t *testing.T) {
 			exec(t, "create table parent(id int primary key)")
 			exec(t, "insert into parent values(1)")
 			exec(t, "create table child(id int primary key,p int,foreign key(p) references parent(id))")
@@ -257,15 +290,19 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			exec(t, "insert into child values(1,1)")
 			requireDuplicate(t, load(writeInput(t, "child_existing.csv", "2,1\n1,1\n"), "child"))
 			require.Equal(t, 1, count(t, "child"))
-		})
-		t.Run("parallel files", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("parallel files", func(t *testing.T) {
 			exec(t, "create table files(id int primary key,name varchar(20))")
 			writeInput(t, "part0.csv", "1,a\n")
 			writeInput(t, "part1.csv", "1,b\n")
 			requireDuplicate(t, load(filepath.Join(inputDir, "part*.csv"), "files")+" parallel 'true'")
 			require.Zero(t, count(t, "files"))
-		})
-		t.Run("cross batch bulk write", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !runPhase("cross batch bulk write", func(t *testing.T) {
 			exec(t, "create table bulk(id int primary key,name varchar(256))")
 			var data strings.Builder
 			// Minimum cardinality crossing the external reader's batch boundary;
@@ -276,13 +313,17 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			data.WriteString("1,duplicate\n")
 			path := writeInput(t, "bulk.csv", data.String())
 			for _, parallel := range []string{"false", "true"} {
-				t.Run("parallel="+parallel, func(t *testing.T) {
+				if !t.Run("parallel="+parallel, func(t *testing.T) {
 					requireDuplicate(t, load(path, "bulk")+" parallel '"+parallel+"'")
 					require.Zero(t, count(t, "bulk"))
-				})
+				}) {
+					return
+				}
 			}
-		})
-		t.Run("explicit transaction rollback", func(t *testing.T) {
+		}) {
+			return
+		}
+		runPhase("explicit transaction rollback", func(t *testing.T) {
 			exec(t, "create table transactional(id int primary key,name varchar(20))")
 			exec(t, "insert into transactional values(1,'seed')")
 			exec(t, "begin")

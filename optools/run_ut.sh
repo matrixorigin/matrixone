@@ -2338,7 +2338,7 @@ function run_prebuilt_race_commands(){
                 return 1
             fi
             checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
-                "package_index=${index} prebuilt=true parallel=${parallel}"
+                "package_index=${index} prebuilt=true parallel=${parallel} timeout_seconds=${remaining}"
             set -m
             (
                 cd "${race_dirs[index]}" || exit 2
@@ -2754,13 +2754,20 @@ function run_race_test_batches_impl(){
         run_batched_race_fallback "${package}" "${fallback_timeout}" || status=$?
         return "${status}"
     fi
+    local execution_deadline=${deadline}
+    if [[ "${CURRENT_UT_COMMAND_STAGE}" == serial ]] && (( 10#${parallel} > 1 )); then
+        # The exclusive issues pool runs independent Go test binaries in
+        # multiple waves. Give each admitted binary its ordinary timeout;
+        # the outer UT watchdog still bounds the complete job.
+        execution_deadline=0
+    fi
     for (( index=0; index<batches; index++ )); do
         (( shard_counts[index] > 0 )) || continue
         race_packages+=("${import_path}")
         race_dirs+=("${directory}")
         race_binaries+=("${binary}")
         race_patterns+=("${shard_patterns[index]}")
-        race_deadlines+=("${deadline}")
+        race_deadlines+=("${execution_deadline}")
     done
     # Execution alone owns the smaller CPU and cluster-admission budget.
     # Compilation, inventory and the caller retain their ordinary CPU budget.
