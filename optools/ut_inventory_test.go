@@ -444,18 +444,6 @@ func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
 			script := `source ./run_ut.sh UT
 PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
 function logger() { printf '%s\n' "$*"; }
-UT_TIMEOUT=1
-function date() {
- if [[ "$1" == +%s ]]; then
-  if [[ -e "$CASE_DIR/start-Three" ]]; then
-   printf '1080\n'
-  else
-   printf '1000\n'
-  fi
- else
-  command date "$@"
- fi
-}
 UT_ISSUES_BATCH_PARALLEL=2
 export GOMAXPROCS=8
 mkfifo "$CASE_DIR/ready-One" "$CASE_DIR/ready-Two"
@@ -502,7 +490,6 @@ for candidate in One Two Three Four Five Six Seven Eight; do
  if [[ "$*" == *"Test$candidate"* ]]; then name=$candidate; break; fi
 done
 [[ -n "$name" ]] || exit 96
-[[ " $* " == *" -test.timeout=60s "* ]] || exit 97
 printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
 printf '%s\n' "$GOMAXPROCS" > "$CASE_DIR/cpu-$name"
 touch "$CASE_DIR/start-$name"

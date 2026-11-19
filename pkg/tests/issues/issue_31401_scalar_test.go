@@ -108,8 +108,8 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						// The failed fixture owns shutdown instead of another parent DDL.
 						if !t.Failed() {
 							// DROP ACCOUNT also drops the tenant databases and their
-							// catalogs. Give this cleanup its own bounded budget.
-							_ = cleanupSQL(sys.ExecContext, 2*time.Minute, "drop account if exists issue31401_scalar")
+							// catalogs. Keep the former combined cleanup budget.
+							_ = cleanupSQL(sys.ExecContext, 30*time.Second, "drop account if exists issue31401_scalar")
 						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))

@@ -69,7 +69,7 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 					// The fixture owner retires the failed cluster.
 					return
 				}
-				cleanup, stop := context.WithTimeout(context.Background(), 2*time.Minute)
+				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 				defer stop()
 				if _, err := adminPool.ExecContext(cleanup, "drop account rule_refresh"); !assert.NoError(t, err) {
 					return
