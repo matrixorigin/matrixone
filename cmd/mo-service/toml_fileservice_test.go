@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -297,7 +298,8 @@ func requireSpillFileMissing(t *testing.T, local *fileservice.LocalFS, name stri
 		FilePath: name,
 		Entries:  []fileservice.IOEntry{{Size: 1}},
 	}
-	require.Error(t, spill.Read(context.Background(), &vector))
+	err := spill.Read(context.Background(), &vector)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
 
 func TestClearSpillFilesPreservesPeerCNLocalRoot(t *testing.T) {
@@ -330,9 +332,10 @@ func TestClearSpillFilesPreservesPeerCNLocalRoot(t *testing.T) {
 	requireSpillFileMissing(t, cn2Local, "stale")
 
 	// A fresh FS instance on the same stable root cleans only its own restart leftovers.
+	writeSpillFile(t, cn2Local, "stale-again", ownStale)
 	closeCN2()
 	cn2Local, cn2Services, _ = newLaunchTestLocalFS(t, "cn2", cn2Dir)
-	writeSpillFile(t, cn2Local, "stale-again", ownStale)
+	requireSpillFile(t, cn2Local, "stale-again", ownStale)
 	require.NoError(t, clearSpillFiles(context.Background(), cn2Services))
 	requireSpillFile(t, cn1Local, "peer", peer)
 	requireSpillFileMissing(t, cn2Local, "stale-again")
