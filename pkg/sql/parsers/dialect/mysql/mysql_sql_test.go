@@ -3790,7 +3790,7 @@ var (
 			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
 		}, {
 			input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
-			output: "create table a (a int) engine = innodb row_format = dynamic comment = 'table A' compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
+			output: "create table a (a int) engine = innodb row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
 		}, {
 			input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
 			output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
@@ -5506,10 +5506,10 @@ var (
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",
-			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+			output: "create table t1 (a int) STORAGE DISK",
 		}, {
 			input:  "create table t1 (a int) STORAGE DISK;",
-			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+			output: "create table t1 (a int) STORAGE DISK",
 		}, {
 			input: "create table t1 (a numeric(10, 2))",
 		}, {

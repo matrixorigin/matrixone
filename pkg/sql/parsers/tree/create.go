@@ -3142,8 +3142,18 @@ type TableOptionCompression struct {
 }
 
 func (node *TableOptionCompression) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	compression := node.Compression
+	if !ctx.NoBackslashEscape() {
+		compression = FormatString(compression)
+	}
 	ctx.WriteString("compression = ")
-	ctx.WriteString(node.Compression)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(compression, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionCompression) TypeName() string { return "tree.TableOptionCompression" }
@@ -3168,8 +3178,18 @@ type TableOptionConnection struct {
 }
 
 func (node *TableOptionConnection) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	connection := node.Connection
+	if !ctx.NoBackslashEscape() {
+		connection = FormatString(connection)
+	}
 	ctx.WriteString("connection = ")
-	ctx.WriteString(node.Connection)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(connection, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionConnection) TypeName() string { return "tree.TableOptionConnection" }
@@ -3194,8 +3214,18 @@ type TableOptionPassword struct {
 }
 
 func (node *TableOptionPassword) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	password := node.Password
+	if !ctx.NoBackslashEscape() {
+		password = FormatString(password)
+	}
 	ctx.WriteString("password = ")
-	ctx.WriteString(node.Password)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(password, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionPassword) TypeName() string { return "tree.TableOptionPassword" }
@@ -3298,7 +3328,10 @@ type TableOptionDelayKeyWrite struct {
 }
 
 func (node *TableOptionDelayKeyWrite) Format(ctx *FmtCtx) {
-	ctx.WriteString("key_write = ")
+	// DELAY_KEY_WRITE is the grammar-visible option name and its value is an
+	// INTEGRAL, so only the misspelled option name needs correcting (PR 32906
+	// reviews 5983418028/5983638763).
+	ctx.WriteString("delay_key_write = ")
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
@@ -3530,9 +3563,16 @@ type TableOptionTablespace struct {
 }
 
 func (node *TableOptionTablespace) Format(ctx *FmtCtx) {
-	ctx.WriteString("tablespace = ")
-	ctx.WriteString(node.Name)
-	ctx.WriteString(node.StorageOpt)
+	// TABLESPACE ident and storage_opt (STORAGE DISK/STORAGE MEMORY) are two
+	// different grammar productions (PR 32906 reviews 5983418028/5983638763):
+	// replay exactly the production that was parsed instead of concatenating
+	// both halves into an unparsable hybrid.
+	if node.Name != "" {
+		ctx.WriteString("tablespace = ")
+		ctx.WriteString(node.Name)
+		return
+	}
+	ctx.WriteString(strings.TrimSpace(node.StorageOpt))
 }
 
 func (node TableOptionTablespace) TypeName() string { return "tree.TableOptionTablespace" }
@@ -3558,8 +3598,18 @@ type TableOptionDataDirectory struct {
 }
 
 func (node *TableOptionDataDirectory) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	dir := node.Dir
+	if !ctx.NoBackslashEscape() {
+		dir = FormatString(dir)
+	}
 	ctx.WriteString("data directory = ")
-	ctx.WriteString(node.Dir)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(dir, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionDataDirectory) TypeName() string { return "tree.TableOptionDataDirectory" }
@@ -3584,8 +3634,18 @@ type TableOptionIndexDirectory struct {
 }
 
 func (node *TableOptionIndexDirectory) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	dir := node.Dir
+	if !ctx.NoBackslashEscape() {
+		dir = FormatString(dir)
+	}
 	ctx.WriteString("index directory = ")
-	ctx.WriteString(node.Dir)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(dir, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionIndexDirectory) TypeName() string { return "tree.TableOptionIndexDirectory" }
@@ -3692,8 +3752,18 @@ type TableOptionEncryption struct {
 }
 
 func (node *TableOptionEncryption) Format(ctx *FmtCtx) {
+	// The grammar accepts only a STRING literal for this option, so the shared
+	// serializer must re-emit the decoded value as a single-quoted SQL literal
+	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
+	// ENGINE_ATTRIBUTE/COMMENT serializers.
+	encryption := node.Encryption
+	if !ctx.NoBackslashEscape() {
+		encryption = FormatString(encryption)
+	}
 	ctx.WriteString("encryption = ")
-	ctx.WriteString(node.Encryption)
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(encryption, "'", "''"))
+	ctx.WriteString("'")
 }
 
 func (node TableOptionEncryption) TypeName() string { return "tree.TableOptionEncryption" }
