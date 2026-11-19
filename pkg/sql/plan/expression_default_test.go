@@ -786,7 +786,7 @@ func TestLegacyInsertMaterializesVolatileGeneratedDependency(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(),
 		"create table expression_default_legacy_dml (id int, a double default (rand()), g double generated always as (a) stored)", 1)
 	require.NoError(t, err)
-	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	stmt.Free()
 	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()

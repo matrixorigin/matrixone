@@ -947,7 +947,7 @@ func TestLegacyOndupAdmissionRecoveryDoesNotRebindVisitedChildren(t *testing.T) 
 				stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, insert+rhs, 1)
 				require.NoError(t, err)
 				defer stmts[0].Free()
-				p, err := BuildPlan(ctx, stmts[0], false)
+				p, err := BuildPlan(ctx, stmts[0], false, nil)
 				if keyed {
 					require.ErrorContains(t, err, "unknown function 'missing_fn'")
 					require.Equal(t, 1, ctx.udfCalls, "ordinary binding stops at the first unresolved function")
@@ -982,7 +982,7 @@ func TestInsertRowAliasRejectsExpandedUDFSubqueries(t *testing.T) {
 					stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, query, 1)
 					require.NoError(t, err)
 					defer stmts[0].Free()
-					p, err := BuildPlan(ctx, stmts[0], false)
+					p, err := BuildPlan(ctx, stmts[0], false, nil)
 					if alias && name != "f_values_constant" {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), "%v", err)
 						require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
