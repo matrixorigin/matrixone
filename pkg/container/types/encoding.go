@@ -372,6 +372,14 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[float32](val)
 	case T_float64:
 		return DecodeFixed[float64](val)
+	case T_bf16:
+		return DecodeFixed[BF16](val)
+	case T_float16:
+		return DecodeFixed[Float16](val)
+	case T_float8:
+		return DecodeFixed[Float8](val)
+	case T_float4:
+		return DecodeFixed[Float4](val)
 	case T_date:
 		return DecodeFixed[Date](val)
 	case T_time:
@@ -394,7 +402,7 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return val
 	case T_enum:
 		return DecodeFixed[Enum](val)
@@ -445,6 +453,14 @@ func CompareValue(left, right any) int {
 		return cmp.Compare(lVal, right.(float32))
 	case float64:
 		return cmp.Compare(lVal, right.(float64))
+	case BF16:
+		return cmp.Compare(lVal.ToFloat32(), right.(BF16).ToFloat32())
+	case Float16:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float16).ToFloat32())
+	case Float8:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float8).ToFloat32())
+	case Float4:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float4).ToFloat32())
 	case Decimal64:
 		return lVal.Compare(right.(Decimal64))
 	case Decimal128:
@@ -550,6 +566,14 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(float32))
 	case T_float64:
 		return EncodeFixed(val.(float64))
+	case T_bf16:
+		return EncodeFixed(val.(BF16))
+	case T_float16:
+		return EncodeFixed(val.(Float16))
+	case T_float8:
+		return EncodeFixed(val.(Float8))
+	case T_float4:
+		return EncodeFixed(val.(Float4))
 	case T_decimal64:
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
@@ -573,7 +597,7 @@ func EncodeValue(val any, t T) []byte {
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+		T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		// Mainly used by Zonemap, which receives val input from DN batch/vector.
 		// This val is mostly []bytes and not []float32 or []float64
 		return val.([]byte)

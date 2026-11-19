@@ -56,7 +56,7 @@ func bindTestFunction(t testing.TB, proc *process.Process, name string, args ...
 }
 
 // bindTestCast retains the requested registered identity, including private casts.
-func bindTestCast(t *testing.T, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
+func bindTestCast(t testing.TB, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
 	t.Helper()
 	sourceType, err := types.TypeFromPlan(source.Typ)
 	require.NoError(t, err)
@@ -2892,11 +2892,11 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 		name, parameter, jsonValue string
 		typ                        types.T
 		kind                       vector.PrepareParamKind
-		reject                     bool
 	}{
 		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64, kind: vector.PrepareParamInteger},
 		{name: "narrow integer compares wider JSON", parameter: "127", jsonValue: `128`, typ: types.T_int8, kind: vector.PrepareParamInteger},
-		{name: "float32 retains range rejection", parameter: "1", jsonValue: `1e100`, typ: types.T_float32, kind: vector.PrepareParamFloat, reject: true},
+		{name: "float32 compares wider positive JSON", parameter: "1", jsonValue: `1e100`, typ: types.T_float32, kind: vector.PrepareParamFloat},
+		{name: "float32 compares wider negative JSON", parameter: "1", jsonValue: `-1e100`, typ: types.T_float32, kind: vector.PrepareParamFloat},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			checkExpressionStorageAfterCleanup(t, proc)
@@ -2930,17 +2930,13 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			defer executor.Free()
 			for _, selection := range [][]bool{nil, {false, true}} {
 				result, err := executor.Eval(proc, []*batch.Batch{bat}, selection)
-				if test.reject {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "expected floating-point range failure: %v", err)
-				} else {
-					require.NoError(t, err)
-					require.Equal(t, 2, result.Length())
-					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
-					require.False(t, result.IsNull(1))
-					require.Equal(t, selection != nil, result.IsNull(0))
-					if selection == nil {
-						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
-					}
+				require.NoError(t, err)
+				require.Equal(t, 2, result.Length())
+				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
+				require.False(t, result.IsNull(1))
+				require.Equal(t, selection != nil, result.IsNull(0))
+				if selection == nil {
+					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 				}
 			}
 			compact := executor.(*FunctionExpressionExecutor).selectedParameterVectors[1]
@@ -2955,8 +2951,8 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			empty, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{})
 			require.NoError(t, err)
 			require.Zero(t, empty.Length())
-			// Reuse the compaction/scatter path with a matching value, including
-			// recovery after the FLOAT32 conversion error.
+			// Reuse the compaction/scatter path with a matching value after
+			// comparing a JSON value outside the parameter's numeric domain.
 			fill(test.parameter, 2)
 			result, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
 			require.NoError(t, err)
@@ -2964,18 +2960,18 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			require.True(t, result.IsNull(0))
 			require.False(t, result.IsNull(1))
 			require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
-			if test.reject {
+			if test.typ == types.T_float32 {
 				fill(test.jsonValue, 2)
-				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{types.T_float64})
-				executor.ResetForNextQuery()
-				result, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
-				require.NoError(t, err)
-				require.False(t, result.IsNull(1))
-				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
-				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{test.typ})
-				executor.ResetForNextQuery()
-				_, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg))
+				for _, typ := range []types.T{types.T_float64, types.T_float32} {
+					proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{typ})
+					executor.ResetForNextQuery()
+					result, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
+					require.NoError(t, err)
+					require.Equal(t, 2, result.Length())
+					require.True(t, result.IsNull(0))
+					require.False(t, result.IsNull(1))
+					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
+				}
 			}
 		})
 	}
@@ -5216,4 +5212,31 @@ func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
 		}
 		require.Same(t, sink, proc.WarningSink)
 	}
+}
+
+// TestVecBlockVectorLiteral checks that a vecf8/vecf4 vector literal is a constant of its
+// stored cell, and that a vector literal of a type without a constant form is an error.
+func TestVecBlockVectorLiteral(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		cell, err := types.AppendBlockScaled(nil, f, []float32{1, -2, 0.5})
+		require.NoError(t, err)
+		oid := types.T_array_float8
+		if f == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		vec, err := generateConstExpressionExecutor(proc, types.New(oid, 3, 0), &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(cell)},
+		}, nil)
+		require.NoError(t, err)
+		require.True(t, vec.IsConst())
+		require.Equal(t, oid, vec.GetType().Oid)
+		require.Equal(t, cell, vec.GetBytesAt(0))
+		vec.Free(proc.Mp())
+	}
+	_, err := generateConstExpressionExecutor(proc, types.T_int64.ToType(), &plan.Literal{
+		Value: &plan.Literal_VecVal{VecVal: "\x00"},
+	}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
 }

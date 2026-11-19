@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -678,11 +679,11 @@ type compositePartBlockFilter struct {
 	copy     *plan.Expr
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, points *compositePointCapture) (map[int32][]compositePartBlockFilter, bool) {
 	var ret map[int32][]compositePartBlockFilter
 	needsLate := false
 	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
-	if blockDisabled && !deferredOnly {
+	if blockDisabled && !deferredOnly && points == nil {
 		return nil, false
 	}
 	visited := make(map[int32]struct{})
@@ -698,6 +699,9 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, defe
 				visit(childID)
 			}
 			return
+		}
+		if points != nil {
+			points.collect(builder, id, node)
 		}
 
 		if deferredOnly {
@@ -815,7 +819,7 @@ func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][
 
 func appendUniqueBlockFilter(node *plan.Node, filter *plan.Expr, copyFilter bool) {
 	for _, existing := range node.BlockFilterList {
-		if blockFilterEquivalent(existing, filter) {
+		if existing.GetCandidateFilter() == filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter) {
 			return
 		}
 	}
@@ -1068,15 +1072,13 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 		return nil
 	}
 	allowed := compositeKeyPartColumns(node.TableDef)
-	if allowed == nil {
-		return nil
-	}
-	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok && allowed != nil {
 		allowed[compoundPos] = struct{}{}
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+		if filter.GetCandidateFilter() ||
+			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent
 			// block-filter expression instead of deep-copying it on every stats
@@ -1339,11 +1341,29 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	// IsSerialized and StringSource do not change the value set tested by a
 	// block filter. Normalize both only at this specialized value-comparison
 	// boundary; general expression identity must continue to preserve source.
+	// The normalized-spelling decimal provenance marker is equally inert for
+	// the tested value set and is normalized here for the same reason. The
+	// retained Literal.Src decides value identity the same way it does for
+	// the domain key: a statically evaluable source is normalized out, and
+	// an execution-dependent source declines the comparison.
 	lit = literalForExecutableIdentity(typ, lit)
+	if normalized, ok := literalDomainValueIdentity(lit); ok {
+		lit = normalized
+	} else {
+		return "", false
+	}
 	if lit.StringSource != 0 {
 		literalCopy := *lit
 		literalCopy.StringSource = 0
 		lit = &literalCopy
+	}
+	if lit.DecimalLiteralRequiresV82 {
+		literalCopy := *lit
+		literalCopy.DecimalLiteralRequiresV82 = false
+		lit = &literalCopy
+	}
+	if canonical, ok := sqlEqualFloat32ScaledLiteral(typ, lit); ok {
+		lit = canonical
 	}
 	typ = literalSemanticKeyType(typ)
 	litBytes, err := lit.Marshal()
@@ -1437,7 +1457,9 @@ func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
 		hash := blockFilterSemanticHash(filter)
 		duplicate := false
 		for _, existing := range buckets[hash] {
-			if blockFilterSemanticallyEquivalent(existing, filter) {
+			if existing.GetCandidateFilter() == filter.GetCandidateFilter() &&
+				((filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter)) ||
+					(!filter.GetCandidateFilter() && blockFilterSemanticallyEquivalent(existing, filter))) {
 				duplicate = true
 				break
 			}
@@ -1629,11 +1651,21 @@ func (builder *QueryBuilder) normalizeColumnDomain(filters []*plan.Expr) []*plan
 		if !domain.pointsInInit {
 			continue
 		}
-		if domain.hasRange {
-			continue
-		}
+		// A same-column range only bypasses the point-domain merging below; it
+		// cannot resurrect a point domain that already proves the conjuncts
+		// match no row. Decide satisfiability before that bypass, or a
+		// surviving between keeps contradictory equalities unfolded.
 		if domain.pointsIn.keys != nil && len(domain.pointsIn.values) == 0 {
 			return []*plan.Expr{MakeFalseExpr()}
+		}
+		if domain.pointsOut != nil {
+			excluded := domain.pointsIn.difference(domain.pointsOut.keySet())
+			if excluded != nil && len(excluded) == 0 {
+				return []*plan.Expr{MakeFalseExpr()}
+			}
+		}
+		if domain.hasRange {
+			continue
 		}
 
 		col := domain.colExpr
@@ -1657,10 +1689,6 @@ func (builder *QueryBuilder) normalizeColumnDomain(filters []*plan.Expr) []*plan
 		}
 		for _, i := range domain.pointsOutIdxs {
 			toDrop[i] = struct{}{}
-		}
-
-		if len(keep) == 0 {
-			return []*plan.Expr{MakeFalseExpr()}
 		}
 
 		newExpr, err := buildColumnDomainExpr(builder.GetContext(), col, keep)
@@ -2457,12 +2485,34 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 		return "", false
 	}
 	lit = literalForExecutableIdentity(typ, lit)
+	lit, ok = literalDomainValueIdentity(lit)
+	if !ok {
+		return "", false
+	}
 	if lit.StringSource != 0 {
 		// Source ownership affects executable-expression identity, not SQL value
 		// equality used to intersect filter domains.
 		literalCopy := *lit
 		literalCopy.StringSource = 0
 		lit = &literalCopy
+	}
+	if lit.DecimalLiteralRequiresV82 {
+		// Normalized-spelling provenance ('019.00' versus its canonical
+		// '19.00') gates protocol dispatch on the executable expression and
+		// stays in expression hashing, but it is inert for the SQL value
+		// equality used to intersect filter domains.
+		literalCopy := *lit
+		literalCopy.DecimalLiteralRequiresV82 = false
+		lit = &literalCopy
+	}
+	if canonical, ok := sqlEqualFloatingLiteral(lit); ok {
+		lit = canonical
+	}
+	if canonical, ok := sqlEqualFloat32ScaledLiteral(typ, lit); ok {
+		lit = canonical
+	}
+	if canonical, ok := sqlEqualStringLiteral(typ, lit); ok {
+		lit = canonical
 	}
 	typ = literalSemanticKeyType(typ)
 	// Serialize the literal with proto binary Marshal rather than String(),
@@ -2490,16 +2540,154 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	return string(key), true
 }
 
+// sqlEqualFloatingLiteral restores SQL value equality for floating signed zero.
+// SQL comparison treats +0 and -0 as one value (f = -0 matches the rows
+// f = 0 matches), but the marshaled literal bits differ, so a raw-bits domain
+// key would prove a false contradiction and fold satisfiable filters to
+// constant false. Only a negative zero is rebound to +0; every distinct
+// nonzero value keeps its exact key.
+func sqlEqualFloatingLiteral(lit *plan.Literal) (*plan.Literal, bool) {
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Dval:
+		if math.Signbit(value.Dval) && value.Dval == 0 {
+			literalCopy := *lit
+			literalCopy.Value = &plan.Literal_Dval{Dval: 0}
+			return &literalCopy, true
+		}
+	case *plan.Literal_Fval:
+		if math.Signbit(float64(value.Fval)) && value.Fval == 0 {
+			literalCopy := *lit
+			literalCopy.Value = &plan.Literal_Fval{Fval: 0}
+			return &literalCopy, true
+		}
+	}
+	return lit, false
+}
+
+// sqlEqualFloat32ScaledLiteral mirrors runtime FLOAT comparison for scaled
+// float32 literals. Runtime equality normalizes each float32 operand by its
+// own declared scale (function/func_compare.go float32ComparisonNormalizers
+// -> types.Float32ScaleNormalizer), so the value a literal actually tests is
+// its scale-normalized payload: cross-width spellings of one value test the
+// same rows and must share one domain key, while spellings whose normalized
+// payloads differ (19.004 at scale 2 tests 19.00 while scale 3 tests 19.004)
+// stay distinct points. DOUBLE comparison tests the float64 payload bits
+// only, so no scale normalization applies there.
+func sqlEqualFloat32ScaledLiteral(typ plan.Type, lit *plan.Literal) (*plan.Literal, bool) {
+	if types.T(typ.Id) != types.T_float32 || typ.Scale <= 0 {
+		return lit, false
+	}
+	value, ok := lit.Value.(*plan.Literal_Fval)
+	if !ok {
+		return lit, false
+	}
+	normalized := types.NewFloat32ScaleNormalizer(typ.Scale).Normalize(value.Fval)
+	if normalized == value.Fval {
+		return lit, false
+	}
+	literalCopy := *lit
+	literalCopy.Value = &plan.Literal_Fval{Fval: normalized}
+	return &literalCopy, true
+}
+
+// literalDomainValueIdentity separates the materialized value that decides
+// SQL-domain identity from the source expression a fold retains on a
+// literal. Bind-time constant folding attaches the folded origin to
+// Literal.Src (an integer-division fold keeps its precision source; prepared
+// specialization keeps the parameter peer), and that source stays
+// value-bearing for executable-expression identity. Domain identity must not
+// follow it: when every node of the retained source is statically evaluable
+// constant state (staticIntegerComparisonPeer), the materialized payload
+// alone decides and the source is normalized out of the key. A source that
+// embeds execution-dependent state (parameter references or real-time,
+// aggregate or window functions) cannot prove the payload's value identity,
+// so callers must decline any domain decision built on it rather than
+// falsify a possibly satisfiable filter.
+func literalDomainValueIdentity(lit *plan.Literal) (*plan.Literal, bool) {
+	if lit.Src == nil {
+		return lit, true
+	}
+	if !staticIntegerComparisonPeer(lit.Src) {
+		return nil, false
+	}
+	literalCopy := *lit
+	literalCopy.Src = nil
+	return &literalCopy, true
+}
+
+// sqlEqualStringLiteral restores SQL value equality for text literals. Runtime
+// scalar string comparison (types.CompareStringValues) resolves values in the
+// comparison domain carried by the bound type: the native Unicode collations
+// compare collation keys that fold SQL-equal spellings (for example 'a' and
+// 'A', 'e' and 'é'), and CHAR columns with byte-domain identities trim
+// trailing spaces; every other identity compares raw bytes. Keying by the
+// marshaled literal bytes alone would make two SQL-equal spellings look like
+// an equal-column distinct-literal contradiction and fold satisfiable filters
+// to constant false. Binary-payload literals (IsBin) keep their exact bytes.
+func sqlEqualStringLiteral(typ plan.Type, lit *plan.Literal) (*plan.Literal, bool) {
+	value, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok || lit.IsBin || typ.Charset > 255 {
+		return lit, false
+	}
+	charset := uint8(typ.Charset)
+	var canonical []byte
+	if types.IsUnicodeCollation(charset) {
+		canonical = types.CollationKeyOrOriginal(charset, []byte(value.Sval))
+	} else if types.T(typ.Id) == types.T_char {
+		canonical = []byte(strings.TrimRight(value.Sval, " "))
+	} else {
+		return lit, false
+	}
+	if string(canonical) == value.Sval {
+		return lit, false
+	}
+	literalCopy := *lit
+	literalCopy.Value = &plan.Literal_Sval{Sval: string(canonical)}
+	return &literalCopy, true
+}
+
 // literalSemanticKeyType removes declaration metadata that the comparison
-// operators do not consult once a string value has been materialized. String
-// equality is byte-based, so different maximum widths cannot make identical
-// values distinct. Type identity, scale, and non-string widths remain part of
-// the key.
+// operators do not consult once a value has been materialized. String equality
+// is byte-based, so different maximum widths cannot make identical values
+// distinct. Temporal equality tests the materialized payload only
+// (function/func_compare.go), so Width and Scale cannot make the same clock
+// value folded at DATETIME(0) and DATETIME(6) a distinct-literal contradiction.
+// Decimal equality rescales coefficient/scale pairs by operand scale and never
+// consults the DECIMAL(M,D) width M (function/func_compare.go), so Width is
+// declaration metadata there too, while Scale stays part of the value.
+// Integral equality dispatches on the type and compares the materialized
+// payload only (function/func_compare.go), and integral Type.Eq ignores
+// Width/Scale (pkg/container/types/types.go), so the declared Width/Scale of
+// an integral literal (a plain token is 0/0 while a folded CAST('19' AS
+// SIGNED) carries 64/-1) is declaration metadata as well. Floating equality is
+// the same payload-only decision for DOUBLE (function/func_compare.go
+// compares the float64 bits), so the DOUBLE(M,D) width/scale an explicit cast
+// carries cannot decide identity; float32 comparison normalizes each operand
+// by its own declared scale (float32ComparisonNormalizers ->
+// types.Float32ScaleNormalizer), so its width is metadata too while the scale
+// folds into the effective payload at sqlEqualFloat32ScaledLiteral. Type
+// identity and non-string widths otherwise remain part of the key.
 func literalSemanticKeyType(typ plan.Type) plan.Type {
+	// typeswitch:partial plan.Literal carries no bf16/float16/float8/float4 payload and
+	// unwrapConstLiteral declines casts to those types (the cast rounds, so the source
+	// literal is not its value), so the domain keys only ever materialize FLOAT32/FLOAT64
+	// literals, whose equality ignores FLOAT64 width and normalizes FLOAT32 by its own scale
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
 		typ.Width = 0
+	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp:
+		typ.Width = 0
+		typ.Scale = 0
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		typ.Width = 0
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		typ.Width = 0
+		typ.Scale = 0
+	case types.T_float64, types.T_float32:
+		typ.Width = 0
+		typ.Scale = 0
 	}
 	return typ
 }
@@ -2705,6 +2893,10 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
+		// a cast to bf16/float16/float8/float4 rounds; the source literal is not its value
+		if types.T(expr.Typ.Id).IsLowPrecisionFloat() {
+			return nil, plan.Type{}, false
+		}
 		expr = fn.Args[0]
 	}
 }
@@ -2719,6 +2911,18 @@ func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*pl
 			DeepCopyExpr(colExpr),
 			stripped[0],
 		})
+	}
+	if types.T(colExpr.Typ.Id).IsLowPrecisionFloat() {
+		// bf16/float16/float8/float4: a disjunction of equalities
+		eqs := make([]*plan.Expr, len(stripped))
+		for i, v := range stripped {
+			eq, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{DeepCopyExpr(colExpr), v})
+			if err != nil {
+				return nil, err
+			}
+			eqs[i] = eq
+		}
+		return combinePlanDisjunction(ctx, eqs)
 	}
 	listExpr := &plan.Expr{
 		Typ: colExpr.Typ,

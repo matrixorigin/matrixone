@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -104,6 +103,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -189,6 +189,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.OptionalRuntimeFilterMaxKeyBytes = t.OptionalRuntimeFilterMaxKeyBytes
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
@@ -196,6 +197,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
 		op.DedupColName = t.DedupColName
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -301,6 +303,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*order.Order)
 		op := order.NewArgument()
 		op.OrderBySpec = t.OrderBySpec
+		op.ScanCutoffLimit = t.ScanCutoffLimit
+		op.ScanCutoffTag = t.ScanCutoffTag
+		op.ScanCutoff = t.ScanCutoff
 		op.SetInfo(&info)
 		return op
 	case vm.Product:
@@ -318,6 +323,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.VectorOpType = t.VectorOpType
+		op.Ignored = t.Ignored
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -439,6 +445,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
+		op.IndexMaintenance = t.IndexMaintenance.Clone()
 		op.Limit = t.Limit
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
@@ -496,7 +503,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		sourceArg := sourceOp.(*shuffle.Shuffle)
 		pool := dupCtx.shufflePools[sourceArg]
 		if pool == nil {
-			pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			if sourceArg.OwnedOutput {
+				pool = shuffle.NewOwnedShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.OwnedColumnCount)
+			} else {
+				pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			}
 			dupCtx.shufflePools[sourceArg] = pool
 		}
 		op := shuffle.NewArgument()
@@ -512,7 +523,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.OwnedOutput = sourceArg.OwnedOutput
+		op.OwnedColumnCount = sourceArg.OwnedColumnCount
 		op.StringHashKey = sourceArg.StringHashKey
+		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -631,6 +645,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.LocalDomainBuilds = t.LocalDomainBuilds
+		op.LocalDomainProbes = t.LocalDomainProbes
+		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
@@ -664,6 +681,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TableFunction.Attrs = t.TableFunction.Attrs
 			op.TableFunction.Params = t.TableFunction.Params
 			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.IndexMaintenance = t.TableFunction.IndexMaintenance.Clone()
 			op.TableFunction.Limit = t.TableFunction.Limit
 			op.TableFunction.SetInfo(&info)
 		}
@@ -708,6 +726,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.HasODKUAffectedRows = t.HasODKUAffectedRows
@@ -900,23 +919,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.GetTopContext()
-	txnOp := proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(proc.GetTxnOperator().Txn().SnapshotTS) {
-			if proc.GetCloneTxnOperator() != nil {
-				txnOp = proc.GetCloneTxnOperator()
-			} else {
-				txnOp = proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(proc.GetTopContext(), proc.GetTxnOperator(), node.ScanSnapshot)
 
 	if preCtx.Ref.SchemaName != "" {
 		_, err := eng.Database(ctx, preCtx.Ref.SchemaName, txnOp)
@@ -1677,6 +1680,9 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AuxiliaryRowIdCol != nil {
+			arg.AuxiliaryRowIdColIdx = node.DedupJoinCtx.AuxiliaryRowIdCol.ColPos + 1
+		}
 		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
 			arg.HasODKUAffectedRows = true
 			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
@@ -2126,6 +2132,45 @@ func constructAggregateConfigWithError(
 			return args, config, nil
 		}
 
+	case plan2.NameVectorMatmul:
+		if len(args) != 4 && len(args) != 5 {
+			return nil, nil, moerr.NewInvalidInputNoCtxf(
+				"vector_matmul requires 4 or 5 arguments, got %d", len(args))
+		}
+		for _, i := range plan2.VectorMatmulConfigArgs(len(args)) {
+			if args[i] == nil || !plan2.IsVectorMatmulConfigExpr(args[i]) {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+			}
+		}
+		topk, err := evaluateAggregateConfigInt64(proc, args[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		queries, queriesOid, isNull, err := evaluateAggregateConfigNullable(proc, args[3])
+		if err != nil {
+			return nil, nil, err
+		}
+		if isNull {
+			return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must not be NULL")
+		}
+		options := ""
+		if len(args) == 5 {
+			// an omitted options argument selects the defaults; a supplied one is a JSON object
+			if options, _, isNull, err = evaluateAggregateConfigNullable(proc, args[4]); err != nil {
+				return nil, nil, err
+			}
+			if isNull || options == "" {
+				return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
+			}
+		}
+		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		if queriesOid == types.T_blob {
+			// a BLOB holds the queries as little-endian float32 values
+			return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulBinaryConfig(topk, []byte(queries), options, gpu), nil
+		}
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options, gpu), nil
+
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
@@ -2191,6 +2236,21 @@ func constructEwmConfig(
 		hArg, err := ewmEvaluateConstantArg(proc, args[valueArgs+1])
 		if err != nil {
 			return nil, nil, err
+		}
+		// The §7 signature tables the half-life as a numeric constant: the
+		// bind-time literal rows reject a boolean there (the window
+		// binder's literal validator), and a decay that resolves to the
+		// tag per execution — a deferred conditional such as
+		// CASE WHEN ? > 0 THEN 'halflife' ELSE 'x' END — must not widen
+		// that rule with the shared evaluator's boolean-as-0/1 view, or a
+		// `TRUE` behind the tag would silently become HalfLife=1. The
+		// isBool bit keeps the resolved domain visible before the
+		// collapse; string-typed prepared markers keep the numeric-text
+		// parse below, and booleans behind a NON-tag decay remain the
+		// adjust/ignoreNA policies they always were.
+		if hArg.isBool {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
 		}
 		if hArg.isString {
 			// h prepared markers resolve to text like decay markers do.
@@ -2268,12 +2328,15 @@ func constructEwmConfig(
 
 // ewmEvaluatedArg carries one evaluated decay/policy constant: the
 // string view (the 'halflife' tag), the numeric view (booleans arrive as
-// 0/1) and the NULL bit.
+// 0/1) and the NULL bit. isBool keeps the resolved value's own domain
+// visible before that boolean/numeric collapse, so slots with a
+// numeric-only contract can reject a genuine boolean.
 type ewmEvaluatedArg struct {
 	isString bool
 	str      string
 	num      float64
 	isNull   bool
+	isBool   bool
 }
 
 // ewmEvaluateConstantVector materializes one semantically constant decay
@@ -2314,6 +2377,7 @@ func ewmEvaluateConstantArg(
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
+		out.isBool = true
 		out.num = 0.0
 		if vector.MustFixedColWithTypeCheck[bool](vec)[0] {
 			out.num = 1.0
@@ -2338,6 +2402,9 @@ func ewmEvaluateConstantArg(
 		out.num = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
 	case types.T_float64:
 		out.num = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		out.num = float64(v)
 	case types.T_decimal64:
 		out.num = types.Decimal64ToFloat64(
 			vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0], vec.GetType().Scale)
@@ -2443,6 +2510,9 @@ func ewmResolveMinPeriods(
 	case types.T_float64:
 		return ewmFloatPeriodsThreshold(
 			vector.MustFixedColWithTypeCheck[float64](vec)[0], family)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		return ewmFloatPeriodsThreshold(float64(v), family)
 	case types.T_decimal64:
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
 		return ewmDecimalPeriodsThreshold(
@@ -2614,8 +2684,9 @@ func validateEwmEventTimeOrder(w *plan.WindowSpec) error {
 	switch types.T(w.OrderBy[0].Expr.Typ.Id) {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64,
-		types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_datetime, types.T_date:
 	default:
 		return moerr.NewInvalidInputNoCtx(
@@ -2750,15 +2821,42 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	s, _, _, err := evaluateAggregateConfigNullable(proc, expr)
+	return s, err
+}
+
+// evaluateAggregateConfigNullable evaluates a string configuration argument and returns its
+// value, its evaluated type and whether it is NULL.
+func evaluateAggregateConfigNullable(proc *process.Process, expr *plan.Expr) (string, types.T, bool, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		return "", err
+		return "", 0, false, err
+	}
+	defer free()
+	oid := vec.GetType().Oid
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", oid, true, nil
+	}
+	if oid == types.T_json {
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, false, nil
+	}
+	return vec.GetStringAt(0), oid, false, nil
+}
+
+// evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.
+func evaluateAggregateConfigInt64(proc *process.Process, expr *plan.Expr) (int64, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return 0, err
 	}
 	defer free()
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
-		return "", nil
+		return 0, moerr.NewInvalidInputNoCtx("aggregate integer configuration must not be NULL")
 	}
-	return vec.GetStringAt(0), nil
+	if vec.GetType().Oid != types.T_int64 {
+		return 0, moerr.NewInvalidInputNoCtxf("aggregate integer configuration has type %s", vec.GetType().Oid)
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](vec, 0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -3056,7 +3154,8 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.VectorOpType = node.ExtraOptions
+	opt, _ := tree.ParseCentroidxOption(node.ExtraOptions)
+	arg.VectorOpType = opt.OpType
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(node.OnList)
 	for i := range node.SendMsgList {
@@ -3206,6 +3305,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -3277,6 +3377,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList

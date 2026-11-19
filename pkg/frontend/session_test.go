@@ -502,10 +502,10 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc", &plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
+		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts}, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts}, nil)
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -515,7 +515,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 				TenantId: 0,
 			},
 		}
-		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts}, nil)
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -620,7 +620,7 @@ func TestSession_ResolveTempIndexTable(t *testing.T) {
 		// In the current bug state, the code in ResolveIndexTableByRef (after my previous fix) handles nil table but throws NoSuchTable.
 		// To reproduce the original panic (if we reverted) or the "no such table" error:
 
-		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{})
+		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{}, nil)
 
 		// If the index was correctly registered, we would mock it:
 		// ses.AddTempTable("db1", "index_table", "mo_index_table_real")
@@ -1133,7 +1133,7 @@ func TestSession_Migrate(t *testing.T) {
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
-				{Name: "optimizer_hints", Value: plan2.MakePlan2StringConstExprWithType("forceOneCN=1")},
+				{Name: "optimizer_hints", Value: plan2.MakePlan2StringConstExprWithType("forceOneCN=1"), RuntimeValue: plan2.MakePlan2StringConstExprWithType("legacy-cn-hint")},
 				{Name: "runtime_filter_limit_in", Value: plan2.MakePlan2Int64ConstExprWithType(77)},
 				{Name: "runtime_filter_limit_bloom_filter", Value: plan2.MakePlan2Int64ConstExprWithType(88)},
 				{Name: "disable_agg_statement", Value: plan2.MakePlan2BoolConstExprWithType(true)},
@@ -1145,7 +1145,6 @@ func TestSession_Migrate(t *testing.T) {
 		require.False(t, target.hasUnreplayableMigrationSystemVars())
 
 		for name, expected := range map[string]interface{}{
-			"optimizer_hints":                   "forceOneCN=1",
 			"runtime_filter_limit_in":           int64(77),
 			"runtime_filter_limit_bloom_filter": int64(88),
 		} {
@@ -1153,6 +1152,12 @@ func TestSession_Migrate(t *testing.T) {
 			require.True(t, ok, name)
 			require.Equal(t, expected, value, name)
 		}
+		optimizerHint, err := target.GetSessionSysVar("optimizer_hints")
+		require.NoError(t, err)
+		require.Equal(t, "forceOneCN=1", optimizerHint)
+		sharedHint, ok := targetRuntime.GetGlobalVariables("optimizer_hints")
+		require.True(t, ok)
+		require.Equal(t, "migration-side-effect-sentinel", sharedHint)
 		require.True(t, target.disableAgg)
 		clearPrivilegeCache, err := target.GetSessionSysVar("clear_privilege_cache")
 		require.NoError(t, err)
@@ -1234,7 +1239,7 @@ func TestSession_Migrate(t *testing.T) {
 			}
 		}
 		require.NotNil(t, optimizerSnapshot)
-		require.NotNil(t, optimizerSnapshot.RuntimeValue)
+		require.Nil(t, optimizerSnapshot.RuntimeValue)
 
 		runtime.ServiceRuntime(sid).SetGlobalVariables("optimizer_hints", "target-sentinel")
 		target := genSession(ctrl, "d1", nil)
@@ -1256,7 +1261,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.Equal(t, "inherited-before-global-set", value)
 		runtimeValue, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("optimizer_hints")
 		require.True(t, ok)
-		require.Equal(t, "global-hint", runtimeValue)
+		require.Equal(t, "target-sentinel", runtimeValue)
 
 		autocommit, err := target.GetSessionSysVar("autocommit")
 		require.NoError(t, err)

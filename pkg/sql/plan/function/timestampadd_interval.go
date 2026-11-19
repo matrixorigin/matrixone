@@ -70,6 +70,7 @@ func timestampAddSecondMicroseconds(text string) int64 {
 // TimestampAddSecondInterval is separate from DATE_ADD's interval grammar and
 // rounding contract. All sources follow one decimal truncation rule.
 func TimestampAddSecondInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	// typeswitch:partial bf16/float16/float8/float4 sources are widened to float32 at resolution
 	switch ivecs[0].GetType().Oid {
 	case types.T_decimal64:
 		return timestampAddTypedSeconds[types.Decimal64](ivecs[0], result, length, selectList, func(v types.Decimal64, scale int32) (int64, bool) {

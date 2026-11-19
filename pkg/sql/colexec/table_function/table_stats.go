@@ -207,6 +207,9 @@ func resolveTableStatsKeyParts(e engine.Engine, proc *process.Process, dbname, t
 	if err != nil {
 		return pb.StatsInfoKey{}, nil, err
 	}
+	if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(targetCtx)); err != nil {
+		return pb.StatsInfoKey{}, nil, err
+	}
 
 	return pb.StatsInfoKey{
 		AccId:      accountID,

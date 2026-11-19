@@ -46,7 +46,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-	_, t, err := ctx.Resolve(dbName, tblName, nil)
+	_, t, err := resolveIndexMaintenanceSource(ctx, tbl, dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +83,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	tableDef := tblInfo.tableDefs[0]
+	if err = rejectLegacyCRC32GeneratedFallback(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with

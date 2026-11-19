@@ -991,7 +991,7 @@ func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) 
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 			require.ErrorContains(t, err, "standalone INTERVAL expression in ORDER BY")

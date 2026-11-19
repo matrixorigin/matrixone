@@ -72,7 +72,7 @@ func TestParallelCopyDataHonorsCallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() {
-		_, err := parallelCopyData(ctx, src, dst, files, 1, nil)
+		_, err := (backupFileCopier{}).parallelCopyData(ctx, src, dst, files, 1, nil)
 		result <- err
 	}()
 
@@ -147,7 +147,7 @@ func TestParallelCopyDataReturnsMissingSourceObject(t *testing.T) {
 		name: backupObject,
 	}
 
-	copied, err := parallelCopyData(t.Context(), src, dst, files, 1, nil)
+	copied, err := (backupFileCopier{}).parallelCopyData(t.Context(), src, dst, files, 1, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 	require.Empty(t, copied)
@@ -197,7 +197,7 @@ func TestParallelCopyDataStopsAdmissionAfterFailure(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := parallelCopyData(t.Context(), src, dst, files, 1, nil)
+		_, err := (backupFileCopier{}).parallelCopyData(t.Context(), src, dst, files, 1, nil)
 		result <- err
 	}()
 
@@ -260,7 +260,7 @@ func TestParallelCopyDataWaitsForScheduledSiblingAfterFailure(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := parallelCopyData(t.Context(), src, dst, files, 2, nil)
+		_, err := (backupFileCopier{}).parallelCopyData(t.Context(), src, dst, files, 2, nil)
 		result <- err
 	}()
 	<-src.allEntered

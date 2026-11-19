@@ -48,7 +48,7 @@ func BenchmarkDependentExecutionScaling(b *testing.B) {
 			require.NoError(b, err)
 			defer stmts[0].Free()
 			optimizer := plan2.NewMockOptimizer(true, proc)
-			p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(b, err)
 			require.NotNil(b, p.GetQuery().Correlation)
 			budget, err := proc.GetExecutionResourceBudget()

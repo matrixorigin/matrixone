@@ -103,6 +103,7 @@ type readerPathCaptureRelation struct {
 	readerRelData     engine.RelData
 	ctx               context.Context
 	hint              engine.FilterHint
+	readers           []engine.Reader
 }
 
 func (r *readerPathCaptureRelation) Ranges(
@@ -129,6 +130,9 @@ func (r *readerPathCaptureRelation) BuildReaders(
 	r.readerRelData = relData
 	r.ctx = ctx
 	r.hint = filterHint
+	if r.readers != nil {
+		return r.readers, nil
+	}
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
 }
 
@@ -200,7 +204,7 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 					message.SendMessage(message.RuntimeFilterMessage{Tag: 101, Typ: typ}, board)
 				}
 
-				readers, err := scope.buildReaders(compile)
+				readers, _, err := scope.buildReaders(compile)
 				if admission == "required PASS" || admission == "canceled required wait" {
 					if admission == "required PASS" {
 						require.ErrorContains(t, err, "producer returned PASS")
@@ -345,7 +349,7 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 
 			compile := &Compile{proc: remoteProc, e: captureEngine}
 			originalData := decoded.NodeInfo.Data
-			readers, err := decoded.buildReaders(compile)
+			readers, _, err := decoded.buildReaders(compile)
 			t.Cleanup(func() {
 				for _, reader := range readers {
 					require.NoError(t, reader.Close())

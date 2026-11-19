@@ -143,6 +143,58 @@ func TestNewOrderUsesPlanUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
 	require.Equal(t, 0, c.Compare(0, 1, 0, 1))
 }
 
+func TestNewOrderGeneralCIUsesCollationWeights(t *testing.T) {
+	mp := mpool.MustNewZero()
+	general := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8)
+	vec := vector.NewVec(general)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"b", "A", "C"}, nil, mp))
+
+	c := NewOrder(general, false, false)
+	c.Set(0, vec)
+	c.Set(1, vec)
+	require.Positive(t, c.Compare(0, 1, 0, 1), "b sorts after A under utf8mb4_general_ci")
+	require.Negative(t, c.Compare(0, 1, 1, 2), "A sorts before C under utf8mb4_general_ci")
+	require.Positive(t, c.Compare(0, 1, 2, 0), "C sorts after b; raw byte order sorts it before")
+
+	desc := NewOrder(general, true, false)
+	desc.Set(0, vec)
+	desc.Set(1, vec)
+	require.Negative(t, desc.Compare(0, 1, 0, 1), "DESC reverses the folded order")
+
+	// The plan type owns the comparison domain even when the runtime vector
+	// only retains the physical string OID.
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendStringList(physical, []string{"b", "A"}, nil, mp))
+	c2 := NewOrder(general, false, false)
+	c2.Set(0, physical)
+	c2.Set(1, physical)
+	require.Positive(t, c2.Compare(0, 1, 0, 1))
+
+	// compare.New keeps the identity relation for equality/identity
+	// consumers; case-insensitive equality is tracked separately from #31174.
+	identity := New(general, false, false)
+	identity.Set(0, vec)
+	identity.Set(1, vec)
+	require.Negative(t, identity.Compare(0, 1, 2, 0), "identity order: C(0x43) < b(0x62)")
+	require.Positive(t, identity.Compare(0, 1, 0, 1))
+}
+
+func TestNewOrderKeepsByteOrderForBinaryCollations(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB4Bin, types.CharsetBinary, types.CharsetLegacy} {
+		mp := mpool.MustNewZero()
+		typ := types.NewWithCharset(types.T_varchar, 64, 0, charset)
+		vec := vector.NewVec(typ)
+		require.NoError(t, vector.AppendStringList(vec, []string{"b", "A"}, nil, mp))
+		c := NewOrder(typ, false, false)
+		c.Set(0, vec)
+		c.Set(1, vec)
+		require.Positive(t, c.Compare(0, 1, 0, 1), "charset %d keeps byte order", charset)
+		vec.Free(mp)
+	}
+}
+
 func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())

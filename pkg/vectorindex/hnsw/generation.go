@@ -90,6 +90,9 @@ func ClearIndexSqls(tblcfg vectorindex.IndexTableConfig) []string {
 	if tblcfg.DictTable != "" {
 		sqls = append(sqls, "DELETE FROM "+sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.DictTable)+" WHERE TRUE")
 	}
+	if tblcfg.IgnoredTable != "" {
+		sqls = append(sqls, "DELETE FROM "+sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IgnoredTable)+" WHERE TRUE")
+	}
 	return sqls
 }
 

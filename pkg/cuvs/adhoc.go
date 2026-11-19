@@ -25,9 +25,9 @@ package cuvs
 import "C"
 import (
 	"runtime"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // AdhocBruteForceSearchInto performs an ad-hoc brute-force search and writes results into
@@ -48,17 +48,17 @@ func AdhocBruteForceSearchInto[T VectorType](
 
 	var errmsg *C.char
 	C.gpu_adhoc_brute_force_search(
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(nRows),
 		C.uint32_t(dim),
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(nQueries),
 		C.uint32_t(limit),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		(*C.int64_t)(unsafe.Pointer(&neighbors[0])),
-		(*C.float)(unsafe.Pointer(&distances[0])),
-		unsafe.Pointer(&errmsg),
+		(*C.int64_t)(util.UnsafePointer(&neighbors[0])),
+		(*C.float)(util.UnsafePointer(&distances[0])),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(queries)
@@ -67,7 +67,7 @@ func AdhocBruteForceSearchInto[T VectorType](
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil

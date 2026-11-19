@@ -194,3 +194,25 @@ targeted rerun.
 automatically for external profiles that produce reports. The standalone targets
 are useful when validating an uploaded artifact directory or rerunning a single
 profile locally.
+
+The local smoke also writes three isolated `codec_*` tables for issue #32466,
+covering missing, zstd, and uncompressed table properties with SQL readback.
+After a successful run, while its Nessie and MinIO services are still available,
+use the namespace recorded in the run summary to independently inspect committed
+files and read the rows (install `pyiceberg[pyarrow,s3fs]` and `pyarrow` first):
+
+```bash
+python3 test/iceberg/check_parquet_codec.py --namespace <run-namespace>
+```
+
+Pass the catalog, warehouse, and S3 options when the fixture uses non-default
+settings. The check walks files planned from the current Iceberg snapshot rather
+than listing the object store; it checks every column and row group, requires a
+dictionary-encoded string page, and compares the PyIceberg readback. A successful
+SQL smoke alone does not imply this independent check passed. Run it before
+tearing down the test-owned services.
+
+The `make test-iceberg-e2e-local` wrapper tears down its services on exit, so
+for this separate check run `go run ./test/iceberg/iceberg_e2e_local.go` against
+an already running, test-owned fixture, then invoke the checker before stopping
+that fixture. Do not run the wrapper against shared Compose services.

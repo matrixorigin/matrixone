@@ -648,6 +648,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -851,6 +853,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
@@ -1030,7 +1034,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 			}
 		}
 	}

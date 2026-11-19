@@ -84,6 +84,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 	if n.NodeType == plan.Node_FUNCTION_SCAN {
 		return func(proc *process.Process, ports []*dependent.DemandInput) (vm.Operator, error) {
 			op := constructTableFunction(n, nil)
+			c.attachIndexMaintenance(n, op)
 			op.SetAnalyzeControl(int(n.NodeId), false)
 			for _, port := range ports {
 				port.SetIdx(int(n.NodeId))
@@ -102,6 +103,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 				kind = apply.OUTER
 			}
 			op := constructApply(n, children[1], kind, proc)
+			c.attachIndexMaintenance(children[1], op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			op.SetAnalyzeControl(int(n.NodeId), false)
 			op.AppendChild(ports[0])

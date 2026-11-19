@@ -58,6 +58,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
+	// A saved result is read back without the SELECT check on the table these show.
+	switch ses.ast.(type) {
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		return false
+	}
 
 	stmtProfile := ses.GetStmtProfile()
 	sqlSourceType := stmtProfile.GetSqlSourceType()
@@ -530,7 +535,7 @@ func abortPerformAttemptSavedResult(execCtx *ExecCtx) error {
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
 	if canSaveQueryResult(ctx, ses) {
 		var data *batch.Batch
-		data, ses.rs, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, mrs.Data)
+		data, ses.rs, err = convertRowsIntoBatchInLocation(ses.GetMemPool(), mrs.Columns, mrs.Data, ses.GetTimeZone())
 		defer cleanBatch(ses.GetMemPool(), data)
 		if err != nil {
 			return err
@@ -946,6 +951,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				}
 
 				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0], false)
+				if err != nil {
+					return err
+				}
+				err = setVecBlockExactText(tmpBatch, j, mrs.Data[0])
 				if err != nil {
 					return err
 				}

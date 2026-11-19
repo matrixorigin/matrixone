@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"crypto/sha256"
 	"testing"
 
@@ -199,7 +200,13 @@ func TestComposeAnalyzedStatsGenerationKeepsFreshPhysicalDistribution(t *testing
 		Result:    []float64{30, 40},
 	}
 
+	metadata.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"old": {Version: 1}}
+	collected.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"url": {Version: 1, Values: [][]byte{[]byte("secret")}}}
 	published := composeAnalyzedStatsGeneration(metadata, collected)
+	require.NotContains(t, published.ByteRangeMap, "old")
+	collected.ByteRangeMap["url"].Values[0][0] = 'x'
+	require.Equal(t, []byte("secret"), published.ByteRangeMap["url"].Values[0])
+	require.Empty(t, composeAnalyzedStatsGeneration(published, plan2.NewStatsInfo()).ByteRangeMap, "a later partial ANALYZE cannot retain an uncollected distribution")
 	require.Equal(t, float64(100), published.TableCnt)
 	require.Equal(t, int64(7), published.BlockNumber)
 	require.Equal(t, int64(3), published.AccurateObjectNumber)
@@ -228,4 +235,55 @@ func TestAnalyzeValueWidthIncludesOnlyOutOfLinePayload(t *testing.T) {
 	require.Equal(t, uint64(types.VarlenaSize), analyzeValueWidth(
 		varlen, make([]byte, types.VarlenaInlineSize+1), true))
 	require.Equal(t, uint64(8), analyzeValueWidth(types.T_int64.ToType(), make([]byte, 8), false))
+}
+
+func TestByteRangePatchPublishesNewOwner(t *testing.T) {
+	gs := newTestGlobalStats(context.Background(), nil, nil)
+	defer gs.Close()
+	key := pbstats.StatsInfoKey{TableID: 42}
+	original := plan2.NewStatsInfo()
+	original.TableCnt = 10
+	original.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"name": {Version: 1, PopulationRows: 10, SampleRows: 10, CompleteSample: true}}
+	gs.mu.statsInfoMap[key] = original
+	n := 20.0
+	require.NoError(t, gs.PatchStats(key, &PatchArgs{TableCnt: &n}))
+	require.NotSame(t, original, gs.mu.statsInfoMap[key])
+	require.Empty(t, gs.mu.statsInfoMap[key].ByteRangeMap)
+	require.Equal(t, 10.0, original.TableCnt)
+	require.NotEmpty(t, original.ByteRangeMap, "existing readers keep an immutable sampled generation")
+}
+
+func TestAnalyzeByteRangeSamplingDomain(t *testing.T) {
+	columns := []*plan.ColDef{
+		{Name: "v", Seqnum: 7, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: "c", Typ: plan.Type{Id: int32(types.T_char)}},
+		{Name: "padded", Typ: plan.Type{Id: int32(types.T_varchar), PadSpace: true}},
+		{Name: "uca", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+		{Name: "i", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+	require.Zero(t, analyzeByteRangeSlots(columns, analyzestats.MustFraction(1, 2)))
+	require.Equal(t, 2048, analyzeByteRangeSlots(columns, analyzestats.MustFraction(1, 1)))
+	require.Zero(t, analyzeByteRangeSlots(columns[1:], analyzestats.MustFraction(1, 1)))
+	many := make([]*plan.ColDef, 32)
+	for i := range many {
+		many[i] = columns[0]
+	}
+	require.Equal(t, 512, analyzeByteRangeSlots(many, analyzestats.MustFraction(1, 1)))
+	sample := analyzestats.NewByteRangeSampler(10)
+	ndv := analyzestats.NewFullScanNDVAccumulator()
+	var id [types.RowidSize]byte
+	require.NoError(t, sample.Observe(analyzestats.ByteRangePriority([32]byte{}, id), id[:], []byte("a"), false))
+	id[0] = 1
+	require.NoError(t, sample.Observe(analyzestats.ByteRangePriority([32]byte{}, id), id[:], nil, true))
+	require.NoError(t, ndv.ObserveSampleValue(analyzestats.HashValue([]byte("a"))))
+	stats := plan2.NewStatsInfo()
+	require.NoError(t, finalizeAnalyzeColumns(stats, []analyzeColumnState{{name: "v", column: columns[0], tableVersion: 5, typ: types.T_varchar.ToType(), ndv: ndv, distribution: sample, sampleNulls: 1}}, 2, 2, analyzestats.MustFraction(1, 1), true))
+	d := stats.ByteRangeMap["v"]
+	require.NotNil(t, d)
+	require.Equal(t, uint32(0), d.Charset, "wire identity follows the catalog, not a reconstructed default charset")
+	require.Equal(t, uint32(7), d.ColumnSeqnum)
+	require.Equal(t, uint32(5), d.TableVersion)
+	require.Equal(t, uint64(2), d.SampleRows)
+	require.True(t, d.CompleteSample)
+	require.Equal(t, [][]byte{[]byte("a")}, d.Values)
 }

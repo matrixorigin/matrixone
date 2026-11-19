@@ -287,6 +287,26 @@ func isSubscribedTable(
 	return sub, nil
 }
 
+// checkSubscribedIndexRelation resolves the published relation in the
+// publisher's account using the executing statement's transaction. The
+// subscription metadata gives IDs but not the relation kind, and an older
+// index relation may have been renamed outside the reserved namespace.
+func checkSubscribedIndexRelation(proc *process.Process, eng engine.Engine, txn client.TxnOperator, sub subscription) error {
+	ctx := defines.AttachAccountId(proc.Ctx, uint32(sub.oriAccId))
+	db, err := eng.Database(ctx, sub.oriDatabaseName, txn)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(ctx, sub.oriTableName, nil)
+	if err != nil {
+		return err
+	}
+	if rel.GetDBID(ctx) != sub.oriDatabaseId || rel.GetTableID(ctx) != sub.oriTableId {
+		return moerr.NewInternalError(proc.Ctx, "subscription relation changed during statistics lookup")
+	}
+	return process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(ctx))
+}
+
 func MoTableSizeRowsHelper(
 	iVecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
@@ -374,6 +394,9 @@ func MoTableSizeRowsHelper(
 				continue
 			}
 
+			if err = process.CheckIndexRelationAccess(proc, tblName, "", 0); err != nil {
+				return nil, nil, nil, err
+			}
 			if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
 				positions[i] = -2 // special table
 				continue
@@ -397,7 +420,9 @@ func MoTableSizeRowsHelper(
 				proc, accountId, db, dbName, tblName); err != nil {
 				return nil, nil, nil, err
 			} else if sub.valid {
-				// is subscription
+				if err = checkSubscribedIndexRelation(proc, eng, txn, sub); err != nil {
+					return nil, nil, nil, err
+				}
 				accIds = append(accIds, sub.oriAccId)
 				dbIds = append(dbIds, sub.oriDatabaseId)
 				tblIds = append(tblIds, sub.oriTableId)
@@ -410,6 +435,9 @@ func MoTableSizeRowsHelper(
 					return nil, nil, nil, err
 				}
 
+				if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(proc.Ctx)); err != nil {
+					return nil, nil, nil, err
+				}
 				accIds = append(accIds, uint64(accountId))
 				dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
 				tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
@@ -507,6 +535,9 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		} else {
 			var rel engine.Relation
 			dbStr, tblStr := string(db), string(tbl)
+			if err = process.CheckIndexRelationAccess(proc, tblStr, "", 0); err != nil {
+				return err
+			}
 
 			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
 				if err = rs.Append(int64(0), false); err != nil {
@@ -566,6 +597,9 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			if err != nil {
 				return err
 			}
+			if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(foolCtx)); err != nil {
+				return err
+			}
 
 			var rows uint64
 			if rows, err = rel.Rows(foolCtx); err != nil {
@@ -605,6 +639,9 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		} else {
 			var rel engine.Relation
 			dbStr, tblStr := string(db), string(tbl)
+			if err = process.CheckIndexRelationAccess(proc, tblStr, "", 0); err != nil {
+				return err
+			}
 
 			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
 				if err = rs.Append(int64(0), false); err != nil {
@@ -667,6 +704,9 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
+				return err
+			}
+			if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(foolCtx)); err != nil {
 				return err
 			}
 
@@ -836,6 +876,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			rel, err := db.Relation(ctx, tableStr, nil)
 			if err != nil {
+				return err
+			}
+			if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(ctx)); err != nil {
 				return err
 			}
 			tableColumns, err := rel.TableColumns(ctx)

@@ -204,7 +204,7 @@ func TestSortRollupCostModelFallsBackWithoutStats(t *testing.T) {
 		 (select a,b from select_test.bind_select order by a,b) d
 		 group by d.a,d.b with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 }
@@ -856,7 +856,7 @@ func buildAutoRollupPlanSQLWithTypedStats(t *testing.T, rows float64, sql string
 	}}
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(ctx, stmts[0], false)
+	queryPlan, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	return queryPlan
 }
@@ -940,7 +940,7 @@ func buildAutoRollupPlanSQLWithControls(
 	}
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(ctx, stmts[0], false)
+	queryPlan, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	return queryPlan
 }

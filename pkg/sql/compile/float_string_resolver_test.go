@@ -56,7 +56,7 @@ func floatResolver(t testing.TB, source *planpb.TableDef) func() (*planpb.TableD
 	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(relation, nil).AnyTimes()
 	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(db, nil).AnyTimes()
 	c := &compilerContext{ctx: proc.Ctx, defaultDB: "db", engine: eng, proc: proc}
-	return func() (*planpb.TableDef, error) { _, def, err := c.Resolve("db", "t", nil); return def, err }
+	return func() (*planpb.TableDef, error) { _, def, err := c.Resolve("db", "t", nil, nil); return def, err }
 }
 
 func TestLegacyFloatResolverRepeatedCatalog(t *testing.T) {

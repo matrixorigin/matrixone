@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -120,6 +121,7 @@ func newCNS3TombstoneWriter(
 
 	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
+	opts = append(opts, ioutil.WithBoundedRuns())
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		opts = append(opts, ioutil.WithChunkedColumnPolicy(policy))
 	}
@@ -254,6 +256,9 @@ func newCNS3DataWriter(
 	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
 	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
+	if !flushOnSync {
+		sinkerOpts = append(sinkerOpts, ioutil.WithBoundedRuns())
+	}
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		sinkerOpts = append(sinkerOpts, ioutil.WithChunkedColumnPolicy(policy))
 	}
@@ -299,6 +304,48 @@ func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, er
 	return w.sinker.WriteOwned(ctx, bat)
 }
 
+// PendingUnpublishedRuns returns the known pre-Sync object names.
+func (w *CNS3Writer) PendingUnpublishedRuns() []string {
+	return w.sinker.PendingUnpublishedRuns()
+}
+
+// RetryUnpublishedRuns abandons the current generation and retries deletion.
+func (w *CNS3Writer) RetryUnpublishedRuns(ctx context.Context) ([]string, error) {
+	return w.sinker.RetryUnpublishedRuns(ctx)
+}
+
+// CleanupUnpublished is the synchronous teardown path. It may outlive
+// cancellation, but never extends the operation's original deadline.
+func (w *CNS3Writer) CleanupUnpublished(ctx context.Context) error {
+	deadline := time.Now().Add(10 * time.Second)
+	if original, ok := ctx.Deadline(); ok && original.Before(deadline) {
+		deadline = original
+	}
+	cleanupCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+	files, err := w.RetryUnpublishedRuns(cleanupCtx)
+	if err != nil {
+		logutil.Errorf("failed to clean up unpublished CN spill objects %v: %v", files, err)
+	}
+	return err
+}
+
+// CloseWithCleanup releases a terminal writer, preserving the operation error.
+func (w *CNS3Writer) CloseWithCleanup(ctx context.Context, primary error) error {
+	var cleanupErr error
+	if !w.WorkspaceOwnsCleanup() {
+		cleanupErr = w.CleanupUnpublished(ctx)
+	}
+	closeErr := w.Close()
+	if primary != nil {
+		return primary
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	return closeErr
+}
+
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
@@ -336,9 +383,7 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
 
@@ -347,7 +392,143 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
-	return nil
+	return err
+}
+
+// DeletePersisted deletes every object this writer has persisted, or may
+// have persisted after a commit-ambiguous failure, but has not transferred
+// out of its lifecycle yet. A failed publication that stops before its
+// replacement file entry is recorded leaves the storage objects recorded
+// nowhere, so they can only be collected through this explicit ownership
+// transfer (issue #25590): the sinker deletes what it can from the file
+// service and returns the exact ownership snapshot — on failure the tracked
+// references are retained inside the sinker, so the caller must either
+// retry or take the returned file list over before closing the writer.
+func (w *CNS3Writer) DeletePersisted(ctx context.Context) ([]string, error) {
+	if w == nil || w.sinker == nil {
+		return nil, nil
+	}
+	return w.sinker.DeletePersisted(ctx)
+}
+
+// PersistedNames hands this writer's persisted / possibly-persisted
+// names out without deleting anything (issue #25590 round-15 review):
+// the failed-publication paths inside a transaction's statement
+// admission transfer the ownership to their asynchronous cleanup owner
+// through this method instead of synchronously deleting on a file
+// service whose deletion a stalled context cannot move — admission, the
+// statements behind this transaction's lock, and rollback stay
+// independent of storage fate. The sinker keeps its tracked references;
+// closing the writer drops them as before.
+func (w *CNS3Writer) PersistedNames() []string {
+	if w == nil || w.sinker == nil {
+		return nil
+	}
+	return w.sinker.PersistedNames()
+}
+
+// AbandonAndRetainableNames cancels abandoned work before taking its snapshot.
+func (w *CNS3Writer) AbandonAndRetainableNames() []string {
+	if w == nil || w.sinker == nil {
+		return nil
+	}
+	return w.sinker.AbandonAndRetainableNames()
+}
+
+// CancelPending cancels a writer without waiting for its asynchronous jobs.
+func (w *CNS3Writer) CancelPending() {
+	if w != nil && w.sinker != nil {
+		w.sinker.CancelPending()
+	}
+}
+
+// HasUncommittedCapacityHook reports whether a capacity hook guards this
+// writer's persistence — the assertion point of the writer-binding
+// regressions: a direct-S3 writer bound to its workspace's admission
+// reserves one in-flight unit per object BEFORE the object persists, so
+// a saturated ledger refuses the spill with nothing half-persisted
+// behind it (issue #25590 round-19 review).
+func (w *CNS3Writer) HasUncommittedCapacityHook() bool {
+	if w == nil || w.sinker == nil {
+		return false
+	}
+	return w.sinker.HasUncommittedCapacityHook()
+}
+
+// WorkspaceOwnsCleanup reports whether the transaction owns unpublished names.
+func (w *CNS3Writer) WorkspaceOwnsCleanup() bool {
+	return w != nil && w.sinker != nil && w.sinker.WorkspaceOwnsCleanup()
+}
+
+// WorkspaceSinkerCapacityOption resolves the transaction workspace's
+// per-object admission option for an S3 writer this proc constructs on
+// the workspace's behalf (issue #25590 round-19/20 reviews): through the
+// platform-agnostic SinkerOwner surface a bound writer reserves one
+// in-flight unit per object BEFORE it persists — so a saturated ledger
+// refuses the spill with nothing half-persisted behind it — regardless
+// of which operator (insert, multi_update's insert sinkers and
+// temporary table writers, the compaction rewriter) built it. A proc
+// without a transaction operator, or a workspace (or test double)
+// without the owner surface, keeps an unhooked writer — exactly the
+// pre-fix behavior.
+func WorkspaceSinkerCapacityOption(proc *process.Process) ioutil.SinkerOption {
+	if proc == nil {
+		return nil
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	owner, ok := txnOp.GetWorkspace().(ioutil.SinkerOwner)
+	if !ok {
+		return nil
+	}
+	return owner.SinkerCapacityOption()
+}
+
+// RebindWorkspaceSinkerCapacity re-arms ONE persistent writer's per-object
+// capacity admission with the CURRENT proc's transaction workspace (issue
+// #25590 round-35 review): a writer a cached plan keeps alive across
+// executions — the multi_update delegate's persistent insert sinkers,
+// which Prepare may find ALREADY-CREATED with the FIRST transaction's
+// hook — enters its next execution still wearing a FINALIZED workspace's
+// hook, and every object it spills next would reserve against a workspace
+// whose terminal boundaries can never release or convert that
+// reservation, permanently consuming engine admission capacity. The
+// rebind follows WorkspaceSinkerCapacityOption's own resolution rules: a
+// proc without a transaction operator, or a workspace without the owner
+// surface, ends up UNHOOKED — exactly the freshly-constructed compat
+// shape — never on the previous workspace's stale hook.
+func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	w.ClearWorkspaceSinkerCapacity()
+	if opt := WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opt(w.sinker)
+	}
+}
+
+// ClearWorkspaceSinkerCapacity drops this persistent writer's
+// execution-scoped capacity hook unconditionally (issue #25590
+// round-54 review): the hook a workspace's SinkerCapacityOption
+// installed captures the workspace's TRANSACTION, and a cached plan's
+// delegate keeps its sinkers — buffer pools and arenas — alive between
+// executions. Between the terminal of the transaction that armed them
+// and the next execution's Prepare, that captured completed workspace
+// is nothing but retention: its remaining history, backing arrays and
+// process references stay reachable through an idle plan even though
+// nothing can spill or reserve again before Prepare re-arms the
+// binding with the CURRENT statement's workspace. The clear is the
+// Reset-side half of the round-35 rebind contract; nil receiver and
+// nil sinker stay no-ops, and a writer no execution armed keeps its
+// fresh-construction shape.
+func (w *CNS3Writer) ClearWorkspaceSinkerCapacity() {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	w.sinker.RebindUncommittedCapacityHook(nil)
+	w.sinker.ClearWorkspaceOwnedCleanup()
 }
 
 // Reset discards any buffered or staged data accumulated since the last

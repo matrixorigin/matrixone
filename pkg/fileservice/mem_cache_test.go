@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -974,23 +975,27 @@ func TestMemCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
 	require.Equal(t, []byte("foo"), readVector.Entries[0].CachedData.Bytes())
 }
 
+// A key reinserted while the eviction of its previous value is still releasing it ends with
+// its insertion notified last: an eviction is never notified after the reinsert.
 func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
 	ctx := context.Background()
 	releaseStarted := make(chan struct{})
 	releaseUnblock := make(chan struct{})
 
 	var mu sync.Mutex
-	evicted := make(map[fscache.CacheKey]int)
+	events := make(map[fscache.CacheKey][]string)
+	record := func(event string) CacheCallbackFunc {
+		return func(key fscache.CacheKey, _ fscache.Data) {
+			mu.Lock()
+			events[key] = append(events[key], event)
+			mu.Unlock()
+		}
+	}
 	cache := NewMemCache(
 		fscache.ConstCapacity(1),
 		&CacheCallbacks{
-			PostEvict: []CacheCallbackFunc{
-				func(key fscache.CacheKey, _ fscache.Data) {
-					mu.Lock()
-					evicted[key]++
-					mu.Unlock()
-				},
-			},
+			PostSet:   []CacheCallbackFunc{record("set")},
+			PostEvict: []CacheCallbackFunc{record("evict")},
 		},
 		nil,
 		"",
@@ -1016,13 +1021,71 @@ func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
 	close(releaseUnblock)
 	assert.NoError(t, <-setDone)
 
-	_, ok := cache.cache.Get(ctx, key1)
-	assert.True(t, ok)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, key := range []fscache.CacheKey{key1, key2} {
+		_, cached := cache.cache.(*s3fifo.DataCache).CurrentSeq(key)
+		want := "evict"
+		if cached {
+			want = "set"
+		}
+		require.NotEmpty(t, events[key])
+		assert.Equal(t, want, events[key][len(events[key])-1], "%v", events[key])
+	}
+}
+
+// A removal notified after its key was set again is stale and not passed on: the key's
+// notification lock is held while the removal and the reinsert both happen, so the removal is
+// delivered after the reinsert is cached.
+func TestMemCacheSuppressesStaleEvictNotice(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	events := make(map[fscache.CacheKey][]string)
+	record := func(event string) CacheCallbackFunc {
+		return func(key fscache.CacheKey, _ fscache.Data) {
+			mu.Lock()
+			events[key] = append(events[key], event)
+			mu.Unlock()
+		}
+	}
+	cache := NewMemCache(
+		fscache.ConstCapacity(1<<20),
+		&CacheCallbacks{
+			PostSet:   []CacheCallbackFunc{record("set")},
+			PostEvict: []CacheCallbackFunc{record("evict")},
+		},
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	key := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	requireDataCacheSet(t, cache.cache, ctx, key, staticTestData([]byte("a")))
+	cached := func() bool {
+		_, ok := cache.cache.(*s3fifo.DataCache).CurrentSeq(key)
+		return ok
+	}
+
+	lock := cache.callbacksLock(key)
+	lock.Lock()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		cache.cache.DeletePaths(ctx, []string{key.Path})
+	}()
+	require.Eventually(t, func() bool { return !cached() }, 5*time.Second, time.Millisecond, "key removed")
+	go func() {
+		defer wg.Done()
+		_, _ = cache.cache.Set(ctx, key, staticTestData([]byte("c")))
+	}()
+	require.Eventually(t, cached, 5*time.Second, time.Millisecond, "key set again")
+	lock.Unlock()
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Zero(t, evicted[key1])
-	assert.Equal(t, 1, evicted[key2])
+	assert.Equal(t, []string{"set", "set"}, events[key], "the stale removal is not passed on")
 }
 
 func TestMemCacheSerializesSameKeyCallbacks(t *testing.T) {

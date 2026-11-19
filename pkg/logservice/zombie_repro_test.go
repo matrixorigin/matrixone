@@ -61,6 +61,13 @@ func buildZombieCluster(t *testing.T, zlog *zap.Logger) (
 	svc1, svc2, svc3 *Service,
 	cfg1, cfg2, cfg3 Config,
 ) {
+	return buildZombieClusterWithReplicaIDs(t, zlog, [3]uint64{1, 2, 3})
+}
+
+func buildZombieClusterWithReplicaIDs(t *testing.T, zlog *zap.Logger, replicaIDs [3]uint64) (
+	svc1, svc2, svc3 *Service,
+	cfg1, cfg2, cfg3 Config,
+) {
 	t.Helper()
 
 	newCfg := func(dataDir string, logPort, raftPort, gossipPort int, seeds []string) Config {
@@ -120,14 +127,76 @@ func buildZombieCluster(t *testing.T, zlog *zap.Logger) (
 	svc3 = mkSvc(cfg3, rt3)
 
 	peers := map[uint64]dragonboat.Target{
-		1: svc1.ID(),
-		2: svc2.ID(),
-		3: svc3.ID(),
+		replicaIDs[0]: svc1.ID(),
+		replicaIDs[1]: svc2.ID(),
+		replicaIDs[2]: svc3.ID(),
 	}
-	require.NoError(t, svc1.store.startHAKeeperReplica(1, peers, false))
-	require.NoError(t, svc2.store.startHAKeeperReplica(2, peers, false))
-	require.NoError(t, svc3.store.startHAKeeperReplica(3, peers, false))
+	require.NoError(t, svc1.store.startHAKeeperReplica(replicaIDs[0], peers, false))
+	require.NoError(t, svc2.store.startHAKeeperReplica(replicaIDs[1], peers, false))
+	require.NoError(t, svc3.store.startHAKeeperReplica(replicaIDs[2], peers, false))
 	return
+}
+
+func TestHAKeeperColdRestartWithHistoricalReplicas(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	logger, _ := captureLogger()
+	ids := [3]uint64{101, 102, 103}
+	s1, s2, s3, c1, c2, c3 := buildZombieClusterWithReplicaIDs(t, logger, ids)
+	initial := []*Service{s1, s2, s3}
+	closed := make([]bool, len(initial))
+	defer func() {
+		for i, s := range initial {
+			if !closed[i] {
+				assert.NoError(t, s.Close())
+			}
+		}
+	}()
+	waitLeader(t, []*store{s1.store, s2.store, s3.store}, 10*time.Second)
+
+	for _, pair := range []struct {
+		service *Service
+		oldIDs  []uint64
+		current uint64
+	}{
+		{s1, []uint64{1, 51}, ids[0]},
+		{s2, []uint64{2}, ids[1]},
+	} {
+		pair.service.store.removeMetadata(0, pair.current)
+		for _, old := range pair.oldIDs {
+			pair.service.store.addMetadata(0, old, false)
+		}
+		pair.service.store.addMetadata(0, pair.current, false)
+	}
+	require.NoError(t, s1.Close())
+	closed[0] = true
+	require.NoError(t, s2.Close())
+	closed[1] = true
+	require.NoError(t, s3.Close())
+	closed[2] = true
+
+	// All peers are unavailable when each constructor checks membership.
+	original := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = original })
+	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
+		return nil, false, nil
+	}
+	r1 := restartService3(t, c1, logger)
+	defer func() { assert.NoError(t, r1.Close()) }()
+	r2 := restartService3(t, c2, logger)
+	defer func() { assert.NoError(t, r2.Close()) }()
+	r3 := restartService3(t, c3, logger)
+	defer func() { assert.NoError(t, r3.Close()) }()
+	for i, s := range []*Service{r1, r2, r3} {
+		assert.Equal(t, ids[i], atomic.LoadUint64(&s.store.haKeeperReplicaID))
+	}
+	waitLeader(t, []*store{r1.store, r2.store, r3.store}, 10*time.Second)
+	// Node 3 has no stale initial-ID record, but bootstrap must still leave
+	// its persisted replacement running.
+	bootstrapCfg := c3
+	bootstrapCfg.BootstrapConfig.BootstrapCluster = true
+	bootstrapCfg.BootstrapConfig.InitHAKeeperMembers = []string{"3:" + c3.UUID}
+	require.NoError(t, r3.BootstrapHAKeeper(context.Background(), bootstrapCfg))
+	assert.Equal(t, ids[2], atomic.LoadUint64(&r3.store.haKeeperReplicaID))
 }
 
 // transferLeaderTo requests that `target` become the leader for shard 0,

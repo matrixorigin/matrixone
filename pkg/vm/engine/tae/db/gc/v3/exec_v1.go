@@ -348,11 +348,18 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 		itTable := db.MakeTableIt(true)
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
+			// The MVCC chain behind GetDeleteAtLocked is mutated by concurrent
+			// catalog drops (DBEntry.DropTableEntryByID holds the entry write
+			// lock around DropEntryLocked -> DeleteLocked -> InsertLocked), so
+			// the GC reader must hold the same entry's read lock while taking
+			// the delete-at snapshot for this table.
+			table.RLock()
 			drop := table.GetDeleteAtLocked()
 			if drop.IsEmpty() {
 				tableID := table.GetID()
 				tableExistenceMap[tableID] = true
 			}
+			table.RUnlock()
 			itTable.Next()
 		}
 	}

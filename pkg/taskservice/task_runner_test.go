@@ -370,13 +370,16 @@ func TestRemoveRunningTask(t *testing.T) {
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 
 		task := mustGetTestAsyncTask(t, store, 1)[0]
-		require.True(t, r.addToWait(context.Background(), task))
+		require.True(t, r.addToWait(context.Background(), task, false))
 		select {
 		case <-executorStarted:
 		case <-time.After(10 * time.Second):
 			require.Fail(t, "executor did not start")
 		}
-		r.removeRunningTask(task.ID)
+		r.runningTasks.RLock()
+		rt := r.runningTasks.m[task.ID]
+		r.runningTasks.RUnlock()
+		r.removeRunningTask(rt, nil)
 		r.runningTasks.RLock()
 		_, exists := r.runningTasks.m[task.ID]
 		_, completed := r.runningTasks.completedTasks[task.ID]
@@ -384,7 +387,7 @@ func TestRemoveRunningTask(t *testing.T) {
 		require.False(t, exists, "removed task should not be in runningTasks")
 		require.True(t, completed, "removed task should be in completedTasks")
 
-		tasks, err := r.doFetch()
+		tasks, err := r.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		require.Empty(t, tasks, "fetch should not return the task marked completed")
 		r.runningTasks.RLock()
@@ -396,18 +399,36 @@ func TestRemoveRunningTask(t *testing.T) {
 		WithRunnerFetchInterval(time.Hour))
 }
 
-func TestRemoveRunningTaskNotExists(t *testing.T) {
+func TestRemoveRunningTaskDoesNotRemoveSuccessor(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		r.removeRunningTask(999)
-
+		oldCtx, oldCancel := context.WithCancelCause(context.Background())
+		defer oldCancel(nil)
+		newCtx, newCancel := context.WithCancelCause(context.Background())
+		defer newCancel(nil)
+		old := runningTask{task: task.AsyncTask{ID: 999}, ctx: oldCtx, cancel: oldCancel}
+		successor := runningTask{task: task.AsyncTask{ID: 999}, ctx: newCtx, cancel: newCancel}
+		r.runningTasks.Lock()
+		r.runningTasks.m[999] = successor
+		r.runningTasks.Unlock()
+		r.removeRunningTask(old, nil)
 		r.runningTasks.RLock()
-		defer r.runningTasks.RUnlock()
-		_, exists := r.runningTasks.m[999]
-		assert.False(t, exists, "non-existent task should not be in runningTasks")
+		current, exists := r.runningTasks.m[999]
 		_, completed := r.runningTasks.completedTasks[999]
-		assert.True(t, completed, "non-existent task should be added to completedTasks")
-	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Hour))
+		r.runningTasks.RUnlock()
+		require.True(t, exists)
+		require.Equal(t, newCtx, current.ctx)
+		require.False(t, completed)
+		require.ErrorIs(t, oldCtx.Err(), context.Canceled)
+		require.NoError(t, newCtx.Err())
+		r.removeRunningTask(successor, nil)
+		r.runningTasks.RLock()
+		_, exists = r.runningTasks.m[999]
+		_, completed = r.runningTasks.completedTasks[999]
+		r.runningTasks.RUnlock()
+		require.False(t, exists)
+		require.True(t, completed)
+		require.ErrorIs(t, newCtx.Err(), context.Canceled)
+	}, WithRunnerParallelism(1), WithRunnerFetchInterval(time.Hour))
 }
 
 func TestRunnerOptionSetters(t *testing.T) {

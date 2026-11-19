@@ -209,7 +209,12 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		effectiveCfg.Write.DMLMaxMemory,
 		metadata.ManifestListMemoryWeight(0, preserved),
 	)
+	parquetOptions, err := icebergwritecore.ParseParquetOptions(tableMeta.Properties)
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
 	writer, err := icebergwritecore.NewFanoutParquetDataWriter(ctx, icebergwritecore.FanoutWriterConfig{
+		ParquetOptions:      parquetOptions,
 		Schema:              schema,
 		PartitionSpec:       spec,
 		TableLocation:       strings.TrimRight(strings.TrimSpace(tableMeta.Location), "/"),

@@ -76,7 +76,7 @@ func TestDependentIcebergInsert(t *testing.T) {
 			require.NoError(t, err)
 			defer stmts[0].Free()
 			optimizer := plan2.NewMockOptimizer(true, proc)
-			bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 			q := bound.GetQuery()
 			td := &plan.TableDef{Name: "gold_orders", DbId: 1, TblId: 2, TableType: catalog.SystemExternalRel, Createsql: icebergInsertCreatesql(), Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}}}}

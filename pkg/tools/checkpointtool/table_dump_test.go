@@ -31,7 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -3202,6 +3204,86 @@ func TestParseCSVRowOrder(t *testing.T) {
 
 	_, err = ParseCSVRowOrder("unknown")
 	require.Error(t, err)
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_VecBlockExactText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		oid := types.T_array_float8
+		if f == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		cell, err := types.StringToBlockScaled(f, "[0.44547153, 1.7, -3.1, 0.02, 5.5]")
+		require.NoError(t, err)
+		vec := vector.NewVec(types.New(oid, 5, 0))
+		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
+
+		var buf bytes.Buffer
+		require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+		out := buf.String()
+		require.True(t, strings.HasPrefix(out, `"`) && strings.HasSuffix(out, `"`), out)
+		text := strings.ReplaceAll(out[1:len(out)-1], `""`, `"`)
+		got, err := types.StringToBlockScaled(f, text)
+		require.NoError(t, err)
+		require.Equal(t, cell, got)
+		vec.Free(mp)
+	}
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_LowPrecisionScalarRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	for _, tc := range []struct {
+		oid    types.T
+		values []any
+	}{
+		{types.T_bf16, []any{types.BF16(0x3fc0), types.BF16(0xc000), types.BF16(0x8000), types.BF16(0x7f7f), types.BF16(1)}},
+		{types.T_float16, []any{types.Float16(0x3e00), types.Float16(0xc000), types.Float16(0x8000), types.Float16(0x7bff), types.Float16(1)}},
+		{types.T_float8, []any{types.Float8(0x3c), types.Float8(0xc0), types.Float8(0x80), types.Float8(0x7e), types.Float8(1)}},
+		{types.T_float4, []any{types.Float4(3), types.Float4(12), types.Float4(8), types.Float4(7), types.Float4(1)}},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			stored := vector.NewVec(tc.oid.ToType())
+			t.Cleanup(func() { stored.Free(proc.Mp()) })
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendAny(stored, value, false, proc.Mp()))
+			}
+			require.NoError(t, vector.AppendAny(stored, nil, true, proc.Mp()))
+			var buf bytes.Buffer
+			for row := 0; row < stored.Length(); row++ {
+				require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *stored.GetType(), []*vector.Vector{stored}, 0, row))
+				buf.WriteByte('\n')
+			}
+			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+				FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, FieldsEscapedBy: `\`,
+				LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+			}, strings.NewReader(buf.String()), csvparser.ReadBlockSize, false)
+			require.NoError(t, err)
+			loaded := vector.NewVec(tc.oid.ToType())
+			t.Cleanup(func() { loaded.Free(proc.Mp()) })
+			require.NoError(t, loaded.PreExtend(stored.Length(), proc.Mp()))
+			loaded.SetLength(stored.Length())
+			for i := 0; i < stored.Length(); i++ {
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				if i == 0 {
+					require.Equal(t, "1.5", row[0].Val, "export the numeric value, not its bit code")
+				}
+				require.NoError(t, sqlutil.SetBytesToAnyVector(proc.Ctx, row[0].Val, i, row[0].IsNull, loaded, proc))
+				require.Equal(t, stored.IsNull(uint64(i)), loaded.IsNull(uint64(i)))
+				if !stored.IsNull(uint64(i)) {
+					want := stored.GetRawBytesAt(i)
+					if i == 2 { // SQL admission canonically stores either signed zero as +0.
+						want = make([]byte, tc.oid.ToType().TypeSize())
+					}
+					require.Equal(t, want, loaded.GetRawBytesAt(i))
+				}
+			}
+			_, err = parser.Read(nil)
+			require.ErrorIs(t, err, io.EOF)
+		})
+	}
 }
 
 func TestCatalogNumericAttributeMaskOracle(t *testing.T) {

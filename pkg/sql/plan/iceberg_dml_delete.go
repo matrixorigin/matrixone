@@ -210,7 +210,7 @@ func resolveIcebergUpdateTarget(ctx CompilerContext, stmt *tree.Update) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg UPDATE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}
@@ -315,7 +315,7 @@ func resolveIcebergDeleteTarget(ctx CompilerContext, stmt *tree.Delete) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg DELETE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}

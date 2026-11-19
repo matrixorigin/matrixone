@@ -1196,7 +1196,7 @@ func (c *manifestArg) String() string {
 }
 
 func (c *manifestArg) Run() error {
-	data, err := GenerateManifestPretty(c.tbl, c.dataDir)
+	data, err := GenerateManifestPretty(c.tbl, c.dataDir, c.ctx.db.Runtime.Now())
 	if err != nil {
 		return err
 	}

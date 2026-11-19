@@ -307,6 +307,14 @@ type mergeReader struct {
 type EmptyReader struct {
 }
 
+// SupportsScanCutoff admits a single ordered reader. A merge reader reports
+// the order of any one child and therefore cannot prove all its children have
+// the ordered-scan contract needed to apply a shared cutoff.
+func SupportsScanCutoff(r engine.Reader) bool {
+	single, ok := r.(*reader)
+	return ok && single != nil && len(single.GetOrderBy()) == 1
+}
+
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
@@ -928,6 +936,12 @@ func (r *reader) read(
 	}()
 
 	r.tryUpdateColumns(cols)
+	if publication := objectio.JSONReadSetFromContext(ctx); publication.MatchesJSONColumns(r.columns.colTypes) {
+		publication.BindColumns(r.columns.seqnums)
+		if r.orderByLimit != nil || r.withFilterMixin.filterState.filter.Valid {
+			publication.Disable()
+		}
+	}
 
 	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
 	// For vector TopN pushdown we may have an extra distVec appended in the previous
@@ -958,8 +972,15 @@ func (r *reader) read(
 		}
 	}()
 
+	// Source.Next may read spill/metadata objects before assembling the
+	// final memory batch. Those nested reads cannot publish an outer column
+	// version; only persisted materialization below or memory delivery can.
+	sourceCtx := ctx
+	if objectio.JSONReadSetFromContext(ctx) != nil {
+		sourceCtx = objectio.WithJSONReadSet(ctx, nil)
+	}
 	blkInfo, state, err := r.source.Next(
-		ctx,
+		sourceCtx,
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
@@ -1014,6 +1035,9 @@ func (r *reader) read(
 				return false, false, err
 			}
 		}
+		if err = objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(outBatch.Vecs, mp, outBatch.RowCount()); err != nil {
+			return false, false, err
+		}
 		return false, false, nil
 	}
 	if r.explainVectorTopStats != nil {
@@ -1032,7 +1056,7 @@ func (r *reader) read(
 	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
-		policy |= fileservice.SkipMemoryCacheWrites
+		policy |= fileservice.MemoryCacheNoEvict
 	}
 	r.readBlockCnt++
 

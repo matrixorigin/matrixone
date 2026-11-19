@@ -263,10 +263,18 @@ explain select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 1;
 select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 1;
 select id from t_cap order by l2_distance(v,'[53,53,53,53]') limit 1;
 
--- ---------------- C14: an element the stored type cannot hold is rejected -----
+-- ---------------- C14: an element the stored type cannot hold is never stored -----
+-- CREATE INDEX fails on it, a REINDEX allowed one bad record leaves the row out of the index
+-- and records it, and a search with it fails
 create table t_big(id bigint primary key, v vecf32(4));
 insert into t_big values (1,'[1,1,1,1]'),(2,'[100000,1,1,1]');
 create index i_big using hnsw on t_big(v) quantization 'float16';
+delete from t_big where id = 2;
+create index i_big using hnsw on t_big(v) quantization 'float16';
+insert into t_big values (2,'[100000,1,1,1]');
+alter table t_big alter reindex i_big hnsw max_bad_records 1;
+-- @ignore:4
+show index ignored from t_big;
 select id from t_f16 order by l2_distance(v,'[100000,1,1,1]') limit 1;
 
 select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;

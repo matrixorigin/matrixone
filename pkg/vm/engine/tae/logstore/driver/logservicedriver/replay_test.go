@@ -98,6 +98,271 @@ func Test_MockBackend1(t *testing.T) {
 	assert.Equal(t, 3, len(loaded))
 }
 
+func TestReplayCheckpointedInteriorHoleAfterPhysicalTruncate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		boundary  uint64
+		wantError bool
+	}{
+		{"checkpoint recorded", 3, false},
+		{"old truncate without boundary", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newMockDriver(2, [][5]uint64{
+				{uint64(Cmd_Normal), 1, 1, 1, 0},
+				{uint64(Cmd_Normal), 2, 3, 3, 1},
+				{uint64(Cmd_Normal), 3, 2, 2, 1},
+				{uint64(Cmd_Normal), 4, 4, 4, 4},
+			}, 2)
+			d.checkpointedDSN = tc.boundary
+			var applied []uint64
+			r := newReplayer(mockHandleFactory(1, func(e *entry.Entry) {
+				applied = append(applied, e.DSN)
+			}), d, 2,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(d)))
+			err := r.Replay(context.Background())
+			if tc.wantError {
+				require.ErrorContains(t, err, "dsn 3 not found")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []uint64{2, 4}, applied)
+				require.Equal(t, uint64(2), r.ExportDSNStats().Min)
+			}
+		})
+	}
+}
+
+func TestReplayCheckpointedTailReuseWithMissingPhysicalPSN(t *testing.T) {
+	for _, shape := range []struct {
+		name             string
+		checkpointedLSN  uint64
+		replacementStart uint64
+	}{
+		{"partial overlap", 1, 2},
+		{"same range", 2, 3},
+	} {
+		for _, missingBefore := range []string{"none", "old", "skip", "replacement"} {
+			for _, truncatedPSN := range []uint64{0, 1} {
+				for _, batchSize := range []int{1, 2, 3, 4, 5, 64} {
+					t.Run(fmt.Sprintf("%s/missing-before-%s/truncate-%d/batch-%d", shape.name, missingBefore, truncatedPSN, batchSize), func(t *testing.T) {
+						// The mock returns each spec's physical PSN; a missing spec
+						// models a Raft command omitted from LogService Read.
+						d := newMockDriver(truncatedPSN, nil, 1)
+						d.checkpointedDSN = shape.checkpointedLSN
+						entries := make(map[uint64]LogEntry)
+						var psn uint64
+						add := func(record LogEntry) uint64 {
+							psn++
+							if psn > truncatedPSN {
+								d.recordSpecs = append(d.recordSpecs, [5]uint64{uint64(Cmd_Normal), psn, 0, 0, 0})
+								entries[psn] = record
+							}
+							return psn
+						}
+						makeUser := func(start, end uint64, payload string) LogEntry {
+							writer := NewLogEntryWriter()
+							for dsn := start; dsn <= end; dsn++ {
+								e := entry.MockEntryWithPayload([]byte(payload))
+								e.DSN = dsn
+								require.NoError(t, writer.AppendEntry(e))
+							}
+							record, err := writer.Finish()
+							require.NoError(t, err)
+							return record
+						}
+						for lsn := uint64(1); lsn <= shape.checkpointedLSN; lsn++ {
+							add(makeUser(lsn, lsn, "checkpointed"))
+						}
+						if missingBefore == "old" {
+							psn++
+						}
+						oldPSN := add(makeUser(3, 3, "obsolete"))
+						if missingBefore == "skip" {
+							psn++
+						}
+						add(SkipMapToLogEntry(map[uint64]uint64{3: oldPSN}))
+						if missingBefore == "replacement" {
+							psn++
+						}
+						add(makeUser(shape.replacementStart, 3, "replacement"))
+
+						var applied []uint64
+						var payloads []string
+						r := newReplayer(func(e *entry.Entry) storeDriver.ReplayEntryState {
+							if e.DSN <= shape.checkpointedLSN {
+								return storeDriver.RE_Truncate
+							}
+							applied = append(applied, e.DSN)
+							payloads = append(payloads, string(e.Entry.GetPayload()))
+							return storeDriver.RE_Nomal
+						}, d, batchSize,
+							WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+							WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
+								return entries[record.Lsn]
+							}))
+						require.NoError(t, r.Replay(context.Background()))
+						if shape.replacementStart == 2 {
+							require.Equal(t, []uint64{2, 3}, applied)
+							require.Equal(t, []string{"replacement", "replacement"}, payloads)
+						} else {
+							require.Equal(t, []uint64{3}, applied)
+							require.Equal(t, []string{"replacement"}, payloads)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+type failFirstWALTruncateClient struct {
+	*mockBackendClient
+	calls atomic.Int32
+}
+
+type cancelReadClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *cancelReadClient) Read(ctx context.Context, firstPSN, maxSize uint64) ([]logservice.LogRecord, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return nil, 0, ctx.Err()
+}
+
+func TestReplayReadStopsOnCallerCancellation(t *testing.T) {
+	client := &cancelReadClient{
+		mockBackendClient: newMockBackendClient(NewMockBackend()),
+		started:           make(chan struct{}),
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
+			return storeDriver.RE_Nomal
+		}, func() storeDriver.ReplayMode {
+			return storeDriver.ReplayMode_ReplayForWrite
+		}, nil)
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("replay did not reach Read")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("replay Read retry ignored caller cancellation")
+	}
+	require.EqualValues(t, 1, client.calls.Load())
+}
+
+type failFirstReadClient struct {
+	*mockBackendClient
+	calls atomic.Int32
+}
+
+func (c *failFirstReadClient) Read(ctx context.Context, firstPSN, maxSize uint64) ([]logservice.LogRecord, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		return nil, 0, errors.New("transient read failure")
+	}
+	return c.mockBackendClient.Read(ctx, firstPSN, maxSize)
+}
+
+func TestReadRetriesTransientErrorWithLiveContext(t *testing.T) {
+	client := &failFirstReadClient{mockBackendClient: newMockBackendClient(NewMockBackend())}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+	_, _, err := d.readFromBackend(context.Background(), 1, 1024)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, client.calls.Load())
+}
+
+func (c *failFirstWALTruncateClient) GetWALTruncate(ctx context.Context) (uint64, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		return 0, 0, errors.New("transient watermark read failure")
+	}
+	return c.mockBackendClient.GetWALTruncate(ctx)
+}
+
+func TestReplayForWriteRetriesWALTruncateWithLiveContext(t *testing.T) {
+	backend := NewMockBackend()
+	client := &failFirstWALTruncateClient{mockBackendClient: newMockBackendClient(backend)}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
+		return storeDriver.RE_Nomal
+	}, func() storeDriver.ReplayMode {
+		return storeDriver.ReplayMode_ReplayForWrite
+	}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, client.calls.Load())
+}
+
+type cancelTruncatedLsnClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *cancelTruncatedLsnClient) GetTruncatedLsn(ctx context.Context) (uint64, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+		<-ctx.Done()
+	}
+	return 0, ctx.Err()
+}
+
+func TestGetTruncatedPSNStopsOnCallerCancellation(t *testing.T) {
+	client := &cancelTruncatedLsnClient{
+		mockBackendClient: newMockBackendClient(NewMockBackend()),
+		started:           make(chan struct{}),
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := d.getTruncatedPSNFromBackend(ctx)
+		result <- err
+	}()
+	<-client.started
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("watermark retry ignored caller cancellation")
+	}
+	require.EqualValues(t, 1, client.calls.Load())
+}
+
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
@@ -873,7 +1138,7 @@ func Test_ReplayerReadsLegacyV2SkipCmd(t *testing.T) {
 		30,
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
-			if record.Lsn == 20 {
+			if record.Lsn == 121 {
 				return legacyEntry
 			}
 			return baseUnmarshal(record)
@@ -923,7 +1188,7 @@ func Test_ReplayerDoesNotApplyDuplicateLegacySkipToReusedDSN(t *testing.T) {
 				readBatchSize,
 				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 				WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
-					if record.Lsn == 2 || record.Lsn == 4 {
+					if record.Lsn == 3 || record.Lsn == 5 {
 						return legacyEntry
 					}
 					return baseUnmarshal(record)

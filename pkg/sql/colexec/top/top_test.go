@@ -17,6 +17,7 @@ package top
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -200,6 +202,96 @@ func TestTop(t *testing.T) {
 					require.Equal(t, expectedSecond, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
 				}
 			}()
+		}
+	}
+}
+
+func TestTopMultiKeyThresholdAndReset(t *testing.T) {
+	for _, mode := range []string{"fixed", "resident", "spill", "migrate"} {
+		for _, ordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/ordered=%t", mode, ordered), func(t *testing.T) {
+				first, second := newExpression(0), newExpression(1)
+				first.Typ = plan.Type{Id: int32(types.T_int64), NotNullable: true}
+				second.Typ = first.Typ
+				typs := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+				if mode != "fixed" {
+					typs = append(typs, types.T_varchar.ToType())
+				}
+				tc := newTestCase(t, mpool.MustNewZero(), typs, 2,
+					[]*plan.OrderBySpec{{Expr: first, Flag: plan.OrderBySpec_DESC}, {Expr: second, Flag: plan.OrderBySpec_DESC}})
+				tc.arg.TopValueTag = 42
+				tc.arg.OrderedOutput = ordered
+				tc.proc.SetMessageBoard(message.NewMessageBoard())
+				t.Cleanup(func() {
+					tc.arg.Free(tc.proc, false, nil)
+					tc.proc.Free()
+					require.Zero(t, tc.proc.Mp().CurrNB())
+				})
+				receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+				for generation := range 2 {
+					func() {
+						require.NoError(t, tc.arg.Prepare(tc.proc))
+						if mode == "spill" {
+							tc.arg.ctr.spilling = true
+						}
+						if mode == "migrate" {
+							tc.arg.ctr.residentByteLimit = 512
+						}
+						child := colexec.NewMockOperator()
+						defer child.Free(tc.proc, false, nil)
+						tc.arg.Children = nil
+						tc.arg.AppendChild(child)
+						base := int64(5 - generation*4)
+						for i, row := range [][2]int64{{base, 1}, {base, 2}, {base, 9}, {base + 1, 1}} {
+							bat := batch.NewWithSize(len(typs))
+							child.WithBatchs([]*batch.Batch{bat})
+							for col, value := range row {
+								bat.Vecs[col] = vector.NewVec(typs[col])
+								require.NoError(t, vector.AppendFixed(bat.Vecs[col], value, false, tc.proc.Mp()))
+							}
+							if mode != "fixed" {
+								width := 32
+								if mode == "migrate" && i == 2 {
+									width = 2048
+								}
+								bat.Vecs[2] = vector.NewVec(typs[2])
+								require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte("x"), width), false, tc.proc.Mp()))
+							}
+							bat.SetRowCount(1)
+						}
+						child.WithBatchCallback(func(i int) {
+							msgs, _, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+							require.NoError(t, err)
+							if i == 2 {
+								require.Len(t, msgs, 1, "满 K 后才可发布阈值")
+								zm := msgs[0].(message.TopValueMessage).TopValueZM
+								require.Equal(t, base, types.DecodeInt64(zm.GetMaxBuf()))
+							} else {
+								require.Empty(t, msgs, "K 未满或首键阈值未变时不能发布新阈值")
+							}
+							if mode == "migrate" && i == 2 {
+								require.True(t, tc.arg.ctr.boundedResident)
+								require.False(t, tc.arg.ctr.spilling)
+							}
+						})
+						var keys, secondary []int64
+						for {
+							result, err := vm.Exec(tc.arg, tc.proc)
+							require.NoError(t, err)
+							if result.Batch == nil {
+								break
+							}
+							keys = append(keys, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
+							secondary = append(secondary, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])...)
+						}
+						require.Equal(t, []int64{base + 1, base}, keys)
+						require.Equal(t, []int64{1, 9}, secondary)
+						require.Equal(t, mode == "spill" || mode == "migrate", tc.arg.ctr.spilling)
+						tc.arg.Reset(tc.proc, false, nil)
+						require.Nil(t, tc.arg.ctr.topValueZM)
+					}()
+				}
+			})
 		}
 	}
 }
@@ -681,6 +773,61 @@ func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
 			testCase.proc.Free()
 			require.Zero(t, testCase.proc.Mp().CurrNB())
 		})
+	}
+}
+
+func TestTopUniqueOrderPrefixes(t *testing.T) {
+	for _, order := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int64
+	}{
+		{"ascending", 0, []int64{1, 2, 5, 7, 3, 4, 6, 8}},
+		{"descending", plan.OrderBySpec_DESC, []int64{8, 6, 4, 3, 7, 5, 2, 1}},
+	} {
+		for _, limit := range []int64{3, 6, 9} {
+			t.Run(fmt.Sprintf("%s/limit=%d", order.name, limit), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { mpool.DeleteMPool(mp) })
+				tc := newTestCase(t, mp,
+					[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, limit,
+					[]*plan.OrderBySpec{
+						{Expr: newExpression(0), Flag: order.flag},
+						{Expr: newExpression(1), Flag: order.flag},
+					})
+				t.Cleanup(func() {
+					tc.arg.Free(tc.proc, false, nil)
+					if len(tc.arg.Children) > 0 {
+						tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+					}
+					tc.proc.Free()
+					require.Zero(t, tc.proc.Mp().CurrNB())
+					require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+				})
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+
+				bats := []*batch.Batch{batch.NewWithSize(2), batch.NewWithSize(2)}
+				resetChildren(tc.arg, bats)
+				for i, ids := range [][]int64{{7, 2, 8, 3}, {5, 1, 6, 4}} {
+					bat := bats[i]
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+					require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 1, 2, 2}, nil, tc.proc.Mp()))
+					require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, tc.proc.Mp()))
+					bat.SetRowCount(len(ids))
+				}
+
+				// 分页边界位于重复首键内部；后到的行必须参与选取。
+				// 唯一次级键使不同 K 的结果都是同一个全序的前缀。
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Len(t, result.Batch.Vecs, 2)
+				want := order.want[:min(int(limit), len(order.want))]
+				require.Equal(t, len(want), result.Batch.RowCount())
+				require.Equal(t, want, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+			})
+		}
 	}
 }
 

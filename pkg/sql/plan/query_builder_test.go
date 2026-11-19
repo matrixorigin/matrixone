@@ -337,7 +337,7 @@ func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 		preparedMapping.Columns[0].Conversion = sqlmongodb.ConversionTryNull
 		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(preparedMapping))
 		prepareControl, err := buildPrepare(tree.NewPrepareString("mongo_ps",
-			"select count(*) from telemetry_source.events_external where value > ?"), &mock.ctxt)
+			"select count(*) from telemetry_source.events_external where value > ?"), &mock.ctxt, nil)
 		require.NoError(t, err)
 		prepare := prepareControl.GetDcl().GetPrepare()
 		require.NotNil(t, prepare)
@@ -536,8 +536,8 @@ func TestBuildTable_AlterView(t *testing.T) {
 	}
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -573,7 +573,7 @@ func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
 	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
 	ctx.EXPECT().DatabaseExists("db", snapshot).Return(true)
 	ctx.EXPECT().GetSubscriptionMeta("db", snapshot).Return(nil, nil)
-	ctx.EXPECT().Resolve("db", "other_table", snapshot).Return(
+	ctx.EXPECT().Resolve("db", "other_table", snapshot, gomock.Any()).Return(
 		&plan.ObjectRef{SchemaName: "db", ObjName: "other_table"},
 		&plan.TableDef{DbId: 1, TblId: 2},
 		nil,
@@ -790,8 +790,8 @@ func buildViewsForLowerCaseTest(
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -858,8 +858,8 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -915,8 +915,8 @@ func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -1337,7 +1337,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -1382,7 +1382,7 @@ func TestQueryBuilderBuildSortRollupPlan(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -1443,7 +1443,7 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			if tc.sort {
@@ -1486,7 +1486,7 @@ func TestQueryBuilderSortRollupPreservesDistinctAggregates(t *testing.T) {
 				}
 				stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
-				queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+				queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 				require.NoError(t, err)
 				query := queryPlan.GetQuery()
 				seen := make(map[int32]bool)
@@ -1557,7 +1557,7 @@ func TestQueryBuilderSortRollupFallsBackForDistinct(t *testing.T) {
 				t.Run(fmt.Sprintf("query-%d", i), func(t *testing.T) {
 					stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
-					queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+					queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 					require.NoError(t, err)
 					require.False(t, planHasSortRollup(queryPlan.GetQuery()),
 						"SELECT DISTINCT must use the legacy NULL-normalizing rollup path under %s", algorithm)
@@ -1624,7 +1624,7 @@ func TestQueryBuilderSortRollupFailsClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 			for _, node := range queryPlan.GetQuery().Nodes {
 				require.False(t, node.NodeType == plan.Node_AGG &&
@@ -1654,7 +1654,7 @@ func TestQueryBuilderSortRollupFallsBackForUnprovenKeyTypes(t *testing.T) {
 				`select a, b, count(*) from select_test.bind_select
 				 group by a, b with rollup`, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(mock, stmts[0], false)
+			queryPlan, err := BuildPlan(mock, stmts[0], false, nil)
 			require.NoError(t, err)
 			for _, node := range queryPlan.GetQuery().Nodes {
 				require.False(t, node.NodeType == plan.Node_AGG &&
@@ -1681,7 +1681,7 @@ func TestQueryBuilderSortRollupFallsBackForDerivedSource(t *testing.T) {
 			(select a from select_test.bind_select) d
 			group by d.a with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 	for _, node := range queryPlan.GetQuery().Nodes {
 		require.False(t, node.NodeType == plan.Node_AGG &&
@@ -1708,7 +1708,7 @@ func TestQueryBuilderSortRollupFallsBackForNestedDerivedRollup(t *testing.T) {
 			group by a with rollup
 		) d`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 }
@@ -1730,7 +1730,7 @@ func TestQueryBuilderSortRollupReusesOrderedDerivedSource(t *testing.T) {
 			(select a, b from select_test.bind_select order by a, b) d
 			group by d.a, d.b with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var rollupAgg *plan.Node
@@ -1780,7 +1780,7 @@ func TestQueryBuilderOrderedDerivedRollupPlanModes(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			counts := make(map[plan.Node_NodeType]int)
@@ -1860,7 +1860,7 @@ func TestQueryBuilderSortRollupFilterIsAggregateBoundary(t *testing.T) {
 			group by a, b with rollup
 			having a = 1`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var aggregate *plan.Node
@@ -1924,7 +1924,7 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, queryPlan.GetQuery())
 		})
@@ -1937,7 +1937,7 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 		group by IF(O.A = 1, 'X', 'same') with rollup`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
 }
 
@@ -1969,7 +1969,7 @@ func TestQueryBuilderRejectsGroupingOutsideGroupingExtensions(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidGroupFuncUse), err)
 
@@ -1991,7 +1991,7 @@ func TestQueryBuilderAllowsGroupingWithSingleGroupingSet(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, queryPlan.GetQuery())
 }
@@ -2053,7 +2053,7 @@ func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.ErrorContains(t, err, test.errorContains)
 		})
 	}
@@ -2065,7 +2065,7 @@ func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T)
 		group by a+1, b with rollup`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 }
 
@@ -2081,7 +2081,7 @@ func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumns(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2156,7 +2156,7 @@ func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumnResolution(t *testin
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			var sortNode *plan.Node
@@ -2188,7 +2188,7 @@ func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var sortNode *plan.Node
@@ -2228,7 +2228,7 @@ func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			var sortNode *plan.Node
@@ -2257,7 +2257,7 @@ func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var sortNode *plan.Node
@@ -2291,7 +2291,7 @@ func TestQueryBuilderBuildGroupingSetOrderByWrappedGroupingColumns(t *testing.T)
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -2309,7 +2309,7 @@ func TestQueryBuilderBuildDistinctRollupRejectsUnselectedGroupingColumnOrder(t *
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.Error(t, err)
 }
 
@@ -2333,7 +2333,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionWithStar(t *testing.T) 
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			query := queryPlan.GetQuery()
@@ -2367,7 +2367,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSourceColumn(t *tes
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	foundHiddenProject := false
@@ -2401,7 +2401,7 @@ func TestQueryBuilderBuildGroupingSetNestedOrderUsesSourcePrecedence(t *testing.
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			matchedBranches := 0
@@ -2493,7 +2493,7 @@ func TestQueryBuilderBuildGroupingSetWindowNestedOrderUsesBranchSemantics(t *tes
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 
 			matchedBranches := 0
@@ -2557,7 +2557,7 @@ func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.
 	} {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 		require.NoError(t, err)
 	}
 }
@@ -2592,7 +2592,7 @@ func TestQueryBuilderBuildGroupingSetWindowRewritesAliasFallbackPredicates(t *te
 				selectStmt := stmts[0].(*tree.Select)
 				require.IsType(t, testCase.astType, selectStmt.OrderBy[0].Expr)
 
-				_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+				_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 				require.NoError(t, err)
 			})
 		}
@@ -2611,7 +2611,7 @@ func TestQueryBuilderBuildGroupingSetWindowRejectsDifferentSourceAliases(t *test
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.ErrorContains(t, err, "Column 'duplicate_alias' in order clause is ambiguous",
 				"group by %s order by %s", groupBy, orderBy)
 		}
@@ -2625,7 +2625,7 @@ func TestQueryBuilderBuildGroupingSetWindowMatchesUngroupedSourceResolution(t *t
 			group by %s order by a + 0`, windowExpr, groupBy)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, selectSQL, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.ErrorContains(t, err, `column "bind_select.a" must appear in the GROUP BY clause`)
 		}
 	}
@@ -2729,7 +2729,7 @@ func TestQueryBuilderBuildGroupingSetNestedOrderFallsBackToAlias(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	matchedBranches := 0
@@ -2777,7 +2777,7 @@ func TestQueryBuilderBuildDistinctGroupingSetNestedOrderUsesProjectedSource(t *t
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			if testCase.wantError {
 				require.ErrorContains(t, err, "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 			} else {
@@ -2804,7 +2804,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 	} {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 		require.NoError(t, err)
 	}
 
@@ -2814,7 +2814,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 		group by a, b with rollup order by x`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.ErrorContains(t, err, "Column 'x' in order clause is ambiguous")
 
 	stmts, err = parsers.Parse(
@@ -2824,7 +2824,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 		group by t1.a, t2.a with rollup order by a`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.ErrorContains(t, err, "Column 'a' in order clause is ambiguous")
 }
 
@@ -2858,7 +2858,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIsReentrant(t *testing.
 			orderExpr := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
 			firstNodeCount := 0
 			for buildIndex := range 2 {
-				queryPlan, buildErr := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], isPrepare)
+				queryPlan, buildErr := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], isPrepare, nil)
 				require.NoError(t, buildErr)
 				require.NotNil(t, queryPlan.GetQuery())
 				require.Equal(t, orderExpr, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
@@ -2889,7 +2889,7 @@ func TestQueryBuilderBuildRollupOrderByQualifiedGroupingColumn(t *testing.T) {
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	orderFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2923,7 +2923,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2953,7 +2953,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2983,7 +2983,7 @@ func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -3013,7 +3013,7 @@ func TestQueryBuilderBuildRollupOrderByAmbiguousGroupingColumn(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.Error(t, err)
 }
 
@@ -3179,7 +3179,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctRejectsHiddenKe
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
@@ -3212,7 +3212,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctAcceptsEquivale
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -3231,7 +3231,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctPreservesOuterQ
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
@@ -3789,7 +3789,7 @@ func TestPreparedGapFillPreservesLiteralTemporalBounds(t *testing.T) {
 				"select _wstart, sum(v) from tw_scale where ts >= '2026-01-01' and ts < '2026-01-04' interval(ts, 1, day) gapfill(partition) fill(null)", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, true)
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, true, nil)
 			require.NoError(t, err)
 			var window *plan.Node
 			for _, node := range logicPlan.GetQuery().Nodes {
@@ -6239,6 +6239,7 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 			}
 		}
 		require.NotNil(t, aggregate)
+		require.NotZero(t, uint64(aggregate.AggList[0].GetF().Func.Obj)&function.Distinct, sql)
 		var hasCanonicalArgument bool
 		for _, arg := range aggregate.AggList[0].GetF().Args {
 			if isCastOverload(arg, 2) {
@@ -6247,6 +6248,36 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 			}
 		}
 		require.True(t, hasCanonicalArgument, sql)
+	}
+}
+
+func TestDistinctMinMaxPreservePromotedCharArgument(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, name := range []string{"min", "max"} {
+		t.Run(name, func(t *testing.T) {
+			arguments := make([]*plan.Expr, 0, 2)
+			for _, distinct := range []string{"", "distinct "} {
+				sql := "select " + name + "(" + distinct + value + ") from nation"
+				logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+				require.NoError(t, err)
+				var aggregate *plan.Expr
+				for _, node := range logicPlan.GetQuery().Nodes {
+					if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+						aggregate = node.AggList[0]
+						break
+					}
+				}
+				require.NotNil(t, aggregate, sql)
+				f := aggregate.GetF()
+				require.NotNil(t, f, sql)
+				require.Zero(t, uint64(f.Func.Obj)&function.Distinct, sql)
+				require.Len(t, f.Args, 1, sql)
+				require.NotNil(t, f.Args[0].GetF(), sql)
+				require.Equal(t, "coalesce", f.Args[0].GetF().Func.ObjName, sql)
+				arguments = append(arguments, f.Args[0])
+			}
+			require.True(t, proto.Equal(arguments[0], arguments[1]), "DISTINCT must not change the MIN/MAX input")
+		})
 	}
 }
 
@@ -6516,7 +6547,7 @@ func buildIcebergTestPlan(t *testing.T, ctx CompilerContext, sql string) (*Plan,
 	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	return BuildPlan(ctx, stmts[0], false)
+	return BuildPlan(ctx, stmts[0], false, nil)
 }
 
 func mustMarshalLegacyExternParam(t *testing.T, param *tree.ExternParam) string {
@@ -7054,6 +7085,12 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: false,
 		},
 		{
+			// Explicit casts of non-NULL literals with exactly known valid
+			// UTF-8 bytes can never hit the Warning 1300 NULL guard, so the
+			// corrected inference is precisely NOT NULL and the common VALUES
+			// type stays NOT NULL for these rows. Unknown/runtime-binary
+			// sources (and string-to-DATETIME casts, see above) still infer
+			// conservative nullable.
 			name:        "char width grows",
 			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
 			oid:         types.T_char,
@@ -7220,7 +7257,7 @@ func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -9667,6 +9704,30 @@ func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
 	}
 }
 
+func TestBindVectorBetween(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		query string
+		want  bool
+	}{
+		{"select cast('[1,2,3]' as vecf32(3)) between cast('[0,0,0]' as vecf32(3)) and cast('[9,9,9]' as vecf32(3))", true},
+		{"select cast('[1,2,3]' as vecbf16(3)) between '[0,0,0]' and '[9,9,9]'", true},
+		{"select cast('[1,2,3]' as vecf32(3)) between cast('[0,0,0]' as vecf64(3)) and cast('[0,0,1]' as vecf8(3))", false},
+		{"select cast('[1,2,3]' as vecint8(3)) between cast('[0,0,0]' as vecf16(3)) and cast('[9,9,9]' as vecf4(3))", true},
+	} {
+		p, err := runOneStmt(mock, t, tc.query)
+		require.NoError(t, err, tc.query)
+		root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+		expr := root.ProjectList[0]
+		require.NotContains(t, expr.String(), `obj_name:"between"`, tc.query)
+		if lit := expr.GetLit(); lit != nil {
+			require.Equal(t, tc.want, lit.GetBval(), tc.query)
+		} else {
+			require.Equal(t, "and", expr.GetF().Func.ObjName, tc.query)
+		}
+	}
+}
+
 func TestIffVectorCommonType(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, query := range []string{
@@ -9695,6 +9756,8 @@ func TestIffVectorCommonType(t *testing.T) {
 		{name: "vecf16", literal: "[1,2]"},
 		{name: "vecint8", literal: "[-128,127]"},
 		{name: "vecuint8", literal: "[0,255]"},
+		{name: "vecf8", literal: "[1,2]"},
+		{name: "vecf4", literal: "[1,2]"},
 	}
 	for i := 0; i < len(vectorTypes); i++ {
 		for j := i + 1; j < len(vectorTypes); j++ {
@@ -9703,15 +9766,14 @@ func TestIffVectorCommonType(t *testing.T) {
 				p, err := runOneStmt(mock, t,
 					fmt.Sprintf("select if(false, cast('%s' as %s(2)), cast('%s' as %s(2)))",
 						left.literal, left.name, right.literal, right.name))
-				if (left.name == "vecf32" && right.name == "vecf64") ||
-					(left.name == "vecf64" && right.name == "vecf32") {
-					require.NoError(t, err)
-					root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
-					require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
-					continue
+				require.NoError(t, err, "%s, %s", left.name, right.name)
+				want := types.T_array_float32
+				if left.name == "vecf64" || right.name == "vecf64" {
+					want = types.T_array_float64
 				}
-				require.Error(t, err)
-				require.Contains(t, err.Error(), "invalid argument function if")
+				root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+				require.Equal(t, int32(want), root.ProjectList[0].Typ.Id, "%s, %s", left.name, right.name)
+				require.Equal(t, int32(2), root.ProjectList[0].Typ.Width)
 			}
 		}
 	}

@@ -80,7 +80,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			require.NotNil(t, tbl)
@@ -110,7 +110,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.NoError(t, tbl.Write(ctx, bat))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, tc.want, txn.writes[0].tableName)
-			summary, ok := txn.cnObjsSummary[*stats.ObjectName().ObjectId()]
+			summary, ok := txn.cnObjsSummary[tc.tableID][*stats.ObjectName().ObjectId()]
 			require.True(t, ok)
 			require.Equal(t, tbl.db.databaseId, summary.databaseId)
 			require.Equal(t, tc.tableID, summary.tableId)
@@ -923,7 +923,12 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	published := &pbstats.StatsInfo{TableName: "events", TableCnt: 5, AccurateObjectNumber: 1,
 		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40, "payload": 40960}}
+	published.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"name": {Version: 1}}
+
 	got := transientTableStats(published, 10005)
+	require.Empty(t, got.ByteRangeMap)
+	require.NotEmpty(t, published.ByteRangeMap)
+
 	require.Equal(t, float64(10005), got.TableCnt)
 	require.Empty(t, got.TableName)
 	require.Equal(t, published.AccurateObjectNumber, got.AccurateObjectNumber)
@@ -936,6 +941,8 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.Equal(t, float64(5), published.TableCnt, "workspace overlay cannot mutate committed Rows/Size statistics")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	snapshot := false
+	tbl.db.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().DoAndReturn(func() bool { return snapshot }).AnyTimes()
 	tbl.tableId = 43 // a committed table, distinct from the fixture's created ID
 	eng := mock_frontend.NewMockEngine(gomock.NewController(t))
 	tbl.eng = eng
@@ -953,6 +960,19 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(^uint64(0)), actual.TableCnt, "remote workspace cannot publish a partial global bound")
 	require.Empty(t, actual.TableName)
+	tbl.remoteWorkspace = false
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "nonreadonly view cannot borrow samples even without inserted rows")
+	require.NotEmpty(t, published.ByteRangeMap)
+
+	txn.readOnly.Store(true)
+	snapshot = true
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "historical views cannot borrow the current population sample")
+	require.NotEmpty(t, published.ByteRangeMap)
+
 }
 
 func TestPartitionRowEstimate(t *testing.T) {
@@ -1143,7 +1163,7 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			workspace := newTransactionWithActivePKTableForTest(t, "pk")
 			op := workspace.op.(*mock_frontend.MockTxnOperator)
 			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
-			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
 			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}

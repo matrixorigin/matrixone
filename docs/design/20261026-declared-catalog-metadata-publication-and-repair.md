@@ -1,6 +1,6 @@
 # Declared catalog metadata: publication admission and account repair
 
-The maintained upgrade target is [4.0.7/41](20261028-catalog-upgrade-407.md). This supersedes earlier draft references below to 4.0.18/19 successor routes; those handlers are retired. Stored-view history recognition remains supported independently.
+The maintained upgrade target is [4.0.7](20261028-catalog-upgrade-407.md), with an offset determined by its registered entries. This supersedes earlier draft references below to 4.0.18/19 successor routes; those handlers are retired. Stored-view history recognition remains supported independently.
 
 Status: revision 16 (2026-10-30) - documentation-only evidence
 linkage on top of revision 15; the delivered design content remains

@@ -26,6 +26,17 @@ const (
 	SkipFullFilePreloads
 	SkipRemoteCacheReads
 	SkipRemoteCacheWrites
+	// NarrowRead marks a read of a small share of each object. Its reader skips
+	// whole-object preloads while the disk cache evicts the whole-object files of
+	// the reader's table before most of their bytes are read.
+	NarrowRead
+	// MemoryCacheNoEvict allows late reads to allocate only unused cache capacity.
+	MemoryCacheNoEvict
+	// ReplayDataForDiskCache permits a synchronous Write to reread Data entries
+	// for its disk cache. The caller and forwarding wrappers must keep Entries,
+	// their Data slices, and backing owners valid and unchanged until Write
+	// returns. ReaderForWrite remains a one-shot stream.
+	ReplayDataForDiskCache
 )
 
 const (

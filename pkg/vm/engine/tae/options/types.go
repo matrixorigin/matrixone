@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -80,14 +81,15 @@ type Options struct {
 	IsStandalone              bool
 	GCTimeCheckerFactory      func(any) func(*types.TS) bool
 
-	Fs                fileservice.FileService                  `toml:"-"`
-	LocalFs           fileservice.FileService                  `toml:"-"`
-	TmpFs             *fileservice.TmpFileService              `toml:"-"`
-	WalClientFactory  logservicedriver.LogServiceClientFactory `toml:"-"`
-	MaxWALRecordSize  int                                      `toml:"-"`
-	Ctx               context.Context                          `toml:"-"`
-	Shard             metadata.TNShard                         `toml:"-"`
-	Clock             clock.Clock                              `toml:"-"`
-	TaskServiceGetter taskservice.Getter                       `toml:"-"`
-	SID               string                                   `toml:"-"`
+	Fs                      fileservice.FileService                          `toml:"-"`
+	LocalFs                 fileservice.FileService                          `toml:"-"`
+	TmpFs                   *fileservice.TmpFileService                      `toml:"-"`
+	WalClientFactory        logservicedriver.LogServiceClientFactory         `toml:"-"`
+	WalContextClientFactory func(context.Context) (logservice.Client, error) `toml:"-"`
+	MaxWALRecordSize        int                                              `toml:"-"`
+	Ctx                     context.Context                                  `toml:"-"`
+	Shard                   metadata.TNShard                                 `toml:"-"`
+	Clock                   clock.Clock                                      `toml:"-"`
+	TaskServiceGetter       taskservice.Getter                               `toml:"-"`
+	SID                     string                                           `toml:"-"`
 }

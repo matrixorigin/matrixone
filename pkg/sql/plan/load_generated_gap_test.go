@@ -43,7 +43,7 @@ func TestImplicitLoadScanSkipsGeneratedColumns(t *testing.T) {
 			create, err := mysql.ParseOne(t.Context(), tc.create, 1)
 			require.NoError(t, err)
 			defer create.Free()
-			ddl, err := BuildPlan(ctx, create, false)
+			ddl, err := BuildPlan(ctx, create, false, nil)
 			require.NoError(t, err)
 			table := ddl.GetDdl().GetCreateTable().TableDef
 			table.TblId = 990137

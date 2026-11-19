@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-// Reader is a snapshot of all txn prepared between from and to.
-// Dirty tables/objects/blocks can be queried based on those txn
+// Reader queries transactions prepared between from and to.
+// Dirty-table results can include extra tables from compacted boundary blocks.
 type Reader struct {
 	from, to types.TS
 	table    *TxnTable
@@ -36,7 +36,9 @@ func mergeSummary(tree *model.Tree, summary *summary) {
 	}
 }
 
-// Merge all dirty table/object/block into one dirty tree
+// GetDirty merges dirty tables into a tree and returns the number of scanned
+// transactions. After block compaction, both may include entries outside the
+// requested range; retained in-range dirty tables must not be omitted.
 func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
 	iterateOnCompact := false

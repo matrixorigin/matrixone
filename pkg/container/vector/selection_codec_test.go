@@ -31,8 +31,65 @@ type selectedRowsOneShotShortWriter struct {
 
 type selectedRowsFastBuffer struct {
 	bytes.Buffer
-	fastCalls int
-	short     bool
+	fastCalls    int
+	varlenaCalls int
+	short        bool
+}
+
+func (w *selectedRowsFastBuffer) WriteSelectedVarlenaRows(values []types.Varlena, area []byte, rows []int32) (int, error) {
+	w.varlenaCalls++
+	start := w.Len()
+	for _, row := range rows {
+		value := values[row].GetByteSlice(area)
+		if err := types.WriteInt32(&w.Buffer, int32(len(value))); err != nil {
+			return w.Len() - start, err
+		}
+		if _, err := w.Buffer.Write(value); err != nil {
+			return w.Len() - start, err
+		}
+	}
+	written := w.Len() - start
+	if w.short && written > 0 {
+		written--
+	}
+	return written, nil
+}
+
+func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
+	pool := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(pool); require.Zero(t, pool.CurrNB()) })
+	require.NoError(t, AppendStringList(source, []string{"", "short", string(bytes.Repeat([]byte("long"), 20))}, nil, pool))
+	rows := []int32{2, 0, 1, 2}
+	for _, tc := range []struct {
+		name   string
+		modify func()
+		fast   bool
+	}{
+		{name: "plain", fast: true},
+		{name: "uniform provenance", fast: true, modify: func() { require.NoError(t, source.SetStringSource(types.StringSourceLiteral)) }},
+		{name: "null fallback", modify: func() { source.SetNull(1) }},
+		{name: "grouping fallback", modify: func() { source.GetNulls().Del(1); source.GetGrouping().Add(1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				source.GetNulls().Clear()
+				source.GetGrouping().Clear()
+				require.NoError(t, source.SetStringSource(types.StringSourceExpression))
+			})
+			if tc.modify != nil {
+				tc.modify()
+			}
+			var reference bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+			fast := &selectedRowsFastBuffer{}
+			require.NoError(t, source.MarshalSelectedRowsTo(fast, rows))
+			require.Equal(t, reference.Bytes(), fast.Bytes())
+			require.Equal(t, tc.fast, fast.varlenaCalls == 1)
+		})
+	}
+	source.GetGrouping().Clear()
+	require.ErrorIs(t, source.MarshalSelectedRowsTo(&selectedRowsFastBuffer{short: true}, rows), io.ErrShortWrite)
 }
 
 func (w *selectedRowsFastBuffer) WriteSelectedFixedRows(

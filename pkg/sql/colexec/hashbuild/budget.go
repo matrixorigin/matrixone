@@ -221,6 +221,9 @@ func (hb *HashmapBuilder) fallbackOptionalRuntimeFilterCollection(
 	proc *process.Process,
 	cause error,
 ) error {
+	if hb.runtimeFilterKeysRequired {
+		return cause
+	}
 	if runtimefilter.ClassifyOptionalFallback(cause) ==
 		runtimefilter.OptionalFallbackNone {
 		return cause
@@ -237,12 +240,7 @@ func (hb *HashmapBuilder) releaseOptionalRuntimeFilterKeys(
 	if proc == nil {
 		return process.ErrExecutionResourceInvalid
 	}
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueSels = nil
 	return nil
 }

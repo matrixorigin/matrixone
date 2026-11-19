@@ -17,7 +17,6 @@
 package cagra
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -211,14 +210,7 @@ func TestCagraSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	// Mock runSql_streaming for LoadIndex (serves the tar as one chunk).
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "search-load", tarPath)
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)

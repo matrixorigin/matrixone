@@ -128,6 +128,7 @@ select count(*) as healthy from persisted_overflow;
 healthy
 2
 use arithmetic_predicate_semantics;
+set @saved_nested_hints=@@optimizer_hints;
 set optimizer_hints='blockFilter=1';
 create table reciprocal(v double);
 insert into reciprocal values(-1),(.1),(1);
@@ -193,5 +194,6 @@ set optimizer_hints='blockFilter=2';
 select w from correlated where round(v+w,-1)=100;
 w
 100
+set optimizer_hints=@saved_nested_hints;
 set optimizer_hints=@saved_transpose_hints;
 drop database arithmetic_predicate_semantics;

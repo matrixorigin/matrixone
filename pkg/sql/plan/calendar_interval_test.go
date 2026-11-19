@@ -153,7 +153,7 @@ func TestCalendarIntervalViewAdmissionBeforeFold(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 	}
 	_, err := build(defines.MORPCVersion114)
 	require.ErrorContains(t, err, "protocol version 115")

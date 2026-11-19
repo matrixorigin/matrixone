@@ -17,6 +17,7 @@
 package vectorscan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -286,7 +287,7 @@ func Identity(
 func RequestFromScalar(
 	spec *plan.IndexSearchScan,
 	identity searchplugin.ScanIdentity,
-	membership []byte,
+	membership *keycodec.KeyPayload,
 	hasMembership bool,
 	membershipRequired bool,
 ) (req searchplugin.Request, ok bool, err error) {
@@ -323,7 +324,7 @@ func RequestFromScalar(
 	req = requestForValues(spec, payload, spec.QueryPayload.Typ, limit, identity)
 	req.QueryIsNull = queryLit.Isnull
 	req.CollectExplainDiagnostics = true
-	req.MembershipFilter = append([]byte(nil), membership...)
+	req.MembershipFilter = membership
 	req.HasMembershipFilter = hasMembership
 	req.MembershipFilterRequired = membershipRequired
 	if len(spec.AlgoExprs) != len(spec.AlgoExprNames) {

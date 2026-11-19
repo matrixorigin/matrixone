@@ -15,6 +15,8 @@
 package compare
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,7 +60,16 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	// vectors can be materialized through a storage or spill path that only
 	// preserves the physical string OID, so deriving collation from the vector
 	// would silently fall back to byte order.
-	cmp = types.CompareStringOrderValues(c.typ, x, y)
+	if c.sqlOrder {
+		cmp = types.CompareStringOrderValues(c.typ, x, y)
+	} else if !types.IsUnicodeCollation(c.typ.Charset) {
+		// Equality/identity consumers keep the historical raw-byte relation;
+		// case-insensitive equality for utf8mb4_general_ci is a separate
+		// defect from the ORDER BY ordering one.
+		cmp = bytes.Compare(x, y)
+	} else {
+		cmp = types.CompareStringValues(c.typ, x, y)
+	}
 	if c.desc {
 		return -cmp
 	}

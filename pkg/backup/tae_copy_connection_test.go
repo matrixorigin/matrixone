@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 )
@@ -341,3 +343,246 @@ var _ io.ReadCloser = new(pooledReadCloser)
 var _ fileservice.ObjectCopier = new(pooledCopyFS)
 var _ fileservice.ObjectCopier = new(rejectingCopyFS)
 var _ fileservice.ObjectCopier = new(flakyChecksumCopyFS)
+
+// emptyObjectCopyFS simulates a provider-side copy whose checksum read
+// surfaces an object-storage read-open failure with no reader, exactly like
+// the MinIO SDK does for a zero-length object, over a real backing FS. A
+// repeated provider copy fails loudly instead of silently repeating work.
+type emptyObjectCopyFS struct {
+	fileservice.FileService
+	content  []byte
+	readErr  error
+	statErrs []error
+	onStat   func()
+	copies   atomic.Int32
+	reads    atomic.Int32
+	stats    atomic.Int32
+}
+
+func (f *emptyObjectCopyFS) CopyObject(
+	ctx context.Context,
+	_ fileservice.FileService,
+	_ string,
+	dstPath string,
+) (bool, error) {
+	if f.copies.Add(1) > 1 {
+		return false, errors.New("provider copy invoked more than once")
+	}
+	err := f.FileService.Write(ctx, fileservice.IOVector{
+		FilePath: dstPath,
+		Entries: []fileservice.IOEntry{{
+			Offset:         0,
+			Size:           int64(len(f.content)),
+			ReaderForWrite: bytes.NewReader(f.content),
+		}},
+	})
+	return err == nil, err
+}
+
+func (f *emptyObjectCopyFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	f.reads.Add(1)
+	if f.readErr != nil {
+		// The read-open failure returns before any reader pointer is filled.
+		return f.readErr
+	}
+	return f.FileService.Read(ctx, vector)
+}
+
+func (f *emptyObjectCopyFS) StatFile(ctx context.Context, name string) (*fileservice.DirEntry, error) {
+	attempt := f.stats.Add(1)
+	if f.onStat != nil {
+		f.onStat()
+	}
+	if len(f.statErrs) > 0 {
+		idx := int(attempt) - 1
+		if idx >= len(f.statErrs) {
+			idx = len(f.statErrs) - 1
+		}
+		if statErr := f.statErrs[idx]; statErr != nil {
+			return nil, statErr
+		}
+	}
+	return f.FileService.StatFile(ctx, name)
+}
+
+func newProviderCopyEndpoints(
+	t *testing.T,
+	content []byte,
+	readErr error,
+	statErrs ...error,
+) (*fileservice.MemoryFS, *emptyObjectCopyFS, *fileservice.MemoryFS) {
+	t.Helper()
+	src, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	backing, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dst := &emptyObjectCopyFS{
+		FileService: backing,
+		content:     content,
+		readErr:     readErr,
+		statErrs:    statErrs,
+	}
+	return src, dst, backing
+}
+
+// TestCopyFileProviderEmptyObject proves the public no-retry copy root
+// accepts a provider-copied zero-length object whose checksum read surfaces
+// the SDK read-EOF failure instead of a reader, that the real target keeps
+// its stat size of zero, and that the result survives the real backup
+// manifest writer plus the package-local sidecar-verified readback helper.
+func TestCopyFileProviderEmptyObject(t *testing.T) {
+	src, dst, backing := newProviderCopyEndpoints(t, nil, io.EOF)
+	checksum, err := CopyFile(t.Context(), src, dst, "object", "")
+	require.NoError(t, err)
+	require.Equal(t, emptyContentSHA256Hex, hex.EncodeToString(checksum))
+	require.EqualValues(t, 1, dst.copies.Load())
+	require.EqualValues(t, 1, dst.reads.Load())
+	require.EqualValues(t, 1, dst.stats.Load())
+	entry, err := backing.StatFile(t.Context(), "object")
+	require.NoError(t, err)
+	require.EqualValues(t, 0, entry.Size)
+
+	// Real metadata consumer: the public empty-object result must survive the
+	// actual backup manifest writer plus the package-local sidecar-verified
+	// readback helper, not only a sum comparison. This pins the manifest
+	// contract for a size-0 entry; it does not claim an empty plain object
+	// is a restorable empty TAE object.
+	meta, err := fileservice.NewMemoryFS("meta", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	const (
+		backupTime = "2026-11-09 18:00:00"
+		backupTS   = "1794230630262503021-0"
+		backupTyp  = "full"
+	)
+	file := &taeFile{
+		path:     "object",
+		size:     entry.Size,
+		checksum: checksum,
+		needCopy: true,
+		ts:       types.BuildTS(1794230630262503021, 0),
+	}
+	require.NoError(t, saveTaeFilesList(t.Context(), meta, []*taeFile{file}, backupTime, backupTS, backupTyp))
+	listData, err := readFileAndCheck(t.Context(), meta, taeList)
+	require.NoError(t, err)
+	rows, err := fromCsvBytes(listData)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, []string{"object", "0", emptyContentSHA256Hex, "true", backupTS}, rows[0])
+	sumData, err := readFileAndCheck(t.Context(), meta, taeSum)
+	require.NoError(t, err)
+	sumRows, err := fromCsvBytes(sumData)
+	require.NoError(t, err)
+	require.Len(t, sumRows, 1)
+	require.Equal(t, []string{backupTime, "0", backupTS, backupTyp}, sumRows[0])
+	// The .sha256 sidecar stays the raw 32-byte digest, not a hex string.
+	saved, err := readFile(t.Context(), meta, taeList+".sha256")
+	require.NoError(t, err)
+	require.Len(t, saved, 32)
+	digest := sha256.Sum256(listData)
+	require.Equal(t, digest[:], saved)
+}
+
+// TestCopyFileWithRetryProviderEmptyObject is the retrying public root for
+// the same empty target: a success on the first checksum phase leaves the
+// provider copy at exactly one call.
+func TestCopyFileWithRetryProviderEmptyObject(t *testing.T) {
+	src, dst, _ := newProviderCopyEndpoints(t, nil, io.EOF)
+	checksum, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+	require.NoError(t, err)
+	require.Equal(t, emptyContentSHA256Hex, hex.EncodeToString(checksum))
+	require.EqualValues(t, 1, dst.copies.Load())
+	require.EqualValues(t, 1, dst.reads.Load())
+	require.EqualValues(t, 1, dst.stats.Load())
+}
+
+func TestCopyFileWithRetryProviderOneByteObject(t *testing.T) {
+	content := []byte("x")
+	src, dst, backing := newProviderCopyEndpoints(t, content, nil)
+	checksum, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+	require.NoError(t, err)
+	want := sha256.Sum256(content)
+	require.Equal(t, want[:], checksum)
+	data, err := readFile(t.Context(), backing, "object")
+	require.NoError(t, err)
+	require.Equal(t, content, data)
+	require.EqualValues(t, 1, dst.copies.Load())
+}
+
+// TestCopyFileWithRetryEOFWithNonEmptyTarget keeps the original failure for
+// an EOF on a non-empty provider target, including the fact that the
+// provider-written bytes are not rolled back.
+func TestCopyFileWithRetryEOFWithNonEmptyTarget(t *testing.T) {
+	content := []byte("data")
+	src, dst, backing := newProviderCopyEndpoints(t, content, io.EOF)
+	_, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+	require.ErrorIs(t, err, io.EOF)
+	require.EqualValues(t, 1, dst.copies.Load())
+	require.EqualValues(t, 1, dst.reads.Load())
+	require.EqualValues(t, 1, dst.stats.Load())
+	// The provider-written target exists; a checksum failure keeps it.
+	data, err := readFile(t.Context(), backing, "object")
+	require.NoError(t, err)
+	require.Equal(t, content, data)
+}
+
+func TestCopyFileWithRetryProviderStatFailures(t *testing.T) {
+	t.Run("non_retryable_error_surfaces", func(t *testing.T) {
+		src, dst, _ := newProviderCopyEndpoints(t, nil, io.EOF,
+			errors.New("head not answerable"))
+		_, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+		require.ErrorContains(t, err, "head not answerable")
+		require.EqualValues(t, 1, dst.copies.Load())
+		require.EqualValues(t, 1, dst.reads.Load())
+		require.EqualValues(t, 1, dst.stats.Load())
+	})
+	t.Run("retryable_error_rechecks_checksum_only", func(t *testing.T) {
+		timeout := errors.New("i/o timeout")
+		src, dst, _ := newProviderCopyEndpoints(t, nil, io.EOF, timeout, timeout, nil)
+		checksum, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+		require.NoError(t, err)
+		require.Equal(t, emptyContentSHA256Hex, hex.EncodeToString(checksum))
+		// Two transient stats re-run only the checksum read and stat.
+		require.EqualValues(t, 1, dst.copies.Load())
+		require.EqualValues(t, 3, dst.reads.Load())
+		require.EqualValues(t, 3, dst.stats.Load())
+	})
+	t.Run("canceled_error_keeps_causality", func(t *testing.T) {
+		src, dst, _ := newProviderCopyEndpoints(t, nil, io.EOF, context.Canceled)
+		_, err := CopyFileWithRetry(t.Context(), src, dst, "object", "")
+		require.ErrorIs(t, err, context.Canceled)
+		require.EqualValues(t, 1, dst.copies.Load())
+	})
+	t.Run("canceled_in_stat_stops_after_first_attempt", func(t *testing.T) {
+		// The cancellation is observed inside the stat of the first
+		// checksum attempt, which stops the phase at that attempt. This
+		// does not wait out a live backoff timer and claims no timer-wait
+		// coverage.
+		ctx, cancel := context.WithCancel(t.Context())
+		src, dst, _ := newProviderCopyEndpoints(t, nil, io.EOF,
+			errors.New("i/o timeout"))
+		dst.onStat = cancel
+		_, err := CopyFileWithRetry(ctx, src, dst, "object", "")
+		require.ErrorIs(t, err, context.Canceled)
+		// The provider copy already succeeded; only the checksum phase ran.
+		require.EqualValues(t, 1, dst.copies.Load())
+		require.EqualValues(t, 1, dst.reads.Load())
+		require.EqualValues(t, 1, dst.stats.Load())
+	})
+	t.Run("canceled_with_nonzero_size_keeps_causality", func(t *testing.T) {
+		// A stat that succeeds with a nonzero size while its ctx gets
+		// canceled must return the cancellation, not the read-EOF
+		// substitute failure, and must never repeat the provider copy.
+		ctx, cancel := context.WithCancel(t.Context())
+		content := []byte("data")
+		src, dst, _ := newProviderCopyEndpoints(t, content, io.EOF)
+		dst.onStat = cancel
+		_, err := CopyFileWithRetry(ctx, src, dst, "object", "")
+		require.ErrorIs(t, err, context.Canceled)
+		require.NotErrorIs(t, err, io.EOF)
+		require.EqualValues(t, 1, dst.copies.Load())
+		require.EqualValues(t, 1, dst.reads.Load())
+		require.EqualValues(t, 1, dst.stats.Load())
+	})
+}
+
+var _ fileservice.ObjectCopier = new(emptyObjectCopyFS)

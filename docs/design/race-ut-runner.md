@@ -20,6 +20,10 @@ Direct script invocation, Make defaults and the CI profile are different:
 | `UT_EMBEDDED_BATCHES` | 1 | 4 | 4 |
 | `UT_EMBEDDED_PACKAGE_PARALLEL` | 1 | 2 | 4 |
 | `UT_PREBUILD_EMBEDDED` | 1 | 0 | 0 |
+| `PLAN_RACE_PARALLEL` | 1 | 1 | 2 |
+| `PLAN_RACE_SHARDS` | process count | process count | 2 |
+| `PLAN_TEST_PARALLEL` | 3 | 3 | 3 |
+| implicit heavy/plan task budget | 3 | 3 | 4 for the measured profile below |
 
 The Make formulas select four issues/embedded processes only for Linux with at
 least eight requested global tasks; smaller budgets and other platforms retain
@@ -35,11 +39,78 @@ Other controls retain separate responsibilities:
 - `UT_OVERLAP_LIGHT=0` keeps the rejected light/issues overlap opt-in.
   `UT_OVERLAP_PLAN=1` reuses released capacity in the existing heavy/plan wave.
 - The engine phase uses up to six shards, capped by global and explicit heavy
-  limits, before the subsequent heavy/plan wave. Plan process parallelism defaults
-  to one; audited plan subtests have a separate ceiling of three.
+  limits, before the subsequent heavy/plan wave. Direct plan process parallelism
+  defaults to one; Make selects two for Linux with exactly eight global tasks.
+  Audited plan subtests have a separate ceiling of three.
 - `UT_TIMEOUT` defaults to 15 minutes. `UT_HARD_TIMEOUT` defaults to `120m` for
   the whole runner lifecycle. A larger outer budget does not reset a package's
   execution deadline.
+
+## Measured Linux heavy/plan profile
+
+The implicit heavy/plan budget is four only when all of these existing settings
+match the measured profile: normalized Linux platform, `UT_PARALLEL=8`,
+`UT_OVERLAP_PLAN=1`, `PLAN_RACE_PARALLEL=2` and `PLAN_RACE_SHARDS=2`.
+Every other profile keeps three. An explicit `HEAVY_RACE_PARALLEL` retains its
+existing validation and precedence. This selects an existing admission limit;
+it adds no runner, dispatcher, owner, process pool, test selection or retry.
+The two plan processes still reserve two slots, leaving two Go resource-heavy
+tasks instead of one. Go's task admission is not an OS-thread or memory limit;
+the CI envelope remains eight CPUs, 16 GiB and one runner.
+
+Resolve this fallback only after the existing engine cap checks the **explicit**
+heavy override. With no override the engine therefore still uses six shards.
+Setting an explicit value of four instead caps the engine at four; setting
+three caps it at three. These diagnostic modes must not be confused with the
+implicit profile or credited as engine improvements. The displayed heavy budget
+must use the same profile selection as the actual dispatch.
+
+The local comparison used the same candidate Go source, existing 50 float/session
+scenarios, two plan processes, three parallel children per plan process, complete
+resource-heavy scope and prepared caches. Each arm ran in an eight-CPU, 16-GiB,
+no-swap cgroup after the previous arm drained. The measured critical path starts
+when the two owners are launched and ends when the later owner finishes:
+
+| Prepared candidate-source arm | Existing budget 3 | Diagnostic budget 4 |
+| --- | ---: | ---: |
+| Resource-heavy wall | 331 s | 220 s |
+| Plan wall, including preparation | 196 s | 242 s |
+| Joined heavy/plan critical path | 331 s | 242 s |
+| Plan build/discovery within that path | 6 s | 37 s |
+| Wave CPU time | 797.10 s | 890.93 s |
+| Scope lifetime memory peak | 7.27 GiB | 5.56 GiB |
+| Wave sampled anonymous-memory maximum | 6.37 GiB | 4.77 GiB |
+| Cgroup max/OOM/kill events | 0 / 0 / 0 | 0 / 0 / 0 |
+
+A preceding budget-four arm also completed at 262 s. The prepared comparison
+reduces the joined path by 89 s (26.9%) while using about 12% more wave CPU time.
+Compilation contention is included: the slower plan owner under four slots
+cannot be hidden by adding package elapsed values or considering only the
+resource-heavy saving. Scope page-cache charging differs between sequential
+runs, so the peak ratio is not a claimed memory saving. The old-plan first arm's
+526 s also includes different source and preparation state; it is not the
+isolated scheduling benefit. Checkout, native preparation, engine work and
+reporting remain outside this phase comparison.
+
+All 8,746 selected roots and 42,412 root/subtest start and terminal nodes match
+exactly between the prepared candidate arms, including the same nine existing
+root skips and no new skips, duplicate execution or failures.
+The new protocol-scope regression is the only addition relative to the old
+planner source. Every original SQL/data/result/error/cleanup oracle is retained;
+see the [behavior map](ci-test-cost-coverage.md). The canonical report validator
+and analyzer passed, all groups drained, and all four diagnostic scopes exited.
+Fixture audit retains the distinct backup/TAE workspace modules and existing
+optional Minio prerequisite; no fixture is disabled to obtain this result.
+
+Selection, package deadline, cancellation/drain, uncertain completion, failure
+precedence and report transfer keep their existing owners and contracts below.
+Exercise the real dispatch for the selected profile, non-Linux/smaller/serial
+profiles, explicit overrides, engine/heavy/plan failures and undrained helpers.
+A full CI run must still confirm the complete job wall and cold-runner resource
+behavior; local phase timings do not establish the one-hour target. Revert this
+profile selection for an exact scheduling rollback. An explicit heavy value of
+three restores one resource slot with two plan processes, but also retains its
+existing engine-three cap.
 
 ## Package and runnable-root selection
 

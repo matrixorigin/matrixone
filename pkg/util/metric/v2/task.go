@@ -19,6 +19,35 @@ import (
 )
 
 var (
+	sqlTaskControlFailureCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "sql_control_failure_total",
+		Help:      "Total failed SQL task control attempts by fixed stage.",
+	}, []string{"stage"})
+
+	SQLTaskDiscoveryFailureCounter   = sqlTaskControlFailureCounter.WithLabelValues("discovery")
+	SQLTaskCronAddFailureCounter     = sqlTaskControlFailureCounter.WithLabelValues("cron_add")
+	SQLTaskCronQueryFailureCounter   = sqlTaskControlFailureCounter.WithLabelValues("cron_query")
+	SQLTaskCronParseFailureCounter   = sqlTaskControlFailureCounter.WithLabelValues("cron_parse")
+	SQLTaskCronTriggerFailureCounter = sqlTaskControlFailureCounter.WithLabelValues("cron_trigger")
+	SQLTaskSyncCommitFailureCounter  = sqlTaskControlFailureCounter.WithLabelValues("sync_commit")
+	SQLTaskAllocationFailureCounter  = sqlTaskControlFailureCounter.WithLabelValues("allocation")
+	SQLTaskExpiryFailureCounter      = sqlTaskControlFailureCounter.WithLabelValues("expiry")
+	SQLTaskReceiptRetryCounter       = sqlTaskControlFailureCounter.WithLabelValues("receipt_retry")
+	SQLTaskReceiptCapacityCounter    = sqlTaskControlFailureCounter.WithLabelValues("receipt_capacity")
+	SQLTaskReceiptAbandonedCounter   = sqlTaskControlFailureCounter.WithLabelValues("receipt_abandoned")
+	SQLTaskUnclaimedFailureCounter   = sqlTaskControlFailureCounter.WithLabelValues("unclaimed")
+
+	sqlTaskPendingGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "mo", Subsystem: "task", Name: "sql_metadata_pending",
+		Help: "SQL task outcomes awaiting metadata reconciliation by fixed class.",
+	}, []string{"class"})
+	SQLTaskManualPendingGauge    = sqlTaskPendingGauge.WithLabelValues("manual")
+	SQLTaskScheduledPendingGauge = sqlTaskPendingGauge.WithLabelValues("scheduled")
+)
+
+var (
 	taskShortDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

@@ -886,9 +886,7 @@ func TestPreparedNtileParameter(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			sourceType := source.ToType()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
-				[]any{ParamValue{Value: "2", SourceType: sourceType, HasSourceType: true, IsBinaryProtocol: true}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "2", SourceType: sourceType, HasSourceType: true, IsBinaryProtocol: true}})
 			require.NoError(t, err)
 			var argument *planpb.Expr
 			require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *planpb.Expr) error {

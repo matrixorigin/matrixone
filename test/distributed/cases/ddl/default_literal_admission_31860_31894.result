@@ -1,0 +1,204 @@
+drop database if exists default_literal_admission_31860_31894;
+create database default_literal_admission_31860_31894;
+use default_literal_admission_31860_31894;
+set @saved_literal_default_mode = @@sql_mode;
+create table t1(v varchar(3) default 12345);
+Invalid default value for 'v'
+select 1 as recovered_strict_create_int;
+recovered_strict_create_int
+1
+create table t1(v varchar(3) default 1.25);
+Invalid default value for 'v'
+select 2 as recovered_strict_create_decimal;
+recovered_strict_create_decimal
+2
+create table t1(v char(3) default 12345);
+Invalid default value for 'v'
+select 3 as recovered_strict_create_char;
+recovered_strict_create_char
+3
+create table a(id int primary key, v varchar(5));
+alter table a add column n varchar(2) default 100;
+Invalid default value for 'n'
+select 4 as recovered_strict_add;
+recovered_strict_add
+4
+create table m(id int primary key, v varchar(5) default 12);
+alter table m modify column v varchar(3) default 12345;
+Invalid default value for 'v'
+select 5 as recovered_strict_modify;
+recovered_strict_modify
+5
+alter table m change column v w varchar(3) default 1234;
+Invalid default value for 'w'
+select 6 as recovered_strict_change;
+recovered_strict_change
+6
+alter table a alter column v set default 123456;
+Invalid default value for 'v'
+select 7 as recovered_strict_setdefault;
+recovered_strict_setdefault
+7
+create table i1(id int primary key, c int default 1);
+alter table i1 alter column c set default 'abc';
+Invalid default value for 'c'
+alter table i1 alter column c set default '12x';
+Invalid default value for 'c'
+alter table i1 alter column c set default 99999999999;
+Invalid default value for 'c'
+alter table i1 modify column c int default 'abc';
+Invalid default value for 'c'
+alter table i1 add column c2 int default 'abc';
+Invalid default value for 'c2'
+select 8 as recovered_strict_badvalue_add;
+recovered_strict_badvalue_add
+8
+create table i2(id int, c int default 'abc');
+Invalid default value for 'c'
+create table i3(id int, c tinyint default 300);
+Invalid default value for 'c'
+create table i4(id int, c date default 'abc');
+Invalid default value for 'c'
+select 9 as recovered_strict_badvalue_create;
+recovered_strict_badvalue_create
+9
+set @@sql_mode='';
+create table e1(v varchar(3) default 12345);
+Invalid default value for 'v'
+select 10 as recovered_empty_create;
+recovered_empty_create
+10
+create table e1(id int primary key, c int default 1);
+alter table e1 alter column c set default 'abc';
+Invalid default value for 'c'
+alter table e1 add column c2 int default 'abc';
+Invalid default value for 'c2'
+select 11 as recovered_empty_badvalue;
+recovered_empty_badvalue
+11
+alter table e1 modify column c int default 'abc';
+Invalid default value for 'c'
+select 12 as recovered_empty_modify;
+recovered_empty_modify
+12
+set @@sql_mode=@saved_literal_default_mode;
+create table f1(v varchar(5) default 12345);
+show create table f1;
+Table    Create Table
+f1    CREATE TABLE `f1` (\n  `v` varchar(5) DEFAULT 12345\n)
+insert into f1 values ();
+select * from f1;
+v
+12345
+create table f2(v varchar(4) default 1.25);
+insert into f2 values ();
+select * from f2;
+v
+1.25
+create table f3(id int primary key, m mediumint default 1);
+insert into f3 values (1, default);
+select id, m from f3 order by id;
+id    m
+1    1
+create table s1(v varchar(3) default 'abcd');
+Invalid default value for 'v'
+select 13 as recovered_overlong_string;
+recovered_overlong_string
+13
+create table s2(v varchar(3) default (12345));
+insert into s2 values ();
+select * from s2;
+v
+123
+create table g1(id int primary key, m mediumint(9) default 8388608);
+Invalid default value for 'm'
+create table g2(id int primary key, d decimal(5,2) unsigned default -1.25);
+Invalid default value for 'd'
+create table n1(id int primary key, d datetime default now());
+insert into n1 (id) values (1);
+select id from n1 order by id;
+id
+1
+create table d1(v varchar(3));
+insert into d1(v) values (12345);
+Data truncation: Can't cast '12345' to VARCHAR type. Src length 5 is larger than Dest length 3
+select 14 as recovered_dml_truncation;
+recovered_dml_truncation
+14
+select cast(12345 as char(3));
+cast(12345 as char(3))
+123
+create table lz1(id int primary key, v varchar(5) default -000001.25);
+insert into lz1 (id) values (1);
+select v from lz1 order by id;
+v
+-1.25
+create table lz1m(id int primary key, v varchar(5));
+alter table lz1m alter column v set default -000001.25;
+insert into lz1m (id) values (1);
+select v from lz1m order by id;
+v
+-1.25
+create table c255(id int primary key, v char(255) default 1.2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222);
+insert into c255 (id) values (1);
+select length(v) from c255;
+length(v)
+255
+create table c255x(id int primary key, v char(255) default 1.22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222);
+Invalid default value for 'v'
+select 21 as recovered_after_char_create_overflow;
+recovered_after_char_create_overflow
+21
+alter table c255 add column w char(255) default 1.22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222;
+Invalid default value for 'w'
+select 22 as recovered_after_alter_add_overflow;
+recovered_after_alter_add_overflow
+22
+alter table c255 alter column v set default 1.22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222;
+Invalid default value for 'v'
+select 23 as recovered_after_alter_default_overflow;
+recovered_after_alter_default_overflow
+23
+create table abase(id int primary key);
+alter table abase add column v char(255) default 1.2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222;
+alter table abase modify column v char(255) default 1.22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222;
+Invalid default value for 'v'
+select 24 as recovered_after_modify_overflow;
+recovered_after_modify_overflow
+24
+select v from lz1 order by id;
+v
+-1.25
+create table up1(id int primary key, c tinyint default +300);
+Invalid default value for 'c'
+select 31 as recovered_after_unary_plus_tinyint_overflow;
+recovered_after_unary_plus_tinyint_overflow
+31
+create table up2(id int primary key, c int default +99999999999);
+Invalid default value for 'c'
+select 32 as recovered_after_unary_plus_int_overflow;
+recovered_after_unary_plus_int_overflow
+32
+create table up3(id int primary key, c tinyint default +100);
+insert into up3 (id) values (1);
+select c from up3 order by id;
+c
+100
+create table up4(id int primary key, v varchar(5) default +1.25);
+insert into up4 (id) values (1);
+select v from up4 order by id;
+v
+1.25
+show create table up4;
+Table	Create Table
+up4	CREATE TABLE `up4` (\n  `id` int NOT NULL,\n  `v` varchar(5) DEFAULT +1.25,\n  PRIMARY KEY (`id`)\n)
+alter table up4 modify column v varchar(5) default +1.25;
+show create table up4;
+Table	Create Table
+up4	CREATE TABLE `up4` (\n  `id` int NOT NULL,\n  `v` varchar(5) DEFAULT +1.25,\n  PRIMARY KEY (`id`)\n)
+create table up5(id int primary key, v varchar(5) default +123456);
+Invalid default value for 'v'
+select 33 as recovered_after_unary_plus_width_overflow;
+recovered_after_unary_plus_width_overflow
+33
+drop database default_literal_admission_31860_31894;

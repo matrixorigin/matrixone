@@ -65,6 +65,11 @@ int mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
                            int use_offset, void **out);
 void mo_cbitmap_free(void *f);
 
+// Build a globally sized bitset once, then add bounded vectors to that set.
+int mo_cbitmap_create(uint64_t base, uint64_t nbits, void **out);
+int mo_cbitmap_add_fixed(void *f, const void *key, size_t len, size_t elemsz,
+                         size_t nitem, const void *nullmap, size_t nullmaplen);
+
 // A cbitmap: bit i of words (bit i & 63 of words[i >> 6]) is the value base + i, for
 // i < nbits. words is NULL when nbits is 0.
 typedef struct {

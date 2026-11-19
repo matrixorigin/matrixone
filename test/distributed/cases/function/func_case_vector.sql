@@ -82,8 +82,9 @@ set @condition = true;
 execute vector_case_stmt using @condition;
 deallocate prepare vector_case_stmt;
 
--- Incompatible vector result branches must fail even when a constant condition
--- would make one branch unreachable.
+-- Mixed vector branches take the common type of docs/sql/vector-common-type.md;
+-- branches of different dimensions fail even when a constant condition makes one
+-- branch unreachable.
 select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4]' as vecf64(2)) end;
 select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4,5]' as vecf32(3)) end;
 select case when true then cast('[1,2]' as vecf32(2)) else '[3,4]' end;

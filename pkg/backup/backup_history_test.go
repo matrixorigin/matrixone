@@ -109,7 +109,7 @@ func TestCopyBackupTableIDHistory(t *testing.T) {
 				require.NoError(t, err)
 			}()
 
-			gotLocations, files, err := copyBackupTableIDHistory(ctx, "", src, dst, start)
+			gotLocations, files, err := (backupFileCopier{}).copyBackupTableIDHistory(ctx, "", src, dst, start)
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 				if tc.missingSource {

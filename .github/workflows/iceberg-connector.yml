@@ -34,6 +34,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-go@v5
         with:
@@ -57,6 +59,8 @@ jobs:
       MO_ICEBERG_REPORT_DIR: test/iceberg/reports/iceberg-e2e-local-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-go@v5
         with:

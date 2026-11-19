@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -133,6 +135,59 @@ func TestUniqueIndexConstraintSymbolIsEffectiveNameOnCreate(t *testing.T) {
 	require.NoError(t, checkConstraintNames([]*tree.UniqueIndex{first, anon}, nil, ctx))
 	require.Equal(t, "k", first.GetIndexName())
 	require.Equal(t, "k_2", anon.Name)
+}
+
+// TestParsedMixedCaseConstraintSymbolIsEffectiveName runs the real parser
+// into the CREATE-side naming entry for the mixed-case residual of issue
+// #31659: `CONSTRAINT `Uq_MiXeD` UNIQUE(k)` must land on the byte-identical
+// effective display name as the equivalent `UNIQUE KEY `Uq_MiXeD`(k)`, a
+// case-variant collision is still rejected on the case-insensitive
+// effective name, and an explicit index name still wins over the symbol.
+func TestParsedMixedCaseConstraintSymbolIsEffectiveName(t *testing.T) {
+	ctx := context.Background()
+	parseUniques := func(sql string) []*tree.UniqueIndex {
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		// Owner is the enclosing test: free the AST when it finishes so the
+		// returned nodes stay readable through the caller's assertions
+		// (helper-local defer Free scrubbed them; no Free leaks instead).
+		t.Cleanup(stmts[0].Free)
+		create, ok := stmts[0].(*tree.CreateTable)
+		require.True(t, ok)
+		var out []*tree.UniqueIndex
+		for _, def := range create.Defs {
+			if u, ok := def.(*tree.UniqueIndex); ok {
+				out = append(out, u)
+			}
+		}
+		require.NotEmpty(t, out)
+		return out
+	}
+
+	symbolForm := parseUniques(
+		"create table symbol_case (id int primary key, k int, constraint `Uq_MiXeD` unique(k))")
+	require.NoError(t, checkConstraintNames(symbolForm, nil, ctx))
+	require.Equal(t, "Uq_MiXeD", symbolForm[0].GetIndexName())
+
+	explicitForm := parseUniques(
+		"create table explicit_case (id int primary key, k int, unique key `Uq_MiXeD`(k))")
+	require.NoError(t, checkConstraintNames(explicitForm, nil, ctx))
+	require.Equal(t, symbolForm[0].GetIndexName(), explicitForm[0].GetIndexName())
+
+	// The preserved spelling must not weaken case-insensitive uniqueness:
+	// `Uq_MiXeD` collides with the case-variant explicit name `uq_mixed`.
+	collide := parseUniques(
+		"create table collide (id int primary key, a int, b int, " +
+			"constraint `Uq_MiXeD` unique(a), unique key `uq_mixed`(b))")
+	require.Error(t, checkConstraintNames(collide, nil, ctx))
+
+	// An explicit index name keeps precedence over the constraint symbol.
+	precedence := parseUniques(
+		"create table precedence (id int primary key, k int, " +
+			"constraint `SyMbOl_MiXeD` unique key `NaMe_WiNs`(k))")
+	require.NoError(t, checkConstraintNames(precedence, nil, ctx))
+	require.Equal(t, "NaMe_WiNs", precedence[0].GetIndexName())
 }
 
 func TestIndexTableKeyTypeForPrefix(t *testing.T) {

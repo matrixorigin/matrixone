@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,14 +41,14 @@ func membershipSpec() *plan.IndexSearchScan {
 	return spec
 }
 
-func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) []byte {
+func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) *keycodec.KeyPayload {
 	proc := testutil.NewProc(t)
 	v := vector.NewVec(typ)
 	appendKeys(v)
 	defer v.Free(proc.Mp())
 	payload, err := v.MarshalBinary()
 	require.NoError(t, err)
-	return payload
+	return testutil.RuntimeKeyPayload(t, payload)
 }
 
 func TestNewReaderMembership(t *testing.T) {

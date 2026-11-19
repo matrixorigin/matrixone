@@ -87,14 +87,17 @@ func (state sequenceStatementState) apply(proc *process.Process) {
 // created — reused, never reset, while the episode is live (G2), opened
 // fresh after an episode closure (Z1) — and the admission probe creates
 // every newly contended watch entry carrying its committed-tuple baseline
-// (A1/Z2); a failed sample records the entry young. A declined verdict
-// surfaces the FIRST-recorded pending's named terminal error.
+// (A1/Z2); a failed sample records the entry young. An expiry terminal
+// identifies its watched sequence; other declines use the first pending.
 func (c *Compile) arbitrateSequenceRetryAdmission(retryState *process.SequenceRetryState, items []process.SequencePendingItem, err error) (bool, error) {
+	if err := c.proc.GetQueryContextError(); err != nil {
+		return false, err
+	}
 	if retryState.Published() {
 		return false, nil
 	}
-	if _, terminal := retryState.TerminalIdentity(); terminal {
-		return false, nil
+	if id, terminal := retryState.TerminalIdentity(); terminal {
+		return false, function.SequenceRetryTerminalError(c.proc, process.DecideOutcome{Target: id}, process.WatchIdentity{})
 	}
 	op := c.proc.GetTxnOperator()
 	if op == nil {
@@ -122,7 +125,12 @@ func (c *Compile) arbitrateSequenceRetryAdmission(retryState *process.SequenceRe
 		// The window elapsed at the seam (site 1): the probe-first expiry
 		// decision — never the wall clock alone — chooses between renewed
 		// continuation, episode closure and the terminal.
-		outcome := function.RunSequenceRetryExpiryDecision(c.proc.Ctx, c.proc, stmtDeadline)
+		// The failed pipeline may have been cancelled during teardown. Only
+		// the query context represents cancellation of the whole statement.
+		outcome := function.RunSequenceRetryExpiryDecision(scopeRunQueryContext(c.proc), c.proc, stmtDeadline)
+		if err := c.proc.GetQueryContextError(); err != nil {
+			return false, err
+		}
 		if outcome.Kind == process.DecideCancelled {
 			// Caller's own cancellation outranks a pending's stale error:
 			// the client receives its own cancellation (v21 precedence,
@@ -130,6 +138,9 @@ func (c *Compile) arbitrateSequenceRetryAdmission(retryState *process.SequenceRe
 			return false, outcome.Err
 		}
 		if outcome.Kind == process.DecideExhausted {
+			if outcome.Target.WantRel != 0 {
+				return false, function.SequenceRetryTerminalError(c.proc, outcome, process.WatchIdentity{})
+			}
 			return false, nil
 		}
 	}

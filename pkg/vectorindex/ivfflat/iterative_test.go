@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -104,8 +105,7 @@ func TestExactMembershipCount(t *testing.T) {
 	n, err := exactMembershipCount(nil, false)
 	require.NoError(t, err)
 	require.Zero(t, n)
-	_, err = exactMembershipCount([]byte{1}, false)
-	require.Error(t, err)
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1})
 
 	mp := mpool.MustNewZero()
 	payload := func(typ types.Type, appendKeys func(*vector.Vector)) []byte {
@@ -124,13 +124,13 @@ func TestExactMembershipCount(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(v, []byte("b"), false, mp))
 	})
 	// integer keys are an exact set; other keys build a bloom filter unless required
-	n, err = exactMembershipCount(ints, false)
+	n, err = exactMembershipCount(testutil.RuntimeKeyPayload(t, ints), false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), n)
-	n, err = exactMembershipCount(strs, false)
+	n, err = exactMembershipCount(testutil.RuntimeKeyPayload(t, strs), false)
 	require.NoError(t, err)
 	require.Zero(t, n)
-	n, err = exactMembershipCount(strs, true)
+	n, err = exactMembershipCount(testutil.RuntimeKeyPayload(t, strs), true)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), n)
 }

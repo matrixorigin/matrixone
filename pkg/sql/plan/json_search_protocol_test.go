@@ -48,7 +48,7 @@ func TestJSONSearchRequiresProtocol136(t *testing.T) {
 
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion136, required)
+	require.Equal(t, defines.MORPCVersion135, required)
 	require.Equal(t, int64(136), defines.MORPCLatestVersion)
 }
 
@@ -76,7 +76,7 @@ func TestJSONSearchProtocolSurvivesWireRoundTrip(t *testing.T) {
 	require.True(t, features.JSONSearch)
 	required, err := RequiredPersistedExpressionProtocolVersion(&decoded)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion136, required)
+	require.Equal(t, defines.MORPCVersion135, required)
 }
 
 func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
@@ -100,7 +100,7 @@ func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
 
 	const sql = `create view v_json_search as select JSON_SEARCH('{"a":"x"}','one','x') as loc`
 	build := func(floor int64) (*Plan, error) {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion136)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		if err != nil {
@@ -111,8 +111,8 @@ func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
 	}
 
 	_, err := build(defines.MORPCVersion134)
-	require.ErrorContains(t, err, "protocol version 136")
-	created, err := build(defines.MORPCVersion136)
+	require.ErrorContains(t, err, "protocol version 135")
+	created, err := build(defines.MORPCVersion135)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -121,5 +121,5 @@ func TestJSONSearchViewAdmissionBeforeFold(t *testing.T) {
 		&data,
 	))
 	require.NotNil(t, data.RequiredProtocolVersion)
-	require.Equal(t, defines.MORPCVersion136, *data.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion135, *data.RequiredProtocolVersion)
 }

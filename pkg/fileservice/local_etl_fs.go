@@ -711,22 +711,5 @@ func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.Create(nativePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// do not check error for this one
-	os.Remove(nativePath)
-	return f, nil
+	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkLocalFile)
 }

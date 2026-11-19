@@ -20,7 +20,8 @@ Load only the reference needed for the task:
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Systematic regression design, counterexamples, white-box/black-box validation, planner/explain/rewrite correctness, avoiding scenario overfit | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
-| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
+| Changed persisted format or interpretation, upgrade/restore, or protocol and plan encoding | [Shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md) |
+| Focused versus owning-package validation, evidence selection and reuse | [Shared validation and evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md) |
 
 ## Enforcement Gates
 
@@ -33,6 +34,7 @@ Consult the referenced material before acting:
 | **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (missing Pixi activation, `gmake` jobserver, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
 | **G-IDXREVIEW** | Reviewing a diff that touches index-algorithm dispatch, `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin` | Read [index-plugin.md](references/index-plugin.md) section 9 and run its greps. |
+| **G-TYPESWITCH** | Adding a `types.T` constant, writing or editing a `switch` over `types.T`, or a `TestTypeSwitchFamilies` failure | Read `pkg/container/types/testdata/README.md`. Handle every member of the family (or of one subfamily) in the switch, or tag it `// typeswitch:partial <reason>`; never add a switch to `typeswitch_baseline.txt`. Regenerate the baseline only to remove fixed/tagged entries, and check its diff only removes lines. |
 | **G-DONE** | Before declaring "done"/"complete"/"passes" | Apply the completion gate below. |
 | **G-TEST-FAIL** | `go test` returns non-zero or hangs >10s | Route by evidence: module/header/link/load errors → [cgo-build-test.md](references/cgo-build-test.md); operator/lifecycle/channel hangs → [operator-pipeline.md](references/operator-pipeline.md); ordinary assertion/panic failures → trace the owning code and test directly. Do not load unrelated references by default. |
 | **G-TEST-EVIDENCE** | A test command yields no final PASS/FAIL, returns a session/process identifier, or leaves a test process alive | Treat it as still running or failed; poll, inspect the process, and capture its real exit status/stack. |
@@ -161,15 +163,14 @@ Read [references/index-plugin.md](references/index-plugin.md) before touching ve
 ## Completion Gate
 
 Before declaring any MatrixOne change done, map every changed artifact to its
-owning validation. Do not run an unrelated Go package merely to fill a box.
+owning validation. Apply the
+[shared evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md#4-reuse-evidence-by-semantic-validity)
+to the final change.
 
 ```
 □ changed artifacts and their direct/dependent validators are explicitly named
-□ if Go is affected, each owning package pattern is named and
-  `GOWORK=off go list -mod=readonly <patterns...>` proves the selection is non-empty
-□ if Go is affected, GOWORK=off go build -mod=readonly <patterns...> -> exit 0
-□ if Go is affected, GOWORK=off go vet -mod=readonly <patterns...>   -> exit 0
-□ if Go is affected, GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s <patterns...> -> exit 0, no hangs
+□ if Go is affected, evidence covers the required test, build, and static checks
+  at the scope defined in the shared validation reference
 □ if non-Go artifacts are affected, their parser/linter plus the smallest
   behavior-level validation for the changed contract pass (for example shell
   syntax + script tests, Make dry-run + target test, or Docker check + relevant build)
@@ -179,7 +180,7 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
   (a hand-listed set drifts from the diff; a `golangci-lint` run reported clean this way
   missed an unused symbol in a package the author forgot they had touched)
 □ git diff --stat -> inspected, no unintended files
-□ all evidence is newer than the last semantic edit/rebase and has a real exit code
+□ evidence covers the final change under the shared rules and records the real exit status
 ```
 
 Hang = failure. If `go test` produces >10s of no output, investigate instead of calling it slow.

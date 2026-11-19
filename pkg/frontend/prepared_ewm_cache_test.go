@@ -61,41 +61,35 @@ func ewmParam(pos int32) *plan.Expr {
 	}
 }
 
-// TestShouldCachePrepareCompileRejectsEwmParameter pins the §10 prepared
-// cache gate: the ewm decay and policy positions compile into the
-// immutable per-execution configuration bytes, so a prepared marker there
-// must rebuild the configuration at every EXECUTE — the statement is not
-// a prepare-compile-cache candidate. A marker confined to the value
-// column is configuration-independent and stays cacheable.
 func TestShouldCachePrepareCompileRejectsEwmParameter(t *testing.T) {
 	// the real plan shape: the prepared decay marker inside the window
 	prepared := ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmColumn(t), ewmParam(0)))
 	require.True(t, plan2.PreparedPlanHasEwmParams(prepared))
-	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 
 	// a policy-position marker gates the same way
 	prepared = ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmColumn(t),
 		plan2.MakePlan2Float64ConstExprWithType(0.5), ewmParam(1)))
 	require.True(t, plan2.PreparedPlanHasEwmParams(prepared))
-	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 
 	// the cov family reads its decay after the second value column
 	prepared = ewmWindowPlan(ewmCall(plan2.NameEwmCov, ewmColumn(t),
 		ewmColumn(t), ewmParam(0)))
 	require.True(t, plan2.PreparedPlanHasEwmParams(prepared))
-	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 
 	// literal decay and policies cache normally
 	prepared = ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmColumn(t),
 		plan2.MakePlan2Float64ConstExprWithType(0.5)))
 	require.False(t, plan2.PreparedPlanHasEwmParams(prepared))
-	require.True(t, shouldCachePrepareCompile(prepared))
+	require.True(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 
 	// a marker in the value column does not admit the gate
 	prepared = ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmParam(0),
 		plan2.MakePlan2Float64ConstExprWithType(0.25)))
 	require.False(t, plan2.PreparedPlanHasEwmParams(prepared))
-	require.True(t, shouldCachePrepareCompile(prepared))
+	require.True(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 }
 
 // TestPreparedEwmDisablesMixedRuntimeSpecializationCache: an EXECUTE-time
@@ -199,7 +193,7 @@ func TestEwmWindowResultMetadataStaysNullable(t *testing.T) {
 // with the EXECUTING statement's clock, so the statement is
 // execution-dependent: the plan must flag it (PreparedPlanHasEwmParams),
 // the prepare-compile cache must not be a candidate
-// (shouldCachePrepareCompile), and the executing EXECUTE must not hand
+// (planReuse at preparedPhysicalCompile), and the executing EXECUTE must not hand
 // back a cached compile — while the literal-only twin stays cacheable
 // under the same gates (§10 prepared-stability contract).
 func TestPreparedEwmRealTimeConfigIsExcludedFromBothCaches(t *testing.T) {
@@ -210,7 +204,7 @@ func TestPreparedEwmRealTimeConfigIsExcludedFromBothCaches(t *testing.T) {
 	realTimePlan := prepared.PreparePlan.GetDcl().GetPrepare().Plan
 	require.True(t, plan2.PreparedPlanHasEwmParams(realTimePlan),
 		"a real-time decay/policy configuration must flag the statement execution-dependent")
-	require.False(t, shouldCachePrepareCompile(realTimePlan),
+	require.False(t, planReuse(false, realTimePlan, preparedPhysicalCompile).reusable,
 		"the prepare-compile cache must not freeze an execution-evaluated ewm configuration")
 
 	comp, p, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
@@ -233,7 +227,7 @@ func TestPreparedEwmRealTimeConfigIsExcludedFromBothCaches(t *testing.T) {
 	literalPlan := literal.PreparePlan.GetDcl().GetPrepare().Plan
 	require.False(t, plan2.PreparedPlanHasEwmParams(literalPlan),
 		"literal-only configuration is not execution-dependent")
-	require.True(t, shouldCachePrepareCompile(literalPlan),
+	require.True(t, planReuse(false, literalPlan, preparedPhysicalCompile).reusable,
 		"literal-only ewm configuration stays a prepare-compile-cache candidate")
 	litComp, litP, litStmt, _, litOwned, litErr := initExecuteStmtParam(
 		litExecCtx, litSes, litCw, nil, literal.Name)

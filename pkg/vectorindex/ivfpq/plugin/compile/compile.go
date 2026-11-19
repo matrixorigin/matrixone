@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -174,7 +175,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	}
 
 	// 1. static check
-	if len(indexDefs) != 2 {
+	if len(indexDefs) < 2 || len(indexDefs) > 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivfpq index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
@@ -235,7 +236,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// this txn, then re-register CDC starting from now (the build
 		// produced tag=0; CDC handles only forward changes).
 		for _, sql := range buildSqls {
-			if err = ctx.RunSql(sql); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "ivfpq_create", indexName); err != nil {
 				return err
 			}
 		}
@@ -315,6 +316,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.IndexAlgoParamQuantizerTrainLimit,
+		catalog.IndexAlgoParamMaxBadRecords,
 		catalog.HnswM,
 		catalog.BitsPerCode,
 		catalog.Quantization,
@@ -395,10 +397,14 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
 	}
-	return []string{
+	sqls := []string{
 		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
 		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
-	}, nil
+	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+	}
+	return sqls, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:757.
@@ -425,6 +431,14 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		PKey:          srcAlias + "." + pkCol,
 		KeyPart:       idx.Parts[0],
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		cfg.IgnoredTable = ignored.IndexTableName
+	}
+	maxBadRecords, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxBadRecords = maxBadRecords
 
 	threads, err := ctx.ResolveVariable("ivfpq_threads_build", true, false)
 	if err != nil {

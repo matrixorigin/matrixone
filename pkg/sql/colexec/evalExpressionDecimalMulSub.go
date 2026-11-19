@@ -94,6 +94,22 @@ func decimalLiteral(e *plan.Expr) bool {
 // FuseDecimalAggregateArgument specializes only a complete aggregate argument.
 // Generic expression constructors never call it; ineligible roots retain their owner.
 func FuseDecimalAggregateArgument(e *plan.Expr, executor ExpressionExecutor) ExpressionExecutor {
+	if root, ok := executor.(*FunctionExpressionExecutor); !ok || root == nil {
+		return executor
+	}
+	if typed := prepareDecimalTyped(e, executor); typed != nil {
+		return typed
+	}
+	if fused := fuseDecimalMulSubArgument(e, executor); fused != executor {
+		return fused
+	}
+	if chain := prepareDecimalChain(e, executor); chain != nil {
+		return chain
+	}
+	return executor
+}
+
+func fuseDecimalMulSubArgument(e *plan.Expr, executor ExpressionExecutor) ExpressionExecutor {
 	root, ok := executor.(*FunctionExpressionExecutor)
 	if !ok {
 		return executor
@@ -222,6 +238,13 @@ func (e *decimalMulSubExecutor) Eval(proc *process.Process, batches []*batch.Bat
 	if !decimalMulSubSource(x, e.x, n) || !decimalMulSubSource(y, e.y, n) {
 		return e.root.Eval(proc, batches, selected)
 	}
+	operands := [2]*vector.Vector{x, y}
+	flat, err := e.root.normalizeDictionaryParameters(operands[:], false)
+	if err != nil {
+		return nil, err
+	}
+	x, y = flat[0], flat[1]
+
 	e.root.resetResultType(e.root.resultVector)
 	if err := e.root.resultVector.PreExtendAndReset(n); err != nil {
 		return nil, err

@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -74,8 +77,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if node.Limit == nil {
 		return
 	}
-	if len(node.OrderBy) != 1 {
-		// for now ,only support order by one column
+	if len(node.OrderBy) == 0 {
 		return
 	}
 	orderByCol := node.OrderBy[0].Expr.GetCol()
@@ -86,6 +88,17 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if scanID == -1 || scanOrderExpr == nil {
 		return
 	}
+	// Dynamic bounds require compatible SQL and zonemap comparators. JSON
+	// uses semantic order rather than byte order; geometry has no zonemap
+	// comparator. Neither single-key nor multi-key Top can prune these types.
+	if typ := types.T(scanOrderExpr.Typ.Id); typ == types.T_json || typ == types.T_geometry || typ == types.T_geometry32 {
+		return
+	}
+	// Zonemaps do not describe NULL ordering. Do not extend dynamic pruning to
+	// nullable leading keys when there are secondary-key winners to preserve.
+	if len(node.OrderBy) > 1 && !scanOrderExpr.Typ.NotNullable {
+		return
+	}
 	if !encodedOrderMatchesSQLOrder(scanOrderExpr) {
 		return
 	}
@@ -94,6 +107,13 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
+	// Readers resolve qualified names by their last component. A literal dot
+	// in the column name is ambiguous; keep the full scan in that case.
+	colPos := int(scanOrderByCol.ColPos)
+	if def := scanNode.TableDef; def != nil && colPos >= 0 && colPos < len(def.Cols) &&
+		strings.Contains(def.Cols[colPos].Name, ".") {
+		return
+	}
 	if !builder.regularIndexScanAllowedByOrderHints(scanNode) {
 		return
 	}
@@ -102,11 +122,13 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	}
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
 	scanOrderBy.Expr = scanOrderExpr
-	eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil &&
+	// A leading-key block order is not a complete multi-key row order: retain
+	// the original Top comparator and never install a static reader limit.
+	eligibleOrderedLimit := len(node.OrderBy) == 1 && staticLimitSafe && node.Offset == nil && node.RankOption == nil &&
 		isPositiveLiteralLimit(node.Limit)
 	enableOrderedLimit := eligibleOrderedLimit &&
 		canPushCompositePrimaryKeyOrderedLimit(scanNode, scanOrderByCol)
-	if canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
+	if len(node.OrderBy) == 1 && canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
 		if eligibleOrderedLimit {
 			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
 			if !enableOrderedLimit {

@@ -46,6 +46,12 @@ type FmtCtx struct {
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
 	caseExpressions               *[]*CaseExpr
+	// compactArgLists joins expression-list items with "," instead of ", ".
+	// It is for single-expression diagnostic text where the reader (a human or
+	// an oracle with a substring expectation) matches the authored spelling;
+	// persistence rendering must NOT use it, because its output is re-parsed
+	// and compared canonically.
+	compactArgLists bool
 }
 
 // CaseExpressions enumerates syntax producers before binding can duplicate or
@@ -103,6 +109,17 @@ func WithQuoteString(quote bool) FmtCtxOption {
 func WithSingleQuoteString() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.singleQuoteString = true
+	})
+}
+
+// WithCompactArgLists renders expression-list items (function argument lists,
+// IN lists, value lists) separated by "," with no following space, so the
+// rendered text stays a substring-faithful spelling of expressions authored
+// without argument spacing. Intended for diagnostic messages that quote the
+// offending expression; persisted SQL keeps the default ", " separator.
+func WithCompactArgLists() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.compactArgLists = true
 	})
 }
 

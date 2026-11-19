@@ -32,10 +32,11 @@ func TestCatalogHooks(t *testing.T) {
 	var _ catalogplugin.Hooks = CatalogHooks{}
 	h := CatalogHooks{}
 
-	// HiddenTableTypes — [Storage, Metadata].
+	// HiddenTableTypes — [Storage, Metadata, Ignored].
 	require.Equal(t, []string{
 		catalog.FullText2Index_TblType_Storage,
 		catalog.FullText2Index_TblType_Metadata,
+		catalog.IndexIgnored_TblType,
 	}, h.HiddenTableTypes())
 
 	// ShouldTruncateHiddenTable — always true for any input.

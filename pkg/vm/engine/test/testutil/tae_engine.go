@@ -130,6 +130,11 @@ func NewTestTAEEngine(
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
 	ioutil.Start("")
+	// The TN uses the CN's clock: the test sender calls the TN without the RPC header
+	// that advances the CN's clock to the TN's.
+	if opts.Clock == nil {
+		opts.Clock = runtime.ServiceRuntime("").Clock()
+	}
 	handle, err := InitTxnHandle(ctx, taeDir, opts)
 	if err != nil {
 		return nil, err

@@ -39,6 +39,7 @@ func isJSONComparisonNumericType(typ types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	}
@@ -89,8 +90,7 @@ func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types
 }
 
 // checkJSONNumericDomain validates the numeric peer's declared adapter domain.
-// For JSON rows it is used only for floating-point conversion; integer peers
-// must not impose their CAST range on the JSON value being compared.
+// JSON rows are converted separately without imposing the peer's range.
 func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ types.T, kind vector.PrepareParamKind) (float64, error) {
 	switch {
 	case typ.IsSignedInt():
@@ -109,6 +109,18 @@ func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ ty
 	case typ == types.T_float32:
 		v, _, err := preparedJSONFloatScalar(ctx, value, typ)
 		return v, err
+	case typ == types.T_bf16 || typ == types.T_float16 || typ == types.T_float8 || typ == types.T_float4:
+		// as CAST to the type: rounded once from the exact value, rejected outside the
+		// type's finite range
+		v, isNull, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
+		if err != nil || isNull {
+			return v, err
+		}
+		f := types.Float32RoundToOdd(v)
+		if types.RejectNarrowFloatInput(f, typ, v, nil) != nil {
+			return 0, jsonCastErr(ctx, typ)
+		}
+		return float64(lowPrecisionFloatValue(typ, f)), nil
 	case typ == types.T_float64 || typ == types.T_any && kind == vector.PrepareParamFloat:
 		v, _, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
 		return v, err
@@ -122,6 +134,21 @@ func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ ty
 	return 0, nil
 }
 
+// lowPrecisionFloatValue is f rounded to the bf16, float16, float8 or float4 grid.
+func lowPrecisionFloatValue(typ types.T, f float32) float32 {
+	switch typ {
+	case types.T_bf16:
+		return types.BF16FromFloat32(f).ToFloat32()
+	case types.T_float16:
+		return types.Float16FromFloat32(f).ToFloat32()
+	case types.T_float8:
+		return types.Float8FromFloat32(f).ToFloat32()
+	case types.T_float4:
+		return types.Float4FromFloat32(f).ToFloat32()
+	}
+	return f
+}
+
 func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *jsonNumericPeer) (int, bool, error) {
 	if isJSONLiteralNull(value) {
 		return 0, true, nil
@@ -132,9 +159,16 @@ func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *json
 		return bytejson.CompareByteJsonTrusted(value, peer.value), false, nil
 	}
 	if peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat {
-		floatValue, err := checkJSONNumericDomain(ctx, value, peer.typ, peer.kind)
+		floatValue, _, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
 		if err != nil {
 			return 0, false, err
+		}
+		if peer.typ == types.T_float32 && floatValue >= -math.MaxFloat32 && floatValue <= math.MaxFloat32 {
+			floatValue = float64(float32(floatValue))
+		} else if peer.typ.IsLowPrecisionFloat() {
+			if f := types.Float32RoundToOdd(floatValue); types.RejectNarrowFloatInput(f, peer.typ, floatValue, nil) == nil {
+				floatValue = float64(lowPrecisionFloatValue(peer.typ, f))
+			}
 		}
 		return compareFloat64Total(floatValue, peer.floatValue), false, nil
 	}
@@ -182,6 +216,9 @@ func comparisonNumericAt(value *vector.Vector, row int, scratch *[8]byte) bytejs
 		code, bits = bytejson.TpCodeFloat64, math.Float64bits(float64(vector.GetFixedAtNoTypeCheck[float32](value, row)))
 	case types.T_float64:
 		code, bits = bytejson.TpCodeFloat64, math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](value, row))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(value, row)
+		code, bits = bytejson.TpCodeFloat64, math.Float64bits(float64(f))
 	case types.T_decimal64:
 		return newTypedByteJson(bytejson.TpCodeDecimal, vector.GetFixedAtNoTypeCheck[types.Decimal64](value, row).Format(value.GetType().Scale))
 	case types.T_decimal128:

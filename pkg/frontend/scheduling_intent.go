@@ -17,9 +17,89 @@ package frontend
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// planningInputForStatement captures the exact statement's execution only when
+// the planning owner admits its root. Prepared execution does not use this path.
+func planningInputForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*plan2.PlanningInput, plan2.ExecutionIntent, bool) {
+	if ses == nil || ses.IsBackgroundSession() || proc == nil || proc.Base == nil || sql == "" {
+		return nil, plan2.ExecutionIntent{}, false
+	}
+	root := planningInputRoot(stmt)
+	if !plan2.PlanningInputMayUseIndex(root) {
+		return nil, plan2.ExecutionIntent{}, false
+	}
+	intent := plan2.ExecutionIntent{
+		TimeZone:  proc.GetSessionInfo().TimeZone,
+		UnixTime:  proc.Base.UnixTime,
+		Placement: statementPlacement(ses, proc, sql, sqlMode, stmt),
+	}
+	input := plan2.NewPlanningInput(root, intent, planningCompiler(ses.GetTxnCompileCtx()))
+	if input == nil {
+		return nil, plan2.ExecutionIntent{}, false
+	}
+	return input, intent, true
+}
+
+func statementPlacement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) schedule.LocalAccessIntent {
+	return schedule.LocalAccessIntent{
+		Scheduling: querySchedulingIntentForStatementWithSQLMode(ses, sql, sqlMode),
+		CurrentCN:  schedule.Worker{ID: proc.GetService(), Addr: currentCNPipelineAddress(ses), Route: schedule.WorkerRouteLocal},
+		Sirius:     siriusStatementSelected(sql, stmt),
+	}
+}
+
+func planningInputRoot(stmt tree.Statement) *tree.Select {
+	inner := unwrapExecutableExplainStatement(stmt)
+	var root *tree.Select
+	switch s := inner.(type) {
+	case *tree.Select:
+		root = s
+	case *tree.ParenSelect:
+		root = s.Select
+	}
+	return root
+}
+
+// executionIntentMatchesCompile compares the captured planning input
+// against what the normal compile path would derive for this exact statement.
+// A mismatch denies the optional path; it must never create a scheduling error.
+func executionIntentMatchesCompile(intent *plan2.ExecutionIntent, ses FeSession, proc *process.Process,
+	sql, sqlMode string, stmt tree.Statement) bool {
+	if intent == nil || !intent.MatchesProcess(proc) || ses == nil || ses.IsBackgroundSession() || sql == "" {
+		return false
+	}
+	root := planningInputRoot(stmt)
+	return root != nil && tree.ParameterCount(root) == 0 && intent.Placement == statementPlacement(ses, proc, sql, sqlMode, stmt)
+}
+
+// validateCapturedExecutionBeforeCompile preserves plans without a captured
+// execution requirement. A scoped access must still match its original intent;
+// otherwise the caller rebuilds and authorizes the plan without that scope.
+func validateCapturedExecutionBeforeCompile(p *plan2.Plan, intent *plan2.ExecutionIntent, ses FeSession,
+	proc *process.Process, sql, sqlMode string, stmt tree.Statement, rebuild func() (*plan2.Plan, error),
+) (*plan2.Plan, bool, error) {
+	if !plan2.HasCapturedExecutionAccess(p) {
+		return p, false, nil
+	}
+	if executionIntentMatchesCompile(intent, ses, proc, sql, sqlMode, stmt) {
+		return p, true, nil
+	}
+	safe, err := rebuild()
+	if err != nil {
+		return nil, false, err
+	}
+	if plan2.HasCapturedExecutionAccess(safe) {
+		return nil, false, moerr.NewInternalErrorNoCtx("unscoped plan rebuild retained captured execution")
+	}
+	return safe, false, nil
+}
 
 // querySchedulingIntentForStatement applies the statement-scoped scheduling
 // SET_VAR overrides without mutating session state. The first override for a

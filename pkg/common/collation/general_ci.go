@@ -18,7 +18,67 @@
 
 package collation
 
-import "unicode/utf8"
+import (
+	"bytes"
+	"unicode/utf8"
+)
+
+// generalCISpaceWeight is the utf8mb4_general_ci weight of U+0020. PAD SPACE
+// collations compare an exhausted key against virtual spaces, so this is the
+// weight every remaining character is measured against once the other key is
+// exhausted.
+const generalCISpaceWeight = 0x20
+
+// CompareGeneralCI compares two utf8mb4_general_ci values: PAD SPACE with one
+// case-folded weight per character and no multi-character expansions. Invalid
+// UTF-8 bytes keep the synthetic weights from NextGeneralCIWeight so malformed
+// and valid input stay in one transitive lexicographic domain.
+func CompareGeneralCI(a, b []byte) int {
+	// utf8mb4_general_ci is a PAD SPACE collation: trailing spaces carry no
+	// weight at all.
+	a = bytes.TrimRight(a, " ")
+	b = bytes.TrimRight(b, " ")
+
+	ai, bi := 0, 0
+	for ai < len(a) && bi < len(b) {
+		wa, sizeA := NextGeneralCIWeight(a[ai:])
+		wb, sizeB := NextGeneralCIWeight(b[bi:])
+		if wa < wb {
+			return -1
+		}
+		if wa > wb {
+			return 1
+		}
+		ai += sizeA
+		bi += sizeB
+	}
+	// One key is exhausted. PAD SPACE keeps comparing its missing characters
+	// against the space weight (my_strnncollsp_utf8mb4) instead of letting the
+	// shorter value lose outright: characters lighter than space (TAB, NUL)
+	// sort the longer value first, characters heavier than space (letters)
+	// sort it last.
+	for ai < len(a) {
+		wa, sizeA := NextGeneralCIWeight(a[ai:])
+		if wa < generalCISpaceWeight {
+			return -1
+		}
+		if wa > generalCISpaceWeight {
+			return 1
+		}
+		ai += sizeA
+	}
+	for bi < len(b) {
+		wb, sizeB := NextGeneralCIWeight(b[bi:])
+		if wb < generalCISpaceWeight {
+			return 1
+		}
+		if wb > generalCISpaceWeight {
+			return -1
+		}
+		bi += sizeB
+	}
+	return 0
+}
 
 func NextGeneralCIWeight(value []byte) (uint32, int) {
 	r, size := utf8.DecodeRune(value)

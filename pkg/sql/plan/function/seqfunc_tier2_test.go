@@ -110,6 +110,17 @@ func TestNextvalAutonomousExhaustionTerminalWithoutRetryState(t *testing.T) {
 	require.Equal(t, seqAutonomousMaxAttempts, f.exec.attempts)
 }
 
+func TestSequenceRetryExpiryDecisionCancellationWithoutProber(t *testing.T) {
+	f := newSeqRouteFixture(t, 7, newSeqMetadataState(1, 1, 100, 1, 1, false, false))
+	f.proc.GetSessionInfo().SeqRetry = process.NewSequenceRetryState()
+	f.proc.Base.TxnOperator = nil // the expiry prober cannot be constructed
+	ctx, cancel := context.WithCancel(f.proc.Ctx)
+	cancel()
+	outcome := RunSequenceRetryExpiryDecision(ctx, f.proc, time.Time{})
+	require.Equal(t, process.DecideCancelled, outcome.Kind)
+	require.ErrorIs(t, outcome.Err, context.Canceled)
+}
+
 // Pre-filter matrix: each arm denies exactly one term (publication already
 // won, autocommit=0, explicit BEGIN, snapshot isolation) while the rest of
 // the envelope would admit. Every arm keeps the terminal named error and
@@ -622,4 +633,77 @@ func TestSequenceRetryStateIsFreshPerStatement(t *testing.T) {
 	_, hasWindow := retryState.RetryDeadline()
 	require.False(t, hasWindow)
 	require.Empty(t, retryState.ConsumePendings())
+}
+
+// The exactly-once terminal verdict is stamped for the whole statement (B2
+// step 5): a later allocation entry for a DIFFERENT identity must surface
+// the STAMPED identity with the STAMPED recorded residue — never the
+// current caller's own names. Caller cancellation keeps precedence and an
+// unstamped state keeps its unchanged not-decided surface.
+func TestNextvalAutonomousStampedTerminalSurfacesStampedIdentity(t *testing.T) {
+	f := newSeqRouteFixture(t, 7, newSeqMetadataState(1, 1, 100, 1, 1, false, false))
+	f.expectCommittedRoute()
+	retryState := process.NewSequenceRetryState()
+	f.proc.GetSessionInfo().SeqRetry = retryState
+
+	id := tier2WatchIdentity(f)
+	retryState.SetWatchingBaselined(id, fixtureBaseline(t, f, id),
+		time.Now().Add(-2*seqAutonomousBudgetDur))
+	retryState.SetPending(id, &process.SequenceRetryPending{
+		Original: moerr.NewInternalErrorNoCtx("prior named surface"),
+		Cause:    moerr.NewLockWaitTimeoutNoCtx(),
+	})
+	_ = retryState.ConsumePendings() // an admitted first conversion consumed it
+	retryState.AdmitRetry(time.Now().Add(-time.Millisecond))
+	f.exec.probeLockHeld = true
+
+	// Stamp the exactly-once verdict through the REAL probe-first expiry
+	// decision the zero-attempt entry runs: committed-unchanged AND held.
+	_, err := nextvalRow(f.proc)
+	require.ErrorContains(t, err,
+		"sequence db.seq: allocation could not acquire the sequence row within 8 attempts")
+	stamped, terminal := retryState.TerminalIdentity()
+	require.True(t, terminal, "the real decision stamped the verdict")
+	require.Equal(t, id, stamped)
+
+	// A later entry for a DIFFERENT identity surfaces the stamped verdict:
+	// the stamped identity's names and its recorded residue.
+	other := process.WatchIdentity{DBName: "otherdb", TblName: "otherseq", WantRel: 9}
+	probeAttempts := f.exec.probeAttempts
+	_, decided, err := seqLiveWindowExpiryDecision(
+		f.proc, &seqExecEnv{ctx: f.proc.Ctx, tier2Eligible: true},
+		other.DBName, other.TblName, other.WantRel)
+	require.True(t, decided)
+	require.ErrorContains(t, err,
+		"sequence db.seq: allocation could not acquire the sequence row within 8 attempts",
+		"the stamped verdict's identity is surfaced, not the current caller's")
+	require.ErrorContains(t, err, "Lock wait timeout exceeded",
+		"the stamped verdict's recorded residue is preserved verbatim")
+	require.Equal(t, probeAttempts, f.exec.probeAttempts,
+		"a stamped terminal re-probes nothing")
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+
+	// Caller cancellation keeps precedence over the stamped surface.
+	cancelled, cancel := context.WithCancel(f.proc.Ctx)
+	cancel()
+	_, decided, err = seqLiveWindowExpiryDecision(
+		f.proc, &seqExecEnv{ctx: cancelled, tier2Eligible: true},
+		other.DBName, other.TblName, other.WantRel)
+	require.True(t, decided)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// A tier-ineligible route and an unstamped state keep the unchanged
+	// not-decided surface.
+	_, decided, err = seqLiveWindowExpiryDecision(
+		f.proc, &seqExecEnv{ctx: f.proc.Ctx, tier2Eligible: false},
+		other.DBName, other.TblName, other.WantRel)
+	require.False(t, decided)
+	require.NoError(t, err)
+	fresh := process.NewSequenceRetryState()
+	f.proc.GetSessionInfo().SeqRetry = fresh
+	_, decided, err = seqLiveWindowExpiryDecision(
+		f.proc, &seqExecEnv{ctx: f.proc.Ctx, tier2Eligible: true},
+		other.DBName, other.TblName, other.WantRel)
+	require.False(t, decided)
+	require.NoError(t, err)
 }

@@ -50,9 +50,9 @@ func TestJSONSearchRemoteProtocolFloor(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.JSONSearch)
-	require.Equal(t, defines.MORPCVersion136, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
 	features.ODKUStatementResult = true
-	require.Equal(t, defines.MORPCVersion136, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
 }
 
 func TestJSONSearchProtocolPlacementSendReceive(t *testing.T) {
@@ -71,8 +71,8 @@ func TestJSONSearchProtocolPlacementSendReceive(t *testing.T) {
 	}{
 		{0, plan2.ExecTypeAP_ONECN},
 		{defines.MORPCVersion134, plan2.ExecTypeAP_ONECN},
-		{defines.MORPCVersion136 - 1, plan2.ExecTypeAP_ONECN},
-		{defines.MORPCVersion136, plan2.ExecTypeAP_MULTICN},
+		{defines.MORPCVersion135 - 1, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion135, plan2.ExecTypeAP_MULTICN},
 	} {
 		client.version = tc.version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -82,30 +82,30 @@ func TestJSONSearchProtocolPlacementSendReceive(t *testing.T) {
 	}
 	client.version = defines.MORPCVersion134
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 136")
-	client.version = defines.MORPCVersion136
+	require.ErrorContains(t, err, "version 135")
+	client.version = defines.MORPCVersion135
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion136, minimum)
+	require.Equal(t, defines.MORPCVersion135, minimum)
 	client.version = defines.MORPCVersion134
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 136", "destination can change after placement")
+	require.ErrorContains(t, err, "version 135", "destination can change after placement")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 136")
+	require.ErrorContains(t, err, "version 135")
 	require.Equal(t, client.calls, client.releases)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	wire := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-	for _, version := range []int64{0, defines.MORPCVersion134, defines.MORPCVersion136 - 1, defines.MORPCVersion136} {
+	for _, version := range []int64{0, defines.MORPCVersion134, defines.MORPCVersion135} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		err = validateRemoteExpressionPipelineProtocol(c.proc, wire)
 		_, decodeErr := decodeScope(data, c.proc, true, nil)
-		if version < defines.MORPCVersion136 {
-			require.ErrorContains(t, err, "version 136")
-			require.ErrorContains(t, decodeErr, "version 136")
-			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, qry), "version 136")
+		if version < defines.MORPCVersion135 {
+			require.ErrorContains(t, err, "version 135")
+			require.ErrorContains(t, decodeErr, "version 135")
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, qry), "version 135")
 		} else {
 			require.NoError(t, err)
 			require.NoError(t, decodeErr)
@@ -121,17 +121,17 @@ func TestJSONSearchProtocolPlacementSendReceive(t *testing.T) {
 }
 
 func TestJSONSearchRechecksActualStream(t *testing.T) {
-	for _, version := range []int64{0, defines.MORPCVersion134, defines.MORPCVersion136 - 1, defines.MORPCVersion136} {
+	for _, version := range []int64{0, defines.MORPCVersion134, defines.MORPCVersion135} {
 		stream := &fakeStreamSender{}
 		replies := make(chan morpc.Message, 1)
 		replies <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
 		sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: replies}
-		err := sender.confirmProtocolOnStream(defines.MORPCVersion136)
-		if version < defines.MORPCVersion136 {
+		err := sender.confirmProtocolOnStream(defines.MORPCVersion135)
+		if version < defines.MORPCVersion135 {
 			require.Error(t, err)
 		} else {
 			require.NoError(t, err)
 		}
-		require.Equal(t, defines.MORPCVersion136, stream.sent[0].(*pipeline.Message).ProtocolVersion)
+		require.Equal(t, defines.MORPCVersion135, stream.sent[0].(*pipeline.Message).ProtocolVersion)
 	}
 }

@@ -314,6 +314,44 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 	}
 }
 
+// planHasFullTextMatchOnTag reports whether a node outside the exceptID subtree holds a
+// fulltext_match whose arguments reference a column of binding tag.
+func planHasFullTextMatchOnTag(nodeID, exceptID, tag int32, builder *QueryBuilder) bool {
+	if nodeID == exceptID {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	for _, child := range node.Children {
+		if planHasFullTextMatchOnTag(child, exceptID, tag, builder) {
+			return true
+		}
+	}
+	for _, list := range [][]*plan.Expr{node.OnList, node.ProjectList, node.FilterList, node.AggList, node.GroupBy} {
+		for _, expr := range list {
+			if fullTextMatchReferencesTag(expr, tag) {
+				return true
+			}
+		}
+	}
+	for _, orderby := range node.OrderBy {
+		if orderby != nil && fullTextMatchReferencesTag(orderby.Expr, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func fullTextMatchReferencesTag(expr *plan.Expr, tag int32) bool {
+	for _, match := range collectNestedFullTextMatches(expr, nil) {
+		for _, arg := range match.GetF().Args {
+			if col := arg.GetCol(); col != nil && col.RelPos == tag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
@@ -379,6 +417,13 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	}
 
 	if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt || join.Stats.Selectivity > 0.95 {
+		return false
+	}
+
+	// The pullup rewrites rightScan columns above the join to any_value outputs of the agg. A
+	// MATCH on those columns would then reference the agg instead of the scan, and no fulltext
+	// index could serve it.
+	if planHasFullTextMatchOnTag(rootID, join.NodeId, rightScan.BindingTags[0], builder) {
 		return false
 	}
 

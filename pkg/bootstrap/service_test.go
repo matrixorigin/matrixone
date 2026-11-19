@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var _ client.TxnOperator = new(testTxnOperator)
@@ -1413,6 +1414,65 @@ func TestInitSystemViewsRetryAndCancellation(t *testing.T) {
 				want = 2
 			}
 			require.Equal(t, want, attempts)
+		})
+	}
+}
+
+func TestSystemViewsExistRequiresCurrentSystemDefinitions(t *testing.T) {
+	failure := errors.New("catalog read failed")
+	currentTables := sysview.InformationSchemaTablesCurrentDDL
+	currentViews := sysview.InformationSchemaViewsDDL
+	currentPartitions := sysview.InformationSchemaPartitionsDDL
+	oldPartitions := strings.Replace(currentPartitions, catalog.NonIndexRelationSQLPredicate("tbl"), "NOT startswith(`tbl`.`relname`, '__mo_index_')", 1)
+	require.NotEqual(t, currentPartitions, oldPartitions)
+	for _, tc := range []struct {
+		name, tables, views, partitions string
+		traceMissing, expectComplete    bool
+		failView                        string
+	}{
+		{name: "complete", tables: currentTables, views: currentViews, partitions: currentPartitions, expectComplete: true},
+		{name: "missing trace", traceMissing: true},
+		{name: "missing tables", views: currentViews, partitions: currentPartitions},
+		{name: "stale tables", tables: sysview.InformationSchemaTablesV118DDL, views: currentViews, partitions: currentPartitions},
+		{name: "missing views", tables: currentTables, partitions: currentPartitions},
+		{name: "stale views", tables: currentTables, views: sysview.InformationSchemaViewsLegacyDDL, partitions: currentPartitions},
+		{name: "missing partitions", tables: currentTables, views: currentViews},
+		{name: "stale partitions", tables: currentTables, views: currentViews, partitions: oldPartitions},
+		{name: "table lookup error", failView: "TABLES"},
+		{name: "partitions lookup error", tables: currentTables, views: currentViews, failView: "PARTITIONS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(sql, "select relkind from mo_catalog.mo_tables") {
+					if tc.traceMissing {
+						return executor.Result{}, nil
+					}
+					return newBootstrapStringResult(catalog.SystemViewRel), nil
+				}
+				if tc.failView != "" && strings.Contains(sql, "tbl.relname = '"+tc.failView+"'") {
+					return executor.Result{}, failure
+				}
+				var definition string
+				switch {
+				case strings.Contains(sql, "tbl.relname = 'TABLES'"):
+					definition = tc.tables
+				case strings.Contains(sql, "tbl.relname = 'VIEWS'"):
+					definition = tc.views
+				case strings.Contains(sql, "tbl.relname = 'PARTITIONS'"):
+					definition = tc.partitions
+				}
+				if definition == "" {
+					return executor.Result{}, nil
+				}
+				return newBootstrapStringResult(definition), nil
+			})
+			complete, err := SystemViewsExist(t.Context(), exec)
+			if tc.failView != "" {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.expectComplete, complete)
 		})
 	}
 }

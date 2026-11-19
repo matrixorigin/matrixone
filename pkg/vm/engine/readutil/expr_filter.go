@@ -121,232 +121,6 @@ func makeDecimalZoneMapBound(colDef *plan.ColDef, value []byte, valueExpr *plan.
 	return bound, true
 }
 
-type zoneMapMatch struct {
-	matches    bool
-	comparable bool
-}
-
-func (m zoneMapMatch) mayMatch() bool {
-	return !m.comparable || m.matches
-}
-
-func (m zoneMapMatch) excludes() bool {
-	return m.comparable && !m.matches
-}
-
-func (m zoneMapMatch) and(other zoneMapMatch) zoneMapMatch {
-	if m.excludes() || other.excludes() {
-		return zoneMapMatch{comparable: true}
-	}
-	if m.comparable && other.comparable {
-		return zoneMapMatch{matches: true, comparable: true}
-	}
-	return zoneMapMatch{}
-}
-
-func rawZoneMapComparable(zm objectio.ZoneMap, columnType types.T) bool {
-	return columnType != types.T_json && zm.IsInited() && zm.GetType() == columnType
-}
-
-func anyLTByBound(
-	zm objectio.ZoneMap, value []byte, bound objectio.ZoneMap, columnType types.T,
-) zoneMapMatch {
-	if bound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.AnyLTByValue(value), comparable: true}
-	}
-	result, ok := zm.AnyLT(bound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func anyLEByBound(
-	zm objectio.ZoneMap, value []byte, bound objectio.ZoneMap, columnType types.T,
-) zoneMapMatch {
-	if bound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.AnyLEByValue(value), comparable: true}
-	}
-	result, ok := zm.AnyLE(bound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func anyGTByBound(
-	zm objectio.ZoneMap, value []byte, bound objectio.ZoneMap, columnType types.T,
-) zoneMapMatch {
-	if bound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.AnyGTByValue(value), comparable: true}
-	}
-	result, ok := zm.AnyGT(bound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func anyGEByBound(
-	zm objectio.ZoneMap, value []byte, bound objectio.ZoneMap, columnType types.T,
-) zoneMapMatch {
-	if bound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.AnyGEByValue(value), comparable: true}
-	}
-	result, ok := zm.AnyGE(bound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func intersectsBound(
-	zm objectio.ZoneMap, value []byte, bound objectio.ZoneMap, columnType types.T,
-) zoneMapMatch {
-	if bound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.ContainsKey(value), comparable: true}
-	}
-	result, ok := zm.Intersect(bound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func anyBetweenBounds(
-	zm objectio.ZoneMap,
-	lowerValue, upperValue []byte,
-	lowerBound, upperBound objectio.ZoneMap,
-	columnType types.T,
-) zoneMapMatch {
-	if lowerBound == nil {
-		if !rawZoneMapComparable(zm, columnType) {
-			return zoneMapMatch{}
-		}
-		return zoneMapMatch{matches: zm.Between(lowerValue, upperValue), comparable: true}
-	}
-	result, ok := zm.AnyBetween(lowerBound, upperBound)
-	return zoneMapMatch{matches: result, comparable: ok}
-}
-
-func inRangeBounds(
-	zm objectio.ZoneMap,
-	lowerValue, upperValue []byte,
-	lowerBound, upperBound objectio.ZoneMap,
-	hint uint8,
-	columnType types.T,
-) zoneMapMatch {
-	switch hint {
-	case 1: // (lb, ub]
-		return anyGTByBound(zm, lowerValue, lowerBound, columnType).
-			and(anyLEByBound(zm, upperValue, upperBound, columnType))
-	case 2: // [lb, ub)
-		return anyGEByBound(zm, lowerValue, lowerBound, columnType).
-			and(anyLTByBound(zm, upperValue, upperBound, columnType))
-	case 3: // (lb, ub)
-		return anyGTByBound(zm, lowerValue, lowerBound, columnType).
-			and(anyLTByBound(zm, upperValue, upperBound, columnType))
-	default: // [lb, ub]
-		return anyGEByBound(zm, lowerValue, lowerBound, columnType).
-			and(anyLEByBound(zm, upperValue, upperBound, columnType))
-	}
-}
-
-func zoneMapVectorComparable(
-	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
-) bool {
-	if !rawZoneMapComparable(zm, columnType) || vec == nil || vec.GetType().Oid != columnType {
-		return false
-	}
-	return !columnType.IsDecimal() || zm.GetScale() == vec.GetType().Scale
-}
-
-func anyInVector(
-	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
-) zoneMapMatch {
-	if !zoneMapVectorComparable(zm, vec, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: zm.AnyIn(vec), comparable: true}
-}
-
-func prefixEqByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: zm.PrefixEq(value), comparable: true}
-}
-
-func prefixBetweenByValue(
-	zm objectio.ZoneMap, lower, upper []byte, columnType types.T,
-) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: zm.PrefixBetween(lower, upper), comparable: true}
-}
-
-func prefixInRangeByValue(
-	zm objectio.ZoneMap, lower, upper []byte, hint uint8, columnType types.T,
-) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: zm.PrefixInRange(lower, upper, hint), comparable: true}
-}
-
-func prefixInVector(
-	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
-) zoneMapMatch {
-	if !zoneMapVectorComparable(zm, vec, columnType) {
-		return zoneMapMatch{}
-	}
-	if vec.IsConstNull() || vec.GetNulls().Any() {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: zm.PrefixIn(vec), comparable: true}
-}
-
-func anyPrefixLTByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{
-		matches:    types.PrefixCompare(zm.GetMinBuf(), value) < 0,
-		comparable: true,
-	}
-}
-
-func anyPrefixLEByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{
-		matches:    types.PrefixCompare(zm.GetMinBuf(), value) <= 0,
-		comparable: true,
-	}
-}
-
-func anyPrefixGTByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{
-		matches:    types.PrefixCompare(zm.GetMaxBuf(), value) > 0,
-		comparable: true,
-	}
-}
-
-func anyPrefixGEByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
-	if !rawZoneMapComparable(zm, columnType) {
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{
-		matches:    types.PrefixCompare(zm.GetMaxBuf(), value) >= 0,
-		comparable: true,
-	}
-}
-
 func makeVectorValueZoneMapBound(
 	columnType types.T, vec *vector.Vector, value []byte,
 ) (objectio.ZoneMap, bool) {
@@ -364,327 +138,193 @@ func makeVectorValueZoneMapBound(
 	return bound, true
 }
 
+// When requireKnown is set, -1 means that ordered skipping was not proved.
 func seekFirstBlockByZoneMap(
 	meta objectio.ObjectDataMeta,
 	seqNum uint16,
 	bound objectio.ZoneMap,
 	columnType types.T,
-	compare func(objectio.ZoneMap) zoneMapMatch,
+	requireKnown bool,
+	compare func(objectio.ZoneMap) index.ZoneMapMatch,
 ) int {
 	blockCnt := int(meta.BlockCount())
 	if blockCnt == 0 || !zoneMapMetadataComparable(meta.MustGetColumn(seqNum).ZoneMap(), bound, columnType) {
+		if requireKnown {
+			return -1
+		}
 		return 0
 	}
 	for j := range blockCnt {
-		if !zoneMapMetadataComparable(
-			meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap(), bound, columnType,
-		) {
+		zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap()
+		if !zoneMapMetadataComparable(zm, bound, columnType) || requireKnown && !compare(zm).Known {
+			if requireKnown {
+				return -1
+			}
 			return 0
 		}
 	}
 	return sort.Search(blockCnt, func(j int) bool {
-		result := compare(meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap())
-		return result.matches
+		return compare(meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap()).Match
 	})
 }
 
 func zoneMapMetadataComparable(
 	zm objectio.ZoneMap, bound objectio.ZoneMap, columnType types.T,
 ) bool {
-	if !rawZoneMapComparable(zm, columnType) {
+	if !index.RawZoneMapComparable(zm, columnType) {
 		return false
 	}
-	return bound == nil || rawZoneMapComparable(bound, columnType)
+	return bound == nil || index.RawZoneMapComparable(bound, columnType)
 }
 
-type temporalFilterRange struct {
-	min types.Timestamp
-	max types.Timestamp
-}
-
-func temporalFilterRangeFromZoneMap(
-	zm objectio.ZoneMap,
-	timestampScale int32,
-	zone *time.Location,
-) (temporalFilterRange, bool) {
-	switch zm.GetType() {
-	case types.T_timestamp:
-		minValue, minOK := zm.GetMin().(types.Timestamp)
-		maxValue, maxOK := zm.GetMax().(types.Timestamp)
-		return temporalFilterRange{min: minValue, max: maxValue}, minOK && maxOK
-	case types.T_datetime:
-		minValue, minOK := zm.GetMin().(types.Datetime)
-		maxValue, maxOK := zm.GetMax().(types.Datetime)
-		if !minOK || !maxOK {
-			return temporalFilterRange{}, false
-		}
-		if minValue == maxValue {
-			value := minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
-			return temporalFilterRange{min: value, max: value}, true
-		}
-		minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
-		if !ok {
-			return temporalFilterRange{}, false
-		}
-		return temporalFilterRange{
-			min: minTimestamp.TruncateToScale(timestampScale),
-			max: maxTimestamp.TruncateToScale(timestampScale),
-		}, true
-	default:
-		return temporalFilterRange{}, false
-	}
-}
-
-func temporalFilterRangeFromValue(
-	value []byte,
-	valueType types.T,
-	timestampScale int32,
-	zone *time.Location,
-) (temporalFilterRange, bool) {
-	if len(value) != 8 {
-		return temporalFilterRange{}, false
-	}
-	var timestamp types.Timestamp
-	switch valueType {
-	case types.T_timestamp:
-		timestamp = types.DecodeTimestamp(value)
-	case types.T_datetime:
-		timestamp = types.DecodeDatetime(value).ToTimestamp(zone).TruncateToScale(timestampScale)
-	default:
-		return temporalFilterRange{}, false
-	}
-	return temporalFilterRange{min: timestamp, max: timestamp}, true
-}
-
-func temporalFilterMatch(op string, value, bound temporalFilterRange) zoneMapMatch {
-	var matches bool
-	switch op {
-	case "=":
-		matches = value.max >= bound.min && value.min <= bound.max
-	case "<":
-		matches = value.min < bound.max
-	case "<=":
-		matches = value.min <= bound.max
-	case ">":
-		matches = value.max > bound.min
-	case ">=":
-		matches = value.max >= bound.min
-	default:
-		return zoneMapMatch{}
-	}
-	return zoneMapMatch{matches: matches, comparable: true}
-}
-
-func makeTemporalFilterMatcher(
-	columnType types.T,
-	value []byte,
-	valueType types.T,
-	timestampScale int32,
-	zone *time.Location,
-	op string,
-) (func(objectio.ZoneMap) zoneMapMatch, bool) {
-	if columnType == valueType {
-		return func(zm objectio.ZoneMap) zoneMapMatch {
-			switch op {
-			case "=":
-				return intersectsBound(zm, value, nil, columnType)
-			case "<":
-				return anyLTByBound(zm, value, nil, columnType)
-			case "<=":
-				return anyLEByBound(zm, value, nil, columnType)
-			case ">":
-				return anyGTByBound(zm, value, nil, columnType)
-			case ">=":
-				return anyGEByBound(zm, value, nil, columnType)
-			default:
-				return zoneMapMatch{}
-			}
-		}, true
-	}
-	if !isMixedTemporalFilterTypes(columnType, valueType) {
-		return nil, false
-	}
-
-	bound, ok := temporalFilterRangeFromValue(value, valueType, timestampScale, zone)
-	if !ok {
-		return nil, false
-	}
-	return func(zm objectio.ZoneMap) zoneMapMatch {
-		valueRange, ok := temporalFilterRangeFromZoneMap(zm, timestampScale, zone)
-		if !ok {
-			return zoneMapMatch{}
-		}
-		return temporalFilterMatch(op, valueRange, bound)
-	}, true
-}
-
-func reverseTemporalFilterOperator(op string) string {
-	switch op {
-	case "<":
-		return ">"
-	case "<=":
-		return ">="
-	case ">":
-		return "<"
-	case ">=":
-		return "<="
-	default:
-		return op
-	}
-}
-
-func isMixedTemporalFilterTypes(typesToCheck ...types.T) bool {
-	hasDatetime, hasTimestamp := false, false
-	for _, typ := range typesToCheck {
-		switch typ {
-		case types.T_datetime:
-			hasDatetime = true
-		case types.T_timestamp:
-			hasTimestamp = true
-		default:
-			return false
-		}
-	}
-	return hasDatetime && hasTimestamp
-}
-
-func compileTemporalFilterExpr(
-	expr *plan.Expr,
-	exprImpl *plan.Expr_F,
-	tableDef *plan.TableDef,
-	fs fileservice.FileService,
-	zone *time.Location,
-) (
-	fastFilterOp FastFilterOp,
-	loadOp LoadOp,
-	objectFilterOp ObjectFilterOp,
-	blockFilterOp BlockFilterOp,
-	seekOp SeekFirstBlockOp,
-	canCompile bool,
-	highSelectivityHint bool,
-	handled bool,
-) {
-	op := exprImpl.F.Func.ObjName
-	if op != "=" && op != "<" && op != "<=" && op != ">" && op != ">=" && op != "between" {
+// compileScalarComparisonFilter owns scalar comparison pruning for both raw
+// and converted domains. Only raw ordered comparisons may seek, stop early or
+// consult a bloom filter; a conversion's tri-state matcher proves pruning alone.
+func compileScalarComparisonFilter(
+	expr *plan.Expr, exprImpl *plan.Expr_F, tableDef *plan.TableDef,
+	fs fileservice.FileService, zone *time.Location,
+) (fastFilterOp FastFilterOp, loadOp LoadOp, objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp, seekOp SeekFirstBlockOp, canCompile bool,
+	highSelectivityHint bool, handled bool) {
+	name := exprImpl.F.Func.ObjName
+	op, binary := types.ParseComparisonOp(name)
+	if !binary && name != "between" {
 		return
 	}
-
 	args := exprImpl.F.Args
-	var colExpr *plan.Expr_Col
-	var columnPlanExpr *plan.Expr
-	var valueExprs []*plan.Expr
-	columnOnLeft := true
-	if op == "between" {
-		if len(args) != 3 {
-			return
-		}
-		var ok bool
-		if colExpr, ok = args[0].Expr.(*plan.Expr_Col); !ok {
-			return
-		}
-		columnPlanExpr = args[0]
-		valueExprs = args[1:]
-	} else {
-		if len(args) != 2 {
-			return
-		}
-		if col, ok := args[0].Expr.(*plan.Expr_Col); ok {
-			colExpr = col
-			columnPlanExpr = args[0]
-			valueExprs = args[1:]
-		} else if col, ok := args[1].Expr.(*plan.Expr_Col); ok {
-			colExpr = col
-			columnPlanExpr = args[1]
-			valueExprs = args[:1]
-			columnOnLeft = false
-		} else {
-			return
-		}
-	}
-
-	temporalTypes := make([]types.T, 0, len(valueExprs)+1)
-	temporalTypes = append(temporalTypes, types.T(columnPlanExpr.Typ.Id))
-	for _, valueExpr := range valueExprs {
-		temporalTypes = append(temporalTypes, types.T(valueExpr.Typ.Id))
-	}
-	if !isMixedTemporalFilterTypes(temporalTypes...) {
-		return
-	}
-	if zone == nil {
+	if binary && len(args) != 2 || !binary && len(args) != 3 {
 		return nil, nil, nil, nil, nil, false, false, true
 	}
-
-	values, ok := getConstBytesFromExpr(valueExprs)
-	if !ok {
-		return nil, nil, nil, nil, nil, false, false, true
-	}
-	colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-	if !columnOnLeft {
-		op = reverseTemporalFilterOperator(op)
-	}
-
-	matchers := make([]func(objectio.ZoneMap) zoneMapMatch, len(values))
-	columnType := types.T(colDef.Typ.Id)
-	commonBetweenScale := int32(-1)
-	if op == "between" && columnType == types.T_datetime &&
-		types.T(valueExprs[0].Typ.Id) == types.T_timestamp &&
-		types.T(valueExprs[1].Typ.Id) == types.T_timestamp {
-		commonBetweenScale = valueExprs[0].Typ.Scale
-	}
-	for i := range values {
-		comparisonOp := op
-		if op == "between" {
-			if i == 0 {
-				comparisonOp = ">="
-			} else {
-				comparisonOp = "<="
-			}
-		}
-		timestampScale := valueExprs[i].Typ.Scale
-		if columnType == types.T_timestamp {
-			timestampScale = colDef.Typ.Scale
-		} else if commonBetweenScale >= 0 {
-			timestampScale = commonBetweenScale
-		}
-		matchers[i], ok = makeTemporalFilterMatcher(
-			columnType,
-			values[i], types.T(valueExprs[i].Typ.Id), timestampScale,
-			zone, comparisonOp,
-		)
-		if !ok {
+	for _, arg := range args {
+		if arg == nil {
 			return nil, nil, nil, nil, nil, false, false, true
 		}
 	}
-	match := func(zm objectio.ZoneMap) zoneMapMatch {
-		if op == "between" {
-			return matchers[0](zm).and(matchers[1](zm))
+	column := args[0]
+	values := args[1:]
+	if column.GetCol() == nil {
+		if !binary || args[1].GetCol() == nil {
+			return nil, nil, nil, nil, nil, false, false, true
 		}
-		return matchers[0](zm)
+		column, values, op = args[1], args[:1], op.Reverse()
 	}
-
-	isPK, isSorted := isSortedKey(colDef)
-	if isSorted {
+	ref := column.GetCol()
+	colDef := getColDefByName(expr, ref.Name, ref.ColPos, tableDef)
+	if colDef == nil {
+		return nil, nil, nil, nil, nil, false, false, true
+	}
+	mixed := false
+	for _, value := range values {
+		mixed = mixed || !index.RawScalarZoneMapTypesCompatible(types.T(colDef.Typ.Id), types.T(value.Typ.Id))
+	}
+	// The native BETWEEN owner has its own byte truncation and candidate-seek
+	// guarantees. Converted bounds instead use the SQL comparison conjunction.
+	if !binary && !mixed {
+		return
+	}
+	vals, ok := getConstBytesFromExpr(values)
+	if !ok {
+		return nil, nil, nil, nil, nil, false, false, true
+	}
+	columnType := types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale)
+	columnType.Charset = uint8(colDef.Typ.Charset)
+	var matchers [2]func(objectio.ZoneMap) index.ZoneMapMatch
+	var bound objectio.ZoneMap
+	for i, value := range values {
+		comparison := op
+		if !binary {
+			comparison = types.ComparisonGreaterEqual
+			if i == 1 {
+				comparison = types.ComparisonLessEqual
+			}
+		}
+		scale := value.Typ.Scale
+		if columnType.Oid == types.T_timestamp {
+			scale = columnType.Scale
+		} else if !binary && types.T(values[0].Typ.Id) == types.T_timestamp && types.T(values[1].Typ.Id) == types.T_timestamp {
+			scale = values[0].Typ.Scale
+		}
+		valueType := types.New(types.T(value.Typ.Id), value.Typ.Width, value.Typ.Scale)
+		valueType.Charset = uint8(value.Typ.Charset)
+		var scalarBound objectio.ZoneMap
+		matchers[i], scalarBound, ok = index.MakeScalarZoneMapMatcher(columnType, vals[i], valueType, scale, zone, comparison)
+		if !ok {
+			return nil, nil, nil, nil, nil, false, false, true
+		}
+		if i == 0 {
+			bound = scalarBound
+		}
+	}
+	match := matchers[0]
+	if !binary {
+		lower, upper := matchers[0], matchers[1]
+		match = func(zm objectio.ZoneMap) index.ZoneMapMatch { return lower(zm).And(upper(zm)) }
+	}
+	isPK, sorted := isSortedKey(colDef)
+	if sorted {
 		fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 			if obj.ZMIsEmpty() {
 				return true, nil
 			}
-			return match(obj.SortKeyZoneMap()).mayMatch(), nil
+			return match(obj.SortKeyZoneMap()).MayMatch(), nil
 		}
 	}
-	loadOp = loadMetadataOnlyOpFactory(fs)
-	seqNum := colDef.Seqnum
+	rawEqual := !mixed && binary && op == types.ComparisonEqual
+	if rawEqual && isPK {
+		loadOp = loadMetadataAndBFOpFactory(fs)
+	} else {
+		loadOp = loadMetadataOnlyOpFactory(fs)
+	}
+	highSelectivityHint = isPK && (mixed || rawEqual)
+	seqNum := uint16(colDef.Seqnum)
 	objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-		if isSorted {
+		if sorted {
 			return true, nil
 		}
-		return match(meta.MustDataMeta().MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
+		return match(meta.MustDataMeta().MustGetColumn(seqNum).ZoneMap()).MayMatch(), nil
 	}
-	blockFilterOp = func(
-		_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter,
-	) (bool, bool, error) {
-		return false, match(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
+	if mixed || op == types.ComparisonGreater || op == types.ComparisonGreaterEqual || !sorted && !(rawEqual && isPK) {
+		blockFilterOp = func(_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter) (bool, bool, error) {
+			return false, match(blkMeta.MustGetColumn(seqNum).ZoneMap()).MayMatch(), nil
+		}
+	} else {
+		blockFilterOp = func(blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter) (bool, bool, error) {
+			zm := blkMeta.MustGetColumn(seqNum).ZoneMap()
+			result := match(zm)
+			if sorted {
+				if op == types.ComparisonLess || op == types.ComparisonLessEqual {
+					return result.Excludes(), result.MayMatch(), nil
+				}
+				if rawEqual && index.AnyLEByBound(zm, vals[0], bound, columnType.Oid).Excludes() {
+					return true, false, nil
+				}
+			}
+			if !result.MayMatch() {
+				return false, false, nil
+			}
+			if rawEqual && isPK && result.Known && (bound == nil || bound.GetType() == zm.GetType() && bound.GetScale() == zm.GetScale()) {
+				var bloom index.BloomFilter
+				if err := bloom.Unmarshal(bf.GetBloomFilter(uint32(blkIdx))); err != nil {
+					return false, false, err
+				}
+				exists, err := bloom.MayContainsKey(vals[0])
+				return false, exists, err
+			}
+			return false, true, nil
+		}
 	}
-	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, nil, true, isPK, true
+	if !mixed && sorted && (rawEqual || op == types.ComparisonGreater || op == types.ComparisonGreaterEqual) {
+		seekMatch := match
+		if rawEqual {
+			seekMatch = func(zm objectio.ZoneMap) index.ZoneMapMatch {
+				return index.AnyGEByBound(zm, vals[0], bound, columnType.Oid)
+			}
+		}
+		seekOp = func(meta objectio.ObjectDataMeta) int {
+			return seekFirstBlockByZoneMap(meta, seqNum, bound, columnType.Oid, false, seekMatch)
+		}
+	}
+	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, true, highSelectivityHint, true
 }
 
 func CompileFilterExprs(
@@ -843,6 +483,16 @@ func compileFilterExpr(
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 	zone *time.Location,
+) (FastFilterOp, LoadOp, ObjectFilterOp, BlockFilterOp, SeekFirstBlockOp, bool, bool) {
+	return compileFilterExprWithProof(expr, tableDef, fs, zone, false)
+}
+
+func compileFilterExprWithProof(
+	expr *plan.Expr,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
+	zone *time.Location,
+	candidateFilter bool,
 ) (
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -856,6 +506,7 @@ func compileFilterExpr(
 	if expr == nil {
 		return
 	}
+	candidateFilter = candidateFilter || expr.CandidateFilter
 	// Zone maps persist the original byte order. A native Unicode collation
 	// compares UCA weights instead, so applying a raw byte zone-map bound can
 	// discard a matching block before the residual SQL comparator runs. Keep
@@ -866,14 +517,26 @@ func compileFilterExpr(
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
-	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
 		if function.GetZoneMapEvaluation(exprImpl.F) == function.ZoneMapUnsupported {
 			canCompile = false
 			return
 		}
-		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
+		name := exprImpl.F.Func.ObjName
+		if name == "or" && len(exprImpl.F.Args) < 2 {
+			return nil, nil, nil, nil, nil, false, false
+		}
+		if candidateFilter && name != "or" {
+			if name == "isnull" || name == "isnotnull" {
+				if len(exprImpl.F.Args) != 1 || candidateColumnDefinition(exprImpl.F.Args[0], tableDef) == nil {
+					return nil, nil, nil, nil, nil, false, false
+				}
+			} else if !candidateScalarFilterSafe(expr, tableDef, false) {
+				return nil, nil, nil, nil, nil, false, false
+			}
+		}
+		if op1, op2, op3, op4, op5, can, hsh, handled := compileScalarComparisonFilter(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {
 			return op1, op2, op3, op4, op5, can, hsh
@@ -889,7 +552,7 @@ func compileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs, zone)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, candidateFilter)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -904,15 +567,17 @@ func compileFilterExpr(
 			}
 
 			fastFilterOp = func(stats *objectio.ObjectStats) (bool, error) {
+				unknown := false
 				for idx := range fastOps {
 					if fastOps[idx] == nil {
+						unknown = true
 						continue
 					}
 					if ok, err := fastOps[idx](stats); ok || err != nil {
 						return ok, err
 					}
 				}
-				return true, nil
+				return unknown || !candidateFilter, nil
 			}
 
 			loadOp = func(ctx context.Context, stats *objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
@@ -931,8 +596,10 @@ func compileFilterExpr(
 			}
 
 			objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+				unknown := false
 				for idx := range objectOps {
 					if objectOps[idx] == nil {
+						unknown = true
 						continue
 					}
 
@@ -940,7 +607,7 @@ func compileFilterExpr(
 						return ok, err
 					}
 				}
-				return true, nil
+				return unknown || !candidateFilter, nil
 			}
 
 			blockFilterOp = func(blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter) (bool, bool, error) {
@@ -948,6 +615,10 @@ func compileFilterExpr(
 				ok := false
 				for idx := range blockOps {
 					if blockOps[idx] == nil {
+						if candidateFilter {
+							can = false
+							ok = true
+						}
 						continue
 					}
 
@@ -983,7 +654,7 @@ func compileFilterExpr(
 			compiled := 0
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs, zone)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, candidateFilter)
 				if !can {
 					continue
 				}
@@ -1072,168 +743,6 @@ func compileFilterExpr(
 				return pos
 			}
 
-		case "<=":
-			colExpr, vals, valExprs, ok := mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			bound, ok := makeDecimalZoneMapBound(colDef, vals[0], valExprs[0])
-			if !ok {
-				canCompile = false
-				return
-			}
-			_, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return anyLEByBound(obj.SortKeyZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-				}
-			}
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return anyLEByBound(dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			blockFilterOp = func(
-				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				result := anyLEByBound(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id))
-				if isSorted {
-					return result.excludes(), result.mayMatch(), nil
-				}
-				return false, result.mayMatch(), nil
-			}
-		case ">=":
-			colExpr, vals, valExprs, ok := mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			bound, ok := makeDecimalZoneMapBound(colDef, vals[0], valExprs[0])
-			if !ok {
-				canCompile = false
-				return
-			}
-			_, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return anyGEByBound(obj.SortKeyZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-				}
-			}
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return anyGEByBound(dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, anyGEByBound(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			if isSorted {
-				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), bound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, vals[0], bound, types.T(colDef.Typ.Id))
-					})
-				}
-			}
-		case ">":
-			colExpr, vals, valExprs, ok := mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			bound, ok := makeDecimalZoneMapBound(colDef, vals[0], valExprs[0])
-			if !ok {
-				canCompile = false
-				return
-			}
-			_, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return anyGTByBound(obj.SortKeyZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-				}
-			}
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return anyGTByBound(dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, anyGTByBound(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			if isSorted {
-				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), bound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGTByBound(zm, vals[0], bound, types.T(colDef.Typ.Id))
-					})
-				}
-			}
-		case "<":
-			colExpr, vals, valExprs, ok := mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			bound, ok := makeDecimalZoneMapBound(colDef, vals[0], valExprs[0])
-			if !ok {
-				canCompile = false
-				return
-			}
-			_, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return anyLTByBound(obj.SortKeyZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-				}
-			}
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return anyLTByBound(dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				result := anyLTByBound(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id))
-				if isSorted {
-					return result.excludes(), result.mayMatch(), nil
-				}
-				return false, result.mayMatch(), nil
-			}
 		case "prefix_eq":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
@@ -1248,7 +757,7 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return prefixEqByValue(obj.SortKeyZoneMap(), vals[0], columnType).mayMatch(), nil
+					return index.PrefixEqByValue(obj.SortKeyZoneMap(), vals[0], columnType).MayMatch(), nil
 				}
 			}
 			highSelectivityHint = isPK
@@ -1260,23 +769,23 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return prefixEqByValue(
+				return index.PrefixEqByValue(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], columnType,
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && anyPrefixLEByValue(zm, vals[0], columnType).excludes() {
+				if isSorted && index.AnyPrefixLEByValue(zm, vals[0], columnType).Excludes() {
 					return true, false, nil
 				}
-				return false, prefixEqByValue(zm, vals[0], columnType).mayMatch(), nil
+				return false, index.PrefixEqByValue(zm, vals[0], columnType).MayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyPrefixGEByValue(zm, vals[0], columnType)
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
 			}
@@ -1294,7 +803,7 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return prefixBetweenByValue(obj.SortKeyZoneMap(), vals[0], vals[1], columnType).mayMatch(), nil
+					return index.PrefixBetweenByValue(obj.SortKeyZoneMap(), vals[0], vals[1], columnType).MayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1304,24 +813,30 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return prefixBetweenByValue(
+				return index.PrefixBetweenByValue(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], columnType,
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && anyPrefixLEByValue(zm, vals[1], columnType).excludes() {
+				if isSorted && index.AnyPrefixLEByValue(zm, vals[1], columnType).Excludes() {
 					return true, false, nil
 				}
-				return false, prefixBetweenByValue(zm, vals[0], vals[1], columnType).mayMatch(), nil
+				return false, index.PrefixBetweenByValue(zm, vals[0], vals[1], columnType).MayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyPrefixGEByValue(zm, vals[0], columnType)
+					pos := seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, candidateFilter, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
+					if candidateFilter && pos >= 0 && pos < int(meta.BlockCount()) && index.AnyPrefixLEByValue(
+						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], columnType,
+					).Excludes() {
+						return int(meta.BlockCount())
+					}
+					return max(pos, 0)
 				}
 			}
 		case "prefix_in_range":
@@ -1339,9 +854,9 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return prefixInRangeByValue(
+					return index.PrefixInRangeByValue(
 						obj.SortKeyZoneMap(), vals[0], vals[1], hint, columnType,
-					).mayMatch(), nil
+					).MayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1351,32 +866,32 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return prefixInRangeByValue(
+				return index.PrefixInRangeByValue(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], hint, columnType,
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
 				if isSorted {
-					upperResult := anyPrefixLEByValue(zm, vals[1], columnType)
+					upperResult := index.AnyPrefixLEByValue(zm, vals[1], columnType)
 					if hint == 2 || hint == 3 {
-						upperResult = anyPrefixLTByValue(zm, vals[1], columnType)
+						upperResult = index.AnyPrefixLTByValue(zm, vals[1], columnType)
 					}
-					if upperResult.excludes() {
+					if upperResult.Excludes() {
 						return true, false, nil
 					}
 				}
-				return false, prefixInRangeByValue(zm, vals[0], vals[1], hint, columnType).mayMatch(), nil
+				return false, index.PrefixInRangeByValue(zm, vals[0], vals[1], hint, columnType).MayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						if hint == 1 || hint == 3 {
-							return anyPrefixGTByValue(zm, vals[0], columnType)
+							return index.AnyPrefixGTByValue(zm, vals[0], columnType)
 						}
-						return anyPrefixGEByValue(zm, vals[0], columnType)
+						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
 			}
@@ -1403,9 +918,9 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return anyBetweenBounds(
+					return index.AnyBetweenBounds(
 						obj.SortKeyZoneMap(), vals[0], vals[1], lowerBound, upperBound, types.T(colDef.Typ.Id),
-					).mayMatch(), nil
+					).MayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1415,27 +930,33 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return anyBetweenBounds(
+				return index.AnyBetweenBounds(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], lowerBound, upperBound, types.T(colDef.Typ.Id),
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				upperResult := anyLEByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id))
-				if isSorted && upperResult.excludes() {
+				upperResult := index.AnyLEByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id))
+				if isSorted && upperResult.Excludes() {
 					return true, false, nil
 				}
-				return false, anyBetweenBounds(
+				return false, index.AnyBetweenBounds(
 					zm, vals[0], vals[1], lowerBound, upperBound, types.T(colDef.Typ.Id),
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
+					pos := seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), candidateFilter, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 					})
+					if candidateFilter && pos >= 0 && pos < int(meta.BlockCount()) && index.AnyLEByBound(
+						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], upperBound, types.T(colDef.Typ.Id),
+					).Excludes() {
+						return int(meta.BlockCount())
+					}
+					return max(pos, 0)
 				}
 			}
 		case "in_range":
@@ -1462,9 +983,9 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return inRangeBounds(
+					return index.InRangeBounds(
 						obj.SortKeyZoneMap(), vals[0], vals[1], lowerBound, upperBound, hint, types.T(colDef.Typ.Id),
-					).mayMatch(), nil
+					).MayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1474,9 +995,9 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return inRangeBounds(
+				return index.InRangeBounds(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], lowerBound, upperBound, hint, types.T(colDef.Typ.Id),
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -1485,27 +1006,27 @@ func compileFilterExpr(
 				if isSorted {
 					if hint == 2 || hint == 3 {
 						// open UB: break when min >= ub
-						if anyLTByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id)).excludes() {
+						if index.AnyLTByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id)).Excludes() {
 							return true, false, nil
 						}
 					} else {
 						// closed UB: break when min > ub
-						if anyLEByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id)).excludes() {
+						if index.AnyLEByBound(zm, vals[1], upperBound, types.T(colDef.Typ.Id)).Excludes() {
 							return true, false, nil
 						}
 					}
 				}
-				return false, inRangeBounds(
+				return false, index.InRangeBounds(
 					zm, vals[0], vals[1], lowerBound, upperBound, hint, types.T(colDef.Typ.Id),
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) zoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						if hint == 1 || hint == 3 {
-							return anyGTByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
+							return index.AnyGTByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 						}
-						return anyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
+						return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 					})
 				}
 			}
@@ -1532,7 +1053,7 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return prefixInVector(obj.SortKeyZoneMap(), vec, columnType).mayMatch(), nil
+					return index.PrefixInVector(obj.SortKeyZoneMap(), vec, columnType).MayMatch(), nil
 				}
 			}
 			highSelectivityHint = isPK && vec.Length() <= 10
@@ -1543,9 +1064,9 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return prefixInVector(
+				return index.PrefixInVector(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vec, columnType,
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			var minPrefix, maxPrefix []byte
 			if vec.Length() > 0 && !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1560,18 +1081,18 @@ func compileFilterExpr(
 					return false, true, nil
 				}
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxPrefix != nil && anyPrefixLEByValue(zm, maxPrefix, columnType).excludes() {
+				if isSorted && maxPrefix != nil && index.AnyPrefixLEByValue(zm, maxPrefix, columnType).Excludes() {
 					return true, false, nil
 				}
-				if prefixInVector(zm, vec, columnType).excludes() {
+				if index.PrefixInVector(zm, vec, columnType).Excludes() {
 					return false, false, nil
 				}
 				return false, true, nil
 			}
 			if isSorted && minPrefix != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyPrefixGEByValue(zm, minPrefix, columnType)
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyPrefixGEByValue(zm, minPrefix, columnType)
 					})
 				}
 			}
@@ -1624,7 +1145,7 @@ func compileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return anyInVector(obj.SortKeyZoneMap(), vec, columnType).mayMatch(), nil
+					return index.AnyInVector(obj.SortKeyZoneMap(), vec, columnType).MayMatch(), nil
 				}
 			}
 			if isPK {
@@ -1641,9 +1162,9 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return anyInVector(
+				return index.AnyInVector(
 					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vec, columnType,
-				).mayMatch(), nil
+				).MayMatch(), nil
 			}
 			vecHasNull := vec.IsConstNull() || vec.GetNulls().Any()
 			var minVal, maxVal []byte
@@ -1668,14 +1189,14 @@ func compileFilterExpr(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxVal != nil && anyLEByBound(zm, maxVal, maxBound, columnType).excludes() {
+				if isSorted && maxVal != nil && index.AnyLEByBound(zm, maxVal, maxBound, columnType).Excludes() {
 					return true, false, nil
 				}
-				membership := anyInVector(zm, vec, columnType)
-				if membership.excludes() {
+				membership := index.AnyInVector(zm, vec, columnType)
+				if membership.Excludes() {
 					return false, false, nil
 				}
-				if isPK && membership.comparable {
+				if isPK && membership.Known {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
 					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
@@ -1690,92 +1211,8 @@ func compileFilterExpr(
 			}
 			if isSorted && minVal != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), minBound, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, minVal, minBound, columnType)
-					})
-				}
-			}
-		case "=":
-			colExpr, vals, valExprs, ok := mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			bound, ok := makeDecimalZoneMapBound(colDef, vals[0], valExprs[0])
-			if !ok {
-				canCompile = false
-				return
-			}
-			isPK, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return intersectsBound(obj.SortKeyZoneMap(), vals[0], bound, types.T(colDef.Typ.Id)).mayMatch(), nil
-				}
-			}
-			if isPK {
-				loadOp = loadMetadataAndBFOpFactory(fs)
-			} else {
-				loadOp = loadMetadataOnlyOpFactory(fs)
-			}
-
-			highSelectivityHint = isPK
-
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return intersectsBound(
-					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], bound, types.T(colDef.Typ.Id),
-				).mayMatch(), nil
-			}
-			blockFilterOp = func(
-				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				var (
-					can, ok bool
-				)
-				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				intersection := intersectsBound(zm, vals[0], bound, types.T(colDef.Typ.Id))
-				if isSorted {
-					can = anyLEByBound(zm, vals[0], bound, types.T(colDef.Typ.Id)).excludes()
-					if can {
-						ok = false
-					} else {
-						ok = intersection.mayMatch()
-					}
-				} else {
-					can = false
-					ok = intersection.mayMatch()
-				}
-				if !ok {
-					return can, ok, nil
-				}
-				// Bloom keys are raw encoded values and carry no scale. A decimal
-				// bound with a different persisted scale cannot be queried safely.
-				if isPK && intersection.comparable && (bound == nil ||
-					(bound.GetType() == zm.GetType() && bound.GetScale() == zm.GetScale())) {
-					var blkBF index.BloomFilter
-					buf := bf.GetBloomFilter(uint32(blkIdx))
-					if err := blkBF.Unmarshal(buf); err != nil {
-						return false, false, err
-					}
-					exist, err := blkBF.MayContainsKey(vals[0])
-					if err != nil || !exist {
-						return false, false, err
-					}
-				}
-				return false, true, nil
-			}
-			if isSorted {
-				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), bound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, vals[0], bound, types.T(colDef.Typ.Id))
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), minBound, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyGEByBound(zm, minVal, minBound, columnType)
 					})
 				}
 			}

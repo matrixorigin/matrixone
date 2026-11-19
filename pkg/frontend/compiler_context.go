@@ -508,6 +508,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	tableName string,
 	sub *plan.SubscriptionMeta,
 	snapshot *plan2.Snapshot,
+	capture *tableReadCapture,
 ) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
@@ -548,6 +549,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	if ShouldSwitchToSysAccount(dbName, tableName) {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
+	capture.begin(tcc, txn)
 
 	start = time.Now()
 
@@ -613,7 +615,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 		if sourceDB == "" {
 			sourceDB = dbName
 		}
-		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
+		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot, nil)
 		if err != nil || relation == nil {
 			return nil, err
 		}
@@ -725,14 +727,14 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	ses := tcc.GetSession()
 	physical, temporary := ses.GetTempTable(dbName, tableName)
-	obj, def, err := tcc.Resolve(dbName, tableName, nil)
+	obj, def, err := tcc.Resolve(dbName, tableName, nil, nil)
 	missing := func(err error) bool {
 		return moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB)
 	}
 	if temporary && def == nil && (err == nil || missing(err)) {
 		// Resolve can hide a relation for subscription/view scope reasons.
 		// Confirm absence in the session's own database before changing ownership.
-		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil)
+		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil, nil)
 		if (lookupErr == nil && relation == nil) || missing(lookupErr) {
 			if owner, ok := ses.(process.MissingTemporaryTableForgetter); ok {
 				owner.ForgetMissingTemporaryTable(dbName, tableName, physical)
@@ -742,15 +744,107 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 	return obj, def, err
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, true)
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, true, borrowOutput)
 }
 
-func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, false)
+func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, false, borrowOutput)
 }
 
-func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool) (*plan2.ObjectRef, *plan2.TableDef, error) {
+// ResolveTemporaryTable checks a destination in the session namespace only.
+// When an alias exists, normal resolution still enforces physical-index access.
+func (tcc *TxnCompilerContext) ResolveTemporaryTable(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	if dbName == "" {
+		dbName = tcc.DefaultDatabase()
+	}
+	ses := tcc.GetSession()
+	if ses == nil {
+		return nil, nil, moerr.NewInternalError(tcc.GetContext(), "session is unavailable for temporary table resolution")
+	}
+	if _, ok := ses.GetTempTable(dbName, tableName); !ok {
+		if owner, ok := ses.(process.TemporaryTableDDL); !ok || !owner.OwnsTemporaryTable(dbName, tableName) {
+			return nil, nil, nil
+		}
+	}
+	return tcc.Resolve(dbName, tableName, snapshot, nil)
+}
+
+func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, snapshot *plan2.Snapshot, temporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	var resolved plan2.TableResolution
+	var captureOutput *plan2.TableResolution
+	if result != nil {
+		captureOutput = &resolved
+	}
+	obj, def, err := tcc.resolve(dbName, tableName, snapshot, temporaryAlias, captureOutput)
+	if err != nil || def == nil {
+		return obj, def, err
+	}
+	physical := def.Name
+	if obj != nil && obj.ObjName != "" {
+		physical = obj.ObjName
+	}
+	if err = tcc.checkUserRelationIndexAccess(tableName, physical, obj, def, snapshot); err != nil {
+		return nil, nil, err
+	}
+	if result != nil {
+		result.Borrow = resolved.Borrow
+	}
+	return obj, def, nil
+}
+
+// checkUserRelationIndexAccess tests the read exception before constructing a
+// denial. Constructing a moerr reports it, even if the caller later discards it.
+func (tcc *TxnCompilerContext) checkUserRelationIndexAccess(requested, physical string, obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) error {
+	if (catalog.RequiresPrivilegedRelationAccess(requested, def.TableType, def.FeatureFlag) ||
+		catalog.RequiresPrivilegedRelationAccess(physical, def.TableType, def.FeatureFlag)) &&
+		tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
+		tcc.execCtx.directIndexReadAdmitted = true
+		return nil
+	}
+	return checkResolvedIndexRelation(tcc.execCtx, requested, physical, def.TableType, def.FeatureFlag)
+}
+
+// mayReadOwnIndexForDirectSelect admits only a real tenant administrator's
+// direct SELECT in its own catalog. Other statement types and catalog scopes
+// stay on the existing restrictive path.
+func (tcc *TxnCompilerContext) mayReadOwnIndexForDirectSelect(obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) bool {
+	if tcc == nil || tcc.execCtx == nil || tcc.execCtx.ses == nil || obj == nil || def == nil ||
+		snapshot != nil || obj.PubInfo != nil || tcc.viewSchemaRead || hiddenIndexCaller(tcc.execCtx.reqCtx) != nil {
+		return false
+	}
+	ses := tcc.execCtx.ses
+	if ses.IsBackgroundSession() || !ses.GetFromRealUser() {
+		return false
+	}
+	stmt := tcc.execCtx.stmt
+	if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+		stmt = prepare.Stmt
+	}
+	if _, ok := stmt.(*tree.Select); !ok {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || tenant.GetUser() == "" || !tenant.IsAccountAdminRole() {
+		return false
+	}
+	accountID, err := defines.GetAccountId(tcc.GetContext())
+	if err != nil || accountID != tenant.GetTenantID() {
+		return false
+	}
+	return tcc.resolvePhysicalObjectAccount(obj, def, snapshot) == tenant.GetTenantID()
+}
+
+// resolveForCatalogValidation checks a cached plan's object identity/version.
+// Its inputs include optimizer-generated index nodes and are not SQL targets.
+func (tcc *TxnCompilerContext) resolveForCatalogValidation(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolve(dbName, tableName, snapshot, true, nil)
+}
+
+func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -800,21 +894,29 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary && resolveTemporaryAlias {
+	if useSessionTemporary && resolveTemporaryAlias && !defines.IsPersistentViewBinding(tcc.GetContext()) {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
 		}
 	}
 
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	var capture *tableReadCapture
+	if result != nil && !borrowSnapshotOverride(snapshot) && sub == nil && !isTmpTable {
+		capture = &tableReadCapture{}
+	}
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot, capture)
 	if err != nil {
 		return nil, nil, err
 	}
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	resolvedDef := table.GetTableDef(ctx)
+	if resolvedDef == nil {
+		return nil, nil, moerr.NewInternalError(ctx, "table definition is unavailable for index relation admission")
+	}
+	tableDef := plan2.CloneTableDefForPlan(resolvedDef, true)
 	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
 		return nil, nil, err
 	}
@@ -853,13 +955,26 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 			TenantId: pubAccountId,
 		}
 	}
+	if result != nil {
+		result.Borrow = capture.finish(tcc, ctx, table, obj, tableDef)
+	}
 	return obj, tableDef, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,
+	snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution,
+) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolveIndexTableByRef(ref, tblName, snapshot, borrowOutput)
+}
+
+func (tcc *TxnCompilerContext) resolveIndexTableByRef(
+	ref *plan.ObjectRef,
+	tblName string,
 	snapshot *plan2.Snapshot,
+	result *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
@@ -889,7 +1004,11 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
+	var capture *tableReadCapture
+	if result != nil && !borrowSnapshotOverride(snapshot) && subMeta == nil && !isTmpTable && ref.SubscriptionName == "" {
+		capture = &tableReadCapture{}
+	}
+	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot, capture)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -922,6 +1041,9 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		tableDef.Name = tblName
 	}
 
+	if result != nil {
+		result.Borrow = capture.finish(tcc, ctx, table, obj, tableDef)
+	}
 	return obj, tableDef, nil
 }
 
@@ -1518,11 +1640,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
+	// Only session-owned temporary references may need alias translation.
+	// Statistics can run after leaving the View binding scope; translating a
+	// bound permanent source here would read/cache the shadow's statistics.
+	if obj.NotLockMeta {
+		if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+			tableName = realName
+		}
 	}
 
 	// 1. Check database and subscription
@@ -1542,7 +1666,7 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	}
 
 	// 2. Get table relation
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1621,7 +1745,8 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	// executed in a cloned historical transaction, not another user root.
 	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	historical := plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS)
+	if historical {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -1629,7 +1754,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
-	if tcc.viewSchemaRead && plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(tcc.GetTxnHandler().GetTxn().SnapshotTS()) {
+	// The subscription alias belongs to data T even on the ordinary SELECT
+	// path. checkSubscriptionValid separately admits its publication at A.
+	if historical {
 		ses := tcc.GetSession()
 		bh := ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
 		if back, ok := bh.(*backExec); ok {

@@ -33,11 +33,13 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 type CatalogHooks struct{}
 
 // HiddenTableTypes — a chunked segment store + a metadata table (no postings
-// table; segments are built from source and CDC-maintained).
+// table; segments are built from source and CDC-maintained), and an ignored table
+// for an index created with one.
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.FullText2Index_TblType_Storage,
 		catalog.FullText2Index_TblType_Metadata,
+		catalog.IndexIgnored_TblType,
 	}
 }
 

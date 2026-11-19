@@ -93,7 +93,7 @@ func sameMediumIntCommonType(left, right types.Type) bool {
 // by the outer context and finally the default DOUBLE domain.
 func InferNumericParameterType(known []types.Type, outer *types.Type) (types.Type, bool) {
 	for _, typ := range known {
-		if typ.Oid == types.T_float32 || typ.Oid == types.T_float64 {
+		if typ.Oid.IsFloat() {
 			return types.T_float64.ToType(), true
 		}
 	}

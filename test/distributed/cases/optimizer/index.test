@@ -78,9 +78,20 @@ insert into t1 select *,*,* from generate_series(1,100000)g;
 select mo_ctl('dn','flush','d1.t1');
 select * from t1 where c2=1;
 -- @separator:table
--- @regex("Index",true)
 explain select * from t1 where c3<2000;
+-- @separator:table
+-- @regex("Index",true)
+explain select * from t1 force index(id1) where c3<2000;
 select count(*) from t1 where c3<2000;
+drop table if exists t1;
+-- Small clustered fake-PK tables retain automatic index backfill selection.
+create table t1(c1 int, c2 int, c3 int, key(c2), unique key id1(c3)) cluster by c1;
+insert into t1 select *,*,* from generate_series(1,50)g;
+-- @separator:table
+select mo_ctl('dn','flush','d1.t1');
+-- @separator:table
+explain select * from t1 where c3<5;
+select * from t1 where c3<5;
 drop table if exists t1;
 drop database if exists d1;
 create database d1;

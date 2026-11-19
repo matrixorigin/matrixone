@@ -881,6 +881,33 @@ func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Typ
 	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
+func enumSetResultTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
+	if provenance.EnumSetResultType != nil {
+		return DeepCopyType(provenance.EnumSetResultType)
+	}
+	return mysqlSpecialTypeFromProvenance(provenance)
+}
+
+// captureEnumSetResultTypes snapshots declared field identity before rewrites
+// can remove a display adapter (including empty plans). Ordering provenance is
+// deliberately not used: it can survive UNION even when field identity does not.
+func (builder *QueryBuilder) captureEnumSetResultTypes(ctx *BindContext) {
+	if builder.qry.StmtType != plan.Query_SELECT {
+		return
+	}
+	builder.qry.EnumSetResultTypes = nil
+	for i := range ctx.headings {
+		typ := enumSetResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+		if typ == nil {
+			continue
+		}
+		if builder.qry.EnumSetResultTypes == nil {
+			builder.qry.EnumSetResultTypes = make([]plan.Type, len(ctx.headings))
+		}
+		builder.qry.EnumSetResultTypes[i] = *typ
+	}
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }

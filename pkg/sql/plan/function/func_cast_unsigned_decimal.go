@@ -114,6 +114,14 @@ func newUnsignedDecimalAdmission(
 		return unsignedDecimalAdmissionFixed[float32](proc, from, result, length, selectList, entry, column)
 	case types.T_float64:
 		return unsignedDecimalAdmissionFixed[float64](proc, from, result, length, selectList, entry, column)
+	case types.T_bf16:
+		return unsignedDecimalAdmissionFixed[types.BF16](proc, from, result, length, selectList, entry, column)
+	case types.T_float16:
+		return unsignedDecimalAdmissionFixed[types.Float16](proc, from, result, length, selectList, entry, column)
+	case types.T_float8:
+		return unsignedDecimalAdmissionFixed[types.Float8](proc, from, result, length, selectList, entry, column)
+	case types.T_float4:
+		return unsignedDecimalAdmissionFixed[types.Float4](proc, from, result, length, selectList, entry, column)
 	case types.T_int8:
 		return unsignedDecimalAdmissionFixed[int8](proc, from, result, length, selectList, entry, column)
 	case types.T_int16:
@@ -197,6 +205,14 @@ func unsignedDecimalNegative[T types.FixedSizeTExceptStrType](v T) bool {
 		return value < 0
 	case float64:
 		return value < 0
+	case types.BF16:
+		return value.ToFloat32() < 0
+	case types.Float16:
+		return value.ToFloat32() < 0
+	case types.Float8:
+		return value.ToFloat32() < 0
+	case types.Float4:
+		return value.ToFloat32() < 0
 	case int8:
 		return value < 0
 	case int16:

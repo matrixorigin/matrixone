@@ -99,8 +99,8 @@ func (t SeqTuple) equalByValue(other SeqTuple) bool {
 // SequenceRetryPending is one converted tier-1 allocation exhaustion awaiting
 // arbitration at the compiler's retry quiescence boundary (design
 // docs/design/sequence_ownership_state_consistency.md §4 D, v13+; B3 per-
-// identity payload map, v19). Original is the named terminal error the
-// client must receive exactly once when the retry is declined; StmtDeadline
+// identity payload map, v19). Original is the named error used for an
+// ordinary declined retry or when expiry cannot identify a target; StmtDeadline
 // is the statement deadline observed at the conversion site (zero when the
 // statement context carries none); Cause is the transient-conflict residue
 // that exhausted the tier-1 wrapper, kept to compose the message of a later
@@ -502,8 +502,8 @@ const (
 	// DecideExhausted is the exactly-once terminal verdict: some
 	// terminal-eligible retained identity is committed-unchanged AND held
 	// (A3), or the caller's own session ceiling was reached. Target names
-	// the surfaced identity (first-recorded order); Terminal carries the
-	// pre-composed error when the decision computed one.
+	// the surfaced identity (first-recorded order); Terminal carries its
+	// recorded cause, or an error that prevented constructing the prober.
 	DecideExhausted
 	// DecideCancelled propagates the caller's own context cancellation
 	// unchanged (B2 step 1 — first, existing precedence).

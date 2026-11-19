@@ -807,6 +807,14 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.MustFixedColNoTypeCheck[uint64](vec)[0], nil
 	case types.T_float32:
 		return vector.MustFixedColNoTypeCheck[float32](vec)[0], nil
+	case types.T_bf16:
+		return vector.MustFixedColNoTypeCheck[types.BF16](vec)[0].ToFloat32(), nil
+	case types.T_float16:
+		return vector.MustFixedColNoTypeCheck[types.Float16](vec)[0].ToFloat32(), nil
+	case types.T_float8:
+		return vector.MustFixedColNoTypeCheck[types.Float8](vec)[0].ToFloat32(), nil
+	case types.T_float4:
+		return vector.MustFixedColNoTypeCheck[types.Float4](vec)[0].ToFloat32(), nil
 	case types.T_float64:
 		return vector.MustFixedColNoTypeCheck[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
@@ -815,6 +823,8 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return slices.Clone(vector.GetArrayAt[float32](vec, 0)), nil
 	case types.T_array_float64:
 		return slices.Clone(vector.GetArrayAt[float64](vec, 0)), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledValue{Oid: vec.GetType().Oid, Cell: bytes.Clone(vec.GetBytesAt(0))}, nil
 	case types.T_array_bf16:
 		return slices.Clone(vector.GetArrayAt[types.BF16](vec, 0)), nil
 	case types.T_array_float16:
@@ -900,6 +910,19 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
+	logStatementStringStatusWithLog(ctx, ses, stmtStr, status, err, true)
+}
+
+// logStatementStringStatusWithLog always performs statement accounting, even
+// when a caller has suppressed a repetitive statement failure log.
+func logStatementStringStatusWithLog(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+	writeLog bool,
+) {
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -919,7 +942,7 @@ func logStatementStringStatus(
 			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		}
 		err = nil // make sure: it is nil for EndStatement
-	} else {
+	} else if writeLog {
 		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
@@ -1569,6 +1592,16 @@ func isTextExecuteParam(value string) bool {
 }
 
 func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	return convertRowsIntoBatchInLocation(pool, cols, rows, time.Local)
+}
+
+// convertRowsIntoBatchInLocation converts frontend result rows into a batch.
+// Some producers, such as DATA BRANCH DIFF, render temporal values as text in
+// the session time zone; loc is the zone used to read TIMESTAMP text back.
+func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (*batch.Batch, *plan.ResultColDef, error) {
+	if loc == nil {
+		loc = time.Local
+	}
 	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
 	if err != nil {
 		return nil, nil, err
@@ -1582,45 +1615,25 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex] = vector.NewVec(typ)
 		nsp := nulls.NewWithSize(cnt)
 
+		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
-		case types.T_varchar:
+		case types.T_varchar, types.T_text, types.T_varbinary:
+			// Byte-valued and vector-valued cells must save the exact bytes
+			// the client-visible result presents (issue #31535): fmt.Sprintf
+			// renders []byte and vector values as numeric lists.
 			for rowIdx, row := range rows {
-				var val string
+				var val []byte
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
 				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
+					val = textRowValueBytes(row[colIndex])
 				}
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
+				err := vector.AppendBytes(bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 
-		case types.T_text:
-			for rowIdx, row := range rows {
-				var val string
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
-				}
-
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
 		case types.T_int8:
 			for rowIdx, row := range rows {
 				var val int8
@@ -1800,8 +1813,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Date
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Date)
+				} else if val, err = getDateFromRowValue(row[colIndex]); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
@@ -1814,8 +1827,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Time
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Time)
+				} else if val, err = getTimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
@@ -1828,8 +1841,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Datetime
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Datetime)
+				} else if val, err = getDatetimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
@@ -1848,7 +1861,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					case types.Timestamp:
 						val = v
 					case string:
-						val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+						val, err = types.ParseTimestamp(loc, v, typ.Scale)
 						if err != nil {
 							return nil, nil, err
 						}
@@ -1924,6 +1937,38 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
+}
+
+// textRowValueBytes renders a hand-built result row value as the exact bytes
+// the client-visible result presents. []byte cells (VARCHAR/VARBINARY engine
+// values) carry their raw bytes, and vector cells render with the same
+// ArrayToString text the protocol shows; other scalar types keep their
+// existing fmt.Sprintf presentation (issue #31535).
+func textRowValueBytes(value any) []byte {
+	switch v := value.(type) {
+	case string:
+		return []byte(v)
+	case []byte:
+		return v
+	case []float32:
+		return []byte(types.ArrayToString[float32](v))
+	case []float64:
+		return []byte(types.ArrayToString[float64](v))
+	case []types.BF16:
+		return []byte(types.ArrayToString[types.BF16](v))
+	case []types.Float16:
+		return []byte(types.ArrayToString[types.Float16](v))
+	case []int8:
+		return []byte(types.ArrayToString[int8](v))
+	case types.BlockScaledValue:
+		text, berr := types.BlockScaledToString(v.Cell)
+		if berr != nil {
+			return []byte(fmt.Sprintf("%v", value))
+		}
+		return []byte(text)
+	default:
+		return []byte(fmt.Sprintf("%v", value))
+	}
 }
 
 func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
@@ -2019,10 +2064,21 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 		}
 		switch columnType {
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-			pType = plan.Type{
-				Id: int32(types.T_varchar),
+			// A VAR_STRING/VARCHAR column carrying the binary charset is a
+			// VARBINARY engine value: its cells hold raw bytes, and the saved
+			// result must keep the binary type instead of coercing them into
+			// text (issue #31535).
+			if mysqlColumn, ok := col.(*MysqlColumn); ok && mysqlColumn.Charset() == charsetBinary {
+				pType = plan.Type{
+					Id: int32(types.T_varbinary),
+				}
+				tType = types.New(types.T_varbinary, types.MaxVarBinaryLen, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_varchar),
+				}
+				tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 			}
-			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_TEXT:
 			pType = plan.Type{
 				Id: int32(types.T_text),
@@ -2102,20 +2158,26 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_time),
+				Id:    int32(types.T_time),
+				Scale: scale,
 			}
-			tType = types.New(types.T_time, 0, 0)
+			tType = types.New(types.T_time, 0, scale)
 		case defines.MYSQL_TYPE_DATETIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_datetime),
+				Id:    int32(types.T_datetime),
+				Scale: scale,
 			}
-			tType = types.New(types.T_datetime, 0, 0)
+			tType = types.New(types.T_datetime, 0, scale)
 		case defines.MYSQL_TYPE_TIMESTAMP:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_timestamp),
+				Id:    int32(types.T_timestamp),
+				Scale: scale,
 			}
-			tType = types.New(types.T_timestamp, 0, 0)
+			tType = types.New(types.T_timestamp, 0, scale)
 		case defines.MYSQL_TYPE_ENUM:
 			pType = plan.Type{
 				Id: int32(types.T_enum),
@@ -2144,6 +2206,55 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 }
 
 const mysqlDecimalExtraLength uint32 = 1
+
+// mysqlTemporalColScale returns the fractional-second precision a
+// TIME/DATETIME/TIMESTAMP result column declares, so saved results keep it.
+func mysqlTemporalColScale(col Column) int32 {
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return 0
+	}
+	scale := int32(decimalCol.Decimal())
+	if scale < 0 || scale > 6 {
+		return 0
+	}
+	return scale
+}
+
+// Saved result rows carry temporal values either as MatrixOne values or, for
+// producers that render rows as text (DATA BRANCH DIFF), as strings.
+func getDateFromRowValue(value any) (types.Date, error) {
+	switch v := value.(type) {
+	case types.Date:
+		return v, nil
+	case string:
+		return types.ParseDateCast(v)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to date type", v)
+	}
+}
+
+func getTimeFromRowValue(value any, scale int32) (types.Time, error) {
+	switch v := value.(type) {
+	case types.Time:
+		return v, nil
+	case string:
+		return types.ParseTime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to time type", v)
+	}
+}
+
+func getDatetimeFromRowValue(value any, scale int32) (types.Datetime, error) {
+	switch v := value.(type) {
+	case types.Datetime:
+		return v, nil
+	case string:
+		return types.ParseDatetime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to datetime type", v)
+	}
+}
 
 type mysqlDecimalColumn interface {
 	Column
@@ -2386,8 +2497,9 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	}
 	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
 	// without an explicit display scale. Clients use this metadata when
-	// converting binary floating-point results to text.
-	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+	// converting binary floating-point results to text. bf16, float16,
+	// float8 and float4 are sent as FLOAT.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64 || typ.Oid.IsLowPrecisionFloat()) &&
 		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
 		col.SetDecimal(mysqlDecimalNotSpecified)
 		return
@@ -2498,8 +2610,13 @@ type UserInput struct {
 	sameStatementAuthorization bool
 	preparePlan                *plan.Plan // binary protocol execute
 	sqlSourceType              []string
-	isRestore                  bool
-	isBinaryProtExecute        bool
+	// Fragments belong only to this input's successful scheduling parse. They
+	// can be reused by statement recording while the SQL and parser mode match.
+	recordFragments     []mysql.SQLFragment
+	recordSQL           string
+	recordSQLMode       string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string
@@ -2531,6 +2648,21 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) clearRecordFragments() {
+	ui.recordFragments = nil
+	ui.recordSQL = ""
+	ui.recordSQLMode = ""
+}
+
+func (ui *UserInput) setRecordFragments(fragments []mysql.SQLFragment, sqlMode string) {
+	if fragments == nil {
+		return
+	}
+	ui.recordFragments = fragments
+	ui.recordSQL = ui.sql
+	ui.recordSQLMode = sqlMode
 }
 
 func (ui *UserInput) genHash() {
@@ -2998,6 +3130,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	}
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
+	}
+	if col.EnumSetResultType != nil && typ.Oid.IsMySQLString() {
+		if err = setEnumSetResultMetadata(ctx, col.EnumSetResultType, typ.Charset, c); err != nil {
+			return nil, err
+		}
 	}
 	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.

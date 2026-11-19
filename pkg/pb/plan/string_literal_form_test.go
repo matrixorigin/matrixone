@@ -25,7 +25,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64
 		want bool
-	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}, {606, false}, {607, false}, {608, false}, {609, false}, {610, false}, {611, false}, {612, false}, {613, false}, {614, false}, {615, false}, {616, false}, {617, false}, {618, false}, {619, false}, {620, false}, {621, false}, {622, false}, {623, false}, {624, false}, {625, false}, {626, false}, {627, false}, {628, false}, {629, false}} {
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}, {606, false}, {607, false}, {608, false}, {609, false}, {610, false}, {611, false}, {612, false}, {613, false}, {614, false}, {615, false}, {616, false}, {617, false}, {618, false}, {619, false}, {620, false}, {621, false}, {622, false}, {623, false}, {624, false}, {625, false}, {626, false}, {627, false}, {628, false}, {629, false}, {636, false}} {
 		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
 			// Identity, not the spelling or the surrounding expression shape,
 			// controls the floor. A subquery child exercises nested detection.
@@ -39,8 +39,8 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.id == 629, features.JSONSearch)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 629, features.Any())
+			require.Equal(t, tc.id == 636, features.JSONSearch)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 636, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{
@@ -105,6 +105,51 @@ func TestVisitExprTreeTraversesEveryNestedVariant(t *testing.T) {
 		return nil
 	}))
 	require.Equal(t, []int32{4, 3, 5, 6, 7}, positions)
+}
+
+func TestRequiredRemoteExpressionFeaturesNonFunctionParents(t *testing.T) {
+	format := func(missingFirst bool) *Expr {
+		first := &Expr{Typ: Type{Id: 23}}
+		if missingFirst {
+			first = nil
+		}
+		return &Expr{Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(262) << 32},
+			Args: []*Expr{first, {}},
+		}}}
+	}
+	parents := map[string]func(*Expr) *Expr{
+		"literal source": func(child *Expr) *Expr {
+			return &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: child}}}
+		},
+		"function without descriptor": func(child *Expr) *Expr {
+			return &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{child}}}}
+		},
+	}
+	for name, parent := range parents {
+		t.Run(name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(parent(format(false)))
+			require.NoError(t, err)
+			require.True(t, features.FormatNumericArguments)
+
+			_, err = RequiredRemoteExpressionFeatures(parent(format(true)))
+			require.ErrorContains(t, err, "FORMAT is missing its first argument")
+		})
+	}
+
+	owner := &struct{ Expressions []*Expr }{Expressions: []*Expr{
+		{Typ: Type{Id: planJSONTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "1"}}}},
+		{Expr: &Expr_Vec{Vec: &LiteralVec{DecimalLiteralRequiresV82: true}}},
+		{Expr: &Expr_Dependent{Dependent: &DependentExpr{Inputs: []*Expr{
+			{Typ: Type{Id: 31}, Expr: &Expr_P{P: &ParamRef{}}},
+		}}}},
+	}}
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONScalarLiteralContracts)
+	require.True(t, features.DecimalLiteralSemantics)
+	require.True(t, features.DependentPrograms)
+	require.True(t, features.FloatConversionSemantics)
 }
 
 func TestValidateStringLiteralFormsSkipsBytePayloads(t *testing.T) {
@@ -977,6 +1022,35 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	features, err = RequiredRemoteExpressionFeatures(makeLiteral(false))
 	require.NoError(t, err)
 	require.False(t, features.DecimalLiteralSemantics)
+}
+
+func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		typ      int32
+		textCast bool
+	}{
+		{planJSONTypeID, false}, {planAnyTypeID, false}, {61, false}, {planJSONTypeID, true},
+	} {
+		arg := &Expr{Typ: Type{Id: tc.typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if tc.textCast {
+			arg = &Expr{Typ: Type{Id: planTextTypeID}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(21)<<32 | 1, ObjName: "cast"}, Args: []*Expr{arg},
+			}}}
+		}
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID) << 32, ObjName: "crc32"}, Args: []*Expr{arg}}}}
+		owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		decoded := &TableDef{}
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(decoded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
+		folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
+		features, err = RequiredRemoteExpressionFeatures(folded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
+	}
 }
 
 func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {

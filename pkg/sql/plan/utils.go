@@ -1104,6 +1104,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				nestedFn := nested.GetF()
+				if nestedFn != nil && nestedFn.Func != nil &&
+					strings.EqualFold(nestedFn.Func.GetObjName(), "bit_count") &&
+					len(nestedFn.Args) == 1 && isPreparedNumericFallbackExpr(nestedFn.Args[0]) {
+					// BIT_COUNT's dedicated collector owns this fallback marker.
+					// Other consumers of the marker are still visited separately.
+					return nil
+				}
 				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
 						query, int32(nodeID), source, positions,
@@ -1650,10 +1658,16 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
+		if leaf, ok := leafByTag[exprImpl.Col.RelPos]; ok {
+			hyperEdge[leaf] = true
+		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
@@ -1915,6 +1929,9 @@ func constantFoldWithPreparedExactSource(
 	spatialChecked bool,
 	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr, nil
+	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
 		// constant-fold representation. Keep it unchanged so callers can fold an
@@ -1969,7 +1986,9 @@ func constantFoldWithPreparedExactSource(
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
@@ -3642,7 +3661,7 @@ func resetPreparePlan(
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -8649,9 +8668,13 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
 					continue
 				}
-				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				original := fn.Args[i]
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, original, proc, false, true)
 				if foldErr != nil {
 					return false, foldErr
+				}
+				if original.GetCandidateFilter() {
+					folded.CandidateFilter = true
 				}
 				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
@@ -8672,9 +8695,10 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 							Id: int32(newID),
 						},
 					},
-					AuxId:       fn.Args[i].AuxId,
-					Ndv:         fn.Args[i].Ndv,
-					Selectivity: fn.Args[i].Selectivity,
+					AuxId:           fn.Args[i].AuxId,
+					CandidateFilter: fn.Args[i].CandidateFilter,
+					Ndv:             fn.Args[i].Ndv,
+					Selectivity:     fn.Args[i].Selectivity,
 				}
 
 			}
@@ -8702,7 +8726,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			// Nullable folded lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return err
+				}
 			}
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -8713,6 +8739,12 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
+			}
+			// Timestamp functions can choose their result precision at execution
+			// time (for example NOW(?) uses the bound FSP). Storage comparisons
+			// must use the same precision as the row executor for this value.
+			if types.T(expr.Typ.Id) == types.T_timestamp && vec.GetType().Oid == types.T_timestamp {
+				expr.Typ.Scale = vec.GetType().Scale
 			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
@@ -8808,6 +8840,15 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	case types.T_float64:
 		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		ret = types.EncodeFloat64(&val)
+
+	case types.T_bf16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.BF16](vec)[row])
+	case types.T_float16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float16](vec)[row])
+	case types.T_float8:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float8](vec)[row])
+	case types.T_float4:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float4](vec)[row])
 
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:

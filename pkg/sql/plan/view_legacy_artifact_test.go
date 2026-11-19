@@ -44,7 +44,7 @@ func TestRealLegacySystemTemplateFailsClosedAfterMigration(t *testing.T) {
 		}
 		mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 		ctx := &historicalColumnsContext{MockCompilerContext: mock}
-		ctx.resolve = func(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+		ctx.resolve = func(database, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			require.Nil(t, snapshot)
 			definition, err := json.Marshal(ViewData{Stmt: current})
 			require.NoError(t, err)

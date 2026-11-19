@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -501,7 +502,7 @@ func newCrFixtureWindow(t *testing.T, sql string, window time.Duration) *crFixtu
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, sql, 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -551,6 +552,31 @@ func crSequenceRelDef() []engine.TableDef {
 
 func (f *crFixture) run() error {
 	_, runErr := f.compile.Run(0)
+	return runErr
+}
+
+// runInBubble keeps retry-window tests independent of host scheduling. The
+// fixture is built outside the bubble because setup may start runtime-owned
+// background work; the local query itself runs on the bubble's goroutine.
+func (f *crFixture) runInBubble(t *testing.T) error {
+	t.Helper()
+	require.True(t, f.compile.IsTpQuery())
+	require.Len(t, f.compile.scopes, 1)
+	require.False(t, f.compile.hasMergeOp)
+	scope := f.compile.scopes[0]
+	require.Contains(t, []magicType{Normal, Merge}, scope.Magic)
+	require.Empty(t, scope.PreScopes)
+	require.False(t, scope.ConcurrentPreScopes)
+	require.False(t, scope.LazyPreScopes)
+	require.False(t, scope.IsLoad)
+	require.False(t, scope.IsTbFunc)
+	require.False(t, scope.isTableScan())
+	var runErr error
+	synctest.Test(t, func(t *testing.T) {
+		defer f.proc.ResetQueryContext()
+		f.compile.startAt = time.Now()
+		runErr = f.run()
+	})
 	return runErr
 }
 
@@ -856,9 +882,8 @@ func sleepUntilDeadlineDelta(st *process.SequenceRetryState, delta time.Duration
 // a baseline WITHOUT re-anchoring D (AdmitRetry preserves the live
 // deadline, G2), and its failure aborts the projection before seqa can
 // resolve, so the watch set retains {seqa, seqb} across every rebuild.
-// The window is doubled (600 ms) so seqb's full 8-attempt join cycle
-// (~90-330 ms on this harness) always exhausts strictly inside seqa's
-// first window — a live-window admission, never the expiry branch.
+// A doubled virtual window keeps seqb's full 8-attempt join inside seqa's
+// first window, independent of host scheduling.
 //
 // The episode runs TWO decisions. Window 1: both sequences' peers commit
 // forward ((5,1)), so the first decision — one interval after seqa's
@@ -874,7 +899,9 @@ func sleepUntilDeadlineDelta(st *process.SequenceRetryState, delta time.Duration
 func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *testing.T) {
 	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
 	f.exec.failAlloc(crSeqA, 0)
-	for g := uint64(1); g <= 64; g++ {
+	// Even minimum backoff reaches both virtual deadlines before the script ends.
+	const maxGenerations = 256
+	for g := uint64(1); g <= maxGenerations; g++ {
 		f.exec.failAlloc(crSeqB, g)
 	}
 	f.exec.probeHeld[crSeqA] = true
@@ -889,7 +916,7 @@ func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *
 	// seqb's committed change vs its admission baseline acquits seqb at
 	// the first decision.
 	f.sink.beforeGen[2] = func() { f.store.advance(crSeqB, 5) }
-	for g := uint64(3); g <= 64; g++ {
+	for g := uint64(3); g <= maxGenerations; g++ {
 		f.sink.beforeGen[g] = func() {
 			// Once the renewal is observable (a later live deadline),
 			// seqb's peers commit AGAIN inside window 2 while seqa stays
@@ -904,7 +931,7 @@ func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *
 		}
 	}
 
-	runErr := f.run()
+	runErr := f.runInBubble(t)
 
 	require.Error(t, runErr)
 	require.ErrorContains(t, runErr,
@@ -942,9 +969,9 @@ func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *
 // check at all. The renewal is observed decision-relatively (a hook reads
 // the live deadline), upon which seqb's contention ends and the next
 // generation drains both sequences from the peers' committed state. The
-// doubled window keeps this at exactly one decision: seqb's join cycle
-// always exhausts inside the first window, and the resolving generation
-// lands far inside the renewed window, so no second decision can fire
+// doubled window keeps this at exactly one decision: under a virtual clock,
+// seqb's join cycle exhausts inside the first window and the resolving
+// generation lands far inside the renewed window, so no second decision can fire
 // and no quantity of generation-index arithmetic is load-sensitive.
 func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
@@ -977,7 +1004,7 @@ func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 		}
 	}
 
-	runErr := f.run()
+	runErr := f.runInBubble(t)
 
 	require.NoError(t, runErr,
 		"conjunctive renewal holds while every contended identity observably changes")
@@ -1009,13 +1036,9 @@ func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 // renewal interval) at the first decision: a young identity can be
 // neither terminal nor renewable, so seqa (old, unchanged, held)
 // terminates immediately and names itself; the late join neither extends
-// seqa's window nor delays its verdict. The doubled window plus the
-// deadline-relative join (D-450 ms) makes both sides robust: seqb's full
-// 8-attempt join cycle (~90-330 ms) always exhausts strictly inside
-// seqa's first window — a live-window admission, never the expiry branch
-// — and seqb's baseline age at the decision, 450 ms minus one cycle,
-// stays inside (0, interval) with >=100 ms margin on both sides. The
-// single observed deadline pins that no re-anchoring ever happened.
+// seqa's window nor delays its verdict. A virtual clock controls the real
+// retry path: seqb joins while D is live, then the first decision runs after
+// seqa's baseline has aged one full interval but seqb's is still young.
 func TestCompileRunSequenceRetryConjunctiveLateJoinKeepsStalledVerdict(t *testing.T) {
 	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
 	f.exec.failAlloc(crSeqA, 0)
@@ -1023,31 +1046,153 @@ func TestCompileRunSequenceRetryConjunctiveLateJoinKeepsStalledVerdict(t *testin
 		f.exec.failAlloc(crSeqB, g)
 	}
 	f.exec.probeHeld[crSeqA] = true
-	// seqb joins 450 ms into seqa's 600 ms window: the join cycle
-	// exhausts inside the live window, so the admission samples seqb's
-	// baseline; that baseline's age at the first decision (at or just
-	// past the deadline) is 450 ms minus one join cycle — young.
-	f.sink.beforeGen[1] = func() { sleepUntilDeadlineDelta(f.state, -450*time.Millisecond) }
 
-	runErr := f.run()
+	// The fixture is created outside the bubble because its process setup can
+	// start a runtime-owned background service. This literal query must run
+	// locally in the bubble, not on the external ants worker pool.
+	require.True(t, f.compile.IsTpQuery())
+	require.Len(t, f.compile.scopes, 1)
+	require.False(t, f.compile.hasMergeOp)
+	scope := f.compile.scopes[0]
+	require.Contains(t, []magicType{Normal, Merge}, scope.Magic)
+	require.Empty(t, scope.PreScopes)
+	require.False(t, scope.ConcurrentPreScopes)
+	require.False(t, scope.LazyPreScopes)
+	require.False(t, scope.IsLoad)
+	require.False(t, scope.IsTbFunc)
+	require.False(t, scope.isTableScan())
 
-	require.Error(t, runErr)
-	require.ErrorContains(t, runErr,
-		"sequence testdb.seqa: allocation could not acquire the sequence row within 8 attempts",
-		"the young identity neither delays nor rescues the stalled verdict")
-	identity, terminal := f.state.TerminalIdentity()
-	require.True(t, terminal)
-	require.Equal(t, crWatchA, identity)
-	plain, locks, _, lockResults := f.exec.counts()
-	require.Equal(t, 4, plain,
-		"two admission samples plus the single decision round's tuple probes")
-	require.Equal(t, 1, locks,
-		"a young identity takes no availability check: it can be neither terminal nor renewable")
-	require.Equal(t, []bool{false}, lockResults, "seqa held is the only checked row")
-	require.Equal(t, 1, f.namedTerminalAborts())
-	deadlines := f.distinctDeadlines()
-	require.Len(t, deadlines, 1,
-		"a late join never re-anchors the live window: one deadline, no extension")
+	synctest.Test(t, func(t *testing.T) {
+		// Run creates query contexts in the bubble; cancel them here before
+		// the outer fixture cleanup calls Compile.Release.
+		defer f.proc.ResetQueryContext()
+		f.compile.startAt = time.Now()
+
+		var aUpper, firstDeadline time.Time
+		f.sink.beforeGen[1] = func() {
+			// A's admission sample has completed before this hook, so this
+			// time is an upper bound on its baseline timestamp.
+			aUpper = time.Now()
+			var ok bool
+			firstDeadline, ok = f.state.RetryDeadline()
+			require.True(t, ok)
+		}
+		f.sink.beforeGen[2] = func() {
+			// B has joined A's live episode. Its eight backoffs each take
+			// less than 26 ms of virtual time, so they fit within D.
+			require.True(t, f.state.HasWatch(crWatchA))
+			require.True(t, f.state.HasWatch(crWatchB))
+			deadline, ok := f.state.RetryDeadline()
+			require.True(t, ok)
+			require.True(t, deadline.Equal(firstDeadline))
+			require.True(t, time.Now().Before(deadline))
+			plain, locks, _, _ := f.exec.counts()
+			require.Equal(t, 2, plain, "both admission samples precede the first decision")
+			require.Zero(t, locks)
+
+			// Advancing the bubble to aUpper + interval makes A at least
+			// one interval old. B's baseline was sampled after aUpper, so
+			// it remains young when the next allocation decides expiry.
+			time.Sleep(time.Until(aUpper.Add(2 * crWindow)))
+		}
+
+		runErr := f.run()
+
+		require.Error(t, runErr)
+		require.ErrorContains(t, runErr,
+			"sequence testdb.seqa: allocation could not acquire the sequence row within 8 attempts",
+			"the young identity neither delays nor rescues the stalled verdict")
+		identity, terminal := f.state.TerminalIdentity()
+		require.True(t, terminal)
+		require.Equal(t, crWatchA, identity)
+		plain, locks, _, lockResults := f.exec.counts()
+		require.Equal(t, 4, plain,
+			"two admission samples plus the single decision round's tuple probes")
+		require.Equal(t, 1, locks,
+			"a young identity takes no availability check: it can be neither terminal nor renewable")
+		require.Equal(t, []bool{false}, lockResults, "seqa held is the only checked row")
+		require.Equal(t, 1, f.namedTerminalAborts())
+		deadlines := f.distinctDeadlines()
+		require.Len(t, deadlines, 1,
+			"a late join never re-anchors the live window: one deadline, no extension")
+	})
+}
+
+// The retry transition may finish after D, even when B converted while D
+// was live. The decision must return the stalled watch A, not pending B.
+func TestCompileRunSequenceRetryExpiryAtTransitionNamesStalledWatch(t *testing.T) {
+	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
+	f.exec.failAlloc(crSeqA, 0)
+	f.exec.failAlloc(crSeqB, 1)
+	f.exec.probeHeld[crSeqA] = true
+	require.True(t, f.compile.IsTpQuery())
+	require.Len(t, f.compile.scopes, 1)
+	require.False(t, f.compile.scopes[0].isTableScan())
+
+	synctest.Test(t, func(t *testing.T) {
+		defer f.proc.ResetQueryContext()
+		f.compile.startAt = time.Now()
+		paused := false
+		f.proc.GetSessionInfo().RetryDiscardOutput = func() error {
+			if !paused && f.state.HasWatch(crWatchA) && f.state.HasWatch(crWatchB) {
+				paused = true
+				deadline, ok := f.state.RetryDeadline()
+				require.True(t, ok)
+				require.True(t, time.Now().Before(deadline), "B converted while the window was live")
+				f.store.advance(crSeqB, 7)
+				time.Sleep(time.Until(deadline) + time.Nanosecond)
+			}
+			return nil
+		}
+
+		err := f.run()
+		require.True(t, paused, "the transition crossed D after B converted")
+		require.ErrorContains(t, err, "sequence testdb.seqa: allocation could not acquire")
+		require.ErrorContains(t, err, "Lock wait timeout exceeded")
+		id, terminal := f.state.TerminalIdentity()
+		require.True(t, terminal)
+		require.Equal(t, crWatchA, id)
+		require.Equal(t, 1, f.namedTerminalAborts())
+	})
+}
+
+func TestSequenceRetryArbitrationIgnoresCancelledPipeline(t *testing.T) {
+	f := newCrFixture(t, "select nextval('seqb'), nextval('seqa')")
+	baseline, err := function.SampleSequenceBaseline(f.proc.Ctx, f.proc, crWatchA, time.Second, time.Time{})
+	require.NoError(t, err)
+	f.state.SetWatchingBaselined(crWatchA, baseline, time.Now().Add(-2*crWindow))
+	f.state.SetPending(crWatchA, &process.SequenceRetryPending{Cause: moerr.NewInternalErrorNoCtx("cause from seqa")})
+	f.state.ConsumePendings()
+	f.state.AdmitRetry(time.Now().Add(-time.Second))
+	f.exec.probeHeld[crSeqA] = true
+	pendingB := tier2Pending(time.Time{})
+	pendingB.Cause = moerr.NewInternalErrorNoCtx("cause from seqb")
+	items := recordAndDrainPending(f.state, crWatchB, pendingB)
+
+	queryCtx := f.proc.Base.GetContextBase().BuildQueryCtx(f.proc.GetTopContext())
+	t.Cleanup(f.proc.ResetQueryContext)
+	f.proc.BuildPipelineContext(queryCtx)
+	f.proc.Cancel(nil) // teardown of one pipeline, not cancellation of the query
+	require.NoError(t, queryCtx.Err())
+	admitted, err := f.compile.arbitrateSequenceRetryAdmission(f.state, items, moerr.NewTxnNeedRetryNoCtx())
+	require.False(t, admitted)
+	require.ErrorContains(t, err, "sequence testdb.seqa: allocation could not acquire")
+	require.ErrorContains(t, err, "cause from seqa")
+	require.NotContains(t, err.Error(), "cause from seqb")
+
+	// A subsequent pending for B also resolves to the stamped A. Publishing
+	// still blocks replay and preserves the ordinary pending fallback.
+	admitted, err = f.compile.arbitrateSequenceRetryAdmission(f.state, items, moerr.NewTxnNeedRetryNoCtx())
+	require.False(t, admitted)
+	require.ErrorContains(t, err, "sequence testdb.seqa: allocation could not acquire")
+	f.state.MarkPublished()
+	admitted, err = f.compile.arbitrateSequenceRetryAdmission(f.state, items, moerr.NewTxnNeedRetryNoCtx())
+	require.False(t, admitted)
+	require.NoError(t, err)
+	f.cancel()
+	admitted, err = f.compile.arbitrateSequenceRetryAdmission(f.state, items, moerr.NewTxnNeedRetryNoCtx())
+	require.False(t, admitted)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // N1 (#30359 review): a prepared-cursor EXECUTE keeps its rows off the

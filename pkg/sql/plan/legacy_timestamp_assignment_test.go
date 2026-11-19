@@ -135,7 +135,7 @@ func TestLegacyFirstTimestampDefinitionPolicy(t *testing.T) {
 			stmts, err := mysql.Parse(mock.ctxt.GetContext(), "CREATE TABLE timestamp_policy (id INT, "+tc.definition+", later_ts TIMESTAMP(6))", 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(&mock.ctxt, stmts[0], false)
+			p, err := BuildPlan(&mock.ctxt, stmts[0], false, nil)
 			require.NoError(t, err)
 			cols := p.GetDdl().GetCreateTable().GetTableDef().Cols
 			require.Equal(t, tc.nullable, cols[1].Default.NullAbility)
@@ -186,7 +186,7 @@ func TestLegacyTimestampZeroAdmissionAndReplay(t *testing.T) {
 		stmts, err := mysql.Parse(mock.ctxt.GetContext(), "CREATE TABLE timestamp_policy ("+definition+")", 1)
 		require.NoError(t, err)
 		defer stmts[0].Free()
-		return BuildPlan(&mock.ctxt, stmts[0], false)
+		return BuildPlan(&mock.ctxt, stmts[0], false, nil)
 	}
 	for _, definition := range []string{
 		"ts TIMESTAMP DEFAULT '0000-00-00 00:00:00'",

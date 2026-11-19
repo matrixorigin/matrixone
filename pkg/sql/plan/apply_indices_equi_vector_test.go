@@ -61,7 +61,7 @@ func equiVectorPlanFixture(t *testing.T, sql string, unique bool) *plan.Query {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	if prepare := p.GetDcl().GetPrepare(); prepare != nil {
 		return prepare.Plan.GetQuery()

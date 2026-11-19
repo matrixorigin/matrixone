@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -390,10 +391,11 @@ func (h *HnswBuild[T]) PreparePersistence(ts int64, buildTS int64, provenance bo
 	return sqls, nil
 }
 
-// PersistChunks runs only after preparation and any device admission succeeds.
-func (h *HnswBuild[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+// WriteIndexFiles writes every model file in txn (see HnswModel.WriteIndexFile). It runs only
+// after preparation and any device admission succeeds.
+func (h *HnswBuild[T]) WriteIndexFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error {
 	for _, idx := range h.indexes {
-		if err := idx.PersistChunks(writer); err != nil {
+		if err := idx.WriteIndexFile(sqlproc, nil, h.tblcfg, txn, run); err != nil {
 			return err
 		}
 	}

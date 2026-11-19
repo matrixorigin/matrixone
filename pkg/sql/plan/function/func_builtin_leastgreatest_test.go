@@ -1018,6 +1018,10 @@ func TestLeastGreatestSupportedOidResolution(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, types.T_varchar, resolution.resultType.Oid)
 				require.GreaterOrEqual(t, resolution.resultType.Width, int32(36))
+			} else if tc.typ.Oid.IsArray() {
+				require.True(t, ok)
+				require.Equal(t, tc.typ, resolution.resultType)
+				require.Equal(t, []types.Type{tc.typ, tc.typ}, resolution.castTypes)
 			} else {
 				require.False(t, ok)
 			}
@@ -1032,7 +1036,8 @@ func TestLeastGreatestSupportedOidResolution(t *testing.T) {
 		{"interval mixed oid", []types.Type{{Oid: types.T_interval}, types.T_varchar.ToType()}},
 		{"geometry same oid", []types.Type{{Oid: types.T_geometry}, {Oid: types.T_geometry}}},
 		{"geometry mixed oid", []types.Type{{Oid: types.T_geometry}, types.T_varchar.ToType()}},
-		{"float arrays mixed oid", []types.Type{types.T_array_float32.ToType(), types.T_array_float64.ToType()}},
+		{"array and integer", []types.Type{types.T_array_float32.ToType(), types.T_int64.ToType()}},
+		{"array dimension mismatch", []types.Type{types.New(types.T_array_float32, 3, 0), types.New(types.T_array_float64, 4, 0)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, ok := resolveLeastGreatestType(tc.input)

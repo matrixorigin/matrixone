@@ -60,7 +60,7 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT n1.N_NATIONKEY, (SELECT (SELECT n1.N_NATIONKEY + n2.N_REGIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY = n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n1`, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 	require.NoError(t, err)
 	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)

@@ -15,6 +15,7 @@
 package taskservice
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func TestSQLTaskDefinerOptsAndMetadata(t *testing.T) {
 		SQLBody:      "select 1",
 	}
 	metadata := BuildSQLTaskMetadata(ctx)
-	require.Equal(t, "sql-task:42:3", metadata.ID)
+	require.Equal(t, "sqltask2:42:00000000000000000003", metadata.ID)
 	require.Equal(t, task.TaskCode_SQLTask, metadata.Executor)
 	require.Equal(t, uint32(1), metadata.Options.Concurrency)
 
@@ -108,4 +109,10 @@ func TestSQLTaskDefinerOptsAndMetadata(t *testing.T) {
 	require.Equal(t, ctx.TaskId, decoded.TaskId)
 	require.Equal(t, ctx.TaskName, decoded.TaskName)
 	require.Equal(t, ctx.SQLBody, decoded.SQLBody)
+
+	maximum := BuildSQLTaskMetadata(&task.SQLTaskContext{TaskId: math.MaxUint64, TriggerCount: math.MaxUint64})
+	require.Len(t, maximum.ID, 50)
+	require.Error(t, validateSQLTaskTriggerSequence(0))
+	require.NoError(t, validateSQLTaskTriggerSequence(math.MaxInt64))
+	require.Error(t, validateSQLTaskTriggerSequence(uint64(math.MaxInt64)+1))
 }

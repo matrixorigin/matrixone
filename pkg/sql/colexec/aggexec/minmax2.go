@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -118,7 +119,7 @@ func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.
 	if vec.IsConst() {
 		row = 0
 	}
-	value := vector.MustFixedColNoTypeCheck[T](vec)[row]
+	value := vector.GetFixedAtNoTypeCheck[T](vec, row)
 	aggs := chunkArr[T](aggVec)
 	if aggVec.IsNull(uint64(y)) {
 		aggVec.UnsetNull(uint64(y))
@@ -180,8 +181,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	if n == 0 {
 		return nil
 	}
-	vals := vector.MustFixedColNoTypeCheck[T](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[T](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -212,9 +212,15 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		kind := vec.GetPrepareParamKindAt(inputRow)
 		source := vec.GetStringSourceAt(inputRow)
 		if isConst {
-			value = vals[0]
-			kind = vec.GetPrepareParamKindAt(0)
-			source = vec.GetStringSourceAt(0)
+			index := 0
+			if selection != nil {
+				index = int(selection[inputRow])
+			}
+			value = vals[index]
+			if vec.IsConst() {
+				kind = vec.GetPrepareParamKindAt(0)
+				source = vec.GetStringSourceAt(0)
+			}
 		} else {
 			value = vals[i+offset]
 		}
@@ -279,7 +285,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	}
 
 	lastX := -1
-	var aggs *[AggBatchSize]T
+	var aggs []T
 	var aggVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -989,9 +995,9 @@ func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Typ
 	var exec minMaxExecBytes
 	exec.mp = mp
 	if isMin {
-		exec.comp = compareUTF8mb4GeneralCI
+		exec.comp = collation.CompareGeneralCI
 	} else {
-		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
+		exec.comp = func(x, y []byte) int { return -collation.CompareGeneralCI(x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

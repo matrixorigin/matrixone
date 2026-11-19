@@ -2118,6 +2118,8 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxBadRecords            int64
+	MaxBadRecordsSet         bool  // whether MAX_BAD_RECORDS was specified, so that 0 can be set
 	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
 	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
 	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
@@ -2127,6 +2129,11 @@ type IndexOption struct {
 }
 
 // Must follow the following sequence when test
+// IsEmpty reports whether Format renders nothing for this option set: it is
+// the exact gate Format uses for its leading separator, kept as a single
+// source of truth so callers can decide whether to serialize an option at
+// all. The index type (IType) is serialized by the owning index AST, not
+// here, and the engine attributes have no serialized form at all.
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
@@ -2138,7 +2145,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
+		node.MaxIndexCapacity != 0 || node.MaxBadRecordsSet || node.MaxPostingsCapacity != 0 ||
 		node.QuantizerTrainLimit != 0 || node.PositionFree ||
 		node.Merge || node.ForceSync ||
 		len(node.IncludeColumns) != 0 || len(node.TokenFilters) != 0 {
@@ -2156,7 +2163,21 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.Comment != "" {
 		ctx.WriteString("comment ")
-		ctx.WriteString(node.Comment)
+		if ctx.singleQuoteString {
+			// Mirror the OP_TYPE serializer's owner semantics (issue #32211):
+			// escape the backslash-escape mode first so the consumer's
+			// backslash-aware ParseOne restores the exact comment bytes,
+			// then single-quote escaping.
+			value := node.Comment
+			if !ctx.NoBackslashEscape() {
+				value = FormatString(value)
+			}
+			ctx.WriteByte('\'')
+			ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+			ctx.WriteByte('\'')
+		} else {
+			ctx.WriteString(node.Comment)
+		}
 		ctx.WriteByte(' ')
 	}
 	if node.AlgoParamList != 0 {
@@ -2265,6 +2286,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.MaxIndexCapacity != 0 {
 		ctx.WriteString("MAX_INDEX_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.MaxBadRecordsSet {
+		ctx.WriteString("MAX_BAD_RECORDS ")
+		ctx.WriteString(strconv.FormatInt(node.MaxBadRecords, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.MaxPostingsCapacity != 0 {
@@ -2391,7 +2417,7 @@ func (node *Index) Format(ctx *FmtCtx) {
 	}
 	if node.Name != "" {
 		ctx.WriteByte(' ')
-		ctx.WriteString(node.Name)
+		ctx.WriteIdentifier(Identifier(node.Name))
 	}
 	if node.KeyType != INDEX_TYPE_INVALID {
 		ctx.WriteString(" using ")
@@ -2456,7 +2482,7 @@ func (node *UniqueIndex) Format(ctx *FmtCtx) {
 	ctx.WriteString("unique key")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
-		ctx.WriteString(node.Name)
+		ctx.WriteIdentifier(Identifier(node.Name))
 	}
 	if !node.Empty {
 		ctx.WriteString(" using none")

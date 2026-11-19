@@ -224,7 +224,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
 	if features.JSONSearch {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion136)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion135)
 	}
 	if features.IncompleteTemporalStrings {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
@@ -268,7 +268,7 @@ func RequiredPersistedIPFunctionProtocolVersion(owner any) (int64, error) {
 
 // RejectJSONSearchInNonViewDefinition keeps the initial JSON_SEARCH support
 // subset independent of whether the cluster has already activated protocol
-// v130. Views retain the requirement and use the shared admission fence;
+// for JSON_SEARCH. Views retain the requirement and use the shared admission fence;
 // other catalog expression surfaces fail closed before publication.
 func RejectJSONSearchInNonViewDefinition(ctx context.Context, owner any) error {
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)

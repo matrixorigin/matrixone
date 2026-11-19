@@ -194,5 +194,5 @@ func TestDeepExistentialGateProjectionSurvivesCopy(t *testing.T) {
 	copy := b.copyNode(ctx, project)
 	_, protected := b.existentialGateProjects[copy]
 	require.True(t, protected)
-	require.False(t, b.canRemoveProject(plan.Node_JOIN, b.qry.Nodes[copy]))
+	require.False(t, b.canRemoveProject(plan.Node_JOIN, b.qry.Nodes[copy], false))
 }

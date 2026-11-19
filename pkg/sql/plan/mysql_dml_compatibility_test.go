@@ -35,7 +35,7 @@ func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepa
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, isPrepareStmt)
+	return BuildPlan(ctx, stmt, isPrepareStmt, nil)
 }
 
 func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
@@ -45,7 +45,7 @@ func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, false, nil)
 }
 
 func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, message string) {
@@ -455,7 +455,7 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	_, ok = findMySQLDMLTargetInDirectTableExpr(ctx, cteName, targets, visibleCTEs)
 	require.False(t, ok)
 
-	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil)
+	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	resolvedTargets := makeMySQLDMLTargets([]*ObjectRef{objRef}, []*TableDef{tableDef})
 	nationName := tree.NewTableName(tree.Identifier("nation"), tree.ObjectNamePrefix{}, nil)

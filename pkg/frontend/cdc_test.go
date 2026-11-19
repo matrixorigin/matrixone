@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
@@ -783,6 +784,93 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// setupCreateCDCTimestampTest stubs the source/sink connection probe and the
+// PITR admission so option validation reaches the StartTs/EndTs handling, and
+// returns a CreateCDC request builder that always carries a valid table level.
+func setupCreateCDCTimestampTest(t *testing.T) (newCreate func(option ...string) *tree.CreateCDC) {
+	pu := config.ParameterUnit{}
+	pu.TaskService = &testTaskService{}
+	setPu("", &pu)
+
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitr.Reset)
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitrWithExclude.Reset)
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
+	})
+	t.Cleanup(stubOpenDbConn.Reset)
+
+	levelOpt := []string{cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table}
+	return func(option ...string) *tree.CreateCDC {
+		return &tree.CreateCDC{
+			TaskName:  "task1",
+			SourceUri: "mysql://root:111@127.0.0.1:6001",
+			SinkType:  cdc.CDCSinkType_MySQL,
+			SinkUri:   "mysql://root:111@127.0.0.1:3306",
+			Tables:    "db1.t1:db1.t1",
+			Option:    append(levelOpt, option...),
+		}
+	}
+}
+
+// Test_doCreateCdc_startTsEndTsFractionalPrecision locks the documented
+// persistence contract in the frontend option-validation path: fractional
+// RFC3339 boundaries persist at full precision for both options.
+func Test_doCreateCdc_startTsEndTsFractionalPrecision(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	create := newCreate(
+		cdc.CDCRequestOptions_StartTs, "2026-11-06T03:02:35.123Z",
+		cdc.CDCRequestOptions_EndTs, "2026-11-07T03:02:35.123456789Z",
+	)
+	require.NoError(t, opts.ValidateAndFill(context.Background(), ses, create))
+	require.Equal(t, "2026-11-06T03:02:35.123Z", opts.StartTs)
+	require.Equal(t, "2026-11-07T03:02:35.123456789Z", opts.EndTs)
+}
+
+// Test_doCreateCdc_startTsEndTsZoneDisclosureError locks the documented
+// diagnostic contract in the frontend option-validation path: an invalid
+// StartTs or EndTs value fails with an error that discloses the
+// session-time-zone interpretation of the unzoned format.
+func Test_doCreateCdc_startTsEndTsZoneDisclosureError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	err := opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_StartTs, "123456",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+
+	err = opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_EndTs, "not-a-time",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+}
+
 type testTaskData struct {
 	metadata task.TaskMetadata
 	details  *task.Details
@@ -800,6 +888,8 @@ type testTaskService struct {
 	sqlExec               taskservice.SqlExecutor
 	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
 }
+
+func (*testTaskService) SQLTaskService() taskservice.TaskService { return nil }
 
 func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	var (
@@ -4445,6 +4535,27 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
+	targetGuardErr := error(&gomysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST})
+	var targetMocks []sqlmock.Sqlmock
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		targetDB, targetMock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		targetMock.ExpectBegin()
+		probe := targetMock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()"))
+		if targetGuardErr != nil {
+			probe.WillReturnError(targetGuardErr)
+		} else {
+			probe.WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		targetMock.ExpectRollback()
+		targetMock.ExpectClose()
+		targetMocks = append(targetMocks, targetMock)
+		return targetDB, nil
+	})
+	defer stubOpenDbConn.Reset()
+
 	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
 	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
@@ -4544,7 +4655,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cdc := &CDCTaskExecutor{
+			executor := &CDCTaskExecutor{
 				logger:           tt.fields.logger,
 				ie:               tt.fields.ie,
 				cnUUID:           tt.fields.cnUUID,
@@ -4562,9 +4673,35 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 				activeRoutine:    tt.fields.activeRoutine,
 				watermarkUpdater: tt.fields.sunkWatermarkUpdater,
 			}
-			err := cdc.retrieveCdcTask(tt.args.ctx)
+			err := executor.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
+			require.Equal(t, cdc.CDCSinkType_MySQL, executor.sinkUri.SinkTyp)
 		})
+	}
+
+	// A mysql URI uses MatrixOne's existing guarded protocol only when the
+	// target positively proves that capability. The first retrieval above
+	// exercises the genuine-MySQL fallback through MySQL error 1305.
+	targetGuardErr = nil
+	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
+		[]string{"sink_uri", "sink_type", "sink_password", "tables", "filters", "start_ts", "end_ts", "no_full", "additional_config"},
+	).AddRow(
+		sinkUri, cdc.CDCSinkType_MySQL, pwd, tables, filters,
+		"2006-01-02T15:04:05-07:00", "2006-01-02T15:04:05-07:00", true,
+		fmt.Sprintf("{\"InitSnapshotSplitTxn\": false,\"%s\":\"%s\",\"%s\":\"%s\"}",
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolStableEpoch,
+			cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2),
+	))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")).
+		WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
+	matrixOneTarget := &CDCTaskExecutor{ie: tie, spec: &task.CreateCdcDetails{
+		TaskId: "taskID_matrixone", Accounts: []*task.Account{{Id: 0, Name: "sys"}},
+	}}
+	require.NoError(t, matrixOneTarget.retrieveCdcTask(context.Background()))
+	require.Equal(t, cdc.CDCSinkType_MO, matrixOneTarget.sinkUri.SinkTyp)
+	require.Len(t, targetMocks, 2)
+	for _, targetMock := range targetMocks {
+		require.NoError(t, targetMock.ExpectationsWereMet())
 	}
 
 	// Legacy persisted tasks must fail closed before the capability probe.
@@ -6212,6 +6349,18 @@ func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
 	legacy, err := CDCStrToTS("2026-09-09T01:02:03.456789Z")
 	require.NoError(t, err)
 	require.Equal(t, int64(0), int64(legacy.Logical()))
+}
+
+// TestCDCStrToTSPersistedBoundaryZoneIndependent proves that the persisted
+// StartTs/EndTs boundary (RFC3339 with the offset applied at creation) is
+// re-parsed into the identical physical timestamp no matter which session
+// later loads the task row: CDCStrToTS takes no time zone.
+func TestCDCStrToTSPersistedBoundaryZoneIndependent(t *testing.T) {
+	fromUTC, err := CDCStrToTS("2025-01-02T03:04:05Z")
+	require.NoError(t, err)
+	fromCST, err := CDCStrToTS("2025-01-02T11:04:05+08:00")
+	require.NoError(t, err)
+	require.Equal(t, fromUTC, fromCST)
 }
 
 func TestCDCParseGranularityTuple(t *testing.T) {

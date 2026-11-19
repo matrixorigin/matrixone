@@ -74,7 +74,7 @@ func (builder *QueryBuilder) buildTableChanges(
 		)
 	}
 
-	objectRef, sourceDef, err := builder.compCtx.Resolve(databaseName, tableName, nil)
+	objectRef, sourceDef, err := builder.compCtx.Resolve(databaseName, tableName, nil, nil)
 	if err != nil {
 		return 0, err
 	}

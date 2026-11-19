@@ -198,6 +198,19 @@ func seqExecutorEnv(ctx context.Context, proc *process.Process, db string) (*seq
 			}
 		}
 	}
+	// The generated allocation SQL embeds physical identifiers that are
+	// already resolved under the session policy (sequenceRelationName ran
+	// before this point), so the internal execution must not re-fold them.
+	// The mysql lexer folds identifiers only under mode 1 while the bind
+	// side folds under every non-zero policy (tree.NewCStr), so executing a
+	// mode-2 session's statements at the session value re-folds the
+	// preserved spelling mid-statement (UPDATE target 'myseq', review
+	// 5776394217). Mode 2 therefore executes case-preserving; modes 0 and 1
+	// keep their historical execution values.
+	internalCasePolicy := lowerCaseTableNames
+	if lowerCaseTableNames == 2 {
+		internalCasePolicy = 0
+	}
 	// Sequence metadata is a catalog-owned mutable row; the BgKey marker is
 	// the internal-write contract that lets the planner accept the UPDATE.
 	// The caller picks the base context: allocation paths use proc.Ctx (alive
@@ -211,7 +224,7 @@ func seqExecutorEnv(ctx context.Context, proc *process.Process, db string) (*seq
 			WithDisableIncrStatement().
 			WithAccountID(accountID).
 			WithDatabase(db).
-			WithLowerCaseTableNames(&lowerCaseTableNames).
+			WithLowerCaseTableNames(&internalCasePolicy).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend),
@@ -265,14 +278,15 @@ func seqLiveWindowExpiryDecision(proc *process.Process, env *seqExecEnv, db, tbl
 	if retryState == nil {
 		return time.Time{}, false, nil
 	}
-	if _, terminal := retryState.TerminalIdentity(); terminal {
+	if target, terminal := retryState.TerminalIdentity(); terminal {
 		// The exactly-once terminal verdict is stamped for this statement:
 		// every later allocation execution surfaces it and never re-admits
-		// (B2 step 5).
+		// (B2 step 5) — naming the STAMPED identity with its recorded
+		// residue, never the current caller's own names.
 		if err := env.ctx.Err(); err != nil {
 			return time.Time{}, true, err
 		}
-		return time.Time{}, true, seqAllocationExhaustedError(proc, db, tblname, retryState.TerminalCause())
+		return time.Time{}, true, seqAllocationExhaustedError(proc, target.DBName, target.TblName, retryState.TerminalCause())
 	}
 	window, ok := retryState.RetryDeadline()
 	if !ok || window.After(seqAutonomousNow()) {
@@ -290,7 +304,7 @@ func seqLiveWindowExpiryDecision(proc *process.Process, env *seqExecEnv, db, tbl
 		}
 		return time.Time{}, true, env.ctx.Err()
 	case process.DecideExhausted:
-		return time.Time{}, true, seqTerminalExhaustedError(proc, retryState, outcome, db, tblname, wantRel)
+		return time.Time{}, true, SequenceRetryTerminalError(proc, outcome, process.WatchIdentity{DBName: db, TblName: tblname, WantRel: wantRel})
 	}
 	// Renew / Retire / Proceed: a live (renewed) window funds the
 	// continuation; a retired window (the episode closed, Z1) returns the
@@ -450,15 +464,14 @@ func seqUnwrapDerived(err error) error {
 	return err
 }
 
-// seqTerminalExhaustedError composes the exactly-once terminal surface of a
-// DecideExhausted outcome: the surfaced identity in first-recorded order,
-// its recorded conflict residue (or the decision's terminal error).
-func seqTerminalExhaustedError(proc *process.Process, retryState *process.SequenceRetryState, outcome process.DecideOutcome, db, tblname string, wantRel uint64) error {
+// SequenceRetryTerminalError composes the named terminal for an expiry
+// decision, using fallback when the decision could not identify a target.
+func SequenceRetryTerminalError(proc *process.Process, outcome process.DecideOutcome, fallback process.WatchIdentity) error {
 	target := outcome.Target
 	if target.WantRel == 0 {
-		target = process.WatchIdentity{DBName: db, TblName: tblname, WantRel: wantRel}
+		target = fallback
 	}
-	cause := retryState.TerminalCause()
+	cause := proc.GetSequenceRetryState().TerminalCause()
 	if cause == nil {
 		cause = outcome.Terminal
 	}
@@ -587,7 +600,7 @@ func seqConvertExhaustionToRetry(proc *process.Process, env *seqExecEnv, db, tbl
 			}
 			return env.ctx.Err()
 		case process.DecideExhausted:
-			return seqTerminalExhaustedError(proc, retryState, outcome, db, tblname, wantRel)
+			return SequenceRetryTerminalError(proc, outcome, id)
 		default:
 			// Renew (the episode continues under the renewed window) and
 			// Retire (the episode closed; this conversion re-admits it

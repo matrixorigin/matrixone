@@ -127,11 +127,8 @@ func TestNormalizeInPayloadRejectsCorruptData(t *testing.T) {
 	}
 }
 
-// InplaceSortAndCompact permutes only the value column and drops NULLs outright
-// when compaction fires, so a nullable payload must bypass it: the rows have to
-// survive intact even though that costs the sorted flag, and therefore pruning.
-// Unreachable from today's PK-derived callers -- this pins the guard for the next
-// caller, which would otherwise publish a filter with its NULLs silently removed.
+// Nullable payloads retain their original rows and sorted flag so pruning
+// remains conservative while the residual preserves SQL NULL semantics.
 func TestConstructInExprPreservesNullablePayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -164,4 +161,42 @@ func TestConstructInExprPreservesNullablePayload(t *testing.T) {
 	require.Equal(t, int64(30), col[0], "values must keep their bitmap-aligned order")
 	require.Equal(t, int64(30), col[2])
 	require.Equal(t, int64(10), col[3])
+}
+
+func TestNormalizationTemporaryPoolIsReleased(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(input, []int64{3, 1, 3}, nil, mp))
+	data, err := input.MarshalBinary()
+	require.NoError(t, err)
+	input.Free(mp)
+	before := append([]byte(nil), data...)
+	// A decoded payload borrows its data. Rejecting COW must surface through
+	// both real normalization callers without changing or leaking the input.
+	rejected, rejectedLength, err := normalizeInPayloadWithPool(data, nil)
+	require.Error(t, err)
+	require.Nil(t, rejected)
+	require.Zero(t, rejectedLength)
+	require.Equal(t, before, data)
+	rejectedFilter, err := normalizePKInVectorPayload(data, nil)
+	require.Error(t, err)
+	require.Nil(t, rejectedFilter)
+	require.Equal(t, before, data)
+	require.Zero(t, mp.CurrNB())
+	encoded, length, err := normalizeInPayloadWithPool(data, mp)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+	require.Equal(t, 2, length)
+	require.Equal(t, before, data)
+	decoded := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColNoTypeCheck[int64](decoded))
+	decoded.Free(mp)
+	filter, err := normalizePKInVectorPayload(data, mp)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColNoTypeCheck[int64](filter))
+	require.Equal(t, before, data)
+	filter.Free(mp)
 }

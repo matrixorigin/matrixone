@@ -99,7 +99,7 @@ invalid input: invalid argument: ewm halflife decay requires a strictly positive
 select ewmmean(x, 'halflife', 0) over (order by id) from s order by id;
 invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
 select ewmmean(x, 'span') over (order by id) from s order by id;
-invalid argument function ewmmean, bad value [DOUBLE VARCHAR]
+invalid input: invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)
 select ewmmean(x, 'halflife', 10, true) over (order by id desc) from s order by id;
 invalid input: invalid argument: event-time ewm statistics require ascending ORDER BY
 select ewmmean(x, 'halflife', 10, true) over (order by id, x) from s order by id;
@@ -918,7 +918,7 @@ create table m9 (id bigint primary key, x double);
 insert into m9 values (1, 1),(2, 2),(3, 3),(4, 4);
 create table ctas_m9 as select ewmmean(x, 0.5, true, false, 2) over (order by id) as c from m9;
 show columns from ctas_m9;
-➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 c  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
 select c from ctas_m9 order by c;
 ➤ c[8,53,31]  𝄀
@@ -928,7 +928,7 @@ null  𝄀
 3.2666666666666666
 create table ctas_c9 as select ewmcorr(1e0, 1e0, 0.5, false) over (order by id) as c from m9;
 show columns from ctas_c9;
-➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 c  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
 select c from ctas_c9 order by c;
 ➤ c[8,53,31]  𝄀

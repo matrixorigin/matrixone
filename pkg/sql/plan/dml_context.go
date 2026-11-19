@@ -376,6 +376,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	allowReadOnlySources bool,
 ) error {
 	var tblName, dbName, alias string
+	var tableNode *tree.TableName
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
 		alias = string(aliasTbl.As.Alias)
@@ -415,6 +416,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
+		tableNode = baseTbl
 		dbName = string(baseTbl.SchemaName)
 		tblName = string(baseTbl.ObjectName)
 	} else {
@@ -442,7 +444,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		dbName = ctx.DefaultDatabase()
 	}
 
-	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := resolveIndexMaintenanceSource(ctx, tableNode, dbName, tblName, nil, nil)
 	if err != nil {
 		return err
 	}

@@ -523,9 +523,9 @@ func (s *service) StartContext(parent context.Context) (err error) {
 		if err != nil || complete {
 			return err
 		}
-		// Fresh derived schema also publishes the C03 TABLES function. Existing
-		// complete clusters keep the skip path above during a rolling upgrade.
-		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion118)); err != nil {
+		// Fresh derived schema publishes TABLES and VIEWS only after their
+		// persisted-expression authoring requirements are admitted.
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion126)); err != nil {
 			return err
 		}
 		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)

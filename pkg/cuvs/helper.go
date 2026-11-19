@@ -25,9 +25,9 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // DistanceType maps to C.distance_type_t
@@ -228,18 +228,18 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
 
 	var errmsg *C.char
 	C.gpu_convert_f32_to_f16(
-		(*C.float)(unsafe.Pointer(&src[0])),
-		unsafe.Pointer(&dst[0]),
+		(*C.float)(util.UnsafePointer(&src[0])),
+		util.UnsafePointer(&dst[0]),
 		C.uint64_t(len(src)),
 		C.int(deviceID),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(src)
 	runtime.KeepAlive(dst)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -289,7 +289,7 @@ func GetGpuDeviceList() ([]int, error) {
 // vectorindex.CAGRA, ...); unknown names take the default.
 func IndexBudgetPercent(indexType string) uint64 {
 	cs := C.CString(indexType)
-	defer C.free(unsafe.Pointer(cs))
+	defer C.free(util.UnsafePointer(cs))
 	return uint64(C.gpu_index_budget_percent(cs))
 }
 
@@ -345,10 +345,10 @@ func (b DeviceBudget) RowsFitting(dev int, perRowBytes uint64) (int64, uint64, e
 func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
 	var errmsg *C.char
 	var maxAdm C.uint64_t
-	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, C.uint64_t(budgetPercent), unsafe.Pointer(&errmsg))
+	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, C.uint64_t(budgetPercent), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if rc != 0 {
@@ -413,10 +413,10 @@ func QuantizerStagingRows(deviceID int, perTrainRow, trainLimit uint64, indexTyp
 	var errmsg *C.char
 	n := C.gpu_quantizer_staging_rows(
 		C.int(deviceID), C.uint64_t(perTrainRow), C.uint64_t(trainLimit),
-		C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
+		C.uint64_t(IndexBudgetPercent(indexType)), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return uint64(n), nil
@@ -444,10 +444,10 @@ func MaxQuantizerTrainLimit() uint64 {
 func DeviceTotalMem(deviceID int) (uint64, error) {
 	var errmsg *C.char
 	var total C.uint64_t
-	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, 0, unsafe.Pointer(&errmsg))
+	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, 0, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if rc != 0 {
@@ -484,11 +484,11 @@ func rowsFittingFreeMem(deviceID int, perRowBytes uint64, budgetPercent uint64) 
 		&cRows,
 		&cFree,
 		C.uint64_t(budgetPercent),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if rc != 0 {
@@ -498,37 +498,37 @@ func rowsFittingFreeMem(deviceID int, perRowBytes uint64, budgetPercent uint64) 
 }
 
 // GpuAllocPinned allocates pinned (non-pageable) host memory.
-func GpuAllocPinned(size uint64) (unsafe.Pointer, error) {
+func GpuAllocPinned(size uint64) (*byte, error) {
 	if size == 0 {
 		return nil, nil
 	}
 
 	var errmsg *C.char
-	ptr := C.gpu_alloc_pinned(C.uint64_t(size), unsafe.Pointer(&errmsg))
+	ptr := C.gpu_alloc_pinned(C.uint64_t(size), util.UnsafePointer(&errmsg))
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if ptr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("gpu_alloc_pinned returned nil")
 	}
-	return ptr, nil
+	return (*byte)(ptr), nil
 }
 
 // GpuFreePinned frees pinned host memory.
-func GpuFreePinned(ptr unsafe.Pointer) error {
+func GpuFreePinned(ptr *byte) error {
 	if ptr == nil {
 		return nil
 	}
 
 	var errmsg *C.char
-	C.gpu_free_pinned(ptr, unsafe.Pointer(&errmsg))
+	C.gpu_free_pinned(util.UnsafePointer(ptr), util.UnsafePointer(&errmsg))
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -539,22 +539,22 @@ func GpuFreePinned(ptr unsafe.Pointer) error {
 type PinnedPool struct {
 	// New optionally specifies a function to generate
 	// a value when Get would otherwise return nil.
-	New func() unsafe.Pointer
+	New func() *byte
 
 	mu    sync.Mutex
-	items []unsafe.Pointer
+	items []*byte
 }
 
 // NewPinnedPool creates a new PinnedPool.
 // The caller must call Destroy to release all pinned memory when done.
-func NewPinnedPool(newFunc func() unsafe.Pointer) *PinnedPool {
+func NewPinnedPool(newFunc func() *byte) *PinnedPool {
 	return &PinnedPool{New: newFunc}
 }
 
 // Get selects an arbitrary item from the PinnedPool, removes it from the
 // PinnedPool, and returns it to the caller.
 // Get may return nil if the pool is empty and New is nil.
-func (p *PinnedPool) Get() unsafe.Pointer {
+func (p *PinnedPool) Get() *byte {
 	p.mu.Lock()
 	if len(p.items) == 0 {
 		p.mu.Unlock()
@@ -570,7 +570,7 @@ func (p *PinnedPool) Get() unsafe.Pointer {
 }
 
 // Put adds x to the pool.
-func (p *PinnedPool) Put(x unsafe.Pointer) {
+func (p *PinnedPool) Put(x *byte) {
 	if x == nil {
 		return
 	}

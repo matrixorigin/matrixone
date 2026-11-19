@@ -44,7 +44,7 @@ func (builder *QueryBuilder) estimateIvfScanWork(source *plan.ObjectRef, snapsho
 	if err := builder.GetContext().Err(); err != nil {
 		return nil, err
 	}
-	obj, table, err := builder.compCtx.ResolveIndexTableByRef(source, entriesName, snapshot)
+	obj, table, err := builder.compCtx.ResolveIndexTableByRef(source, entriesName, snapshot, nil)
 	if ctxErr := builder.GetContext().Err(); ctxErr != nil {
 		return nil, ctxErr
 	}

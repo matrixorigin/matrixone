@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -801,7 +802,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 		if !ok {
 			return 0.1
 		}
-		ret = (val2 - val1 + 1) / (max - min)
+		return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 
 	default:
 		return 0.1
@@ -852,7 +853,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
-				ret = (val2 - val1 + 1) / (max - min)
+				return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 			}
 		}
 	default:
@@ -1070,6 +1071,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		}
 	case *plan.Expr_Lit:
 		ret = 1.0
+		// Contradiction folding (normalizeColumnDomain) and constant folding can
+		// reduce a whole filter list to one boolean literal. Its row fraction is
+		// exact: TRUE keeps every row, while FALSE and NULL keep none. Estimating
+		// the always-empty case as 1.0 sized scans and the operators above them
+		// for the full table behind an always-empty filter (#32068). This floor
+		// matches the impossible-interval estimate in estimateIntervalSelectivity.
+		if IsFalseExpr(expr) || exprImpl.Lit.GetIsnull() {
+			ret = 0.00000001
+		}
 	}
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
@@ -1363,9 +1373,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		return 1
 	}
 	col := extractColRefInFilter(expr)
-	if col != nil {
+	if col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, tableDef.Cols[col.ColPos].Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1566,7 +1576,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = selectivity_out
 			node.Stats.BlockNum = leftStats.BlockNum
 
-		case plan.Node_SEMI, plan.Node_INDEX:
+		case plan.Node_SEMI:
+			node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[0], node.Children[1], leftStats, rightStats)
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = leftSelectivity * safeSelectivityRatio(node.Stats.Outcnt, leftStats.Outcnt)
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1843,8 +1860,8 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 		node.Stats.Selectivity = preservedStats.Selectivity
 	case plan.Node_SEMI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
-		node.Stats.Outcnt = preservedStats.Outcnt * estimateJoinSelectivity(
-			clampSelectivity(preservedStats.Selectivity, 1), clampSelectivity(matchingStats.Selectivity, 1))
+		node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[1], node.Children[0], preservedStats, matchingStats)
+		node.Stats.Selectivity = clampSelectivity(preservedStats.Selectivity, 1) * safeSelectivityRatio(node.Stats.Outcnt, preservedStats.Outcnt)
 		node.Stats.BlockNum = preservedStats.BlockNum
 	case plan.Node_ANTI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
@@ -1868,6 +1885,29 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 // clamped inputs. After a physical swap, the preserved input still comes first.
 func estimateJoinSelectivity(preservedSelectivity, matchingSelectivity float64) float64 {
 	return clampSelectivity(math.Pow(matchingSelectivity, math.Pow(preservedSelectivity, 0.2)), 1)
+}
+
+// Filtering within the matching input is not the probability that a preserved
+// key has a match. Use the same overlap uncertainty as ANTI, rather than applying
+// the matching input's source-filter ratio a second time.
+func estimateSemiJoinOutcnt(node *plan.Node, builder *QueryBuilder, preservedID, matchingID int32, preserved, matching *Stats) float64 {
+	rows := math.Max(0, finiteOr(preserved.Outcnt, 0))
+	if rows == 0 || matching.Outcnt <= 0 {
+		return 0
+	}
+	if len(node.OnList) == 0 {
+		return rows
+	}
+	// A filtered unique-key dimension has no duplicate-key amplification.
+	// Retain the existing dimension-domain estimate for this proven case.
+	if antiJoinLeftKeysArePrimaryKey(node, builder, matchingID, preservedID) {
+		outcnt := rows * estimateJoinSelectivity(clampSelectivity(preserved.Selectivity, 1), clampSelectivity(matching.Selectivity, 1))
+		if antiJoinLeftKeysArePrimaryKey(node, builder, preservedID, matchingID) {
+			outcnt = math.Min(outcnt, math.Max(0, finiteOr(matching.Outcnt, 0)))
+		}
+		return outcnt
+	}
+	return rows - estimateAntiJoinOutcnt(node, builder, preservedID, matchingID, preserved, matching)
 }
 
 // estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
@@ -2000,7 +2040,7 @@ func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool
 		return 0, false
 	}
 	value, ok := getLiteralUint64(expr)
-	if !ok && !containsDynamicParam(expr) {
+	if !ok && !containsDynamicParam(expr) && !defines.IsIndexMaintenanceViewBinding(builder.GetContext()) {
 		folded, err := ConstantFold(
 			batch.EmptyForConstFoldBatch,
 			DeepCopyExpr(expr),
@@ -2182,6 +2222,40 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
+// isSimpleZoneMapFilter 只识别可将边界值一次性物化的直接列比较。
+// 准入仍须通过 ExprIsZonemappable；这不是复杂表达式的安全性证明。
+func isSimpleZoneMapFilter(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	argCount := 2
+	switch fn.GetFunc().GetObjName() {
+	case "=", "<", "<=", ">", ">=", "in":
+	case "between":
+		argCount = 3
+	case "in_range":
+		argCount = 4
+	default:
+		return false
+	}
+	if !hasNonNilFunctionArgs(fn, argCount) {
+		return false
+	}
+	if fn.GetFunc().GetObjName() == "in" {
+		// IN 的操作数不可交换；列表在常量折叠前后分别表示为 List/Vec。
+		return fn.Args[0].GetCol() != nil &&
+			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&
+			isRuntimeConstExpr(fn.Args[1])
+	}
+	if fn.Args[0].GetCol() == nil {
+		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
+	}
+	for _, bound := range fn.Args[1:] {
+		if !isRuntimeConstExpr(bound) {
+			return false
+		}
+	}
+	return true
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if builder.isRestore {
 		return DefaultHugeStats()
@@ -2193,11 +2267,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultStats()
 	}
 
-	//ts := timestamp.Timestamp{}
-	//if node.ScanTS != nil {
-	//	ts = *node.ScanTS
-	//}
-
 	var scanSnapshot *plan.Snapshot
 	if node.ScanSnapshot != nil {
 		scanSnapshot = node.ScanSnapshot
@@ -2205,53 +2274,46 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	s, err := statsForTableDef(
 		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
-	if err != nil || s == nil {
-		return DefaultStats()
+	if err != nil {
+		s = nil
 	}
 
-	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
+	hint := 0
+	if builder.optimizerHints != nil {
+		hint = builder.optimizerHints.blockFilter
+	}
 	var blockSel float64 = 1
 	var preservedCompositeFilters []*plan.Expr
-	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {
+	if hint != 2 {
 		preservedCompositeFilters = existingCompositeBlockFilters(node)
 	}
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if builder.optimizerHints != nil {
-			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
-				node.BlockFilterList = nil
-			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-						copyOfExpr := DeepCopyExpr(node.FilterList[i])
-						copyOfExpr.Selectivity = currentBlockSel
-						blockExprList = append(blockExprList, copyOfExpr)
-					}
-				}
-			}
-		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			}
+		filter := node.FilterList[i]
+		currentBlockSel := 1.0
+		if s != nil {
+			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
+		}
+		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
+		// 简单比较仍下推；其余表达式保留既有成本策略及语义安全检查。
+		if hint != 2 && (hint == 1 || isSimpleZoneMapFilter(filter) || currentBlockSel < 1 ||
+			strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(filter.GetF(), node.TableDef)) &&
+			ExprIsZonemappable(builder.GetContext(), filter) {
+			copyOfExpr := DeepCopyExpr(filter)
+			copyOfExpr.Selectivity = currentBlockSel
+			blockExprList = append(blockExprList, copyOfExpr)
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	blockExprList = append(blockExprList, preservedCompositeFilters...)
 	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
+	if s == nil {
+		return DefaultStats()
+	}
+	stats := new(plan.Stats)
+	stats.TableCnt = s.TableCnt
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
@@ -2474,10 +2536,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = false
 			break
 		}
+		leftBuildRows := leftChild.Stats.Outcnt
+		if node.JoinType == plan.Node_ANTI && leftChild.NodeType == plan.Node_JOIN && leftChild.JoinType == plan.Node_INNER {
+			if selectivity, known := builder.getJoinActiveDomainSelectivity(leftChild.NodeId); known {
+				// The legacy INNER estimate can apply a dimension's historical
+				// filter fraction instead of its coverage of the fact key domain.
+				// Do not choose a wide ANTI build solely from that lower estimate.
+				leftBuildRows = max(leftBuildRows, builder.qry.Nodes[leftChild.Children[0]].Stats.Outcnt*selectivity)
+				node.IsRightJoin = false
+			}
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
+		} else if builder.IsEquiJoin(node) && leftBuildRows*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 

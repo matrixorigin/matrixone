@@ -207,6 +207,11 @@ select username from t3 where username like 'Ma%';
 Mastermann Masterfrau
 select username from t3 where username like '%Frau';
 ➤ username[12,-1,0]  𝄀
+Mustermann Musterfrau  𝄀
+Mustermann Musterfrau  𝄀
+Mustermann musterfrau  𝄀
+Mustermann Masterfrau  𝄀
+Mastermann Masterfrau  𝄀
 Mustermann MusterFrau
 select username from t3 where username like '%Mast%';
 ➤ username[12,-1,0]  𝄀

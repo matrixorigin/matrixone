@@ -84,7 +84,7 @@ func TestBuildDDLUnsignedDecimalMaskIntoTableDef(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.NotEmpty(t, cols)
@@ -101,7 +101,7 @@ func TestBuildDDLUnsignedDecimalMaskIntoTableDef(t *testing.T) {
 			"create table ud_t8 (a tinyint unsigned, b decimal(10,2))", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
 		require.Zero(t, cols[0].Typ.GetNumericAttributes(), "integer columns keep the legacy signedness channel")
@@ -132,7 +132,7 @@ func TestBuildDDLUnsignedDecimalStrictConstantDefault(t *testing.T) {
 		} {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err, sql)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault),
 				"%s must fail with ER_INVALID_DEFAULT, got %v", sql, err)
@@ -145,7 +145,7 @@ func TestBuildDDLUnsignedDecimalStrictConstantDefault(t *testing.T) {
 			"create table sd_signed (a decimal(10,2) default -1.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 	})
 
@@ -154,7 +154,7 @@ func TestBuildDDLUnsignedDecimalStrictConstantDefault(t *testing.T) {
 			"create table sd_ok (a decimal(10,2) unsigned default 1.25)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
 		require.NotNil(t, def)
@@ -173,7 +173,7 @@ func TestBuildDDLUnsignedDecimalStrictConstantDefault(t *testing.T) {
 		} {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err, sql)
 			def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
 			if def != nil && def.GetExpr() != nil {
@@ -189,7 +189,7 @@ func TestBuildDDLUnsignedDecimalStrictConstantDefault(t *testing.T) {
 			"create table sd_vol (a decimal(10,2) unsigned default (-1-rand()))", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err, "volatile sources are validated at replay, never at authoring")
 		def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
 		require.NotNil(t, def)
@@ -314,7 +314,7 @@ func TestBuildInsertUnsignedDecimalAdmission(t *testing.T) {
 			"insert into ud_ins(a, b) values (-1.5, -2.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		text := built.String()
 		// The composition appears at the VALUES-rowset layer and again at the
@@ -335,7 +335,7 @@ func TestBuildInsertUnsignedDecimalAdmission(t *testing.T) {
 			"insert ignore into ud_ins(a, b) values (-1.5, -2.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		text := built.String()
 		admissions := strings.Count(text, unsignedDecimalAdmissionIgnoreQuoted)
@@ -358,7 +358,7 @@ func TestBuildInsertUnsignedDecimalAdmission(t *testing.T) {
 			"insert into sd_ins(b) values (-2.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		require.Zero(t, strings.Count(built.String(), "unsigned_decimal_admission"),
 			"a plain signed DECIMAL keeps the pre-change assignment shapes")
@@ -580,7 +580,7 @@ func TestAlterModifyUnsignedDomainForcesCopy(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err, sql)
 		return built.GetDdl().GetAlterTable().GetAlgorithmType()
 	}

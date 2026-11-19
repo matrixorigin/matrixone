@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -219,6 +220,56 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	}
 }
 
+// bf16Overflow is the smallest float32 magnitude that rounds to infinity when narrowed to
+// bf16, as vectorindex.Float16Overflow is for float16.
+const bf16Overflow = float32(3.3961775e38) // bits 0x7F7F8000
+
+// CheckStorable returns the reason an index storing kind cannot store vec, or nil. It rejects
+// exactly the vectors ToStorage rejects, by range, without converting them; the range of an
+// int8/uint8 index does not reject a vector.
+func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) error {
+	if len(vec) == 0 {
+		return moerr.NewIndexVectorDimensionNoCtx("the vector is empty")
+	}
+	if !allFinite(vec) {
+		return moerr.NewIndexVectorNonFiniteNoCtx()
+	}
+	limit, overflows := float32(math.Inf(1)), kind
+	switch kind {
+	case usearch.F64:
+		return nil
+	case usearch.F16:
+		limit = vectorindex.Float16Overflow
+	case usearch.BF16:
+		limit = bf16Overflow
+	case usearch.I8, usearch.U8:
+		// an int8/uint8 index maps float32 values, so only the step to float32 can overflow
+		overflows = usearch.F32
+	}
+	switch x := any(vec).(type) {
+	case []float32:
+		for _, e := range x {
+			if e >= limit || e <= -limit {
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(float64(e), overflows))
+			}
+		}
+	case []float64:
+		for _, e := range x {
+			if f := float32(e); math.IsInf(float64(f), 0) || f >= limit || f <= -limit {
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(e, overflows))
+			}
+		}
+	default:
+		// bf16/f16/int8/uint8 elements widen to float32 exactly; bf16 can exceed f16
+		for _, f := range toFloat32(vec) {
+			if f >= limit || f <= -limit {
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(float64(f), overflows))
+			}
+		}
+	}
+	return nil
+}
+
 // allFinite reports whether no element of vec is NaN or infinite.
 func allFinite[T types.ArrayElement](vec []T) bool {
 	switch x := any(vec).(type) {
@@ -299,15 +350,24 @@ func storedFloat32[T types.ArrayElement](vec []T, kind usearch.Quantization) []f
 // checkNarrowed rejects a finite element that overflows the element type the index stores.
 func checkNarrowed(x, stored float64, kind usearch.Quantization) error {
 	if math.IsInf(stored, 0) && !math.IsInf(x, 0) {
-		return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "vector element %v cannot be stored as %s", x, kind.String())
+		return narrowedError(x, kind)
 	}
 	return nil
+}
+
+func narrowedError(x float64, kind usearch.Quantization) error {
+	return moerr.NewOutOfRangeNoCtx("hnsw quantization", narrowedDetail(x, kind))
+}
+
+func narrowedDetail(x float64, kind usearch.Quantization) string {
+	return fmt.Sprintf("vector element %v cannot be stored as %s", x, kind.String())
 }
 
 // BaseBounds returns the bounds an int8/uint8 index of a vecint8/vecuint8 column maps its
 // vectors with: the range of the column type, so stored elements equal the column's values
 // and need no training. Other columns have none.
 func BaseBounds(baseType int32) QuantizeBounds {
+	// typeswitch:partial only the integer vector column types have fixed bounds
 	switch baseType {
 	case int32(types.T_array_int8):
 		return QuantizeBounds{Min: math.MinInt8, Max: math.MaxInt8, Set: true}
@@ -350,6 +410,7 @@ func WidenToFloat32(v any) (out []float32, ok bool) {
 // BytesToFloat32 decodes a vector of a vecf16/vecbf16/vecint8/vecuint8 column into float32;
 // ok is false for any other type.
 func BytesToFloat32(typ int32, data []byte) ([]float32, bool) {
+	// typeswitch:partial narrow element types only; vecf32/vecf64 need no widening and vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch typ {
 	case int32(types.T_array_float16):
 		return WidenToFloat32(types.BytesToArray[types.Float16](data))

@@ -604,6 +604,14 @@ func ewmKeyAt(keyVec *vector.Vector, row int) (ewm.KeyVal, error) {
 				"invalid input: ewm event-time ORDER BY keys must be finite")
 		}
 		return ewm.FloatKey(f), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(keyVec, ewmPhysIndex(keyVec, row))
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return ewm.KeyVal{}, moerr.NewInvalidInputNoCtx(
+				"invalid input: ewm event-time ORDER BY keys must be finite")
+		}
+		return ewm.FloatKey(f), nil
 	case types.T_timestamp:
 		return ewm.IntKey(int64(vector.MustFixedColWithTypeCheck[types.Timestamp](keyVec)[ewmPhysIndex(keyVec, row)])), nil
 	case types.T_datetime:

@@ -86,14 +86,6 @@ var (
 	str_WriterForRead_Write_end               = internString("WriterForRead.Write end")
 	str_set_memory_cache_entry_begin          = internString("set memory cache entry begin")
 	str_set_memory_cache_entry_end            = internString("set memory cache entry end")
-	str_memory_cache_post_set_begin           = internString("memory cache postSet begin")
-	str_memory_cache_post_set_end             = internString("memory cache postSet end")
-	str_memory_cache_post_get_begin           = internString("memory cache postGet begin")
-	str_memory_cache_post_get_end             = internString("memory cache postGet end")
-	str_memory_cache_post_evict_begin         = internString("memory cache postEvict begin")
-	str_memory_cache_post_evict_end           = internString("memory cache postEvict end")
-	str_memory_cache_callbacks_begin          = internString("memory cache callbacks begin")
-	str_memory_cache_callbacks_end            = internString("memory cache callbacks end")
 )
 
 type stringRef struct {
