@@ -49,6 +49,8 @@ type container struct {
 	filterRows                []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
+	membershipPrepared        bool
+	membershipApplied         bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
 	readerWorkspace           []*vector.Vector
@@ -228,7 +230,10 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
@@ -299,7 +304,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil
 		tableScan.ctr.metricView = nil
