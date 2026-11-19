@@ -442,7 +442,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode&^(tableDumpBindingPreTemporalNullability|tableDumpBindingPreJSON|tableDumpBindingPreUnixTimestampDatetime|tableDumpBindingPreIntegerDecimal|tableDumpBindingPreDecimalPrecision|tableDumpBindingPreIncompleteTemporal|tableDumpBindingDDLColumnScope|tableDumpBindingLegacyFloat|tableDumpBindingLegacyFloatFormatting|tableDumpBindingFrozenFloatDefaults|tableDumpBindingPreJSONFolding|tableDumpBindingPreTimeNullability) | tableDumpBindingReleasedBitCount
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingReleasedBitCount)
 	if mode&tableDumpBindingReleasedBitCount != 0 {
 		bindCtx = context.WithValue(bindCtx, releasedBitCountDumpBindingKey{}, true)
 	}
@@ -1098,11 +1098,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 			}
 			if visit.hasBitCount {
-				// Reconstruct released bindings as a whole expression. DUMP
-				// and LOAD compare the result against the exact saved tree.
-				modes = append(modes, tableDumpBindingReleasedBitCount)
-				if ddlScope != nil && visit.hasColumn {
-					modes = append(modes, tableDumpBindingReleasedBitCount|tableDumpBindingDDLColumnScope)
+				// Keep the applicable proof modes for other calls in the same
+				// expression. The only additional BIT_COUNT binding is the
+				// one shipped by 4.2.8.
+				for _, mode := range modes {
+					modes = append(modes, mode|tableDumpBindingReleasedBitCount)
 				}
 			}
 			// All session witnesses share the ordinary cancellation and total
