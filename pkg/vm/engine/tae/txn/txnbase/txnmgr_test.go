@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -519,4 +520,92 @@ func TestCommitQueueStageMetricsFollowExecutedWork(t *testing.T) {
 		}
 		require.Equal(t, want, count(stage), stage)
 	}
+}
+
+func TestTxnWaiterLazyNotification(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var waiter txnWaiter
+		waiter.Add()
+		waiter.Add()
+		require.Nil(t, waiter.emptyCh)
+		ctx, cancel := context.WithCancel(t.Context())
+		first := make(chan error, 1)
+		second := make(chan error, 1)
+		go func() { first <- waiter.Wait(ctx) }()
+		go func() { second <- waiter.Wait(t.Context()) }()
+		synctest.Wait()
+		require.NotNil(t, waiter.emptyCh)
+		cancel()
+		require.ErrorIs(t, <-first, context.Canceled)
+		waiter.Done()
+		synctest.Wait()
+		select {
+		case <-second:
+			t.Fatal("waiter returned before the final transaction completed")
+		default:
+		}
+		waiter.Done()
+		require.NoError(t, <-second)
+		require.Nil(t, waiter.emptyCh)
+		waiter.Add()
+		require.Nil(t, waiter.emptyCh)
+		waiter.Done()
+	})
+}
+
+func BenchmarkTxnWaiterGeneration(b *testing.B) {
+	var waiter txnWaiter
+	b.ReportAllocs()
+	for b.Loop() {
+		waiter.Add()
+		waiter.Done()
+	}
+}
+
+// Done gates Wait after it has captured the current generation channel.
+type gatedWaitContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c gatedWaitContext) Done() <-chan struct{} {
+	close(c.entered)
+	<-c.release
+	return c.Context.Done()
+}
+
+func TestTxnWaiterOverlappingGenerations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var waiter txnWaiter
+		waiter.Add()
+		entered, release := make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		old := make(chan error, 1)
+		go func() { old <- waiter.Wait(gatedWaitContext{Context: ctx, entered: entered, release: release}) }()
+		<-entered
+		waiter.Done()
+		waiter.Add()
+		current := make(chan error, 1)
+		go func() { current <- waiter.Wait(ctx) }()
+		synctest.Wait()
+		select {
+		case <-current:
+			t.Fatal("new generation reported empty")
+		default:
+		}
+		releaseOnce.Do(func() { close(release) })
+		require.NoError(t, <-old)
+		synctest.Wait()
+		select {
+		case <-current:
+			t.Fatal("old generation released new waiter")
+		default:
+		}
+		waiter.Done()
+		require.NoError(t, <-current)
+	})
 }

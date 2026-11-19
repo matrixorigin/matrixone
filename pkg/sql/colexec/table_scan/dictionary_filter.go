@@ -46,6 +46,11 @@ func (tableScan *TableScan) selectReaderFilter(proc *process.Process, bat *batch
 	}
 	rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, tableScan.ctr.allFilterExecutors, tableScan.OutputAllocation,
 		&tableScan.ctr.filterRows, &tableScan.ctr.filterBs, tableScan.OpAnalyzer, before, tableScan.ctr.dictionaryInputs)
+	// Apply-only readers and all-match batches never displace a read vector.
+	// Install the slots before returning a partial selection to its publisher.
+	if err == nil && !all && tableScan.ctr.readerWorkspace == nil && tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() {
+		tableScan.prepareSelectionWorkspace()
+	}
 	return engine.ReaderFilterResult{Sels: rows, All: all}, err
 }
 

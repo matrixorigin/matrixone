@@ -8954,8 +8954,25 @@ func evalRight(str string, length int64) string {
 }
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+	// Overflow/underflow and NaN/Inf-input results stay row-local NULLs (#28375).
+	// A finite negative base with a finite non-integer exponent has no real
+	// value, so an evaluated row rejects with the DOUBLE out-of-range error
+	// (MySQL 1690, SQLSTATE 22003) instead of a silent NULL: the #28375
+	// contract's domain-shaped exception for the #31155 Expected. NULL
+	// inputs, skipped rows and all other results keep the #28375 contract.
+	// A zero-length batch evaluates no rows: the constant/constant template
+	// shape still invokes the callback once, so the domain check stays off
+	// for length 0 (colexec passes empty-batch row counts).
+	var domainErr error
+	err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if length > 0 && v1 < 0 && !math.IsInf(v1, 0) &&
+			!math.IsNaN(v2) && !math.IsInf(v2, 0) && v2 != math.Trunc(v2) {
+			if domainErr == nil {
+				domainErr = moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
+			return 0, nil
+		}
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
 			return 0, moerr.NewOutOfRangeNoCtxf(
@@ -8963,6 +8980,10 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		}
 		return res, nil
 	}, selectList)
+	if domainErr != nil {
+		return domainErr
+	}
+	return err
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
