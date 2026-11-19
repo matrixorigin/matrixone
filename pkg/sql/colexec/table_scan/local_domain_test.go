@@ -182,7 +182,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			probeReader := &localDomainTestReader{values: []int64{1, 2, 99, 0}, nullAt: 3}
 			if tc.tight {
 				probeReader.values, probeReader.nullAt = []int64{1, 99, 99, 99, 99, 99, 99, 99}, -1
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 				require.NoError(t, err)
 				probe.OutputAllocation = allocation
 			}
@@ -418,7 +418,7 @@ func TestLocalDomainDictionaryKeyCapacityRefusal(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			base, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), allocation)
 			require.NoError(t, err)

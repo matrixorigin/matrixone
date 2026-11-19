@@ -21,14 +21,13 @@ import (
 	"io"
 	"math"
 	"math/bits"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // This file holds the Bitmap operations outside the Gobra-verified core in
-// bitmap.go: copying, remapping, serialization and helpers that use unsafe,
+// bitmap.go: copying, remapping, serialization and helpers,
 // generics or packages Gobra cannot model. They must preserve the invariants
 // documented in bitmap.go.
 
@@ -55,15 +54,6 @@ func (n *Bitmap) Clone() *Bitmap {
 func (n *Bitmap) Iterator() Iterator {
 	itr := n.IteratorValue()
 	return &itr
-}
-
-// RawPtrLen returns the address of the first data word and the logical length
-// in bits, for passing the bitmap to C. It returns (0, 0) for an empty bitmap.
-func (n *Bitmap) RawPtrLen() (uintptr, uintptr) {
-	if n == nil || len(n.data) == 0 {
-		return 0, 0
-	}
-	return uintptr(unsafe.Pointer(&n.data[0])), uintptr(n.numBits)
 }
 
 func (n *Bitmap) Ptr() *uint64 {
@@ -249,7 +239,7 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	if size == 0 {
 		n.data = nil
 	} else {
-		n.data = unsafe.Slice((*uint64)(unsafe.Pointer(&data[0])), size/8)
+		n.data = types.DecodeSlice[uint64](data[:size])
 	}
 }
 
@@ -280,7 +270,7 @@ func (n *Bitmap) UnmarshalNoCopyV1(data []byte) {
 	if size == 0 {
 		n.data = nil
 	} else {
-		n.data = unsafe.Slice((*uint64)(unsafe.Pointer(&data[0])), size/8)
+		n.data = types.DecodeSlice[uint64](data[:size])
 	}
 	n.popCount = 0
 	for i := 0; i < len(n.data); i++ {

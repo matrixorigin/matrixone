@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -143,11 +144,19 @@ func Ptr(nsp *Nulls) *uint64 {
 	return nsp.GetBitmap().Ptr()
 }
 
+// RawPtrLen returns the address of the first bitmap word and the logical
+// length in bits, for passing the null map to C. It returns (0, 0) when there
+// is no bitmap storage.
 func (nsp *Nulls) RawPtrLen() (uintptr, uintptr) {
 	if nsp == nil {
 		return 0, 0
 	}
-	return nsp.GetBitmap().RawPtrLen()
+	bm := nsp.GetBitmap()
+	ptr := bm.Ptr()
+	if ptr == nil {
+		return 0, 0
+	}
+	return uintptr(unsafe.Pointer(ptr)), uintptr(bm.Len())
 }
 
 // Size estimates the memory usage of the Nulls.

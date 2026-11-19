@@ -786,7 +786,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			output.Clean(queryMP)
 			output = batch.NewWithSchema(true, nil, colTypes)
