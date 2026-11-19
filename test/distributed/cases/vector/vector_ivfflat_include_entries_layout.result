@@ -56,6 +56,25 @@ __mo_index_pri_col    __mo_index_include_title    __mo_index_include_category
 1    alpha    10
 2    beta    20
 3    gamma    30
+insert ignore into vector_ivfflat_include_phase2 values
+(1, "[99,99,99]", "ignored", 99),
+(4, "[10,11,12]", "delta", 40);
+select id, title, category from vector_ivfflat_include_phase2 order by id;
+id    title    category
+1    alpha    10
+2    beta    20
+3    gamma    30
+4    delta    40
+execute s1;
+__mo_index_pri_col    __mo_index_include_title    __mo_index_include_category
+1    alpha    10
+2    beta    20
+3    gamma    30
+4    delta    40
+select id from vector_ivfflat_include_phase2 use index(idx_ivf_include)
+order by l2_distance(embedding, "[99,99,99]") limit 1;
+id
+4
 deallocate prepare s1;
 drop table vector_ivfflat_include_phase2;
 drop database vector_ivfflat_include_phase2;

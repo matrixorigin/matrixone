@@ -40,6 +40,37 @@ func TestCloneToFlatCompactFreesPartialAllocation(t *testing.T) {
 	require.Equal(t, int64(0), srcMP.CurrNB())
 }
 
+func TestDupFreesPartialAllocation(t *testing.T) {
+	srcMP := mpool.MustNew("dup-source")
+	defer mpool.DeleteMPool(srcMP)
+	src := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(src, make([]byte, 2<<20), false, srcMP))
+	defer src.Free(srcMP)
+	dstMP := mpool.MustNew("dup-destination")
+	defer mpool.DeleteMPool(dstMP)
+	baseline := dstMP.AllocatedBytes()
+	oldLimit := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = oldLimit })
+	got, err := src.Dup(dstMP)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, baseline, dstMP.AllocatedBytes(), "area failure must release the header allocated earlier in Dup")
+}
+
+func TestConstBytesFreesPartialAllocation(t *testing.T) {
+	mp := mpool.MustNew("const-bytes-failure")
+	defer mpool.DeleteMPool(mp)
+	baseline := mp.AllocatedBytes()
+	oldLimit := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = oldLimit })
+	got, err := NewConstBytes(types.T_varchar.ToType(), make([]byte, 2<<20), 8192, mp)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, baseline, mp.AllocatedBytes(), "area failure must retire the successful constant header allocation")
+}
+
 func TestCloneToFlatCompactPreservesConstGrouping(t *testing.T) {
 	mp := mpool.MustNewZero()
 	tests := []struct {

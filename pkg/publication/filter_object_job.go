@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 // Job types
@@ -445,7 +446,7 @@ func (j *WriteObjectJob) Execute() {
 				},
 			})
 			if err != nil {
-				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				res.Err = errutil.Wrap(err, "failed to write object to fileservice")
 				j.complete(res)
 				return
 			}
@@ -474,7 +475,7 @@ func (j *WriteObjectJob) Execute() {
 			if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 				// File already exists, this is ok
 			} else {
-				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				res.Err = errutil.Wrap(err, "failed to write object to fileservice")
 				j.complete(res)
 				return
 			}

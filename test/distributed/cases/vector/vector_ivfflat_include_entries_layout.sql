@@ -48,6 +48,15 @@ set @q = concat(
 );
 prepare s1 from @q;
 execute s1;
+-- IGNORE must maintain the IVF index from accepted rows only.
+insert ignore into vector_ivfflat_include_phase2 values
+    (1, "[99,99,99]", "ignored", 99),
+    (4, "[10,11,12]", "delta", 40);
+select id, title, category from vector_ivfflat_include_phase2 order by id;
+execute s1;
+select id from vector_ivfflat_include_phase2 use index(idx_ivf_include)
+order by l2_distance(embedding, "[99,99,99]") limit 1;
+
 deallocate prepare s1;
 
 drop table vector_ivfflat_include_phase2;

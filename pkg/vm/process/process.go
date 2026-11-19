@@ -316,6 +316,7 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return nil, err
 			}
 		}

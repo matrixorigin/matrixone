@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -242,4 +243,42 @@ func TestGetJobStats_NotNil(t *testing.T) {
 	assert.NotNil(t, stats)
 	stats2 := GetJobStats()
 	assert.Same(t, stats, stats2) // singleton
+}
+
+// A background RPC may complete after an explicit renewal. It must notify the
+// current registration, but cannot overwrite a removed/replaced generation.
+func TestWorkerSyncProtectionLateRenewal(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprint(replace), func(t *testing.T) {
+			w := &worker{syncProtectionJobs: make(map[string]*syncProtectionEntry)}
+			w.RegisterSyncProtection("job", 1000)
+			entry := w.syncProtectionJobs["job"]
+			if replace {
+				w.UnregisterSyncProtection("job")
+			}
+			w.RegisterSyncProtection("job", 2000)
+			_, changed := w.WatchSyncProtection("job")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				w.updateSyncProtectionTTL("job", entry, 1500)
+			}()
+			<-done
+			if replace {
+				require.Equal(t, int64(2000), w.GetSyncProtectionTTL("job"))
+				select {
+				case <-changed:
+					t.Fatal("stale renewal changed a new registration")
+				default:
+				}
+			} else {
+				require.Equal(t, int64(1500), w.GetSyncProtectionTTL("job"))
+				select {
+				case <-changed:
+				default:
+					t.Fatal("earlier authoritative TTL was not notified")
+				}
+			}
+		})
+	}
 }

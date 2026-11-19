@@ -195,7 +195,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	defer releaseF()
 
 	mp := m.host.GetMPool()
-	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -235,9 +234,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
-		if m.stats.blkRowCnt%100 == 0 && m.stats.targetObjSize > 0 {
-			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
-		}
+		bigblk := m.stats.isBlockOversized(m.buffer)
 		// write new block
 		if m.stats.blkRowCnt == int(m.rowPerBlk) || bigblk {
 			m.stats.blkRowCnt = 0
@@ -264,7 +261,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				m.stats.objBlkCnt = 0
 				m.stats.objRowCnt = 0
 				m.stats.objCnt++
-				bigblk = false
 			}
 		}
 

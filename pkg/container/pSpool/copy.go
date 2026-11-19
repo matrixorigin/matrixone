@@ -36,7 +36,20 @@ type cachedBatch struct {
 }
 
 type oneBatchMemoryCache struct {
-	buffers []vector.DetachedBuffer
+	buffers       []vector.DetachedBuffer
+	retainedLimit int64
+}
+
+// SetCacheMemoryLimit is configured before sending the first batch. It limits
+// only backing returned by the last consumer; an active borrowed batch is never
+// evicted. Zero preserves the legacy cache policy.
+func (ps *PipelineSpool) SetCacheMemoryLimit(bytes int64) {
+	if ps == nil || bytes <= 0 {
+		return
+	}
+	for i := range ps.cache.buffer.bytesCache {
+		ps.cache.buffer.bytesCache[i].retainedLimit = bytes
+	}
 }
 
 func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
@@ -70,6 +83,16 @@ func (cb *cachedBatch) GetCopiedBatch(
 	}
 
 	cacheID, dst = cb.buffer.getCacheID()
+	attemptBatch, attemptID := dst, cacheID
+	success := false
+	defer func() {
+		if !success {
+			// The caller receives no batch/cache ID on failure. Return the actual
+			// ID here after destroying only this attempt's partial vector stores.
+			attemptBatch.Clean(cb.mp)
+			cb.buffer.putCacheID(cb.mp, attemptID, attemptBatch)
+		}
+	}()
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
 	if sourceSelection := src.AllocationAccountSelection(); !vector.AllocationAccountSelectionsEqual(
@@ -77,7 +100,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 		dst.AllocationAccountSelection(),
 	) {
 		if err = dst.SetAllocationAccount(sourceSelection); err != nil {
-			cb.CacheBatch(true, cacheID, dst)
 			return nil, false, 0, err
 		}
 	}
@@ -118,14 +140,12 @@ func (cb *cachedBatch) GetCopiedBatch(
 				selection,
 			)
 			if err != nil {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 		}
 
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 
@@ -136,14 +156,12 @@ func (cb *cachedBatch) GetCopiedBatch(
 					len(vec.GetArea()),
 					dst.Vecs[i],
 				); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 			dst.Vecs[i].Reset(typ)
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
 				vec); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 
@@ -152,14 +170,12 @@ func (cb *cachedBatch) GetCopiedBatch(
 		if vec.HasGrouping() {
 			groupingRows := vec.GetGrouping().GetBitmap().Len()
 			if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, mpool.ErrAllocationAccountInvalid
 			}
 			if err = dst.Vecs[i].PreExtendGrouping(
 				int(groupingRows),
 				cb.mp,
 			); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
@@ -179,6 +195,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 	// set row count.
 	dst.SetRowCount(src.RowCount())
+	success = true
 
 	return dst, true, cacheID, nil
 }
