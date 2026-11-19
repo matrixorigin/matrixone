@@ -358,13 +358,15 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 }
 
 func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
-	t.Run("DDL currently accepts duplicate and EqualFold-equivalent labels", func(t *testing.T) {
+	// New DDL rejects these, as MySQL does; the mocked tables below stand in
+	// for definitions created before that check existed.
+	t.Run("DDL rejects duplicate and EqualFold-equivalent labels", func(t *testing.T) {
 		for _, sql := range []string{
 			"create table enum_duplicate_ddl (e enum('same', 'same', 'other'))",
 			"create table enum_equal_fold_ddl (e enum('low', 'LOW', 'high'))",
 		} {
 			_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
-			require.NoError(t, err)
+			require.ErrorContains(t, err, "duplicate enum member")
 		}
 	})
 

@@ -328,7 +328,7 @@ func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 }
 
 func TestProjectionColumnUses(t *testing.T) {
-	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "unknown"} {
+	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "membership", "domain-pass", "unknown"} {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProc(t)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -354,8 +354,11 @@ func TestProjectionColumnUses(t *testing.T) {
 			}
 			require.NoError(t, scan.PrepareProjection(proc))
 			t.Cleanup(func() { scan.FreeProjection(proc) })
-			if shape == "domain" {
-				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: true}}
+			if shape == "domain" || shape == "membership" || shape == "domain-pass" {
+				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: shape == "domain-pass"}}
+				if shape == "membership" {
+					scan.ctr.readerFilter = &engine.ReaderFilterRequest{Membership: &engine.ReaderMembershipFilter{}}
+				}
 			}
 			if shape == "unknown" {
 				scan.ProjectExecutors[0].Free()
@@ -373,8 +376,11 @@ func TestProjectionColumnUses(t *testing.T) {
 			if shape == "forward-priority" {
 				want[1] = engine.ReaderColumnRetain
 			}
-			if shape == "domain" {
+			if shape == "domain" || shape == "membership" {
 				want[2] = engine.ReaderColumnOwned
+			}
+			if shape == "membership" {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.readerFilter.Membership.ColumnUses)
 			}
 			require.Equal(t, want, scan.ctr.columnUses)
 		})

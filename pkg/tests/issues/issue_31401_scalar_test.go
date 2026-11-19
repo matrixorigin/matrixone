@@ -107,7 +107,10 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						// A failed child operation may still have an unknown result.
 						// The failed fixture owns shutdown instead of another parent DDL.
 						if !t.Failed() {
-							_ = cleanupSQL(sys.ExecContext, 20*time.Second, "drop account if exists issue31401_scalar")
+							// DROP ACCOUNT drops every tenant system table and
+							// database serially; under CI contention single
+							// steps take seconds, so 20s was not enough.
+							_ = cleanupSQL(sys.ExecContext, 2*time.Minute, "drop account if exists issue31401_scalar")
 						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
