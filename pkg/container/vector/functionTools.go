@@ -711,20 +711,11 @@ func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) er
 			return err
 		}
 	}
-	if nullable {
-		if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
-			return err
-		}
-	}
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	if nullBitmap := fr.vec.nsp.GetBitmap(); nullable && nullBitmap.HasExternalStorage() {
-		// Allocation-accounted storage can outlive several evaluations and be
-		// larger than this result. Publish the current row domain explicitly so
-		// NULL unions never infer it from a reused source or physical capacity.
-		nullBitmap.TryExpandWithSize(targetSize)
-	}
+	// The null bitmap is allocated on the first NULL write, so a result that
+	// never holds NULL does not allocate one.
 
 	if !fr.isVarlena {
 		fr.length = 0

@@ -1320,8 +1320,6 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 		1,
 		102,
 		103,
-		104,
-		105,
 	)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)

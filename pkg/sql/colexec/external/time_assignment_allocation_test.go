@@ -61,7 +61,7 @@ func TestPrepareTimeStagingPreservesOutputAllocation(t *testing.T) {
 						require.NoError(t, err)
 						account, err = registry.Open(64 << 20)
 						require.NoError(t, err)
-						selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerExternal, 1, 2, 3, 4)
+						selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerExternal, 1, 2)
 						require.NoError(t, err)
 						arg.OutputAllocation = selection
 					}

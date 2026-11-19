@@ -670,7 +670,7 @@ func TestORLikeSubjectReuseAccountFailureAndBuildRollback(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	expression := orLikeTestExpression(t, proc, orLikeTestSubject(t, proc, true), 3)
 	executor, err := NewExpressionExecutorWithAllocation(proc, expression, selection)

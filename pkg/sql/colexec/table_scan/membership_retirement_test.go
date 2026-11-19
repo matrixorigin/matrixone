@@ -81,7 +81,7 @@ func TestMembershipRetiresBeforeEmptyBatchContinue(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	domain, _ := runtimefilter.NewLocalDomain(types.T_int32, 1000, 1, 1, 1000000)
 	t.Cleanup(domain.Close)

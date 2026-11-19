@@ -60,16 +60,16 @@ const (
 	GroupAllocationSiteHashIterator
 	GroupAllocationSiteKeyData
 	GroupAllocationSiteKeyArea
-	GroupAllocationSiteKeyNulls
-	GroupAllocationSiteKeyGrouping
+	_ // reserved: was GroupAllocationSiteKeyNulls
+	_ // reserved: was GroupAllocationSiteKeyGrouping
 	GroupAllocationSiteExpressionData
 	GroupAllocationSiteExpressionArea
-	GroupAllocationSiteExpressionNulls
-	GroupAllocationSiteExpressionGrouping
+	_ // reserved: was GroupAllocationSiteExpressionNulls
+	_ // reserved: was GroupAllocationSiteExpressionGrouping
 	GroupAllocationSiteAggregateData
 	GroupAllocationSiteAggregateArea
-	GroupAllocationSiteAggregateNulls
-	GroupAllocationSiteAggregateGrouping
+	_ // reserved: was GroupAllocationSiteAggregateNulls
+	_ // reserved: was GroupAllocationSiteAggregateGrouping
 	GroupAllocationSiteAggregateArgumentCount
 	GroupAllocationSiteAggregateArgumentArena
 	GroupAllocationSitePartialOutput
@@ -411,8 +411,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteKeyData,
 		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
 	)
 	if err != nil {
 		return err
@@ -422,8 +420,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteExpressionData,
 		GroupAllocationSiteExpressionArea,
-		GroupAllocationSiteExpressionNulls,
-		GroupAllocationSiteExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -432,12 +428,10 @@ func (ctr *container) setAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 	)
 	if err != nil {
@@ -461,8 +455,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteKeyData,
 		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
 		recoveryClass,
 	)
 	if err != nil {
@@ -472,12 +464,10 @@ func (ctr *container) setAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 		recoveryClass,
 	)

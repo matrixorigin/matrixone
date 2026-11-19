@@ -169,7 +169,7 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, 1, 1, 2, 3, 4)
+		account, 1, 1, 2)
 	require.NoError(t, err)
 
 	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
@@ -202,7 +202,7 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+		account, mpool.AllocationOwnerOrder, 1, 2)
 	require.NoError(t, err)
 
 	ts := vector.NewOffHeapVecWithType(types.T_datetime.ToType())

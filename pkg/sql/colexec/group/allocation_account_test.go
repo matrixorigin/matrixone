@@ -773,7 +773,6 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	)
 	require.NoError(t, err)
 	g.ctr.groupingRollup = []*vector.Vector{rollup}
-	require.Greater(t, allocation.account.Snapshot().Used, before)
 
 	g.ctr.resetForSpill()
 	require.Nil(t, g.ctr.groupingRollup)
@@ -889,8 +888,6 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
 			GroupAllocationSiteKeyArea,
-			GroupAllocationSiteKeyNulls,
-			GroupAllocationSiteKeyGrouping,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(
@@ -1127,11 +1124,11 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	destination := g.ctr.groupByBatches[0].Vecs[0]
 	requiredWords := (rows + 63) / 64
 	require.GreaterOrEqual(t,
-		destination.GetNulls().GetBitmap().ExternalStorageCapacity(),
+		destination.GetNulls().GetBitmap().CapWords(),
 		requiredWords,
 	)
 	require.GreaterOrEqual(t,
-		destination.GetGrouping().GetBitmap().ExternalStorageCapacity(),
+		destination.GetGrouping().GetBitmap().CapWords(),
 		requiredWords,
 	)
 

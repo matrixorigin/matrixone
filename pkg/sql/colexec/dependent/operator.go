@@ -52,7 +52,7 @@ func (o *Operator) SetAllocationAccount(account *mpool.AllocationAccount) error 
 	if o.execution != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 	if err != nil {
 		return err
 	}
