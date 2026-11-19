@@ -3601,7 +3601,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					from,
 					to,
 					tbl.proc.Load().GetMPool(),
-					fileservice.ExactColumnsRead,
+					fileservice.Policy(0),
 				)
 			} else {
 				var release func()
@@ -3613,7 +3613,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.MetaLocation(),
 					cacheVectors,
 					tbl.proc.Load().GetMPool(),
-					fileservice.ExactColumnsRead,
+					fileservice.Policy(0),
 				)
 				if err == nil {
 					sels := searchFunc(cacheVectors)

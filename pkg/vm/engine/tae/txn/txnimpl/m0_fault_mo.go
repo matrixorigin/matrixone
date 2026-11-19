@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -64,7 +63,7 @@ func m0ValidateTNAddRequest(ctx context.Context, schema *catalog.Schema, req *ap
 	}
 	// The schema mutation uses MustTypeFromPlan; validate first so malformed
 	// wire metadata cannot panic after a transactional schema node is made.
-	if err := m0ValidateTNColumnType(col.Typ); err != nil {
+	if _, err := types.TypeFromPlan(col.Typ); err != nil {
 		return errors.Join(moerr.NewInternalError(ctx, "M0: invalid TN appended column type"), err)
 	}
 	if col.Default.Expr != nil {
@@ -240,18 +239,6 @@ func m0WorkspaceCatalogRow(ctx context.Context, owner *txnStore, rel handle.Rela
 		}
 	}
 	return true, ctx.Err()
-}
-
-// TypeFromPlan validates collation but its size lookup panics for unknown
-// OIDs. Contain that conversion at the request boundary, before mutation.
-func m0ValidateTNColumnType(typ plan.Type) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.NewInternalErrorNoCtxf("M0: invalid TN column type: %v", recovered)
-		}
-	}()
-	_, err = types.TypeFromPlan(typ)
-	return err
 }
 
 func m0AfterApplyAddColumn(ctx context.Context) error {

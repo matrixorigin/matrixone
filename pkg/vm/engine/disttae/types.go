@@ -2166,8 +2166,9 @@ type txnTable struct {
 }
 
 type blockSortHelper struct {
-	blk *objectio.BlockInfo
-	zm  index.ZM
+	blk   *objectio.BlockInfo
+	zm    index.ZM
+	nulls uint32
 }
 
 type CloneTxnCache struct {

@@ -600,6 +600,7 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 			node.JoinType = plan.Node_RIGHT
 		}
 	}
+	builder.normalizeForcedJoinProbeSide(nodeID)
 }
 
 func (builder *QueryBuilder) remapHavingClause(
@@ -890,9 +891,10 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 8+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
+	cols = append(cols, ctx.AuxiliaryRowIdCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}

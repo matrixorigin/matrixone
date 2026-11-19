@@ -137,6 +137,74 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	calls int
+}
+
+func (it *countedReplayRows) Next() bool {
+	it.calls++
+	return it.RowsIter.Next()
+}
+
+func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: stamp, id: 42},
+		{rowID: types.NewRowid(&block, 1), ts: stamp, id: 43},
+		{rowID: types.NewRowid(&block, 2), ts: stamp.Next(), id: 44},
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		calls  int
+	}{
+		{"first-row-denied", 7, 1},
+		{"growth-denied", 23, 2},
+		{"fits", 24, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			if tc.name == "fits" {
+				require.NoError(t, err)
+				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			}
+			require.Equal(t, tc.calls, it.calls)
+		})
+	}
+}
+
 func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -1070,7 +1138,7 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
 	// but we should find created_at by name.
 	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
-	zms, err := ls.getBlockZMs(ctx)
+	zms, _, err := ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
@@ -1080,25 +1148,25 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// Test case 2: Test with simple column name (without table prefix)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Test case 3: Test fallback to ColPos when name lookup fails
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Test case 4: Report a plan error when both name lookup and ColPos fail
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.ErrorContains(t, err, "cannot find column for ORDER BY")
 
 	// Test case 5: Test with Name2ColIndex (O(1) lookup)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 }
 
@@ -1154,7 +1222,7 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 	// Should extract "created_at" from "db.table.created_at"
 	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
-	zms, err := ls.getBlockZMs(ctx)
+	zms, _, err := ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
@@ -1209,7 +1277,7 @@ func TestOrderedScanRetainsBlockWithMissingColumn(t *testing.T) {
 		}}}
 	}
 	orderBy("present", 0)
-	present, err := ls.getBlockZMs(ctx)
+	present, _, err := ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 	require.Len(t, present, 2)
 	require.True(t, present[0].IsInited())
@@ -1221,7 +1289,7 @@ func TestOrderedScanRetainsBlockWithMissingColumn(t *testing.T) {
 		t.Cleanup(func() { def.Cols[0].Typ = plan.Type{Id: int32(types.T_int32)} })
 		orderBy("present", 0)
 		ls.OrderBy[0].Expr.Typ.Id = int32(types.T_int64)
-		incompatible, err := ls.getBlockZMs(ctx)
+		incompatible, _, err := ls.getBlockZMs(ctx)
 		require.NoError(t, err)
 		require.Len(t, incompatible, 2)
 		ls.blockZMS = incompatible
@@ -1237,7 +1305,7 @@ func TestOrderedScanRetainsBlockWithMissingColumn(t *testing.T) {
 	}{{"near_missing", 1}, {"missing", 128}} {
 		t.Run(tc.name, func(t *testing.T) {
 			orderBy(tc.name, tc.pos)
-			missing, err := ls.getBlockZMs(ctx)
+			missing, _, err := ls.getBlockZMs(ctx)
 			require.NoError(t, err)
 			require.Len(t, missing, 2)
 			ls.blockZMS = missing

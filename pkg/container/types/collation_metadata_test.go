@@ -129,3 +129,10 @@ func TestCollationTypeRejectsUnknownBeforePublication(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, marker.ValidateCollation())
 }
+
+func TestTypeFromPlanRejectsInvalidOID(t *testing.T) {
+	for _, id := range []int32{255, -1, 256 + int32(T_int32)} {
+		_, err := TypeFromPlan(plan.Type{Id: id})
+		require.Error(t, err, "plan type OID %d", id)
+	}
+}

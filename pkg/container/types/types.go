@@ -1211,6 +1211,14 @@ func (t T) OidString() string {
 
 // TypeLen returns type's length whose type oid is T
 func (t T) TypeLen() int {
+	size := t.typeLen()
+	if size < 0 {
+		panic(fmt.Sprintf("unknown type %d", t))
+	}
+	return size
+}
+
+func (t T) typeLen() int {
 	switch t {
 	case T_any:
 		return 0
@@ -1259,7 +1267,7 @@ func (t T) TypeLen() int {
 	case T_enum:
 		return 2
 	}
-	panic(fmt.Sprintf("unknown type %d", t))
+	return -1
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24

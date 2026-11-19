@@ -102,5 +102,64 @@ explain analyze select id from pages order by id limit 5 offset 17000;
 select id from pages order by id limit 5 offset 17000;
 set max_dop = @saved_max_dop;
 set session query_max_workers = @saved_query_max_workers;
+-- Nullable single leading keys join the deep-offset cutoff: pages must
+-- stay exact under both default placements (ASC leads with NULLs, DESC
+-- trails them) whether or not block skipping happens, and the hza/hzb
+-- counterexamples of issue #32469 pin that NULL-carrying blocks are never
+-- skipped on the local reader while every block input is accounted for.
+set session optimizer_hints = 'execType=2';
+set session query_max_workers = 1;
+set max_dop = 1;
+create table nullpages (id int primary key, k2 int);
+insert into nullpages select result, if(result <= 100, null, result) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+insert into nullpages select result, result + 10000 from generate_series(8193, 16384) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+insert into nullpages select result, result + 20000 from generate_series(16385, 24576) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+insert into nullpages select result, result + 30000 from generate_series(24577, 32768) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.nullpages');
+select id, k2 from nullpages order by k2 limit 5 offset 16404;
+select id, k2 from nullpages order by k2 desc limit 5 offset 16404;
+select id, k2 from nullpages order by k2 limit 5 offset 40000;
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id, k2 from nullpages order by k2 limit 5 offset 16404;
+select id, k2 from nullpages order by k2 desc limit 5 offset 16404;
+select id, k2 from nullpages order by k2 limit 5 offset 40000;
+set session optimizer_hints = 'execType=2';
+create table hza (id int primary key, k3 int);
+insert into hza select result, if(result <= 2, null, result) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hza');
+insert into hza select result + 9000000, if(result <= 5, null, result + 9000000) from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hza');
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b",true)
+explain analyze select k3 from hza order by k3 limit 10;
+select k3 from hza order by k3 limit 10;
+select k3 from hza order by k3 limit 3;
+select k3 from hza order by k3 desc limit 10;
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select k3 from hza order by k3 limit 10;
+select k3 from hza order by k3 limit 3;
+select k3 from hza order by k3 desc limit 10;
+set session optimizer_hints = 'execType=2';
+create table hzb (id int primary key, k3 int);
+insert into hzb select result, null from generate_series(1, 8192) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hzb');
+-- ids continue into the second block: an all-NULL first block plus a
+-- populated second block is the D2 counterexample shape.
+insert into hzb select result, result + 100 from generate_series(8193, 16384) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.hzb');
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b",true)
+explain analyze select k3 from hzb order by k3 limit 10;
+select k3 from hzb order by k3 limit 10;
+-- @regex("Table Scan[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\b",true)
+explain analyze select k3 from hzb order by k3 desc limit 10;
+select k3 from hzb order by k3 desc limit 10;
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select k3 from hzb order by k3 limit 10;
+select k3 from hzb order by k3 desc limit 10;
+set session optimizer_hints = 'execType=2';
+set max_dop = @saved_max_dop;
+set session query_max_workers = @saved_query_max_workers;
 set session optimizer_hints = @saved_optimizer_hints;
 drop database ordered_pagination_cutoff;

@@ -37,7 +37,11 @@ func TypeFromPlan(typ plan.Type) (Type, error) {
 	if err := typ.ValidateCollation(); err != nil {
 		return Type{}, err
 	}
-	result := NewWithCharset(T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	oid := T(typ.Id)
+	if int32(oid) != typ.Id || oid.typeLen() < 0 {
+		return Type{}, moerr.NewInvalidInputNoCtxf("invalid plan type OID %d", typ.Id)
+	}
+	result := NewWithCharset(oid, typ.Width, typ.Scale, uint8(typ.Charset))
 	result.CollationVersion = uint8(typ.CollationVersion)
 	return result, nil
 }

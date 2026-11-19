@@ -1493,8 +1493,24 @@ func NewInvalidTruncateLsn(ctx context.Context, shardId, idx uint64) *Error {
 	return newError(ctx, ErrInvalidTruncateLsn, shardId, idx)
 }
 
+// NewInvalidTruncateLsnWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewInvalidTruncateLsnWithMessage(ctx context.Context, message string) *Error {
+	err := NewInvalidTruncateLsn(ctx, 0, 0)
+	err.message = message
+	return err
+}
+
 func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 	return newError(ctx, ErrNotLeaseHolder, holderId)
+}
+
+// NewNotLeaseHolderWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewNotLeaseHolderWithMessage(ctx context.Context, message string) *Error {
+	err := NewNotLeaseHolder(ctx, 0)
+	err.message = message
+	return err
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {

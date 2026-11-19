@@ -5819,6 +5819,28 @@ func TestIssue25590LateOrphanRegistrationCollectedBeforeShutdown(t *testing.T) {
 	require.Zero(t, producers, "no producer registration survived")
 }
 
+// TestIssue25590SuccessfulDrainReschedulesCoalescedArrival pins the
+// successful-drain completion boundary: an enqueue that coalesces behind
+// the active drain must trigger another pass when that drain finishes.
+func TestIssue25590SuccessfulDrainReschedulesCoalescedArrival(t *testing.T) {
+	e := NewEngineForTest(nil)
+	e.unpublishedPending.mu.Lock()
+	e.unpublishedPending.drainScheduled = true
+	e.unpublishedPending.drainIdle = make(chan struct{})
+	e.unpublishedPending.mu.Unlock()
+
+	// This enqueue lands after the successful drain's empty snapshot but
+	// before its completion releases the coalescing slot. Its schedule call
+	// is therefore coalesced behind the still-active drain.
+	lateName := "issue25590-arrived-before-drain-completion"
+	e.enqueueUnpublishedPending([]string{lateName})
+
+	require.True(t, e.clearUnpublishedPendingSchedule(true),
+		"successful completion must request another drain for the coalesced arrival")
+	require.Equal(t, []string{lateName}, issue25590QueuedNames(e),
+		"the queued ownership remains intact until the rescheduled drain runs")
+}
+
 // TestIssue25590QueueMembershipDeduplicatesAtScale pins the round-11
 // requirement that replaced the linear membership scans: the engine
 // queue answers duplicates from the membership index, keeps the index in

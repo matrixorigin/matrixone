@@ -310,6 +310,10 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		col := *ctx.OdkuGeneratedAutoIncrementCol
 		newCtx.OdkuGeneratedAutoIncrementCol = &col
 	}
+	if ctx.AuxiliaryRowIdCol != nil {
+		col := *ctx.AuxiliaryRowIdCol
+		newCtx.AuxiliaryRowIdCol = &col
+	}
 	newCtx.ForeignKeyChecks = make([]plan.ODKUForeignKeyCheck, len(ctx.ForeignKeyChecks))
 	for i, check := range ctx.ForeignKeyChecks {
 		newCtx.ForeignKeyChecks[i].ColIdxList = slices.Clone(check.ColIdxList)
@@ -435,7 +439,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 	newNode.NarrowScan = node.NarrowScan
-	newNode.ReadPolicy = node.ReadPolicy
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
