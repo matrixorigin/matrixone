@@ -23,16 +23,17 @@ claim.
 The map is the index for the rest of the work:
 
 - read the complete diff once to populate it;
-- classify every review lens as applicable to a mapped closure or not applicable
-  with a concrete reason;
-- group identical applicability/N/A decisions; do not generate a verbose
-  closure-by-lens Cartesian product;
+- record applicable risks and material exclusions. Group mechanical edits
+  under one reason when they share the same contract;
 - revisit only the hunks/callers needed to close an applicable question or
   verify a candidate finding;
 - never substitute a path grep, diff stat, or random spot check for reading all
   changed hunks.
 
-This preserves completeness while removing repeated whole-diff sweeps.
+Carry this map from design through delivery review. Confirm the final range
+and artifacts, then update changed closures and affected consumers. Reuse
+previously inspected closures when their relevant inputs are unchanged. A
+reviewer who receives it checks it against the PR diff.
 
 ## 2. Assign risk per closure, not per PR
 
@@ -43,9 +44,9 @@ changes pay the same cost.
 | Level | Shape | Required review/validation depth |
 |---|---|---|
 | **R0: non-behavioral** | documentation, comments, formatting, mechanical rename, or generated output whose source contract is unchanged | inspect diff/delivery, links/schema/parser/lint as applicable; no unrelated Go tests |
-| **R1: local** | deterministic test-only work or local sequential internal behavior with no public, persistent, shared-state, or cross-owner contract | invariant/oracle review; exact focused validation plus owning package when code/tests changed |
-| **R2: contract** | production behavior, public error/result/metadata, cross-package ownership, protocol-facing code, or a changed dependent contract | R1 plus consumer/negative-path proof, owning packages, and UT/BVT or compatibility evidence at the changed boundary |
-| **R3: systemic** | concurrency/lifecycle/global state, persistence/wire/catalog format, distributed protocol, restart/upgrade, security/tenant boundary, material hot path, background resource, or large/complex feature/refactor | explicit state/ownership/wait/bound models; unhappy paths; relevant race/fault/restart/upgrade/security/performance evidence in addition to R2 |
+| **R1: local** | deterministic test-only work or local sequential internal behavior with no public, persistent, shared-state, or cross-owner contract | invariant/oracle review and exact focused validation; exercise the owning package when shared fixtures, selection, or behavior beyond the focused check may change |
+| **R2: contract** | public result/error/metadata, cross-package ownership, protocol-facing code, or a changed dependent contract | real consumer and negative/control proof at the changed boundary; use the test contract to select UT/BVT and affected packages |
+| **R3: systemic** | concurrency/lifecycle/global state, persisted format or interpretation, distributed protocol, restart/upgrade, security/tenant boundary, material hot path, background resource, or large/complex feature/refactor | model the affected ownership, state, waits, or bounds and prove the applicable unhappy paths with relevant race, fault, restart, upgrade or performance evidence |
 
 Risk is evidence-driven. A large diff can be R0 if it is proven mechanical; a
 small state-machine change can be R3. Record why each elevated dimension applies.
@@ -89,6 +90,25 @@ failed design review, or missing generated/delivery input. Otherwise complete
 all applicable mapped closures in the same pass so the next review does not
 rediscover a different blocker.
 
+### Challenge the claim with one discriminating check
+
+- **Suspected overfit or a bypass.** Vary the reproducer along the closest
+  dimension that should preserve the behavior, such as direct versus prepared
+  execution, or two plans for equivalent SQL. Include a neighboring control
+  where the new behavior should not apply. For timing failures, perturb
+  scheduling along an existing reachable path and assert the terminal outcome.
+  A forced impossible state can prove a defensive invariant only.
+- **Test or CI changes.** Confirm the same required assertions, cases, race
+  instrumentation and cleanup still run at the intended entry point. Inspect
+  changed filters, retries, skips, timeouts, exits and expected results that
+  could hide a failure. For merged cases, account for each distinct prior
+  oracle once.
+- **Performance claims.** Check equivalent results and completed work, including
+  work deferred to another phase, process, or background task. Compare the
+  affected phase and end-to-end metric under comparable data and setup. Where
+  noise could explain the claim, alternate base and candidate and report the
+  spread. State what the measurement covers.
+
 ## 4. Reuse evidence by semantic validity
 
 Local output and CI are equally valid when all of these hold:
@@ -116,15 +136,8 @@ commit metadata, or an unrelated package change. After a rebase, compare the
 old/new base and dependency closure; rerun only affected evidence. When that
 comparison is unavailable or ambiguous, treat the evidence as stale.
 
-Record reuse explicitly:
-
-```text
-Evidence: <check/command and selected target>
-Revision/mode: <head/base, platform/toolchain/tags/topology>
-Result: <terminal status/link>
-Validity: reused | rerun | stale
-Reason: <mapped contract and relevant inputs unchanged/changed>
-```
+Record evidence alongside the applicable closure with its selection,
+revision/mode, terminal result and any reason for reuse or invalidation.
 
 ## 5. Review and delivery record
 
@@ -133,8 +146,8 @@ Keep the handoff small and decision-oriented:
 ```text
 Range/mode: <base, head, merge-base; self-delivery or external review>
 Change map: <closures, owners/consumers, R0-R3 reasons>
-Design gate: <not applicable/exempt, or document revision and decision>
-Applicable lenses: <closure -> lens>; N/A lenses: <reason>
+Design gate: <not applicable/exempt, or reviewed revision and decision>
+Risks: <applicable dimensions and material exclusions>
 Evidence: <reused, newly run, stale/missing>
 Findings/decisions: <concrete failure paths and accepted tradeoffs>
 Result: PASS | BLOCKED | REQUEST_CHANGES
