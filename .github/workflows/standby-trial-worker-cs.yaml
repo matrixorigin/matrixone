@@ -19,7 +19,8 @@ jobs:
   worker:
     name: Coverage reservation CS group ${{ inputs.group }}
     if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && inputs.ticket != ''
-    runs-on: cs-node-cache-7c14g
+    # Drill only: group 1 must actually queue without consuming a real CS slot.
+    runs-on: ${{ fromJSON(inputs.group == 1 && '["cs-node-cache-7c14g","trial-only-32922-no-matching-runner-60df1"]' || '["cs-node-cache-7c14g"]') }}
     environment: ci
     timeout-minutes: 320
     steps:
