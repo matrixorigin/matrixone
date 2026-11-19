@@ -8908,6 +8908,15 @@ func bindFuncExprImplByPlanExpr(
 	} else {
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
+	if err == nil && name == "bit_count" && len(lookupTypes) == 1 && ctx.Value(releasedBitCountDumpBindingKey{}) != nil {
+		oid := lookupTypes[0].Oid
+		if coerced, ok := fGet.ShouldDoImplicitTypeCast(); ok {
+			oid = coerced[0].Oid
+		}
+		if overload := bitCountFloatFieldOverload(oid); overload >= 0 {
+			fGet, err = function.GetFunctionByNameWithOverload(ctx, name, lookupTypes, overload)
+		}
+	}
 	if err != nil {
 		if name == "between" {
 			return bindBetweenAsComparisons(ctx, args)

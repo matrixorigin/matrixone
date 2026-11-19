@@ -22,12 +22,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// Only table dump origin validation uses the released expression binding.
+type releasedBitCountDumpBindingKey struct{}
+
 func bitCountFloatFieldOverload(oid types.T) int32 {
-	switch oid { // typeswitch:partial only native MySQL FLOAT and DOUBLE fields have private overloads.
+	switch oid { // typeswitch:partial only native MySQL FLOAT and DOUBLE fields select the rounding overload.
 	case types.T_float32:
-		return function.BitCountFieldFloat32Overload
+		return function.BitCountRoundedFloat32Overload
 	case types.T_float64:
-		return function.BitCountFieldFloat64Overload
+		return function.BitCountRoundedFloat64Overload
 	default:
 		return -1
 	}
