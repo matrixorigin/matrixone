@@ -9,6 +9,65 @@ metadata:
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
 
+## Developer authority and blocker calibration
+
+These rules apply to Codex, Claude, and every other compatible reviewing agent.
+
+- A developer's explicit, recorded decision is authoritative for the reviewed
+  change: accept it, capture its rationale in the decision log, and do not
+  re-raise it as a finding. Revisit it only when the developer asks, or when
+  materially new evidence proves that the stated assumptions no longer hold;
+  present that evidence as a question, not as an override.
+- **Blocking** is exceptional. Mark a finding blocking only when it has a
+  concrete, demonstrated path to a merge-bar failure: correctness breakage,
+  data loss/corruption, security exposure, hang/deadlock, resource leak with
+  material impact, incompatibility, or required validation that is genuinely
+  missing. State the failing inputs/state and consequence.
+- A plausible concern, preference, maintainability improvement, micro-nit,
+  unproven risk, or item already accepted by the developer is **non-blocking**
+  (or omitted). Do not turn every observation into a blocker: if everything is
+  blocking, the label has lost its meaning.
+- MatrixOne upgrades by full-cluster shutdown only; old and new binaries never
+  serve one cluster together. "An older CN/TN cannot decode or run this" is not
+  a finding: never request, or block on the absence of, a per-feature
+  `MORPCVersion`, `AllCNsSupportProtocol`/capability gate, or old-peer
+  fallback. Check supported persisted state, backups and external contracts,
+  including changes to the meaning of existing stored definitions. Use the
+  [shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md).
+- When uncertain, classify non-blocking and ask for the developer's decision;
+  never use a blocking label merely to force attention or another review round.
+
+## Design quality and delivery scope
+
+- Start from user behavior, real callers and existing responsibility owners.
+  Reuse authoritative state machines, validation, storage and execution paths.
+  An unused capability may be missing integration; establish intent before deletion.
+- Trace how new and existing logic fit together. Justify new branches, recheck
+  old assumptions, and remove superseded logic and compatibility paths when
+  their supported use ends, including configuration, state, wiring and docs.
+- Remove unreachable branches, unused fields, redundant computation and
+  abstractions without useful callers. Added complexity must earn its runtime
+  and maintenance cost through concrete functionality, correctness, robustness
+  or performance; avoid speculative generality and over-engineering.
+- Test real entry points, boundaries and reachable unhappy paths with independent
+  oracles and minimal fixtures. Reject duplicated setup, implementation-mirroring
+  assertions and test volume that adds no distinct behavioral proof.
+- Evaluate implementation, tests and documentation separately, then assess the
+  total maintained diff. Net growth is a negative that needs justified benefit;
+  genuine net reduction is a positive when behavior and coverage are preserved.
+  Moving files or externalizing logs is not product simplification. Never remove
+  necessary behavior, coverage or explanation merely to improve line counts.
+- Before delivery, exclude temporary files, raw logs/profiles/benchmark results,
+  per-run manifests, agent transcripts, review attestations and one-off proof
+  narratives. Retain maintained design docs, regression fixtures and reproduction
+  tools only where they have continuing value to the repository.
+
+Keep raw evidence outside tracked source. When reviewers need it, use CI
+artifacts, PR attachments or durable external links; do not require a raw-evidence
+commit to satisfy review. Keep the PR body concise: problem, resulting behavior,
+key validation/results and material limits. Link bulky details instead of pasting
+logs, repeated summaries or the experiment/review chronology.
+
 ## Resource Map
 
 | Change shape | Read |
@@ -22,25 +81,32 @@ whole gate for you**. First resolve the **target** from the args:
 
 | Args | Target to review |
 |------|------------------|
-| *(empty)* | current branch **vs `main`** |
+| *(empty)* | current branch vs its verified PR base when one exists, otherwise the verified upstream `4.2-dev` |
 | a git ref / branch / tag / commit (e.g. `develop`, `origin/release-2.0`, `abc123`) | current branch **vs that ref** |
 | `vs <ref>` / `base=<ref>` | current branch **vs `<ref>`** |
 | all-digits (e.g. `25199`) | that **GitHub PR** |
-| anything else (e.g. `pkg/vectorindex focus on quantizer`) | scope/focus, still **vs `main`** |
+| anything else (e.g. `pkg/vectorindex focus on quantizer`) | scope/focus, using the same verified default-base resolution |
 | `<ref> <scope…>` | **vs `<ref>`**, restricted to the trailing scope |
 | `docs` / `help` | just show §1–§8, run nothing |
 
+Resolve the explicit user base, then the PR base, then the current upstream
+`4.2-dev` tip. If network access is unavailable, report the remote ref's object ID
+and known freshness limitation. Always report the base ref, resolved commit,
+and merge-base.
+
 Then execute (do not shortcut):
 
-1. Launch the **code-review** workflow at **high** on the resolved target — state the
-   base you resolved ("this branch compared to `<base>`") — appending verbatim:
+1. If a callable **code-review** workflow exists, launch it at **high** on the
+   resolved target and state the base ("this branch compared to `<base>`"), appending:
    `多角度评审，第一性原则，系统性思考问题，涉及到的修改需要调研完整的功能闭环，unhappy path cover.`
-   Pass any scope/skip instructions through too.
+   Pass scope/skip instructions through. If that capability is absent, execute
+   §1–§5 directly with the available repository and review tools; capability
+   absence must not block the gate.
 2. On results, apply **§3** (trace each finding's functional closure to its terminal
    node; personally spot-check any *cluster of refutations* — a verifier can repeat
-   one wrong call) and **§5** (severity LAST, calibrated to the merge bar;
-   decision-log every won't-fix/known-gap with its reason; no finding without a
-   concrete failure).
+   one wrong call) and **§5** (developer decisions are authoritative; severity LAST,
+   calibrated to the merge bar; decision-log every won't-fix/known-gap with its
+   reason; no finding without a concrete failure).
 3. Present a converged, ranked findings list, each with a **fix-or-decision-log
    recommendation** — not another review round.
 
@@ -70,8 +136,12 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
+| **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Apply the shared race protocol linked in §6. |
 
-Scope = the complete diff vs the base branch (`git diff <base>...HEAD` + staged/unstaged), **not** just the last file you touched.
+Scope = committed changes vs merge-base, staged changes, unstaged changes, and
+untracked files in scope—not just the last file touched. Inspect `git status
+--short` and `git ls-files --others --exclude-standard`; also verify that any
+required generated/delivery artifact is not silently excluded by ignore rules.
 
 ---
 
@@ -83,13 +153,15 @@ lens is obvious to another.
 | Lens | Ask |
 |------|-----|
 | **Correctness** | Does each changed function produce the right output for ordinary AND boundary inputs (0, 1, max, empty, nil, overflow)? |
-| **Concurrency** | Shared state touched by >1 goroutine? Races, lost wakeups, double-close, ordering assumptions? (`-race` the new tests.) |
+| **Concurrency** | Shared state touched by >1 goroutine? Races, lost wakeups, double-close, ordering assumptions? Apply the mandatory race-stress gate in §6. |
 | **Control path** | Can cancel/close/reject/timeout make progress independently of the blocked operation, or does it wait on the same lock/channel/RPC? |
 | **State / generation** | Is every transition and failed transition defined? Can old work affect a restarted/reused generation or observe it before admission completes? |
 | **Resource lifecycle** | Every fd/goroutine/lock/alloc created on the change's paths — closed/released on **every** branch incl. error/panic? (→ §4 Q1) |
-| **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? |
+| **Compatibility / boundary** | Do released formats, stored definitions, backups and external contracts work as expected on the target? Apply the shared upgrade compatibility contract. |
 | **Failure modes** | Every error return handled; partial failure leaves consistent state; no silent fallback that hides corruption. |
 | **Contract / API** | Callers updated on both ends of a protocol change; interface impls complete (compile-time `var _` checks intact). |
+| **Performance / scale** | On frequency-sensitive paths, did allocations, copies, scans, locks/atomics, goroutines, I/O, logs, or metric cardinality materially change? Benchmark/profile only when the cost can be material; otherwise record a bounded cost analysis. |
+| **Platform / build** | Are Darwin/Linux, amd64/arm64, build tags, CGo/native loading, container users, and runtime-vs-build platform assumptions explicit and fail-closed where applicable? |
 
 ---
 
@@ -135,21 +207,25 @@ diff touches:
 - **Q2 hung** — every explicit or implicit wait dependency has a guaranteed release; fail-fast/control paths must not queue behind the work they stop.
 - **Q3 OOM** — every accumulation has a bound / recycle.
 
-Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail, G3 symmetry,
-G4 line-reread, G5 calibrate-last) before keeping any finding.
+Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail/block,
+G3 bound/release, G4 line-reread, G5 calibrate-last) before keeping any finding.
 
 ---
 
 ## 5. Convergence discipline — this is what actually breaks the loop
 
-1. **Calibrate to the merge bar.** Flag only what would block merge or cause a
-   real defect (correctness, data loss, leak, hang, incompatibility). Style /
-   micro-nits: fix silently or skip — never loop on them. (Assign severity LAST,
-   per unhappy-path-audit G5.)
-2. **Keep a decision log.** Record every intentional design choice and every
-   "won't fix / acceptable" item (with the why). Re-reviews and PR reviewers
-   re-surface these constantly; a written decision lets you dismiss them in one
-   line instead of re-litigating. (This is the #1 loop cause after unproven findings.)
+1. **Calibrate to the merge bar.** Blocking means a concrete, demonstrated
+   merge-bar failure—not merely a concern. Flag only real defects
+   (correctness, data loss, material leak, hang, incompatibility, security) or
+   genuinely required missing validation; state the failure path. Style /
+   micro-nits: fix silently or skip — never loop on them. When unsure, use
+   non-blocking. (Assign severity LAST, per unhappy-path-audit G5.)
+2. **Keep a decision log and respect it.** Record every intentional design
+   choice and every "won't fix / acceptable" item (with the why). A developer's
+   explicit decision closes that item for this review: do not re-raise or relabel
+   it blocking unless materially new evidence invalidates its stated assumption.
+   Re-reviews and PR reviewers re-surface these constantly; a written decision
+   lets you dismiss them in one line instead of re-litigating.
 3. **Verify before flagging.** No finding survives without a concrete failure
    (§2) that passed the 5 gates (§4).
 4. **One thorough pass beats many incremental.** The whole point: exhaust §1–§4
@@ -161,20 +237,31 @@ G4 line-reread, G5 calibrate-last) before keeping any finding.
 ## 6. How to run
 
 **On your own working diff (the default — this is a *self* gate):**
-- Fastest: `/code-review high` (workflow-backed, multi-angle finders + verify
-  pass) — then apply §3 closure + §5 discipline to the results.
-- Or invoke the review workflow directly with these emphases as args, e.g.
-  `Workflow(code-review, "high <target>. 多角度评审、第一性原则、系统性思考、完整功能闭环、unhappy path cover")`.
-- Or manually: walk §1 lens-by-lens → §3 closure → §4 Q1–Q3 → §5 gate.
+- If a callable review workflow exists, use it for parallel discovery and then
+  apply §3 closure + §5 discipline yourself.
+- Otherwise walk §1 lens-by-lens → §3 closure → §4 Q1–Q3 → §5 directly. This is
+  the complete supported fallback, not a degraded or blocked review.
 
 For concurrency/lifecycle changes, build the invariant, transition table,
 ownership graph, wait-for graph, and generation boundary from
 [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md). Derive
 the test matrix from semantic axes; do not reuse a remembered case list.
 
-**On a PR (same methodology, later in the lifecycle):** `/code-review ultra <PR#>`
-or `/review <PR#>`. But the point of *this* skill is to run BEFORE the PR so those
-find nothing.
+### Proportional Go unit-test validation and race stress
+
+Use the [shared validation scope](../../../.agents/skills/mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr)
+to select focused and owning-package tests. When **G-RACE-STRESS** applies,
+use the [shared race protocol](../../../.agents/skills/mo-dev/references/race-validation.md)
+for the adaptive budget, package scope, and execution mode. Include any
+failing test named in the issue, CI, or review feedback. Record platform or
+build constraints that prevent required validation.
+
+Use the [shared evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md#4-reuse-evidence-by-semantic-validity)
+to verify the result and its applicability to the final change.
+
+On a PR, use the same methodology against the verified PR base. A callable
+review workflow may accelerate discovery, but it does not replace personal
+closure and severity verification.
 
 Depth delegation: for the leak/hung/OOM analysis, drive the **unhappy-path-audit**
 skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
@@ -190,8 +277,10 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ state ownership, wait-for dependencies, and generation transitions modeled where applicable
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
-□ new/changed tests run green (incl. -race where concurrency changed)
-□ test matrix covers every changed transition and evidence is newer than the final edit/rebase
+□ every new/modified and directly affected Go behavioral unit test passed a proven non-empty focused run
+□ when G-RACE-STRESS applies, the required scope and adaptive budget follow the shared race protocol
+□ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
+□ evidence covers the changed behavior and satisfies the shared validity rules
 □ applicable domain guards passed (index-plugin → §8) — additive to the §1–§4 sweep above, never a substitute for it
 ```
 
@@ -210,39 +299,9 @@ the gate catches it next time (the gate improves; the loop still ends).
 
 Apply when the diff touches index-algorithm dispatch, any
 `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin`.
-These layer on top of §1–§4; each maps to a **mo-dev §8.7** forbidden pattern
-(read **mo-dev §8** for the framework). Any failing check is a merge blocker —
-the whole point of the plugin registry is that adding/editing an algorithm never
-needs a per-algo `switch`, so a diff that reintroduces one re-opens the
-"forgot-a-seam" bug class.
-
-1. **No new per-algo dispatch** — no new `switch …IndexAlgo` / `case MoIndex<X>Algo:` /
-   `IsIvfIndexAlgo || …` in `pkg/sql/{compile,plan}` / `pkg/catalog`; route through
-   `indexplugin.Get(algo)` / `IsVectorIndexAlgo`. (Legacy holdouts in
-   `build_dml_util.go` / `bind_insert.go` may remain — no NEW ones.)
-   ```bash
-   git diff -U0 pkg/sql pkg/catalog | grep -E '^\+' \
-     | grep -E 'IsIvfIndexAlgo|IsHnswIndexAlgo|IsCagraIndexAlgo|IsIvfpqIndexAlgo|IndexAlgo *==|case .*Algo\b'
-   ```
-2. **No import cycle** — no plugin sub-package imports `pkg/sql/plan` or `pkg/sql/compile`:
-   ```bash
-   git diff pkg/vectorindex/*/plugin pkg/fulltext/plugin \
-     | grep -E '^\+.*matrixorigin/matrixone/pkg/sql/(plan|compile)"'   # expect empty
-   ```
-3. **`indexplugin` not polluted** — no file under `pkg/indexplugin/` (except `all/`, `iscp/`)
-   imports a concrete algo package or gains algorithm-named / `switch algo` code:
-   ```bash
-   git diff pkg/indexplugin \
-     | grep -E '^\+.*(vectorindex/(ivfflat|ivfpq|cagra|hnsw)/plugin|fulltext/plugin)'  # only all*.go / iscp
-   ```
-4. **GPU registration correct** — a GPU-only algo's blank import is in `all_gpu.go`
-   (`//go:build gpu`), not `all.go`; each `build_gpu.go` has a `//go:build !gpu` CPU counterpart.
-5. **Assertions intact** — no deleted / commented / `//nolint`'d `var _ AlgoPlugin` or `var _ Hooks`:
-   ```bash
-   git diff | grep -E '^-.*var _ (plugin\.)?(AlgoPlugin|Hooks)'   # expect empty
-   ```
-6. **Runtime kept out** — no build/search kernel logic copied into the plugin; it still
-   calls `pkg/vectorindex/<algo>/{build_gpu,search_gpu}.go`.
-7. **New-algo completeness** — blank-imported in `all/` or `all_gpu/`, an SQL case under
-   `test/distributed/cases/vector/`, and CPU unit tests for the plan/schema/runtime hooks
-   (not just the GPU-gated BVT, which reads 0% coverage in non-GPU CI).
+Run [mo-dev index-plugin reference §9](../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change)
+as the single source of current algorithm-specific checks. Its greps are
+candidate discovery only: inspect matched production code, exclude
+comments/tests, and prove registration, hooks, applicable ISCP/CDC wiring,
+build-tag behavior, and public-path coverage before passing or blocking. Do not
+copy the detailed guard here; duplicated rules drift.
