@@ -17,6 +17,7 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -58,7 +59,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		QueryPlacementReason: c.queryPlacement.Reason,
 		Stats:                stats,
 		ForceSingle:          forceSingle,
-		ForceMultiCN:         plan2.GetForceScanOnMultiCN(),
+		ForceMultiCN:         plan2.GetForceScanOnMultiCN() || (multi_update.ReceivingCNProbeEnabled && multi_update.ReceivingCNForceMultiCN(c.proc)),
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
 	}
 	scanPlacement := schedule.DecideScanPlacement(scanRequest)

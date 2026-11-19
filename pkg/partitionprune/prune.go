@@ -51,6 +51,16 @@ func Prune(
 
 	// Initialize an array of batches, one for each partition
 	bats := make([]*batch.Batch, len(metadata.Partitions))
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			for _, b := range bats {
+				if b != nil {
+					b.Clean(proc.Mp())
+				}
+			}
+		}
+	}()
 
 	// Process each partition
 	for i, p := range metadata.Partitions {
@@ -69,7 +79,9 @@ func Prune(
 	}
 
 	// Return the result containing all partitioned batches and their metadata
-	return partitionservice.NewPruneResult(bats, metadata.Partitions), nil
+	result := partitionservice.NewPruneResult(bats, metadata.Partitions, proc.Mp())
+	handedOff = true
+	return result, nil
 }
 
 // PrunePartitionByExpr evaluates a partition expression against the input batch and returns
@@ -96,6 +108,12 @@ func PrunePartitionByExpr(
 ) (*batch.Batch, error) {
 	// Create a new batch with the same structure as the input batch
 	res := batch.NewWithSize(bat.VectorCount())
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			res.Clean(proc.Mp())
+		}
+	}()
 	for i := range bat.Vecs {
 		res.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
@@ -146,5 +164,6 @@ func PrunePartitionByExpr(
 
 	// Set the row count of the result batch
 	res.SetRowCount(res.Vecs[0].Length())
+	handedOff = true
 	return res, nil
 }

@@ -31,6 +31,13 @@ type UpdateColumnRewriteHook interface {
 	UpdateColumnRequiresIndexRewrite(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error)
 }
 
+// UpdatePrimaryKeyHook permits an inline index to maintain an updated source
+// primary key, including whether that path supports RETURNING. Algorithms
+// without this capability retain the existing rejection.
+type UpdatePrimaryKeyHook interface {
+	SupportsPrimaryKeyUpdate(tableDef *planpb.TableDef, returning bool) bool
+}
+
 var (
 	IncludedColumnAffected       func(indexDef *planpb.IndexDef, colName string) (bool, error)
 	RenameIncludedColumnsForAlgo func(tableDef *planpb.TableDef, algo, oldColName, newColName string) ([]string, error)

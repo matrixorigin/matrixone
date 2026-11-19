@@ -16,16 +16,27 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,6 +92,154 @@ func TestClonePartitionTargetContextsSuppressesPhysicalAffectedRows(t *testing.T
 	require.False(t, ordinary[0].SuppressPhysicalAffectedRows)
 	require.EqualValues(t, 1, physicalInsertAffectedRows(ordinary[0], 1),
 		"single-target partition updates still count physical inserts")
+}
+
+func TestBuildPartitionUpdateTargetsIndexOnlyContext(t *testing.T) {
+	ctx := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Obj: 901},
+		TableDef: &plan.TableDef{TblId: 902, FeatureFlag: features.IndexTable},
+		PartitionIndexCtx: &plan.PartitionIndexCtx{
+			ParentRef:    &plan.ObjectRef{Obj: 77},
+			ParentTable:  &plan.TableDef{TblId: 77, FeatureFlag: features.Partitioned},
+			PartitionCol: plan.ColRef{ColPos: 3},
+		},
+	}
+	targets := buildPartitionUpdateTargets([]*MultiUpdateCtx{ctx})
+	require.Len(t, targets, 1)
+	require.True(t, targets[0].indexOnly)
+	require.Equal(t, uint64(77), targets[0].tableID)
+	require.Len(t, targets[0].contexts, 1)
+	require.Equal(t, int32(3), targets[0].contexts[0].PartitionIndexCtx.PartitionCol.ColPos)
+	require.NotSame(t, ctx, targets[0].contexts[0])
+}
+
+func TestPartitionMultiUpdateIgnoresIndexOnlyAffectedRows(t *testing.T) {
+	op := &PartitionMultiUpdate{
+		raw:         &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{{IgnoreAffectedRows: true}}},
+		rawContexts: []*MultiUpdateCtx{{IgnoreAffectedRows: true}},
+	}
+	op.doAddAffectedRows(7)
+	require.Zero(t, op.GetAffectedRows())
+
+	op.raw.MultiUpdateCtx = []*MultiUpdateCtx{{}}
+	op.doAddAffectedRows(3)
+	require.EqualValues(t, 3, op.GetAffectedRows())
+}
+
+func TestPartitionRouteOrdinalAcceptsFixedIntegerRoutes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := testutil.NewInt32Vector(3, types.T_int32.ToType(), proc.Mp(), false, nil, []int32{0, 1, -1})
+	defer vec.Free(proc.Mp())
+	for row, want := range []int{0, 1, -1} {
+		got, ok := partitionRouteOrdinal(vec, row)
+		require.True(t, ok)
+		require.Equal(t, want, got)
+	}
+	str := testutil.NewStringVector(1, types.T_varchar.ToType(), proc.Mp(), false, nil, []string{"0"})
+	defer str.Free(proc.Mp())
+	_, ok := partitionRouteOrdinal(str, 0)
+	require.False(t, ok)
+}
+
+func TestWritePartitionIndexTargetMapsNoMatchOrdinalOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		routes     []int32
+		textRoutes []string
+		routeNulls []bool
+		wantErr    string
+	}{
+		{
+			name:    "no-match-after-valid-row",
+			routes:  []int32{0, -1},
+			wantErr: "invalid input: Table has no partition for value from column_list",
+		},
+		{
+			name:    "other-negative",
+			routes:  []int32{-2},
+			wantErr: "invalid input: invalid partition fulltext route ordinal -2",
+		},
+		{
+			name:    "out-of-range",
+			routes:  []int32{2},
+			wantErr: "invalid input: invalid partition fulltext route ordinal 2",
+		},
+		{
+			name:       "malformed-type",
+			textRoutes: []string{"0"},
+			wantErr:    "invalid input: invalid partition fulltext route ordinal 0",
+		},
+		{
+			name:       "null-route-vector",
+			routes:     []int32{0},
+			routeNulls: []bool{true},
+			wantErr:    "invalid input: partition fulltext route is NULL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			rowCount := len(tc.routes)
+			if tc.textRoutes != nil {
+				rowCount = len(tc.textRoutes)
+			}
+			data := make([]int64, rowCount)
+			for i := range data {
+				data[i] = int64(i + 10)
+			}
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = testutil.NewInt64Vector(rowCount, types.T_int64.ToType(), proc.Mp(), false, nil, data)
+			if tc.textRoutes != nil {
+				input.Vecs[1] = testutil.NewStringVector(rowCount, types.T_varchar.ToType(), proc.Mp(), false, nil, tc.textRoutes)
+			} else {
+				input.Vecs[1] = testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), proc.Mp(), false, tc.routeNulls, tc.routes)
+			}
+			input.SetRowCount(rowCount)
+
+			mp := proc.Mp()
+			baseline := mp.CurrNB()
+			heapBytes, heapObjects := mp.OnHeapOutstanding()
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			physicalTargetResolutions := 0
+			eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, _ any, _ uint64) (string, string, engine.Relation, error) {
+					physicalTargetResolutions++
+					return "", "", nil, fmt.Errorf("unexpected physical partition target resolution")
+				},
+			).AnyTimes()
+
+			target := &partitionUpdateTarget{
+				contexts: []*MultiUpdateCtx{{
+					PartitionIndexCtx: &plan.PartitionIndexCtx{PartitionCol: plan.ColRef{ColPos: 1}},
+				}},
+				meta: partition.PartitionMetadata{Partitions: []partition.Partition{{PartitionID: 1}, {PartitionID: 2}}},
+			}
+			op := &PartitionMultiUpdate{raw: &MultiUpdate{Engine: eng}}
+			err := op.writePartitionIndexTarget(proc, target, input)
+
+			require.EqualError(t, err, tc.wantErr)
+			require.Zero(t, physicalTargetResolutions, "a rejected route must not resolve or write a physical partition target")
+			require.Equal(t, data, vector.MustFixedColWithTypeCheck[int64](input.Vecs[0]), "routing must not mutate input values")
+			require.Equal(t, rowCount, input.RowCount())
+			if tc.textRoutes == nil {
+				require.Equal(t, tc.routes, vector.MustFixedColWithTypeCheck[int32](input.Vecs[1]), "routing must not mutate route values")
+				for i := range rowCount {
+					wantNull := i < len(tc.routeNulls) && tc.routeNulls[i]
+					require.Equal(t, wantNull, input.Vecs[1].GetNulls().Contains(uint64(i)))
+				}
+			} else {
+				require.Equal(t, types.T_varchar, input.Vecs[1].GetType().Oid)
+				require.Equal(t, rowCount, input.Vecs[1].Length())
+			}
+			bytes, objects := mp.OnHeapOutstanding()
+			require.Equal(t, baseline, mp.CurrNB(), "temporary partial route groups must be released")
+			require.Equal(t, heapBytes, bytes)
+			require.Equal(t, heapObjects, objects)
+		})
+	}
 }
 
 func TestClonePartitionContextsConsumeODKUMetadataOnce(t *testing.T) {
@@ -259,10 +418,12 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	secondaryName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
 		catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	fulltextName := catalog.FullTextIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	op := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{
 		{TableDef: &plan.TableDef{Name: "main_table"}},
 		{TableDef: &plan.TableDef{Name: uniqueName}},
 		{TableDef: &plan.TableDef{Name: secondaryName}},
+		{TableDef: &plan.TableDef{Name: fulltextName, TableType: catalog.FullTextIndex_TblType}},
 	}}
 
 	op.resetMultiUpdateCtxs()
@@ -270,6 +431,8 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[0]).tableType)
 	require.Equal(t, UpdateUniqueIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[1]).tableType)
 	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[2]).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[3]).tableType)
+	require.True(t, isSecondaryIndexTableName(fulltextName))
 }
 
 func TestPartitionMultiUpdateString(t *testing.T) {
@@ -319,13 +482,13 @@ func TestBuildPartitionUpdateTargetsKeepsPhysicalTargetsIndependent(t *testing.T
 }
 
 func TestPartitionWriterIDsSeparateAliasesOfSamePhysicalTable(t *testing.T) {
-	first := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
-	second := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	first := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
+	second := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
 	op := &PartitionMultiUpdate{}
 
-	firstID := op.writerID(first, 100)
-	require.Equal(t, firstID, op.writerID(first, 100))
-	require.NotEqual(t, firstID, op.writerID(second, 100))
+	firstID := op.writerID(first, 100, actionUpdate)
+	require.Equal(t, firstID, op.writerID(first, 100, actionUpdate))
+	require.NotEqual(t, firstID, op.writerID(second, 100, actionUpdate))
 }
 
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
@@ -357,7 +520,7 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 
 func TestPartitionMultiUpdateResetReleasesWriters(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	target := &partitionUpdateTarget{writerIDs: map[uint64]uint64{10: 1}}
+	target := &partitionUpdateTarget{writerIDs: map[partitionWriterKey]uint64{{physicalTableID: 10, action: actionUpdate}: 1}}
 	op := &PartitionMultiUpdate{
 		raw:          &MultiUpdate{},
 		targets:      []*partitionUpdateTarget{target},
@@ -599,4 +762,265 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.NotSame(t, original.TableDef, cloned.TableDef)
 	cloned.ObjRef.ObjName = "modified"
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
+}
+
+func TestPartitionUpdatePrunesAbsoluteColumnAfterRowID(t *testing.T) {
+	for _, rowIDFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(rowIDFirst), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := batch.NewWithSize(3)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			if rowIDFirst {
+				input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			}
+			input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+			for _, key := range []int32{1, 2, 1} {
+				if rowIDFirst {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Rowid{}, false, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(99), false, proc.Mp()))
+				}
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(99), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[2], key, false, proc.Mp()))
+			}
+			input.SetRowCount(3)
+			meta := partition.PartitionMetadata{}
+			for _, key := range []int32{1, 2} {
+				col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+				value := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: key}}}}
+				expr, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{col, value})
+				require.NoError(t, err)
+				withRowID := sqlplan.DeepCopyExpr(expr)
+				withRowID.GetF().Args[0].GetCol().ColPos = 1
+				meta.Partitions = append(meta.Partitions, partition.Partition{PartitionID: uint64(key), Expr: expr, ExprWithRowID: withRowID})
+			}
+			require.NotPanics(t, func() {
+				result, err := prunePartitionUpdate(proc, input, meta, 2)
+				require.NoError(t, err)
+				defer result.Close()
+				counts := map[uint64]int{}
+				result.Iter(func(p partition.Partition, b *batch.Batch) bool { counts[p.PartitionID] = b.RowCount(); return true })
+				require.Equal(t, map[uint64]int{1: 2, 2: 1}, counts)
+			})
+		})
+	}
+}
+
+func TestPartitionUpdatePrunesCompoundExpressionFromMappedColumns(t *testing.T) {
+	for _, rowIDFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint("rowIDFirst=", rowIDFirst), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			intType := plan.Type{Id: int32(types.T_int32)}
+			col := func(pos int32) *plan.Expr {
+				return &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+			}
+			sum, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{col(0), col(1)})
+			require.NoError(t, err)
+			limit := &plan.Expr{Typ: intType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 10}}}}
+			below, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "<", []*plan.Expr{sqlplan.DeepCopyExpr(sum), limit})
+			require.NoError(t, err)
+			atOrAbove, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, ">=", []*plan.Expr{sum, sqlplan.DeepCopyExpr(limit)})
+			require.NoError(t, err)
+			withRowID := func(expr *plan.Expr) *plan.Expr {
+				expr = sqlplan.DeepCopyExpr(expr)
+				var shift func(*plan.Expr)
+				shift = func(e *plan.Expr) {
+					switch x := e.Expr.(type) {
+					case *plan.Expr_Col:
+						x.Col.ColPos++
+					case *plan.Expr_F:
+						for _, arg := range x.F.Args {
+							shift(arg)
+						}
+					}
+				}
+				shift(expr)
+				return expr
+			}
+			meta := partition.PartitionMetadata{Partitions: []partition.Partition{
+				{PartitionID: 1, Expr: below, ExprWithRowID: withRowID(below)},
+				{PartitionID: 2, Expr: atOrAbove, ExprWithRowID: withRowID(atOrAbove)},
+			}}
+
+			routeStart := 2
+			vecCount := 4
+			if rowIDFirst {
+				routeStart = 3
+				vecCount++
+			}
+			input := batch.NewWithSize(vecCount)
+			defer input.Clean(proc.Mp())
+			for i := range input.Vecs {
+				if rowIDFirst && i == 0 {
+					input.Vecs[i] = vector.NewVec(types.T_Rowid.ToType())
+				} else {
+					input.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+				}
+			}
+			for _, values := range [][]int32{{99, 99, 1, 20}, {99, 99, 1, 0}, {99, 99, 4, 6}} {
+				if rowIDFirst {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Rowid{}, false, proc.Mp()))
+				}
+				for i := 0; i < vecCount; i++ {
+					if rowIDFirst && i == 0 {
+						continue
+					}
+					valuePos := i
+					if rowIDFirst {
+						valuePos--
+					}
+					require.NoError(t, vector.AppendFixed(input.Vecs[i], values[valuePos], false, proc.Mp()))
+				}
+			}
+			input.SetRowCount(3)
+
+			result, err := prunePartitionUpdateByColumns(proc, input, meta, []int{routeStart, routeStart + 1})
+			require.NoError(t, err)
+			defer result.Close()
+			counts := map[uint64]int{}
+			result.Iter(func(p partition.Partition, b *batch.Batch) bool {
+				counts[p.PartitionID] = b.RowCount()
+				return true
+			})
+			require.Equal(t, map[uint64]int{1: 1, 2: 2}, counts)
+		})
+	}
+}
+
+// Exercise the parent-table consumer rather than index-only grouping, which
+// has a different cleanup owner. Input and pool survive every reset/reuse.
+func TestPartitionMultiUpdatePruneOwnership(t *testing.T) {
+	for _, terminal := range []string{"reset", "free"} {
+		for _, outcome := range []string{"success", "write-error", "prune-error"} {
+			t.Run(terminal+"/"+outcome, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				mp := mpool.MustNewZeroNoFixed()
+				defer mpool.DeleteMPool(mp)
+				proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+				defer proc.Free()
+				input := batch.NewWithSize(1)
+				defer input.Clean(mp)
+				input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				for _, key := range []int64{1, 2} {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, mp))
+				}
+				input.SetRowCount(2)
+				meta := partition.PartitionMetadata{TableID: 70}
+				for _, key := range []int64{1, 2} {
+					col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+					value := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: key}}}}
+					expr, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{col, value})
+					require.NoError(t, err)
+					meta.Partitions = append(meta.Partitions, partition.Partition{PartitionID: uint64(70 + key), PartitionTableName: fmt.Sprintf("p%d", key), Expr: expr})
+				}
+				storage := &partitionIndexTestStorage{metadata: meta}
+				proc.Base.PartitionService = &partitionIndexTestService{storage: storage}
+				def := func(id uint64, name string) *plan.TableDef {
+					return &plan.TableDef{TblId: id, Name: name, Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}}}
+				}
+				parentDef := def(70, "parent")
+				parentDef.FeatureFlag = features.Partitioned
+				relations := make(map[uint64]engine.Relation)
+				byName := make(map[string]engine.Relation)
+				writes := 0
+				failWrite := outcome == "write-error"
+				injected := fmt.Errorf("injected parent partition write failure")
+				for _, table := range []*plan.TableDef{parentDef, def(71, "p1"), def(72, "p2")} {
+					rel := mock_frontend.NewMockRelation(ctrl)
+					rel.EXPECT().GetTableName().Return(table.Name).AnyTimes()
+					rel.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
+					rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
+					rel.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+					rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+						writes++
+						require.Equal(t, 1, b.RowCount())
+						require.Equal(t, int64(writes), vector.GetFixedAtWithTypeCheck[int64](b.Vecs[0], 0))
+						if failWrite && writes == 2 {
+							return injected
+						}
+						return nil
+					}).AnyTimes()
+					relations[table.TblId] = rel
+					byName[table.Name] = rel
+				}
+				database := mock_frontend.NewMockDatabase(ctrl)
+				database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, name string, _ any) (engine.Relation, error) {
+					return byName[name], nil
+				}).AnyTimes()
+				eng := mock_frontend.NewMockEngine(ctrl)
+				eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+				eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ any, id uint64) (string, string, engine.Relation, error) {
+					return "test", "db", relations[id], nil
+				}).AnyTimes()
+				newOperator := func() *PartitionMultiUpdate {
+					raw := &MultiUpdate{Action: UpdateWriteTable, Engine: eng, MultiUpdateCtx: []*MultiUpdateCtx{{
+						ObjRef: &plan.ObjectRef{SchemaName: "test", ObjName: "parent", Obj: 70}, TableDef: parentDef, InsertCols: []int{0},
+					}}}
+					return NewPartitionMultiUpdate(raw).(*PartitionMultiUpdate)
+				}
+				op := newOperator()
+				defer func() { op.Free(proc, false, nil) }()
+				child := colexec.NewMockOperator()
+				op.AppendChild(child)
+				baseline := mp.CurrNB()
+				heapBytes, heapObjects := mp.OnHeapOutstanding()
+				assertPruneReleased := func() {
+					t.Helper()
+					bytes, objects := mp.OnHeapOutstanding()
+					require.Equal(t, heapBytes, bytes, "prune copies must be gone while input and pool remain live")
+					require.Equal(t, heapObjects, objects)
+					require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](input.Vecs[0]))
+					require.Equal(t, 2, input.RowCount())
+				}
+				for generation := range 2 {
+					// Reset reuses the same argument; Free ends that argument's
+					// lifetime and the next statement constructs a new one.
+					if generation == 1 && terminal == "free" {
+						op = newOperator()
+						op.AppendChild(child)
+					}
+					storage.metadata = meta
+					if generation == 0 && outcome == "prune-error" {
+						storage.metadata.Partitions = meta.Partitions[:1]
+					}
+					require.NoError(t, op.Prepare(proc))
+					child.ResetBatchs()
+					child.Reset(proc, false, nil)
+					child.WithBatchs([]*batch.Batch{input})
+					writes = 0
+					result, err := op.Call(proc)
+					if generation == 0 && outcome != "success" {
+						require.Error(t, err)
+						if outcome == "write-error" {
+							require.ErrorIs(t, err, injected)
+							require.Equal(t, 2, writes, "failure follows physical progress")
+						} else {
+							require.Contains(t, err.Error(), "Table has no partition for value from column_list")
+							require.Zero(t, writes)
+						}
+					} else {
+						require.NoError(t, err)
+						require.Same(t, input, result.Batch)
+						require.Equal(t, 2, writes)
+					}
+					assertPruneReleased()
+					if terminal == "reset" {
+						op.Reset(proc, err != nil, err)
+					} else {
+						op.Free(proc, err != nil, err)
+					}
+					assertPruneReleased()
+					failWrite = false
+				}
+				op.Free(proc, false, nil)
+				assertPruneReleased()
+				require.Equal(t, baseline, mp.CurrNB(), "raw buffers also released before pool destruction")
+			})
+		}
+	}
 }

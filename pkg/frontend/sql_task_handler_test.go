@@ -904,7 +904,7 @@ func newSQLTaskHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	t.Cleanup(func() {
 		require.NoError(t, ts.Close())
 	})
-	getPu(ses.GetService()).TaskService = ts
+	getPu(ses.GetService()).SetTaskService(ts)
 	return ses, ts, store
 }
 

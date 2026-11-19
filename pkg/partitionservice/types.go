@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -193,34 +194,56 @@ func GetService(
 	return v.(PartitionService)
 }
 
+// PruneResult owns the split batches. Iter callbacks borrow them until Close.
+// Copies share the same owner: closing any copy invalidates all copies.
+// Like iteration, Close must be called serially by the consuming operator.
 type PruneResult struct {
-	batches    []*batch.Batch
-	partitions []partition.Partition
+	state *pruneResultState
 }
 
-func NewPruneResult(bats []*batch.Batch, partitions []partition.Partition) PruneResult {
-	var pr PruneResult
+type pruneResultState struct {
+	batches    []*batch.Batch
+	partitions []partition.Partition
+	mp         *mpool.MPool
+}
+
+// NewPruneResult takes ownership of every batch, including empty batches.
+func NewPruneResult(bats []*batch.Batch, partitions []partition.Partition, mp *mpool.MPool) PruneResult {
+	state := &pruneResultState{mp: mp}
 	for i := range bats {
 		if bats[i].RowCount() != 0 {
-			pr.batches = append(pr.batches, bats[i])
-			pr.partitions = append(pr.partitions, partitions[i])
+			state.batches = append(state.batches, bats[i])
+			state.partitions = append(state.partitions, partitions[i])
+		} else {
+			bats[i].Clean(mp)
 		}
 	}
-	return pr
+	return PruneResult{state: state}
 }
 
 func (res PruneResult) Iter(fn func(partition partition.Partition, bat *batch.Batch) bool) {
-	for i, p := range res.partitions {
-		if !fn(p, res.batches[i]) {
+	if res.state == nil {
+		return
+	}
+	for i, p := range res.state.partitions {
+		if !fn(p, res.state.batches[i]) {
 			break
 		}
 	}
 }
 
 func (res PruneResult) Close() {
-
+	if res.state == nil {
+		return
+	}
+	for _, bat := range res.state.batches {
+		bat.Clean(res.state.mp)
+	}
+	res.state.batches = nil
+	res.state.partitions = nil
+	res.state.mp = nil
 }
 
 func (res PruneResult) Empty() bool {
-	return len(res.partitions) == 0
+	return res.state == nil || len(res.state.partitions) == 0
 }

@@ -25,14 +25,20 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21},
-		"Type":             {"numeric_attributes": 14},
-		"Expr":             {"candidate_filter": 27},
-		"CreateDatabase":   {"defaults": 5},
-		"AlterDatabase":    {"defaults": 3},
-		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
-		"DatabaseDefaults": {"collation_revision": 6},
-		"ColDef":           {"result_column_kind": 23},
+		"Query":                    {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21, "local_runtime_filter_domains": 23, "enum_set_result_types": 24},
+		"Type":                     {"numeric_attributes": 14},
+		"Expr":                     {"candidate_filter": 27},
+		"CreateDatabase":           {"defaults": 5},
+		"AlterDatabase":            {"defaults": 3},
+		"CreateTable":              {"database_defaults": 18, "ctas_execution_protocol_version": 19},
+		"DatabaseDefaults":         {"collation_revision": 6},
+		"ColDef":                   {"result_column_kind": 23, "enum_set_result_type": 25},
+		"DedupJoinCtx":             {"auxiliary_row_id_col": 17},
+		"UpdateCtx":                {"partition_index_ctx": 20},
+		"PreInsertCtx":             {"preserve_input": 18},
+		"PartitionIndexCtx":        {"parent_ref": 1, "parent_table": 2, "partition_col": 3},
+		"LocalRuntimeFilterTarget": {"scan_node_id": 1, "column_name": 2, "probe_ndv": 3},
+		"LocalRuntimeFilterDomain": {"source_scan_node_id": 1, "source_column_name": 2, "key_type": 3, "targets": 4},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
@@ -55,6 +61,27 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		delete(want, message.GetName())
 	}
 	require.Empty(t, want, "missing merged message descriptors")
+}
+
+func TestPlanConflictFieldsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name     string
+		original proto.Message
+		decoded  proto.Message
+	}{
+		{"numeric attributes", &Type{NumericAttributes: 3}, &Type{}},
+		{"partition index context", &UpdateCtx{PartitionIndexCtx: &PartitionIndexCtx{}}, &UpdateCtx{}},
+		{"preserve input", &PreInsertCtx{PreserveInput: true}, &PreInsertCtx{}},
+		{"local runtime filter", &Query{LocalRuntimeFilterDomains: []*LocalRuntimeFilterDomain{{SourceScanNodeId: 1, SourceColumnName: "source", KeyType: 2, Targets: []*LocalRuntimeFilterTarget{{ScanNodeId: 3, ColumnName: "target", ProbeNdv: 4}}}}}, &Query{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := proto.Marshal(test.original)
+			require.NoError(t, err)
+			require.NoError(t, proto.Unmarshal(encoded, test.decoded))
+			require.True(t, proto.Equal(test.original, test.decoded))
+		})
+	}
 }
 
 func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
@@ -83,6 +110,26 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMergedFulltextPartitionPlanFieldsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		in   proto.Message
+		out  proto.Message
+	}{
+		{name: "dedup_join_context", in: &DedupJoinCtx{AuxiliaryRowIdCol: &ColRef{}}, out: &DedupJoinCtx{}},
+		{name: "update_partition_index_context", in: &UpdateCtx{PartitionIndexCtx: &PartitionIndexCtx{}}, out: &UpdateCtx{}},
+		{name: "preinsert_preserve_input", in: &PreInsertCtx{PreserveInput: true}, out: &PreInsertCtx{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := proto.Marshal(tt.in)
+			require.NoError(t, err)
+			require.NoError(t, proto.Unmarshal(encoded, tt.out))
+			require.Equal(t, tt.in, tt.out)
+		})
+	}
+}
+
 func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
 	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{IndexScanInfo: IndexScanInfo{IsIndexScan: true, RequiresCapturedExecution: true}, FilterList: []*Expr{{
@@ -96,4 +143,25 @@ func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	var decoded Query
 	require.NoError(t, decoded.Unmarshal(encoded))
 	require.Equal(t, original, &decoded)
+}
+
+func TestMergedPlanDescriptorMessageIndices(t *testing.T) {
+	tests := []struct {
+		name    string
+		message interface{ Descriptor() ([]byte, []int) }
+	}{
+		{"PartitionIndexCtx", &PartitionIndexCtx{}},
+		{"LocalRuntimeFilterTarget", &LocalRuntimeFilterTarget{}},
+		{"LocalRuntimeFilterDomain", &LocalRuntimeFilterDomain{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, indices := test.message.Descriptor()
+			require.Len(t, indices, 1)
+			file := decodePlanDescriptor(t, data)
+			require.GreaterOrEqual(t, indices[0], 0)
+			require.Less(t, indices[0], len(file.GetMessageType()))
+			require.Equal(t, test.name, file.GetMessageType()[indices[0]].GetName())
+		})
+	}
 }
