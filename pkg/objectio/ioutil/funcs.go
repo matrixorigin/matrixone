@@ -457,7 +457,7 @@ func ReadDeletes(
 	}
 
 	meta, release, err = LoadTombstoneColumns(
-		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
+		objectio.WithoutColumnReadSpec(ctx), cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 	)
 	if err != nil || isPersistedByCN {
 		return
@@ -483,7 +483,7 @@ func ReadDeletes(
 			release()
 			cols[commitIdx] = physicalCommitTS
 			meta, release, err = LoadTombstoneColumns(
-				ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
+				objectio.WithoutColumnReadSpec(ctx), cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 			)
 			if err != nil {
 				return

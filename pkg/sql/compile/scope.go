@@ -1936,6 +1936,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			if err != nil {
 				return err
 			}
+			readSpec := objectio.NewColumnReadSpecFromTableDef(node.TableDef)
 			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
@@ -1945,7 +1946,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
-				if c.evalAggOptimize(node, blk, partialResults, partialResultTypes, columnMap) != nil {
+				if c.evalAggOptimize(node, blk, partialResults, partialResultTypes, columnMap, readSpec) != nil {
 					partialResults = nil
 					return false, nil
 				}

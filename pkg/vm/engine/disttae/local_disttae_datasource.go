@@ -79,6 +79,11 @@ func NewLocalDataSource(
 	}
 
 	source.table = table
+	tableDef := table.GetTableDef(ctx)
+	source.readSpec = objectio.NewColumnReadSpecFromTableDef(tableDef)
+	if !skipReadMem && txnOffset > 0 && category != engine.ShardingRemoteDataSource {
+		source.workspaceCols = workspaceColumnPositions(tableDef)
+	}
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
@@ -105,11 +110,13 @@ type LocalDisttaeDataSource struct {
 		insIter logtailreplay.RowsIter
 	}
 
-	table *txnTable
+	table    *txnTable
+	readSpec *objectio.ColumnReadSpec
 
-	wsCursor  int
-	cachedBat *batch.Batch
-	sels      []int64
+	workspaceCols map[uint16]int // nil for dense sequence numbers
+	wsCursor      int
+	cachedBat     *batch.Batch
+	sels          []int64
 
 	txnOffset int
 
@@ -379,14 +386,18 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
-			colMeta := blkMeta.ColumnMeta(uint16(orderByColIDX))
-			zm := colMeta.ZoneMap()
-			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
-				blockZMS[i] = zm
-				blockNulls[i] = colMeta.NullCnt()
-			}
+		if ls.readSpec == nil && orderByColIDX > int(blkMeta.GetMaxSeqnum()) {
+			continue
 		}
+		colMeta, err := objectio.ResolveColumnMeta(ls.readSpec, blkMeta, uint16(orderByColIDX))
+		if err != nil {
+			return nil, nil, err
+		}
+		zm := colMeta.ZoneMap()
+		if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+			blockZMS[i] = zm
+		}
+		blockNulls[i] = colMeta.NullCnt()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -677,10 +688,69 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
+// Workspace INSERTs store logical columns after the generated rowid.
+func workspaceColumnPositions(def *plan.TableDef) map[uint16]int {
+	logical := 0
+	for _, col := range def.GetCols() {
+		if col.Seqnum == objectio.SEQNUM_ROWID {
+			continue
+		}
+		if col.Seqnum != uint32(logical) {
+			positions := make(map[uint16]int, len(def.Cols))
+			pos := 1
+			for _, col := range def.Cols {
+				if col.Seqnum != objectio.SEQNUM_ROWID {
+					positions[uint16(col.Seqnum)] = pos
+					pos++
+				}
+			}
+			return positions
+		}
+		logical++
+	}
+	return nil
+}
+
+func (ls *LocalDisttaeDataSource) workspaceColumnPosition(seq uint16) int {
+	if seq == objectio.SEQNUM_ROWID {
+		return 0
+	}
+	if ls.workspaceCols != nil {
+		// Position 0 is rowid. A missing sequence must never resolve to it.
+		if pos, ok := ls.workspaceCols[seq]; ok {
+			return pos
+		}
+		return -1
+	}
+	return int(seq) + 1
+}
+
+func workspaceColumn(bat *batch.Batch, position int) (*vector.Vector, error) {
+	if position < 0 || position >= len(bat.Vecs) || bat.Vecs[position] == nil {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid workspace INSERT column position %d (batch has %d vectors)", position, len(bat.Vecs))
+	}
+	return bat.Vecs[position], nil
+}
+
+func (ls *LocalDisttaeDataSource) appendWorkspaceProjection(
+	out, input *batch.Batch, seqNums []uint16, sels []int64, mp *mpool.MPool,
+) error {
+	for i, dest := range out.Vecs {
+		src, err := workspaceColumn(input, ls.workspaceColumnPosition(seqNums[i]))
+		if err != nil {
+			return err
+		}
+		if err := dest.Union(src, sels, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
-	pkSeqNums int32,
+	pkSeqNum int32,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
@@ -704,15 +774,18 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	var (
 		skipMask       objectio.Bitmap
 		packer         *types.Packer
-		enableFilter   bool
 		offsets        []int64
 		retainedRowIds []objectio.Rowid
 	)
 
-	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
-		enableFilter = true
-		// __mo_rowid is the first
-		pkSeqNums++
+	enableFilter := ls.memPKFilter.Valid()
+	pkPos, bfPos := -1, -1
+	if enableFilter && pkSeqNum >= 0 && pkSeqNum < objectio.SEQNUM_UPPER {
+		pkPos = ls.workspaceColumnPosition(uint16(pkSeqNum))
+	}
+	enableBF := ls.memPKFilter.HasMemberFilter()
+	if enableBF {
+		bfPos = ls.workspaceColumnPosition(uint16(ls.memPKFilter.BFSeqNum))
 	}
 
 	for {
@@ -730,16 +803,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 				sels = ls.sels
 			}
 
-			for i, destVec := range outBatch.Vecs {
-				colIdx := int(seqNums[i])
-				if colIdx != objectio.SEQNUM_ROWID {
-					colIdx++
-				} else {
-					colIdx = 0
-				}
-				if err := destVec.Union(ls.cachedBat.Vecs[colIdx], sels, mp); err != nil {
-					return err
-				}
+			if err := ls.appendWorkspaceProjection(outBatch, ls.cachedBat, seqNums, sels, mp); err != nil {
+				return err
 			}
 
 			if len(sels) == objectio.BlockMaxRows {
@@ -764,7 +829,22 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
-		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
+		rowIDs, err := workspaceColumn(entry.bat, 0)
+		if err != nil {
+			return err
+		}
+		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](rowIDs)
+		var pkVec, bfVec *vector.Vector
+		if enableFilter {
+			if pkVec, err = workspaceColumn(entry.bat, pkPos); err != nil {
+				return err
+			}
+		}
+		if enableBF {
+			if bfVec, err = workspaceColumn(entry.bat, bfPos); err != nil {
+				return err
+			}
+		}
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
 		// Refer to genBlock and genRowid method.
 
@@ -773,7 +853,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		// point read re-encoded every workspace batch's primary keys, so
 		// single-row UPDATE statements slowed down linearly with the number
 		// of rows already modified by the transaction (issue 26796).
-		if enableFilter && entry.pkRange.inited &&
+		if enableFilter && entry.pkRange.inited && entry.pkCheckPos == pkPos &&
 			!ls.memPKFilter.MayMatchKeyRange(entry.pkRange.min, entry.pkRange.max) {
 			ls.wsCursor++
 			continue
@@ -795,8 +875,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		// Both fail closed to the FilterVector plus membership path below.
 		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); isExact &&
 			entry.pkRange.inited &&
-			!ls.memPKFilter.HasMemberFilter() &&
-			entry.pkCheckPos == int(pkSeqNums) {
+			!enableBF &&
+			entry.pkCheckPos == pkPos {
 			index, built := ls.table.getTxn().ensureInsertKeyOffsetsLocked(&writes[ls.wsCursor])
 			if built {
 				readutil.RecordIndexProbeForTest()
@@ -826,17 +906,16 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 					func() {
 						put := ls.table.db.getEng().packerPool.Get(&packer)
 						defer put.Put()
-						ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+						ls.memPKFilter.FilterVector(pkVec, packer, &skipMask)
 					}()
 				}
 
 				// apply bf filter on workspace entries
-				if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+				if enableBF {
 					if !skipMask.IsValid() {
 						skipMask = objectio.GetReusableBitmap()
 					}
-					bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-					ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+					ls.memPKFilter.FilterHint.BF.TestVector(bfVec, func(exist bool, isnull bool, row int) {
 						if !exist {
 							skipMask.Add(uint64(row))
 						}
@@ -870,16 +949,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			sels = sels[:objectio.BlockMaxRows-rows]
 		}
 
-		for i, destVec := range outBatch.Vecs {
-			colIdx := int(seqNums[i])
-			if colIdx != objectio.SEQNUM_ROWID {
-				colIdx++
-			} else {
-				colIdx = 0
-			}
-			if err = destVec.Union(entry.bat.Vecs[colIdx], sels, mp); err != nil {
-				return err
-			}
+		if err = ls.appendWorkspaceProjection(outBatch, entry.bat, seqNums, sels, mp); err != nil {
+			return err
 		}
 
 		if rows+len(sels) == objectio.BlockMaxRows {
@@ -893,6 +964,25 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 	return nil
+}
+
+// ReplayBatch retains logtail names independently of batch.Batch. A dropped
+// slot can contain a placeholder vector, so both the name and vector matter.
+func replayDataColumn(bat *logtailreplay.ReplayBatch, seq uint16, spec *objectio.ColumnReadSpec) (*vector.Vector, error) {
+	if bat == nil || bat.Batch == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing logtail batch layout")
+	}
+	pos := 2 + int(seq) // rowid and commit timestamp precede data
+	if pos >= len(bat.Vecs) {
+		return nil, spec.ValidateMissingColumn(seq)
+	}
+	if pos >= len(bat.Attrs) || bat.Attrs[pos] == "" || bat.Vecs[pos] == nil {
+		if spec != nil {
+			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d is missing within logtail batch layout", seq)
+		}
+		return nil, nil
+	}
+	return bat.Vecs[pos], nil
 }
 
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
@@ -1001,12 +1091,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 			// apply bf filter on committed entries
 			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-				bfColVec := entry.Batch.Vecs[2+ls.memPKFilter.BFSeqNum] // 2 for rowid and commits
-				if bfColVec.IsNull(uint64(entry.Offset)) {
-					bfSkipped++
-					continue
+				bfSeq := uint16(ls.memPKFilter.BFSeqNum)
+				bfColVec, err := replayDataColumn(entry.Batch, bfSeq, ls.readSpec)
+				if err != nil {
+					return err
 				}
-				if !ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
+				if bfColVec == nil || bfColVec.IsNull(uint64(entry.Offset)) ||
+					!ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
 					bfSkipped++
 					continue
 				}
@@ -1037,21 +1128,14 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 					continue
 				}
 
-				idx := 2 /*rowid and commits*/ + seqNums[i]
-
-				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
-					entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					err = vector.AppendAny(
-						outBatch.Vecs[i],
-						nil,
-						true,
-						mp)
+				src, err := replayDataColumn(entry.Batch, seqNums[i], ls.readSpec)
+				if err != nil {
+					return err
+				}
+				if src == nil {
+					err = ls.readSpec.AppendMissingRows(seqNums[i], outBatch.Vecs[i], 1, mp)
 				} else {
-					err = outBatch.Vecs[i].UnionOne(
-						entry.Batch.Vecs[int(idx)],
-						entry.Offset,
-						mp,
-					)
+					err = outBatch.Vecs[i].UnionOne(src, entry.Offset, mp)
 				}
 				if err != nil {
 					return err

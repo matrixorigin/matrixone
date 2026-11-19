@@ -231,6 +231,8 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	defer iter.Close()
 
 	out := newMaterializedInMemBatch(attrs, colTypes, mp)
+	readSpec := objectio.ColumnReadSpecFromContext(ctx)
+	tombstoneCtx := objectio.WithoutColumnReadSpec(ctx)
 	totalRows := 0
 	scan := 0
 	bfSkipped := 0
@@ -238,11 +240,16 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	for iter.Next() {
 		scan++
 		entry := iter.Entry()
-		if ds.shouldSkipCommittedInMemEntry(entry) {
+		skip, err := ds.shouldSkipCommittedInMemEntry(entry, readSpec)
+		if err != nil {
+			out.Clean(mp)
+			return err
+		}
+		if skip {
 			bfSkipped++
 			continue
 		}
-		deleted, err := ds.isDeletedByCommittedTombstones(ctx, entry.RowID)
+		deleted, err := ds.isDeletedByCommittedTombstones(tombstoneCtx, entry.RowID)
 		if err != nil {
 			out.Clean(mp)
 			return err
@@ -255,7 +262,7 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 			ds.inMemBatches = append(ds.inMemBatches, out)
 			out = newMaterializedInMemBatch(attrs, colTypes, mp)
 		}
-		if err := appendCommittedInMemEntry(out, entry, seqNums, mp); err != nil {
+		if err := appendCommittedInMemEntry(out, entry, seqNums, readSpec, mp); err != nil {
 			out.Clean(mp)
 			return err
 		}
@@ -287,17 +294,17 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 
 func (ds *materializedSnapshotDataSource) shouldSkipCommittedInMemEntry(
 	entry *logtailreplay.RowEntry,
-) bool {
-	if ds.memPKFilter == nil || !ds.memPKFilter.HasBF || ds.memPKFilter.BFSeqNum == -1 {
-		return false
+	spec *objectio.ColumnReadSpec,
+) (bool, error) {
+	if ds.memPKFilter == nil || !ds.memPKFilter.HasMemberFilter() {
+		return false, nil
 	}
-	bfColVec := entry.Batch.Vecs[2+ds.memPKFilter.BFSeqNum]
-	if bfColVec.IsNull(uint64(entry.Offset)) {
-		return true
+	vec, err := replayDataColumn(entry.Batch, uint16(ds.memPKFilter.BFSeqNum), spec)
+	if err != nil {
+		return false, err
 	}
-	return !ds.memPKFilter.FilterHint.BF.Test(
-		bfColVec.GetRawBytesAt(int(entry.Offset)),
-	)
+	return vec == nil || vec.IsNull(uint64(entry.Offset)) ||
+		!ds.memPKFilter.FilterHint.BF.Test(vec.GetRawBytesAt(int(entry.Offset))), nil
 }
 
 func (ds *materializedSnapshotDataSource) isDeletedByCommittedTombstones(
@@ -345,6 +352,7 @@ func appendCommittedInMemEntry(
 	out *batch.Batch,
 	entry *logtailreplay.RowEntry,
 	seqNums []uint16,
+	readSpec *objectio.ColumnReadSpec,
 	mp *mpool.MPool,
 ) error {
 	for i := range out.Vecs {
@@ -358,14 +366,16 @@ func appendCommittedInMemEntry(
 				return err
 			}
 		default:
-			idx := 2 + seqNums[i]
-			if int(idx) >= len(entry.Batch.Vecs) || entry.Batch.Attrs[idx] == "" {
-				if err := vector.AppendAny(out.Vecs[i], nil, true, mp); err != nil {
-					return err
-				}
-				continue
+			src, err := replayDataColumn(entry.Batch, seqNums[i], readSpec)
+			if err != nil {
+				return err
 			}
-			if err := out.Vecs[i].UnionOne(entry.Batch.Vecs[idx], entry.Offset, mp); err != nil {
+			if src == nil {
+				err = readSpec.AppendMissingRows(seqNums[i], out.Vecs[i], 1, mp)
+			} else {
+				err = out.Vecs[i].UnionOne(src, entry.Offset, mp)
+			}
+			if err != nil {
 				return err
 			}
 		}

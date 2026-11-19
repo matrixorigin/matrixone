@@ -596,7 +596,7 @@ func (obj *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
 	panic("not supported")
 }
 
-func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch, _ uint32) (err error) {
+func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch, _ uint32, _ any) (err error) {
 	panic("not supported")
 }
 

@@ -453,7 +453,7 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 		}
 	}
 
-	from, err := mnode.ApplyAppendLocked(bat)
+	from, err := mnode.ApplyAppendLocked(bat, oldSchema)
 	require.NoError(t, err)
 	require.Equal(t, 0, from)
 
@@ -516,7 +516,7 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 			}
 		}
 	}
-	_, err := mnode.ApplyAppendLocked(input)
+	_, err := mnode.ApplyAppendLocked(input, nil)
 	require.NoError(t, err)
 	defer mnode.data.Close()
 
@@ -773,7 +773,7 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 				return bat
 			}
 			// A replay may install payload before a reservation materializes.
-			require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[2]), 2))
+			require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[2]), 2, nil, nil))
 			defer mnode.data.Close()
 			// A delayed earlier owner must not shrink or clear the later payload.
 			require.NoError(t, mnode.ReserveRowsLocked(1))
@@ -788,7 +788,7 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 				}
 			}
 			for row := 0; row < 2; row++ {
-				require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[row]), uint32(row)))
+				require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[row]), uint32(row), nil, nil))
 			}
 			vec := mnode.data.Vecs[0]
 			for row, value := range tc.values {
@@ -802,7 +802,7 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 			// Transfer reapply replaces the same destination without moving rows.
 			replacement := makeBatch(tc.values[2])
 			for range 2 {
-				require.NoError(t, mnode.ApplyAppendAtLocked(replacement, 0))
+				require.NoError(t, mnode.ApplyAppendAtLocked(replacement, 0, nil, nil))
 				require.Equal(t, tc.values[2], vec.GetValue(0))
 				require.Equal(t, tc.values[2], vec.GetValue(2))
 				require.Equal(t, 129, vec.Length())
@@ -953,23 +953,31 @@ func TestReplayAppendPayloadPreservesLegacyLogicalID(t *testing.T) {
 			meta := catalog.MockObjectEntry(table, stats, false, nil, types.BuildTS(1, 0))
 			obj := newAObject(meta, nil, false)
 			t.Cleanup(func() { obj.node.Load().Unref() })
+			schema := table.GetLastestSchema(false)
 			makeBatch := func(id uint64, logical any, includeLogical bool) *containers.Batch {
 				bat := containers.NewBatch()
 				t.Cleanup(bat.Close)
-				ids := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
-				ids.MustAppendValue(id, false)
-				bat.AddVector(pkgcatalog.SystemRelAttr_ID, ids)
-				if includeLogical {
-					logicalIDs := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
-					logicalIDs.MustAppendValue(logical, logical == nil)
-					bat.AddVector(pkgcatalog.SystemRelAttr_LogicalID, logicalIDs)
+				for _, col := range schema.ColDefs {
+					if col.Name == pkgcatalog.SystemRelAttr_LogicalID && !includeLogical && tableID == pkgcatalog.MO_TABLES_ID {
+						continue
+					}
+					var value any
+					switch col.Name {
+					case pkgcatalog.SystemRelAttr_ID:
+						value = id
+					case pkgcatalog.SystemRelAttr_LogicalID:
+						value = logical
+					}
+					vec := containers.MakeVector(col.Type, common.DefaultAllocator)
+					require.NoError(t, vector.AppendAny(vec, value, value == nil, vec.MPool()))
+					bat.AddVector(col.Name, vec)
 				}
 				return bat
 			}
 			n := obj.PinNode()
 			defer n.Unref()
 			// The existing append path is the compatibility control.
-			_, err := n.MustMNode().ApplyAppendLocked(makeBatch(11, nil, false))
+			_, err := n.MustMNode().ApplyAppendLocked(makeBatch(11, nil, false), nil)
 			require.NoError(t, err)
 			logical := n.MustMNode().data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
 			if tableID == pkgcatalog.MO_TABLES_ID {
@@ -978,8 +986,8 @@ func TestReplayAppendPayloadPreservesLegacyLogicalID(t *testing.T) {
 				require.True(t, logical.IsNull(0))
 			}
 			// A later modern payload must survive an earlier legacy replay.
-			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(9, uint64(90), true), 4))
-			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(7, nil, false), 2))
+			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(9, uint64(90), true), 4, schema))
+			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(7, nil, false), 2, schema))
 			require.Equal(t, uint64(90), logical.GetValue(4))
 			if tableID == pkgcatalog.MO_TABLES_ID {
 				require.False(t, logical.IsNull(2), "legacy system-table replay must derive logical ID from rel_id")

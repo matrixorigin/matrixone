@@ -110,6 +110,55 @@ func newPersistedPKCheckTableBlocks(t testing.TB, oid types.T, tombstone bool, b
 	return tbl, eng, fs, keys
 }
 
+func TestPrimaryKeysMayBeUpsertedSparsePrimaryKey(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	proc := tbl.proc.Load()
+	ctx, mp := proc.Ctx, proc.Mp()
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+	eng.fs, eng.mp = fs, mp
+	tbl.db.op.AddWorkspace(&Transaction{engine: eng, proc: proc})
+	typ := types.T_varchar.ToType()
+	tbl.primaryIdx, tbl.primarySeqnum = 0, 3
+	tbl.tableDef = &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "pk", Seqnum: 3, Typ: typ.PlanType(), Primary: true},
+			{Name: "other", Seqnum: 0, Typ: typ.PlanType()},
+		},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "pk"},
+		Name2ColIndex: map[string]int32{"pk": 0, "other": 1},
+	}
+	data := batch.NewWithSize(2)
+	defer data.Clean(mp)
+	data.Vecs[0], data.Vecs[1] = vector.NewVec(typ, mp), vector.NewVec(typ, mp)
+	require.NoError(t, vector.AppendBytes(data.Vecs[0], []byte("target"), false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte("disjoint"), false, mp))
+	data.SetRowCount(1)
+	writer := ioutil.ConstructWriter(0, []uint16{3, 0}, 0, true, false, fs)
+	_, err = writer.WriteBatch(data)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	part := eng.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId)
+	func() {
+		state, done := part.MutateState()
+		defer done()
+		state.UpdateDuration(types.TS{}, types.MaxTs())
+		require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+			ObjectStats: writer.GetObjectStats(), CreateTime: types.BuildTS(20, 0),
+		}, false))
+	}()
+	eng.pClient.SetSubscribeState(tbl.db.databaseId, tbl.tableId, Subscribed)
+
+	from, to := types.BuildTS(10, 0), types.BuildTS(30, 0)
+	changed, err := tbl.PrimaryKeysMayBeUpserted(ctx, from, to, data, 0)
+	require.NoError(t, err)
+	require.True(t, changed)
+	changed, err = tbl.PrimaryKeysMayBeUpserted(ctx, from, to, data, 1)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
 func TestPersistedPKCheckUsesCallerContext(t *testing.T) {
 	for _, tombstone := range []bool{false, true} {
 		for _, oid := range []types.T{types.T_varchar, types.T_int64} {

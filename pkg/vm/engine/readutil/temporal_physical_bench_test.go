@@ -101,7 +101,7 @@ func BenchmarkTemporalPhysicalReaderWork(b *testing.B) {
 						case "object_fast":
 							_, err = fast(&stats)
 						case "seek":
-							_ = seek(meta.MustDataMeta())
+							_ = mustSeekBlock(b, seek, meta.MustDataMeta())
 						case "block_filter":
 							_, _, err = block(blocks-1, meta.MustDataMeta().GetBlockMeta(uint32(blocks-1)), nil)
 						case "metadata_cache":

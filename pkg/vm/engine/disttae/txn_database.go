@@ -496,7 +496,7 @@ func (db *txnDatabase) createWithID(
 				tbl.version = defVal.Version
 			}
 		}
-		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)
+		tbl.extraInfo.NextColSeqnum = max(tbl.extraInfo.NextColSeqnum, uint32(len(cols)-1))
 		if tbl.extraInfo.BlockMaxRows == 0 {
 			tbl.extraInfo.BlockMaxRows = options.DefaultBlockMaxRows
 		}
@@ -507,9 +507,12 @@ func (db *txnDatabase) createWithID(
 		tbl.primaryIdx = -1
 		tbl.primarySeqnum = -1
 		for i, col := range cols {
+			if col.Name != catalog.Row_ID {
+				tbl.extraInfo.NextColSeqnum = max(tbl.extraInfo.NextColSeqnum, uint32(col.Seqnum)+1)
+			}
 			if col.ConstraintType == catalog.SystemColPKConstraint {
 				tbl.primaryIdx = i
-				tbl.primarySeqnum = i
+				tbl.primarySeqnum = int(col.Seqnum)
 			}
 		}
 

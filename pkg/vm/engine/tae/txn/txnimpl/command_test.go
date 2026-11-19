@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
@@ -42,4 +44,31 @@ func TestAppendCmd_MarshalUnmarshal_RoundTrip(t *testing.T) {
 	cmd2, ok := cmdInterface.(*AppendCmd)
 	require.True(t, ok)
 	assert.Equal(t, cmd.Ts, cmd2.Ts)
+}
+
+func TestLegacyRenameAppendRequiresExactLayout(t *testing.T) {
+	previous := catalog.NewEmptySchema("legacy_rename")
+	typ := types.T_int32.ToType()
+	require.NoError(t, previous.AppendPKCol("c", typ, 0))
+	require.NoError(t, previous.AppendCol("d", typ))
+	require.NoError(t, previous.Finalize(false))
+	current := previous.Clone()
+	require.NoError(t, current.ApplyAlterTable(api.NewRenameColumnReq(0, 0, "c", "new_key", 0)))
+
+	attrs := previous.AllNames()
+	require.True(t, isLegacyRenameAppend(attrs, previous, current))
+	require.False(t, isLegacyRenameAppend(current.AllNames(), previous, current))
+	require.False(t, isLegacyRenameAppend(attrs[:len(attrs)-1], previous, current))
+	wrongNames := previous.AllNames()
+	wrongNames[0] = "unknown"
+	require.False(t, isLegacyRenameAppend(wrongNames, previous, current))
+	wrongNames[0], wrongNames[1] = attrs[1], attrs[0]
+	require.False(t, isLegacyRenameAppend(wrongNames, previous, current))
+
+	changedType := current.Clone()
+	changedType.ColDefs[0].Type = types.T_int64.ToType()
+	require.False(t, isLegacyRenameAppend(attrs, previous, changedType))
+	changedSeq := current.Clone()
+	changedSeq.ColDefs[0], changedSeq.ColDefs[1] = changedSeq.ColDefs[1], changedSeq.ColDefs[0]
+	require.False(t, isLegacyRenameAppend(attrs, previous, changedSeq))
 }

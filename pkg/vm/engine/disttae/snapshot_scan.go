@@ -53,6 +53,7 @@ type snapshotScanReaderConfig struct {
 	attrs          []string
 	seqnums        []uint16
 	colTypes       []types.Type
+	readSpec       *objectio.ColumnReadSpec
 	blockFilter    objectio.BlockReadFilter
 	filterSeqnum   uint16
 	filterType     types.Type
@@ -457,6 +458,7 @@ func readSnapshotWithSource(
 	mp *mpool.MPool,
 	onBatch func(*batch.Batch) error,
 ) error {
+	ctx = objectio.WithColumnReadSpec(objectio.WithoutColumnReadSpec(ctx), cfg.readSpec)
 	readerOpts := []readutil.ReaderOption{
 		readutil.WithColumns(cfg.seqnums, cfg.colTypes),
 	}
@@ -504,6 +506,7 @@ func buildSnapshotScanReaderConfig(
 		attrs:    attrs,
 		seqnums:  attrsToSeqnums(attrs, tableDef),
 		colTypes: colTypes,
+		readSpec: objectio.NewColumnReadSpecFromTableDef(tableDef),
 	}
 
 	blockFilter, filterSeqnum, filterType, ok, err := buildSnapshotBlockFilter(tableDef, filterExpr, mp)

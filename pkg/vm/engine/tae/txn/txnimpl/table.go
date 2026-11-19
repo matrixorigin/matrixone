@@ -1465,9 +1465,14 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	if req.Kind == apipb.AlterKind_UpdateAutoIncrement {
 		tbl.autoIncrementAlter = true
 	}
+	if req.Kind == apipb.AlterKind_RenameColumn {
+		if space := tbl.dataTable.tableSpace; space != nil && space.node != nil {
+			rename := req.GetRenameCol()
+			space.node.renameColumn(rename.OldName, rename.NewName, newSchema.GetColIdx(rename.NewName))
+		}
+	}
 
 	tbl.dataTable.schema = newSchema // update new schema to txn local schema
-	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
 	return err
 }
 
@@ -2020,6 +2025,9 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	}
 	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {
 		return err
+	}
+	if space := tbl.dataTable.tableSpace; space != nil && space.node != nil && space.node.data != nil {
+		space.node.bindAppendSchema(tbl.entry.GetAppendSchemaAtPrepare(tbl.store.txn))
 	}
 	nodeCount := len(tbl.txnEntries.entries)
 	for idx, node := range tbl.txnEntries.entries {

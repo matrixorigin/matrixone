@@ -298,7 +298,7 @@ func ReadBlockForTopN(
 		}
 	}()
 	column := columns[position]
-	if column < SEQNUM_UPPER && column <= blk.GetMaxSeqnum() && blk.ColumnMeta(column).DataType() != 0 {
+	if column < SEQNUM_UPPER && column <= blk.GetMaxSeqnum() && column < blk.GetMetaColumnCount() && blk.ColumnMeta(column).DataType() != 0 {
 		r.reader.ext = blk.ColumnMeta(column).Location()
 	}
 	eligible := r.reader.ext != nil && r.reader.ext.Alg() == compress.Lz4Chunked &&

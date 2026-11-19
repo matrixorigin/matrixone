@@ -434,39 +434,111 @@ func (entry *TableEntry) GetLastestSchema(isTombstone bool) *Schema {
 	return entry.GetLastestSchemaLocked(isTombstone)
 }
 
-// GetVisibleSchema returns committed schema visible at the given txn
-func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool) (schema *Schema) {
+// GetVisibleSchema returns the schema visible to the transaction, including its own DDL.
+func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool) *Schema {
+	schema, _ := entry.getVisibleSchemas(txn, isTombstone, false)
+	return schema
+}
+
+// GetAppendSchemaAtPrepare returns the authoritative data schema for a WAL
+// append at the writer's prepare timestamp, including its own catalog change.
+func (entry *TableEntry) GetAppendSchemaAtPrepare(txn txnif.TxnReader) *Schema {
+	prepare := txn.GetPrepareTS()
+	for {
+		var schema *Schema
+		var pending txnif.TxnReader
+		entry.RLock()
+		entry.LoopChainLocked(func(node *MVCCNode[*TableMVCCNode]) bool {
+			if node.IsSameTxn(txn) {
+				schema = node.BaseNode.Schema
+				return false
+			}
+			if node.IsAborted() {
+				return true
+			}
+			if !node.IsCommitted() {
+				if !txn.IsReplay() {
+					_, pending = node.NeedWaitCommitting(prepare)
+				}
+				return pending == nil
+			}
+			if ts := node.GetPrepare(); ts.GT(&prepare) {
+				return true
+			}
+			if !node.HasDropCommitted() {
+				schema = node.BaseNode.Schema
+			}
+			return false
+		})
+		entry.RUnlock()
+		if pending == nil {
+			return schema
+		}
+		// Earlier prepares can finish in the WAL/apply workers. Release the
+		// table lock before waiting so catalog commit or rollback can take it.
+		pending.GetTxnState(true)
+	}
+}
+
+// GetReplayAppendSchemas also returns the writer's committed snapshot schema
+// when the replayed transaction has installed its own column change.
+func (entry *TableEntry) GetReplayAppendSchemas(txn txnif.TxnReader, isTombstone bool) (current, previous *Schema) {
+	return entry.getVisibleSchemas(txn, isTombstone, true)
+}
+
+func (entry *TableEntry) getVisibleSchemas(txn txnif.TxnReader, isTombstone, replayAppend bool) (current, previous *Schema) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.GetVisibleNodeLocked(txn)
 	if node == nil {
-		node = entry.sessionTemporarySchemaLocked(txn)
+		node = entry.sessionTemporarySchemaLocked(txn, txn.IsReplay())
 	}
-	if node != nil {
-		if isTombstone {
-			return node.BaseNode.GetTombstoneSchema()
+	if node == nil {
+		return nil, nil
+	}
+	if isTombstone {
+		return node.BaseNode.GetTombstoneSchema(), nil
+	}
+	current = node.BaseNode.Schema
+	if !replayAppend || !node.IsSameTxn(txn) || current.Version == 0 || !current.Extra.ColumnChanged {
+		return current, nil
+	}
+	entry.LoopChainLocked(func(node *MVCCNode[*TableMVCCNode]) bool {
+		if !node.IsCommitted() || !node.IsVisible(txn) {
+			return true
 		}
-		return node.BaseNode.Schema
-	}
-	return nil
+		if !node.HasDropCommitted() && node.BaseNode.Schema.Version == current.Version-1 {
+			previous = node.BaseNode.Schema
+		}
+		return false
+	})
+	return current, previous
 }
 
 // sessionTemporarySchemaLocked allows an independently committed empty schema
-// in an older user data transaction. It never changes data visibility and never
-// substitutes another tenant, an uncommitted schema, or a dropped generation.
+// in an older user data transaction. It never changes data visibility or
+// substitutes an uncommitted schema or a dropped generation.
 // Callers hold entry.RLock.
-func (entry *TableEntry) sessionTemporarySchemaLocked(txn txnif.TxnReader) *MVCCNode[*TableMVCCNode] {
+func (entry *TableEntry) sessionTemporarySchemaLocked(txn txnif.TxnReader, replay bool) *MVCCNode[*TableMVCCNode] {
 	node := entry.GetLatestCommittedNodeLocked()
 	if node == nil || node.HasDropCommitted() {
 		return nil
 	}
 	schema := node.BaseNode.Schema
-	owner, ok := txn.(interface{ GetTenantID() uint32 })
-	if !ok || schema.Relkind != pkgcatalog.SystemTemporaryTable ||
-		!defines.IsTempTableName(schema.Name) || schema.AcInfo.TenantID != owner.GetTenantID() {
+	if schema.Relkind != pkgcatalog.SystemTemporaryTable || !defines.IsTempTableName(schema.Name) {
 		return nil
 	}
-	return node
+	if replay {
+		// WAL addresses the already authorized temporary generation by its
+		// database and table IDs and does not serialize the writer's tenant.
+		prepare := txn.GetPrepareTS()
+		if end := node.GetEnd(); !node.IsAborted() && end.LE(&prepare) {
+			return node
+		}
+	} else if owner, ok := txn.(interface{ GetTenantID() uint32 }); ok && schema.AcInfo.TenantID == owner.GetTenantID() {
+		return node
+	}
+	return nil
 }
 
 func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
@@ -982,29 +1054,11 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		checks := apipb.CloneExtra(newSchema.Extra).Checks
-		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
-		// reset in new Schema
-		var hints []apipb.MergeHint
-		copy(hints, newSchema.Extra.Hints)
-		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum:     newSchema.Extra.NextColSeqnum,
-			MinOsizeQuailifed: newSchema.Extra.MinOsizeQuailifed,
-			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
-			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
-			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
-			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
-			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
-			Hints:             hints,
-			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
-			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
-			AutoIdCache:       newSchema.Extra.AutoIdCache,
-			DefaultCharset:    newSchema.Extra.DefaultCharset,
-			CollationVersion:  newSchema.Extra.CollationVersion,
-			KeyFormat:         newSchema.Extra.KeyFormat,
-			Checks:            checks,
-		}
-
+		extra := apipb.CloneExtra(newSchema.Extra)
+		extra.ColumnChanged = false
+		extra.DroppedAttrs = nil
+		extra.OldName = ""
+		newSchema.Extra = extra
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return

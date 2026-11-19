@@ -47,7 +47,7 @@ type ObjectAppender interface {
 		txn txnif.AsyncTxn,
 	) (int, error)
 	ApplyAppendAt(bat *containers.Batch, offset uint32,
-		txn txnif.AsyncTxn,
+		writeSchema any, /* *catalog.Schema; avoid import cycle */
 	) error
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch,
@@ -58,7 +58,7 @@ type ObjectAppender interface {
 
 type ObjectReplayer interface {
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error)
+	OnReplayAppendPayload(bat *containers.Batch, offset uint32, writeSchema any /* *catalog.Schema */) (err error)
 }
 
 type Object interface {

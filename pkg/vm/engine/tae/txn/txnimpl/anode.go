@@ -31,10 +31,11 @@ import (
 // which belongs to txn's workspace and can be appended data into.
 type anode struct {
 	*baseNode
-	data        *containers.Batch
-	rows        uint32
-	appends     []*appendInfo
-	isTombstone bool
+	data         *containers.Batch
+	appendSchema *catalog.Schema
+	rows         uint32
+	appends      []*appendInfo
+	isTombstone  bool
 
 	isMergeCompact bool
 }
@@ -95,6 +96,64 @@ func (n *anode) Close() (err error) {
 
 func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 	return uint32(data.Length()) - offset
+}
+
+func (n *anode) appendSourceSchema() *catalog.Schema {
+	if n.appendSchema != nil {
+		return n.appendSchema
+	}
+	return n.table.GetLocalSchema(n.isTombstone)
+}
+
+// bindAppendSchema gives the WAL payload the names visible at PrepareTS.
+// Freeze can already have applied these rows using the local names. The
+// vectors and reservations stay valid because both schemas use the same
+// physical sequence numbers, in the same order and with the same types.
+func (n *anode) bindAppendSchema(target *catalog.Schema) {
+	source := n.appendSourceSchema()
+	if target == nil || source == target || !sameAppendColumnLayout(source, target) ||
+		walColumnsInSchemaOrder(n.data.Attrs, target) || !walColumnsInSchemaOrder(n.data.Attrs, source) {
+		return
+	}
+	attrs := make([]string, len(source.ColDefs))
+	nameIdx := make(map[string]int, len(attrs))
+	for i, col := range source.ColDefs {
+		name := target.ColDefs[target.SeqnumMap[col.SeqNum]].Name
+		attrs[i] = name
+		nameIdx[name] = i
+	}
+	n.data.Attrs, n.data.Nameidx = attrs, nameIdx
+	n.appendSchema = target
+}
+
+func sameAppendColumnLayout(a, b *catalog.Schema) bool {
+	if !a.IsSameColumns(b) {
+		return false
+	}
+	for i, col := range a.ColDefs {
+		other := b.ColDefs[i]
+		if col.SeqNum != other.SeqNum || !col.Type.Eq(other.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+// renameColumn keeps the workspace batch aligned with its transaction's schema.
+// A rename preserves vector positions and the keys in the workspace index.
+func (n *anode) renameColumn(oldName, newName string, pos int) {
+	if n.data == nil || pos >= len(n.data.Attrs) || n.data.Attrs[pos] != oldName {
+		return
+	}
+	if oldPos, exists := n.data.Nameidx[oldName]; !exists || oldPos != pos {
+		return
+	}
+	if _, exists := n.data.Nameidx[newName]; exists {
+		return
+	}
+	delete(n.data.Nameidx, oldName)
+	n.data.Attrs[pos] = newName
+	n.data.Nameidx[newName] = pos
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {

@@ -2928,8 +2928,14 @@ func GetExprZoneMap(
 			case function.ISNOTNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
-					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					col := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)]))
+					var hasValue bool
+					if block, ok := meta.(objectio.BlockHeaderMeta); ok {
+						hasValue = col.NullCnt() < block.BlockHeader().Rows()
+					} else {
+						hasValue = col.ZoneMap().IsInited()
+					}
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], hasValue)
 					return zms[expr.AuxId]
 				default:
 					zms[expr.AuxId].Reset()

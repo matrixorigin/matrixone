@@ -24,6 +24,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/tidwall/pretty"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -156,6 +158,11 @@ type Schema struct {
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
+	maxSeqnum  uint16
+
+	// Built lazily for a finalized schema. Cloning rebuilds the derived fields.
+	columnReadSpecOnce sync.Once
+	columnReadSpec     *objectio.ColumnReadSpec
 
 	isSecondaryIndexTable bool
 	FromPublication       bool // mark if table is created by publication, should skip merge
@@ -185,6 +192,26 @@ func (s *Schema) Clone() *Schema {
 		panic(err)
 	}
 	return ns
+}
+
+func (s *Schema) ColumnReadSpec() *objectio.ColumnReadSpec {
+	if s == nil || s.Extra == nil || !features.IsSchemaEvolved(s.Extra.FeatureFlag) {
+		return nil
+	}
+	s.columnReadSpecOnce.Do(func() {
+		cols := make([]objectio.ColumnReadSpecInput, 0, len(s.ColDefs))
+		for _, col := range s.ColDefs {
+			if !col.IsPhyAddr() && col.SeqNum < objectio.SEQNUM_UPPER {
+				cols = append(cols, objectio.ColumnReadSpecInput{SeqNum: col.SeqNum, Type: col.Type})
+			}
+		}
+		s.columnReadSpec = objectio.NewColumnReadSpec(cols)
+	})
+	return s.columnReadSpec
+}
+
+func (s *Schema) MaxSeqnum() uint16 {
+	return s.maxSeqnum
 }
 
 func (s *Schema) IsSecondaryIndexTable() bool {
@@ -234,6 +261,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if targetCol.SeqNum != uint16(rename.SequenceNum) {
 			return moerr.NewInternalErrorNoCtxf("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
 		}
+		delete(s.NameMap, targetCol.Name)
 		targetCol.Name = rename.NewName
 		s.NameMap[targetCol.Name] = targetCol.Idx
 		if rename.Checks != nil {
@@ -911,6 +939,10 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
+	// Finalize runs on an unpublished schema, including after a layout change.
+	s.columnReadSpecOnce = sync.Once{}
+	s.columnReadSpec = nil
+	s.maxSeqnum = 0
 	// Preflight before appending rowid or mutating sequence maps. On initial
 	// schemas ordinals become IDs; replay preserves existing, possibly sparse IDs.
 	for idx, def := range s.ColDefs {
@@ -969,6 +1001,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 			s.SeqnumMap[def.SeqNum] = idx
 			s.PhyAddrKey = def
 		} else {
+			s.maxSeqnum = max(s.maxSeqnum, def.SeqNum)
 			s.SeqnumMap[def.SeqNum] = idx
 		}
 	}

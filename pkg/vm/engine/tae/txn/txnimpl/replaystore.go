@@ -85,7 +85,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
 	for _, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
-		store.prepareCmd(command)
+		store.prepareCmd(command, txn)
 	}
 	store.registerPreparedDMLTables(txn)
 	return
@@ -146,7 +146,7 @@ func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
 		txn.String()))
 }
 
-func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
+func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, txn txnif.TxnReader) {
 	if txncmd.GetType() != txnbase.IOET_WALTxnEntry {
 		common.DoIfDebugEnabled(func() {
 			logutil.Debug(
@@ -164,15 +164,14 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
 		store.catalog.ReplayCmd(txncmd, store.Observer)
 	case *AppendCmd:
-		store.replayAppendData(
-			cmd, store.Observer)
+		store.replayAppendData(cmd, txn, store.Observer)
 	case *updates.UpdateCmd:
 		store.replayDataCmds(
 			cmd, store.Observer)
 	}
 }
 
-func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReader, observer wal.ReplayObserver) {
 	hasActive := false
 	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
@@ -223,17 +222,55 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if blk.ObjectPersisted() {
 			continue
 		}
+		table := blk.GetTable()
+		source, previous := table.GetReplayAppendSchemas(txn, cmd.IsTombstone)
+		if source == nil {
+			panic(moerr.NewInternalErrorNoCtxf("no visible WAL append schema for table %d at %s",
+				id.TableID, txn.GetStartTS().ToString()))
+		}
+		if !cmd.IsTombstone {
+			// New appends across a rename use PrepareTS names in physical
+			// sequence order. With a checkpoint the StartTS version may
+			// have collapsed to this very schema.
+			prepared := table.GetAppendSchemaAtPrepare(txn)
+			if prepared != nil && prepared != source && sameAppendColumnLayout(source, prepared) &&
+				walColumnsInSchemaOrder(data.Attrs, prepared) {
+				source = prepared
+			}
+		}
+		if previous != nil && !walColumnsInSchemaOrder(data.Attrs, source) &&
+			isLegacyRenameAppend(data.Attrs, previous, source) {
+			source = previous
+		}
 		start := info.GetSrcOff()
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff()); err != nil || sarg != "" {
+		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff(), source); err != nil || sarg != "" {
 			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
 			if sarg == "" {
 				panic(err)
 			}
 		}
 	}
+}
+
+func walColumnsInSchemaOrder(attrs []string, schema *catalog.Schema) bool {
+	if len(attrs) != len(schema.ColDefs) {
+		return false
+	}
+	for i, attr := range attrs {
+		if attr != schema.ColDefs[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+// Older writers could leave buffered rows under their original names after
+// their own rename. Require the complete ordered layout, including the row ID.
+func isLegacyRenameAppend(attrs []string, previous, current *catalog.Schema) bool {
+	return sameAppendColumnLayout(previous, current) && walColumnsInSchemaOrder(attrs, previous)
 }
 
 func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {

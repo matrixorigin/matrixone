@@ -97,7 +97,7 @@ func (space *tableSpace) ReapplyFrozen() (err error) {
 		// the allocator's handle point back to an older object.
 		patchHandle := tableData.GetHandle(space.isTombstone)
 		driver := patchHandle.SetAppender(&info.dest)
-		err = driver.ApplyAppendAt(bat, info.destOff, space.table.store.txn)
+		err = driver.ApplyAppendAt(bat, info.destOff, space.node.appendSourceSchema())
 		driver.Close()
 		bat.Close()
 		if err != nil {
@@ -166,7 +166,7 @@ func (space *tableSpace) ApplyAppend() (err error) {
 		ctx := space.appends[space.applied]
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		if err = ctx.driver.ApplyAppendAt(
-			bat, ctx.dest, space.table.store.txn); err != nil {
+			bat, ctx.dest, ctx.node.appendSourceSchema()); err != nil {
 			bat.Close()
 			return
 		}

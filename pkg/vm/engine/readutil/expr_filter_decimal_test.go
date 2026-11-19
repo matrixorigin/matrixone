@@ -467,7 +467,7 @@ func TestCompileFilterExprJSONZoneMapsFailOpen(t *testing.T) {
 					require.True(t, selected, "JSON block zone map must fail open")
 				}
 				if seek != nil {
-					require.Equal(t, 0, seek(dataMeta), "JSON zone maps must not skip leading blocks")
+					require.Equal(t, 0, mustSeekBlock(t, seek, dataMeta), "JSON zone maps must not skip leading blocks")
 				}
 			})
 		}
@@ -601,7 +601,7 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 	require.NotNil(t, seek)
 	dataMeta := decimalObjectDataMeta(t, decimalType, "10.0000", "20.0000", "30.0000")
 	allocations := testing.AllocsPerRun(1000, func() {
-		zoneMapSeekSink = seek(dataMeta)
+		zoneMapSeekSink = mustSeekBlock(t, seek, dataMeta)
 	})
 	require.Zero(t, allocations)
 }
@@ -626,12 +626,16 @@ func BenchmarkSeekFirstBlockByZoneMap(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				zoneMapSeekSink = seekFirstBlockByZoneMap(
-					dataMeta, 0, nil, types.T_int64, false,
+				var err error
+				zoneMapSeekSink, err = seekFirstBlockByZoneMap(
+					nil, dataMeta, 0, nil, types.T_int64, false,
 					func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyGEByBound(zm, boundBytes, nil, types.T_int64)
 					},
 				)
+				if err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}
@@ -733,12 +737,12 @@ func TestCompileFilterExprORSeekSkipsAbsentRange(t *testing.T) {
 	require.True(t, compiled)
 	require.NotNil(t, seek)
 	meta := decimalObjectDataMeta(t, typ, "0.0000", "1.0000", "2.0000", "3.0000")
-	require.Equal(t, 2, seek(meta))
+	require.Equal(t, 2, mustSeekBlock(t, seek, meta))
 
 	// An unknown block prevents a seek past it, even if the first known block
 	// lies above the absent arm's upper bound.
 	meta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(index.NewZM(types.T_decimal64, 4))
-	require.Equal(t, 0, seek(meta))
+	require.Equal(t, 0, mustSeekBlock(t, seek, meta))
 }
 
 // A generic folded boolean has no proof that skipping rows preserves other
@@ -822,7 +826,7 @@ func TestCompileFilterExprDecimalSortedBetweenPaths(t *testing.T) {
 			selected, err = objectFilter(nil, nil)
 			require.NoError(t, err)
 			require.True(t, selected)
-			require.Equal(t, 1, seek(dataMeta))
+			require.Equal(t, 1, mustSeekBlock(t, seek, dataMeta))
 
 			quickBreak, selected, err := blockFilter(1, dataMeta.GetBlockMeta(1), nil)
 			require.NoError(t, err)
@@ -871,7 +875,7 @@ func TestCompileFilterExprDecimalSortedInRangeHints(t *testing.T) {
 				if hint == 1 || hint == 3 {
 					wantSeek = 1
 				}
-				require.Equal(t, wantSeek, seek(dataMeta))
+				require.Equal(t, wantSeek, mustSeekBlock(t, seek, dataMeta))
 
 				quickBreak, selected, err := blockFilter(2, dataMeta.GetBlockMeta(2), nil)
 				require.NoError(t, err)
@@ -971,7 +975,7 @@ func TestCompileFilterExprSortedUnknownZoneMapDoesNotExcludeLaterBlocks(t *testi
 					require.Equal(t, operation.quickBreak, quickBreak)
 
 					if seek != nil {
-						require.Equal(t, 0, seek(dataMeta), "unknown leading block must make seek fail open")
+						require.Equal(t, 0, mustSeekBlock(t, seek, dataMeta), "unknown leading block must make seek fail open")
 					}
 				})
 			}
@@ -1051,7 +1055,7 @@ func TestCompileFilterExprSortedIncompatibleZoneMapFailsOpen(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, quickBreak)
 				require.True(t, selected)
-				require.Equal(t, 0, seek(dataMeta))
+				require.Equal(t, 0, mustSeekBlock(t, seek, dataMeta))
 			})
 		}
 	}
@@ -1200,7 +1204,7 @@ func TestSeekFirstBlockFailsOpenForUnsampledUnknownZoneMap(t *testing.T) {
 
 				// sort.Search for the ordinary boundary probes blocks 2, 4 and 3;
 				// block 1 is deliberately unsampled and must still force seek=0.
-				require.Equal(t, 0, seek(dataMeta))
+				require.Equal(t, 0, mustSeekBlock(t, seek, dataMeta))
 			})
 		}
 	}
@@ -1620,4 +1624,11 @@ func TestTemporalCandidateCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
 			require.NotNil(t, fast)
 		}
 	}
+}
+
+func mustSeekBlock(t testing.TB, seek SeekFirstBlockOp, meta objectio.ObjectDataMeta) int {
+	t.Helper()
+	pos, err := seek(meta)
+	require.NoError(t, err)
+	return pos
 }
