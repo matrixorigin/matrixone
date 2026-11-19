@@ -23,9 +23,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -290,7 +290,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
-			if !assertx.InEpsilonF64(want, get) {
+			if !util.InEpsilonF64(want, get) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
 			}
@@ -442,7 +442,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if !assertx.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
+			if !util.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}

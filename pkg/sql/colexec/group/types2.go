@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -349,7 +348,7 @@ type container struct {
 	autoSpill               bool
 	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
 	spillAggList            []aggexec.GroupAggFuncExec
-	spillBkts               list.Deque[*spillBucket]
+	spillBkts               []*spillBucket
 	currentSpillBkt         []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
@@ -565,7 +564,7 @@ func (ctr *container) releaseFinalRecoveryCapacity() error {
 		return nil
 	}
 	if ctr.currentSpillBkt != nil ||
-		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
+		len(ctr.spillBkts) != 0 {
 		return nil
 	}
 	ctr.releaseMemoryGrowthParticipant()
@@ -683,13 +682,10 @@ func (ctr *container) freeSpillReloadStaging() {
 
 func (ctr *container) freeSpillBkts() {
 	// free all spill buckets.
-	if ctr.spillBkts != nil {
-		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free()
-			return true
-		})
-		ctr.spillBkts.Clear()
+	for _, bkt := range ctr.spillBkts {
+		bkt.free()
 	}
+	ctr.spillBkts = nil
 
 	for _, bkt := range ctr.currentSpillBkt {
 		bkt.free()
