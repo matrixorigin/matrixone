@@ -180,6 +180,87 @@ func TestHistoricalChangesSubmitFinishedObjectBeforePlanningNext(t *testing.T) {
 	}
 }
 
+type replayReadFailureFS struct {
+	fileservice.FileService
+	slowObject    string
+	missingObject string
+	missingErr    error
+	started       chan struct{}
+	stopped       chan struct{}
+}
+
+func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if len(v.Entries) > 1 {
+		switch v.FilePath {
+		case fs.slowObject:
+			close(fs.started)
+			<-ctx.Done()
+			close(fs.stopped)
+			return ctx.Err()
+		case fs.missingObject:
+			select {
+			case <-fs.started:
+				return fs.missingErr
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return fs.FileService.Read(ctx, v)
+}
+
+func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		missingFirst bool
+	}{
+		{name: "missing block first", missingFirst: true},
+		{name: "missing block second"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer mem.Close(ctx)
+
+			ts := types.BuildTS(100, 0)
+			slow := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+			missing := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+			objects := []*objectio.ObjectEntry{slow, missing}
+			if tc.missingFirst {
+				objects[0], objects[1] = objects[1], objects[0]
+			}
+			fs := &replayReadFailureFS{
+				FileService:   mem,
+				slowObject:    slow.ObjectName().String(),
+				missingObject: missing.ObjectName().String(),
+				missingErr:    moerr.NewFileNotFoundNoCtx(missing.ObjectName().String()),
+				started:       make(chan struct{}),
+				stopped:       make(chan struct{}),
+			}
+			zm := index.NewZM(types.T_int32, 0)
+			pk := int32(11)
+			index.UpdateZM(zm, types.EncodeInt32(&pk))
+			filter := &engine.PKFilter{Segments: [][]byte{zm}}
+			ctx = engine.WithPKFilter(ctx, filter)
+			changes := &ChangeHandler{pkFilter: filter, scheduler: tasks.NewParallelJobScheduler(LoadParallism)}
+			defer changes.scheduler.Stop()
+			handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts, objects, fs, mp)
+			err = handle.init(ctx, true)
+			require.NoError(t, ctx.Err(), "the caller must still be able to read the snapshot")
+			require.ErrorIs(t, err, fs.missingErr)
+			select {
+			case <-fs.stopped:
+			default:
+				t.Fatal("replay returned before the canceled read finished")
+			}
+		})
+	}
+}
+
 // Tombstones store the deleted user PK at seqnum 1, independently of its
 // position in the data schema. Both paths must prune the unrelated block, while
 // an unfiltered consumer must still read both blocks.

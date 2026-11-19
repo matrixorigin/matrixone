@@ -790,20 +790,33 @@ type aObjectReadGroup struct {
 	span       blockReadRange
 }
 
-func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
+func (h *AObjectHandle) prefetch(ctx context.Context) error {
 	t0 := time.Now()
 	defer func() {
 		h.p.changesHandle.readDuration += time.Since(t0)
 	}()
 
+	readCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
 	var blockIDs [LoadParallism]uint16
 	var groups [LoadParallism]aObjectReadGroup
 	var jobs [LoadParallism]*tasks.Job
 	schedule := func(i int) {
+		if readCtx.Err() != nil {
+			return
+		}
 		group := groups[i]
 		stats := group.object.ObjectStats
 		ids := blockIDs[group.first:group.end]
-		job := getJob(ctx, stats.ObjectName().String(), JTCDCLoad, func(ctx context.Context) *tasks.JobResult {
+		job := getJob(readCtx, stats.ObjectName().String(), JTCDCLoad, func(ctx context.Context) (result *tasks.JobResult) {
+			// Results are drained in replay order. Cancel at the point of
+			// failure so an earlier pending read cannot delay recovery.
+			defer func() {
+				if result != nil && result.Err != nil {
+					cancel(result.Err)
+				}
+			}()
 			loc := stats.BlockLocation(ids[0], objectio.BlockMaxRows)
 			if len(ids) == 1 {
 				bat, _, err := ioutil.LoadOneBlock(ctx, h.fs, loc, objectio.SchemaData)
@@ -813,6 +826,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			return &tasks.JobResult{Res: batches, Err: err}
 		})
 		if err := h.p.changesHandle.scheduler.Schedule(job); err != nil {
+			cancel(err)
 			job.DoneWithErr(err)
 		}
 		jobs[i] = job
@@ -820,9 +834,12 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 
 	groupCount := 0
 	for i := range blockIDs {
-		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
+		if readCtx.Err() != nil {
+			break
+		}
+		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx)
 		if targetErr != nil {
-			err = targetErr
+			cancel(targetErr)
 			break
 		}
 		if !ok {
@@ -857,7 +874,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 		groupCount++
 	}
-	if err == nil && groupCount > 0 && jobs[groupCount-1] == nil {
+	if groupCount > 0 && jobs[groupCount-1] == nil {
 		schedule(groupCount - 1)
 	}
 
@@ -869,13 +886,10 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		putJob(job)
 		if res.Err != nil {
-			if err == nil {
-				err = res.Err
-			}
 			continue
 		}
 		batches := res.Res.([]*batch.Batch)
-		if err != nil {
+		if readCtx.Err() != nil {
 			for _, bat := range batches {
 				bat.Clean(h.mp)
 			}
@@ -889,6 +903,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.blks = append(h.blks, objectio.NewBlockidWithObjectID(objID, blockIDs[group.first+j]))
 		}
 	}
+	err := context.Cause(readCtx)
 	if err != nil {
 		for _, bat := range h.cache[cacheStart:] {
 			bat.Clean(h.mp)
