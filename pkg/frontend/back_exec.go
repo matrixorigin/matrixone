@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -453,7 +452,6 @@ func doComQueryInBack(
 		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
-		Buf:           backSes.buf,
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
@@ -1240,7 +1238,6 @@ func (backSes *backSession) initFeSes(
 	db string,
 	callBack outputCallBackFunc) *backSession {
 	backSes.pool = ses.GetMemPool()
-	backSes.buf = buffer.New()
 	backSes.stmtProfile = process.StmtProfile{}
 	backSes.tenant = nil
 	backSes.txnHandler = txnHandler
