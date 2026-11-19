@@ -85,77 +85,6 @@ func (n *Bitmap) IsSame(b *Bitmap) bool {
 	return true
 }
 
-// RemapOrdered rewrites the bitmap in place for an ordered row selection.
-// When negate is false, output row i comes from sels[i]. When negate is true,
-// sels identifies rows to remove. The caller must provide strictly increasing,
-// non-negative row indexes. Because every destination row is at or before its
-// source row, one cached source word is sufficient to avoid allocating a
-// second data-scaled bitmap. Selection rows beyond the bitmap's logical
-// length are valid and read as clear: a null bitmap may be shorter than its
-// owning vector when the vector's trailing rows are all non-null. The result
-// keeps that implicit clear tail rather than growing to the selection length:
-// ordered compaction cannot move a set bit beyond the original bitmap extent.
-func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
-	if n == nil {
-		return
-	}
-	oldLength := n.numBits
-	previous := int64(-1)
-	for _, sel := range sels {
-		if sel <= previous || sel < 0 {
-			panic("bitmap ordered remap requires strictly increasing non-negative rows")
-		}
-		previous = sel
-	}
-	logicalLength := min(oldLength, int64(len(sels)))
-	if negate {
-		logicalLength = oldLength
-	}
-	n.prepareOrderedRemap(logicalLength)
-
-	sourceWordIndex := int64(-1)
-	var sourceWord uint64
-	readSource := func(row int64) bool {
-		if row >= oldLength {
-			return false
-		}
-		wordIndex := row >> 6
-		if wordIndex != sourceWordIndex {
-			sourceWordIndex = wordIndex
-			sourceWord = n.data[wordIndex]
-		}
-		return sourceWord&(uint64(1)<<uint(row&63)) != 0
-	}
-	writeDestination := func(row int64, value bool) {
-		wordIndex := row >> 6
-		mask := uint64(1) << uint(row&63)
-		if value {
-			n.data[wordIndex] |= mask
-		} else {
-			n.data[wordIndex] &^= mask
-		}
-	}
-
-	output := int64(0)
-	if !negate {
-		for _, sel := range sels[:logicalLength] {
-			writeDestination(output, readSource(sel))
-			output++
-		}
-	} else {
-		selIndex := 0
-		for source := int64(0); source < oldLength; source++ {
-			if selIndex < len(sels) && source == sels[selIndex] {
-				selIndex++
-				continue
-			}
-			writeDestination(output, readSource(source))
-			output++
-		}
-	}
-	n.finishOrderedRemap(output, logicalLength)
-}
-
 // RemapMaskOrdered is RemapOrdered for an ordered bitmap selection. Selection
 // bitmap iteration is monotonic, so the rewrite uses no row-scaled scratch.
 func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
@@ -224,43 +153,6 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 		}
 	}
 	n.finishOrderedRemap(output, logicalLength)
-}
-
-func (n *Bitmap) prepareOrderedRemap(logicalLength int64) {
-	words := int((logicalLength + 63) / 64)
-	if words > cap(n.data) {
-		data := make([]uint64, words)
-		copy(data, n.data)
-		n.data = data
-		return
-	}
-	if words > len(n.data) {
-		storage := n.data[:cap(n.data)]
-		clear(storage[len(n.data):words])
-		n.data = storage[:words]
-	}
-}
-
-func (n *Bitmap) finishOrderedRemap(written, logicalLength int64) {
-	words := int((logicalLength + 63) / 64)
-	if written < logicalLength {
-		word := int(written >> 6)
-		if tail := uint(written & 63); tail != 0 {
-			n.data[word] &= (uint64(1) << tail) - 1
-			word++
-		}
-		clear(n.data[word:words])
-	}
-	if words > 0 && logicalLength&63 != 0 {
-		n.data[words-1] &= (uint64(1) << uint(logicalLength&63)) - 1
-	}
-	clear(n.data[words:])
-	n.data = n.data[:words]
-	n.numBits = logicalLength
-	n.popCount = 0
-	for _, word := range n.data {
-		n.popCount += int64(bits.OnesCount64(word))
-	}
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {

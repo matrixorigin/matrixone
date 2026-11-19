@@ -46,7 +46,7 @@ func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
 	result, err := executor.Eval(proc, batches, nil)
 	require.NoError(t, err)
 	require.Equal(t, []bool{false, true, false}, vector.MustFixedColNoTypeCheck[bool](result))
-	require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 	require.Same(t, allocation, result.AllocationAccountSelection())
 	for _, arg := range input.Vecs {
 		arg.GetNulls().Add(1)

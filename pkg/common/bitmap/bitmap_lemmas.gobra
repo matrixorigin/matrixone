@@ -245,3 +245,53 @@ func cntZero(s seq[uint64], nb int64, m int) {
 		cntZero(s, nb, m-1)
 	}
 }
+
+// SortedRows holds when sels is strictly increasing and non-negative.
+ghost
+decreases
+pure func SortedRows(sels seq[int64]) bool {
+	return (forall a int :: {sels[a]} 0 <= a && a < len(sels) ==> 0 <= sels[a]) &&
+		(forall a, b int :: {sels[a], sels[b]} 0 <= a && a < b && b < len(sels) ==> sels[a] < sels[b])
+}
+
+// RankUpTo is the number of the first m entries of sels below x.
+ghost
+requires 0 <= m && m <= len(sels)
+decreases m
+pure func RankUpTo(sels seq[int64], m int, x int64) int {
+	return m == 0 ? 0 : RankUpTo(sels, m-1, x) + (sels[m-1] < x ? 1 : 0)
+}
+
+// Rank is the number of entries of sels below x.
+ghost
+decreases
+pure func Rank(sels seq[int64], x int64) int {
+	return RankUpTo(sels, len(sels), x)
+}
+
+// A sorted selection has sels[i] >= i.
+ghost
+requires SortedRows(sels) && 0 <= m && m <= len(sels)
+ensures forall i int :: {sels[i]} 0 <= i && i < m ==> sels[i] >= int64(i)
+decreases m
+func selsAtLeastIndex(sels seq[int64], m int) {
+	if m > 0 {
+		selsAtLeastIndex(sels, m-1)
+		if m > 1 {
+			assert sels[m-2] < sels[m-1]
+		}
+	}
+}
+
+// If exactly the entries before idx are below x, the rank of x is idx.
+ghost
+requires 0 <= idx && idx <= len(sels) && 0 <= m && m <= len(sels)
+requires forall j int :: {sels[j]} 0 <= j && j < idx ==> sels[j] < x
+requires forall j int :: {sels[j]} idx <= j && j < len(sels) ==> sels[j] >= x
+ensures RankUpTo(sels, m, x) == (m < idx ? m : idx)
+decreases m
+func rankAt(sels seq[int64], m int, x int64, idx int) {
+	if m > 0 {
+		rankAt(sels, m-1, x, idx)
+	}
+}
