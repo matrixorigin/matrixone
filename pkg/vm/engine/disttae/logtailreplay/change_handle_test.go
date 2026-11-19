@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -322,6 +323,65 @@ func TestPersistedObjectPrefetchHonorsRowLimitWithByteBudget(t *testing.T) {
 	drain(aobj.prefetch, aobj.isEnd, &aobj.cache, func() {
 		aobj.specialLayouts, aobj.blks = nil, nil
 	})
+}
+
+func TestPersistedObjectPrefetchSplitsAdjacentWideRows(t *testing.T) {
+	for _, tc := range []struct {
+		rows, wideBytes, maxBytes int
+	}{
+		{rows: 32, wideBytes: 600 << 10, maxBytes: 1 << 20},
+		{rows: 32, wideBytes: 5 << 20, maxBytes: 8 << 20},
+	} {
+		t.Run(fmt.Sprintf("wide-%d", tc.wideBytes), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			widths := make([]int, tc.rows)
+			for i := range widths {
+				widths[i] = 16
+			}
+			widths[0], widths[1] = tc.wideBytes, tc.wideBytes
+			obj, fs := writeTestVaryingWidthObjectWithCommitTS(t, mp, widths)
+			baseline := mp.CurrNB()
+			scheduler := tasks.NewParallelJobScheduler(2)
+			defer scheduler.Stop()
+			spillConfig, tracker := newTestChangeRangeSpillConfig(t)
+			changes := &ChangeHandler{scheduler: scheduler, maxInMemoryBytes: tc.maxBytes, spillConfig: spillConfig}
+			base := &baseHandle{changesHandle: changes}
+
+			for _, makeHandle := range []func() (func(context.Context) error, func() bool, *[]*batch.Batch){
+				func() (func(context.Context) error, func() bool, *[]*batch.Batch) {
+					h := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+					return h.prefetch, h.isEnd, &h.cache
+				},
+				func() (func(context.Context) error, func() bool, *[]*batch.Batch) {
+					h := NewAObjectHandle(context.Background(), base, false,
+						types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+					return h.prefetch, h.isEnd, &h.cache
+				},
+			} {
+				prefetch, isEnd, cache := makeHandle()
+				readRows, windows := 0, 0
+				for !isEnd() {
+					require.NoError(t, prefetch(context.Background()))
+					for _, bat := range *cache {
+						if bat.RowCount() > 1 {
+							require.LessOrEqual(t, bat.Allocated(), tc.maxBytes)
+						}
+						readRows += bat.RowCount()
+						windows++
+						bat.Clean(mp)
+					}
+					*cache = nil
+				}
+				require.Equal(t, tc.rows, readRows)
+				require.Greater(t, windows, 2)
+				require.Equal(t, baseline, mp.CurrNB())
+			}
+			if len(tracker.diskReservations) > 0 {
+				tracker.requireReleased(t, false)
+			}
+		})
+	}
 }
 
 func TestOrderPersistedColumnSeqnumsUsesLogicalColumnOrder(t *testing.T) {
@@ -687,6 +747,56 @@ func TestPartitionStateRangeReleasesSpillOnDiskQuotaError(t *testing.T) {
 	require.Equal(t, 20, readRows)
 	require.NoError(t, retry.Close())
 	retryTracker.requireReleased(t, true)
+}
+
+func TestPartitionStateRangeReleasesEarlierSpillOnLaterReservationError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 20, true)
+	defer src.Clean(mp)
+	baseline := mp.CurrNB()
+	config, tracker := newTestChangeRangeSpillConfig(t)
+	reserveFiles := config.ReserveFiles
+	fileFactory := config.FileFactory
+	var files []*os.File
+	config.FileFactory = func(ctx context.Context, name string) (*os.File, error) {
+		file, err := fileFactory(ctx, name)
+		if file != nil {
+			files = append(files, file)
+		}
+		return file, err
+	}
+	reserveErr := moerr.NewInternalErrorNoCtx("later change range spill reservation failed")
+	reservations := 0
+	config.ReserveFiles = func(size uint64) (engine.ChangeRangeSpillReservation, error) {
+		reservations++
+		if reservations == 2 {
+			return nil, reserveErr
+		}
+		return reserveFiles(size)
+	}
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, config)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.Nil(t, handle)
+	require.ErrorIs(t, err, reserveErr)
+	require.Equal(t, 2, reservations)
+	require.NotEmpty(t, files)
+	for _, file := range files {
+		_, err := file.Stat()
+		require.ErrorIs(t, err, os.ErrClosed)
+	}
+	for _, reservation := range tracker.diskReservations {
+		require.True(t, reservation.released)
+	}
+	for _, reservation := range tracker.fileReservations {
+		require.True(t, reservation.released)
+	}
+	require.Equal(t, baseline, mp.CurrNB())
 }
 
 func TestPartitionStateRangeReleasesSpillOnCancellation(t *testing.T) {
@@ -3609,6 +3719,19 @@ func writeTestWideObjectWithCommitTS(
 	rows, payloadBytes int,
 ) (*objectio.ObjectEntry, fileservice.FileService) {
 	t.Helper()
+	widths := make([]int, rows)
+	for i := range widths {
+		widths[i] = payloadBytes
+	}
+	return writeTestVaryingWidthObjectWithCommitTS(t, mp, widths)
+}
+
+func writeTestVaryingWidthObjectWithCommitTS(
+	t *testing.T,
+	mp *mpool.MPool,
+	widths []int,
+) (*objectio.ObjectEntry, fileservice.FileService) {
+	t.Helper()
 	fs, err := fileservice.NewMemoryFS(
 		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
 	)
@@ -3624,9 +3747,9 @@ func writeTestWideObjectWithCommitTS(
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
 	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	payload := []byte(strings.Repeat("w", payloadBytes))
 	var blk types.Blockid
-	for i := 0; i < rows; i++ {
+	for i, width := range widths {
+		payload := []byte(strings.Repeat("w", width))
 		rowKey := uint64(i)
 		copy(payload, types.EncodeUint64(&rowKey))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
@@ -3637,7 +3760,7 @@ func writeTestWideObjectWithCommitTS(
 			bat.Vecs[2], types.BuildTS(100, uint32(i)), false, mp,
 		))
 	}
-	bat.SetRowCount(rows)
+	bat.SetRowCount(len(widths))
 	_, err = writer.WriteBatch(bat)
 	require.NoError(t, err)
 	blocks, _, err := writer.Sync(context.Background())

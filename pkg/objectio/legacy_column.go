@@ -297,6 +297,54 @@ func readLegacyColumnNulls(source io.ReaderAt, layout legacyColumnLayout) (nulls
 	return result, err
 }
 
+func addLegacyColumnWindowCosts(source io.ReaderAt, originSize int64, offset int, costs []uint64) error {
+	layout, err := readLegacyColumnLayout(source, originSize)
+	if err != nil {
+		return err
+	}
+	if offset < 0 || offset > layout.rows-len(costs) {
+		return moerr.NewInvalidInputNoCtx("legacy object column window is out of range")
+	}
+	for i := range costs {
+		costs[i] += uint64(layout.typ.TypeSize())
+	}
+	if !layout.typ.IsVarlen() {
+		return nil
+	}
+	sourceNulls, err := readLegacyColumnNulls(source, layout)
+	if err != nil {
+		return err
+	}
+	first, descriptors := offset, len(costs)
+	if layout.class == vector.CONSTANT {
+		first, descriptors = 0, 1
+	}
+	descriptorSize := layout.typ.TypeSize()
+	data := make([]byte, descriptors*descriptorSize)
+	if _, err := source.ReadAt(data, layout.dataOffset+int64(first*descriptorSize)); err != nil {
+		return err
+	}
+	for i := range costs {
+		row := i
+		if layout.class == vector.CONSTANT {
+			row = 0
+		}
+		if sourceNulls.Contains(uint64(first + row)) {
+			continue
+		}
+		value := types.DecodeSlice[types.Varlena](data[row*descriptorSize:])[0]
+		if value.IsSmall() {
+			continue
+		}
+		areaOffset, areaLength := value.OffsetLen()
+		if uint64(areaOffset)+uint64(areaLength) > uint64(layout.areaLength) {
+			return moerr.NewInvalidInputNoCtx("invalid legacy object column varlen offset")
+		}
+		costs[i] += uint64(areaLength)
+	}
+	return nil
+}
+
 func materializeLegacyColumnWindow(
 	source io.ReaderAt,
 	originSize int64,

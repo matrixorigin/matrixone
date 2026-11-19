@@ -1195,10 +1195,10 @@ func prepareRangeNetEffectSpill(
 		return newSpilledBatchHandle(merged, output.rows, chunkRows, chunkBytes, mp)
 	}
 	if dataHandle, err = makeHandle(dataOutput); err != nil {
-		return nil, nil, err
+		return
 	}
 	if tombstoneHandle, err = makeHandle(tombstoneOutput); err != nil {
-		return nil, nil, err
+		return
 	}
 	return dataHandle, tombstoneHandle, nil
 }
@@ -3086,12 +3086,13 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
+	ownedHandle := changeHandle
 	defer func() {
 		if err != nil {
-			if changeHandle != nil {
-				_ = changeHandle.Close()
-				changeHandle = nil
-			}
+			// An explicit `return nil, err` clears the named result before this
+			// defer runs; retain the owner of all partially built spill files.
+			_ = ownedHandle.Close()
+			changeHandle = nil
 		}
 	}()
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -4187,20 +4188,31 @@ func prefetchObjects(
 					windowRows = min(windowRows, max(1, maxRows/4))
 				}
 				windowByteBudget := 0
-				if decodedBytes > 0 && totalRows > 0 {
-					if maxBytes > 0 {
-						windowByteBudget = max(1, maxBytes/4)
+				if maxBytes > 0 {
+					windowByteBudget = max(1, maxBytes/4)
+					if decodedBytes > 0 && totalRows > 0 {
 						windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
 					}
 				}
 				cols := persistedColumnSeqnums(blockMeta)
+				spillFactory := func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
+					return newLegacyColumnSpill(ctx, spillConfig)
+				}
+				if windowByteBudget > 0 && windowRows > 1 {
+					windowRows, err = objectio.FitOneBlockAllColumnsWindow(
+						ctx, &dataMeta, loc.Name().String(), blockID, cols,
+						rowOffset, windowRows, windowByteBudget,
+						fileservice.SkipAllCache, fs, spillFactory,
+					)
+					if err != nil {
+						return &tasks.JobResult{Err: err}
+					}
+				}
 				bat, err := objectio.ReadOneBlockAllColumnsWindow(
 					ctx, &dataMeta, loc.Name().String(), blockID, cols,
 					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
 					windowByteBudget,
-					func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
-						return newLegacyColumnSpill(ctx, spillConfig)
-					},
+					spillFactory,
 				)
 				if err != nil {
 					return &tasks.JobResult{Err: err}
