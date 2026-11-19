@@ -239,6 +239,120 @@ func TestReadLegacyColumnWindowRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
+	type windowCase struct {
+		name, kind     string
+		version        uint16
+		class          byte
+		invalid, spill bool
+	}
+	var cases []windowCase
+	for _, kind := range []string{"fixed", "varlen"} {
+		for _, version := range []struct {
+			name string
+			id   uint16
+		}{{"v1", IOET_ColumnData_V1}, {"v2", IOET_ColumnData_V2}} {
+			for _, class := range []struct {
+				name    string
+				tag     byte
+				invalid bool
+			}{{"flat", vector.FLAT, false}, {"legacy", vector.DICTIONARY, false}, {"unknown", vector.DICTIONARY + 1, true}} {
+				if class.invalid && kind == "varlen" {
+					continue
+				}
+				for _, mode := range []string{"buffered", "spill"} {
+					cases = append(cases, windowCase{name: kind + "/" + version.name + "/" + class.name + "/" + mode, kind: kind, version: version.id, class: class.tag, invalid: class.invalid, spill: mode == "spill"})
+				}
+			}
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(ctx) })
+			typ := types.T_int64.ToType()
+			if tc.kind == "varlen" {
+				typ = types.T_varchar.ToType()
+			}
+			source := vector.NewVec(typ)
+			t.Cleanup(func() { source.Free(mp) })
+			values := []string{"first distinct value longer than the inline representation", "", "last distinct value longer than the inline representation"}
+			for row := 0; row < 3; row++ {
+				if tc.kind == "fixed" {
+					require.NoError(t, vector.AppendFixed(source, int64(11*(row+1)), row == 1, mp))
+				} else {
+					require.NoError(t, vector.AppendBytes(source, []byte(values[row]), row == 1, mp))
+				}
+			}
+			var payload bytes.Buffer
+			if tc.version == IOET_ColumnData_V1 {
+				require.NoError(t, source.MarshalBinaryWithBufferV1(&payload))
+			} else {
+				require.NoError(t, source.MarshalBinaryWithBuffer(&payload))
+			}
+			encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: tc.version})...)
+			encoded = append(encoded, payload.Bytes()...)
+			encoded[IOEntryHeaderSize] = tc.class
+			ext := writeLegacyTestExtent(t, fs, "legacy-class", encoded, compress.None)
+			meta := BuildMetaData(1, 1)
+			column := meta.GetBlockMeta(0).ColumnMeta(0)
+			column.setDataType(uint8(typ.Oid))
+			column.setLocation(ext)
+			var spill *testColumnWindowSpill
+			factory := func(context.Context) (ColumnWindowSpill, error) {
+				file, err := os.CreateTemp(t.TempDir(), "legacy-class-*")
+				if err != nil {
+					return nil, err
+				}
+				spill = &testColumnWindowSpill{File: file}
+				t.Cleanup(func() {
+					if !spill.closed {
+						_ = spill.Close()
+					}
+				})
+				return spill, nil
+			}
+			limit := 0
+			if tc.spill {
+				limit = 1
+			}
+			bat, err := ReadOneBlockAllColumnsWindow(ctx, &meta, "legacy-class", 0, []uint16{0}, 1, 2, fileservice.SkipAllCache, fs, mp, limit, factory)
+			if bat != nil {
+				t.Cleanup(func() { bat.Clean(mp) })
+			}
+			if tc.spill {
+				require.NotNil(t, spill)
+				require.True(t, spill.closed)
+			} else {
+				require.Nil(t, spill)
+			}
+			if tc.invalid {
+				require.Error(t, err)
+				require.Nil(t, bat)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 2, bat.RowCount())
+			require.False(t, bat.Vecs[0].IsDictionary())
+			require.Equal(t, typ, *bat.Vecs[0].GetType())
+			require.True(t, bat.Vecs[0].IsNull(0))
+			require.False(t, bat.Vecs[0].IsNull(1))
+			if tc.kind == "varlen" {
+				require.Equal(t, []byte(values[2]), bat.Vecs[0].GetBytesAt(1))
+			} else {
+				require.Equal(t, int64(33), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 1))
+			}
+		})
+	}
+}
+
 func bufioReader(data []byte) *bufio.Reader {
 	return bufio.NewReader(bytes.NewReader(data))
 }

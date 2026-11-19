@@ -1000,10 +1000,11 @@ func (b *sqlJSONPlanBuilder) resolveUpdateRef(node *plan.Node, ref *plan.ColRef,
 				if child == nil {
 					return nil, false
 				}
-				if int(ref.ColPos) != len(child.ProjectList) || len(node.WinSpecList) != 1 {
+				pos := int(ref.ColPos) - len(child.ProjectList)
+				if pos < 0 || pos >= len(node.WinSpecList) {
 					return nil, false
 				}
-				return b.resolveUpdateExpr(node, node.WinSpecList[0], active)
+				return b.resolveUpdateExpr(node, node.WinSpecList[pos], active)
 			}
 		case plan.Node_UNION, plan.Node_UNION_ALL:
 			if ref.RelPos == 0 {

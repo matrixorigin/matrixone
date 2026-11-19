@@ -47,6 +47,7 @@ type Bytes struct {
 type cacheDataReservation interface {
 	commit()
 	release()
+	pending() bool
 }
 
 func NewBytes(data []byte) *Bytes {
@@ -135,7 +136,7 @@ func (b *Bytes) releaseAllocation() {
 }
 
 var _ fscache.DataOwnership = (*Bytes)(nil)
-var _ fscache.DataCacheReservation = (*Bytes)(nil)
+var _ fscache.DataCachePendingReservation = (*Bytes)(nil)
 var _ fscache.DataCacheAdmission = (*Bytes)(nil)
 
 // CommitCacheReservation transfers pending capacity accounting to the FIFO
@@ -144,6 +145,11 @@ func (b *Bytes) CommitCacheReservation() {
 	if b.reservation != nil {
 		b.reservation.commit()
 	}
+}
+
+// CacheReservationPending reports whether b holds a reservation not yet committed.
+func (b *Bytes) CacheReservationPending() bool {
+	return b.reservation != nil && b.reservation.pending()
 }
 
 // CacheAdmissionAllowed reports whether this data can enter the destination

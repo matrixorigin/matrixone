@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -322,6 +322,77 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 					waitCrossCN(t, 0, 1)
 					want = tc.wantAfterDML
 				}
+			}
+			if tc.name == "hnsw" {
+				t.Run("ordinary_user_hnsw_rebuild", func(t *testing.T) {
+					waitCrossCN(t, 1, 0)
+					conn = conns[0]
+					metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='vectors') and algo_table_type='"+catalog.Hnsw_TblType_Metadata+"'")
+					require.Len(t, metadataTable, 1)
+					meta := "`" + metadataTable[0] + "`"
+					cleanupSQL := func(statement string) {
+						cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+						defer stop()
+						if _, err := conns[0].ExecContext(cleanupCtx, statement); err != nil {
+							t.Errorf("cleanup %q: %v", statement, err)
+						}
+					}
+					exec(t, "create role rebuild_role")
+					t.Cleanup(func() { cleanupSQL("drop role rebuild_role") })
+					exec(t, "create user rebuild_user identified by '111' default role rebuild_role")
+					t.Cleanup(func() { cleanupSQL("drop user rebuild_user") })
+					for _, statement := range []string{
+						"grant connect on account * to rebuild_role",
+						"grant all on database " + schema + " to rebuild_role",
+						"grant all on table " + schema + ".* to rebuild_role",
+					} {
+						exec(t, statement)
+					}
+					waitCrossCN(t, 0, 1)
+
+					plan.SetForceScanOnMultiCN(true)
+					t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+					for i := range conns {
+						cn, err := cluster.GetCNService(i)
+						require.NoError(t, err)
+						db, err := sql.Open("mysql", fmt.Sprintf("sys#rebuild_user#rebuild_role:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+						require.NoError(t, err)
+						t.Cleanup(func() {
+							if err := db.Close(); err != nil {
+								t.Errorf("close ordinary user db: %v", err)
+							}
+						})
+						user, err := db.Conn(ctx)
+						require.NoError(t, err)
+						t.Cleanup(func() {
+							if err := user.Close(); err != nil {
+								t.Errorf("close ordinary user connection: %v", err)
+							}
+						})
+						conn = user
+						exec(t, "use "+schema)
+						exec(t, "set experimental_hnsw_index=1")
+						var ignored int
+						var denied *mysql.MySQLError
+						err = user.QueryRowContext(ctx, "select count(*) from "+meta).Scan(&ignored)
+						require.ErrorAs(t, err, &denied)
+						require.Contains(t, strings.ToLower(denied.Message), "privilege")
+
+						conn = conns[i]
+						before := query(t, "select max(build_ts) from "+meta)
+						require.NotEqual(t, []string{"NULL"}, before)
+						conn = user
+						exec(t, "alter table vectors alter reindex hx hnsw force_sync")
+						search := "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'"
+						require.Contains(t, strings.Join(query(t, "explain "+search), "\n"), "Vector Index Scan")
+						require.Equal(t, []string{"4", "3", "1"}, query(t, search))
+						conn = conns[i]
+						after := query(t, "select max(build_ts) from "+meta)
+						require.NotEqual(t, []string{"NULL"}, after)
+						require.NotEqual(t, before, after, "CN%d must publish a new generation", i)
+						waitCrossCN(t, i, 1-i)
+					}
+				})
 			}
 		})
 	}

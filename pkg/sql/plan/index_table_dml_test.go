@@ -142,7 +142,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, objRef)
 	require.NotNil(t, tableDef)
@@ -184,7 +184,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -217,7 +217,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -258,7 +258,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -297,7 +297,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -460,7 +460,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -505,7 +505,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept_composite_uk", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept_composite_uk", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -538,7 +538,7 @@ func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
 	bindCtx := NewBindContext(builder, nil)
 
 	dmlCtx := NewDMLContext()
-	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_t", nil)
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_t", nil, nil)
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
@@ -600,7 +600,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			bindCtx := NewBindContext(builder, nil)
 
 			dmlCtx := NewDMLContext()
-			objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_composite_t", nil)
+			objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_composite_t", nil, nil)
 			require.NoError(t, err)
 			dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 			dmlCtx.tableDefs = []*planpb.TableDef{tableDef}

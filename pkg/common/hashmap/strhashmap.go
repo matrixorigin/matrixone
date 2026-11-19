@@ -126,6 +126,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if withDomain {
 			prefix = 1
 		}
+		if vec.IsDictionary() {
+			if err := itr.prepareDictionaryKeySizes(vec, start, count, prefix, withDomain); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if vec.IsGrouping() {
 			for i := 0; i < count; i++ {
 				if err := add(i, 1); err != nil {
@@ -189,11 +196,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			}
 			if vec.IsConst() {
 				value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(0))
-				valueSize := len(value)
-				if vec.GetType().Oid == types.T_json {
-					valueSize = keycodec.CanonicalJSONSize(value)
-				}
-				size := prefix + 4 + valueSize
+				size := prefix + 4 + hashKeyValueSize(vec.GetType().Oid, value)
 				if size < 0 || uniformRowSize > maxInt-size {
 					return mpool.ErrAllocationAccountInvalid
 				}
@@ -206,10 +209,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
 					return err
 				}
-			} else if vec.GetType().Oid == types.T_json {
+			} else if oid := vec.GetType().Oid; oid == types.T_json || oid.IsBlockScaledArray() {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
-					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
+					if err := add(i, prefix+4+hashKeyValueSize(oid, value)); err != nil {
 						return err
 					}
 				}
@@ -261,11 +264,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				valueRow = 0
 			}
 			value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(valueRow))
-			valueSize := len(value)
-			if vec.GetType().Oid == types.T_json {
-				valueSize = keycodec.CanonicalJSONSize(value)
-			}
-			if err := add(i, prefix+4+valueSize); err != nil {
+			if err := add(i, prefix+4+hashKeyValueSize(vec.GetType().Oid, value)); err != nil {
 				return err
 			}
 		}
@@ -391,6 +390,11 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		return
 	}
 	for _, vec := range vecs {
+		if vec.IsDictionary() {
+			itr.fillDictionaryKeys(vec, start, count)
+			continue
+		}
+
 		if isFlatCharStringHashKey(vec) {
 			fillFlatCharStringHashKey(itr, vec, count, start)
 			continue
@@ -398,7 +402,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
 			default:
 				fillGroupingAwareStr(itr, vec, count, start)
@@ -417,7 +421,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		} else {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
 			default:
 				fillStringGroupStr(itr, vec, count, start, len(vecs))
@@ -430,6 +434,20 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+// hashKeyValueSize is the length appendVarlenaHashKey appends for a value already passed
+// through canonicalVarlenaHashValueForType: a JSON or vecf8/vecf4 key differs in length
+// from the stored value. keycodec.CanonicalValueSize takes the stored value instead and
+// would apply the collation key a second time.
+func hashKeyValueSize(oid types.T, value []byte) int {
+	switch {
+	case oid == types.T_json:
+		return keycodec.CanonicalJSONSize(value)
+	case oid.IsBlockScaledArray():
+		return keycodec.CanonicalVecBlockSize(value)
+	}
+	return len(value)
 }
 
 // encodeFlatFixedKeyRows writes complete fixed-width keys in one pass over the
@@ -450,8 +468,9 @@ func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, sta
 	keySize := 0
 	for i, vec := range vecs {
 		typ := vec.GetType()
+		// typeswitch:partial bf16/float16/float8/float4 zeros are stored as +0 (CanonicalLowPrecFloat), so their bytes are the key
 		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
-			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			vec.IsConst() || vec.IsDictionary() || vec.HasGrouping() || vec.GetNulls().Any() {
 			return false
 		}
 		width := typ.TypeSize()
@@ -498,6 +517,8 @@ func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
 		return keycodec.AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return keycodec.AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return keycodec.AppendCanonicalVecBlock(dst, value)
 	default:
 		return append(dst, value...)
 	}
@@ -1416,4 +1437,140 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 
 func (m *StrHashMap) FillGroupHashes(dst []uint64) []uint64 {
 	return m.hashMap.FillGroupHashes(dst)
+}
+
+// fillDictionaryKeys uses the common equality codec and the existing key frame.
+// Admission/sizing has already reserved each complete key before this pass.
+func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, count int) {
+	typ := *vec.GetType()
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	// typeswitch:partial only float32/64 require key canonicalization; low-precision float storage is already canonical.
+	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() && !vec.HasGrouping() {
+		fixed := vector.ResolveFixedBytesReadView(vec)
+		if !fixed.Constant {
+			switch fixed.Width {
+			case 1:
+				fillSelectedStrKeys[uint8](itr, fixed, start, count, withDomain)
+				return
+			case 2:
+				fillSelectedStrKeys[uint16](itr, fixed, start, count, withDomain)
+				return
+			case 4:
+				fillSelectedStrKeys[uint32](itr, fixed, start, count, withDomain)
+				return
+			case 8:
+				fillSelectedStrKeys[uint64](itr, fixed, start, count, withDomain)
+				return
+			case 12:
+				fillSelectedStrKeys[[12]byte](itr, fixed, start, count, withDomain)
+				return
+			case 16:
+				fillSelectedStrKeys[[16]byte](itr, fixed, start, count, withDomain)
+				return
+			case 20:
+				fillSelectedStrKeys[[20]byte](itr, fixed, start, count, withDomain)
+				return
+			case 24:
+				fillSelectedStrKeys[[24]byte](itr, fixed, start, count, withDomain)
+				return
+			case 32:
+				fillSelectedStrKeys[[32]byte](itr, fixed, start, count, withDomain)
+				return
+			}
+		}
+	}
+
+	var strings vector.VarlenaReadView
+	var fixed vector.FixedBytesReadView
+	if typ.IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	} else {
+		fixed = vector.ResolveFixedBytesReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			itr.keys[i] = append(itr.keys[i], 2)
+			continue
+		}
+		if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], 1)
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		key := itr.keys[i]
+		if withDomain {
+			key = append(key, 0)
+		}
+		if typ.IsVarlen() {
+			physical := int(strings.Selection[row])
+			if strings.Constant {
+				physical = 0
+			}
+			value := strings.Values[physical].GetByteSlice(strings.Area)
+			prefix := len(key)
+			key = append(key, 0, 0, 0, 0)
+			key = keycodec.AppendCanonicalValue(key, typ, value)
+			length := uint32(len(key) - prefix - 4)
+			copy(key[prefix:prefix+4], util.UnsafeToBytes(&length))
+		} else {
+			key = keycodec.AppendCanonicalValue(key, typ, dictionaryFixedBytes(fixed, row))
+		}
+		itr.keys[i] = key
+	}
+}
+
+func fillSelectedStrKeys[T any](itr *strHashmapIterator, view vector.FixedBytesReadView, start, count int, withDomain bool) {
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/view.Width*view.Width])
+	selected := view.Selection[start : start+count]
+	if !withDomain {
+		for i, row := range selected {
+			itr.keys[i] = append(itr.keys[i], types.EncodeSlice(values[row:row+1])...)
+		}
+	} else {
+		for i, row := range selected {
+			key := append(itr.keys[i], 0)
+			itr.keys[i] = append(key, types.EncodeSlice(values[row:row+1])...)
+		}
+	}
+}
+
+// prepareDictionaryKeySizes uses the existing iterator sizing frame. It does
+// not capture the flat add closure or allocate another row-size vector.
+func (itr *strHashmapIterator) prepareDictionaryKeySizes(vec *vector.Vector, start, count, prefix int, withDomain bool) error {
+	const maxInt = int(^uint(0) >> 1)
+	var strings vector.VarlenaReadView
+	if vec.GetType().IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		size := 0
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			size = 1
+		} else if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				size = 1
+			}
+		} else {
+			if vec.GetType().IsFixedLen() {
+				size = prefix + vec.GetType().TypeSize()
+			} else {
+				physical := int(strings.Selection[row])
+				if strings.Constant {
+					physical = 0
+				}
+				value := strings.Values[physical].GetByteSlice(strings.Area)
+				size = prefix + 4 + keycodec.CanonicalValueSize(*vec.GetType(), value)
+			}
+		}
+		if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		itr.zValues[i] += int64(size)
+	}
+	return nil
 }

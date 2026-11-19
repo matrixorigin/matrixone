@@ -66,4 +66,9 @@ drop index ix on t;
 create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_cosine_ops' quantization 'float16';
 drop index ix on t;
 
+-- vecf8 / vecf4 columns take no CAGRA or IVF-PQ index
+create table vb (id bigint primary key, a8 vecf8(3), a4 vecf4(3));
+create index ix_vb using cagra on vb(a8) op_type 'vector_l2_ops';
+create index ix_vb using ivfpq on vb(a4) lists = 1 op_type 'vector_l2_ops';
+
 drop database vec_distance_semantics_gpu;

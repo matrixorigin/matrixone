@@ -35,4 +35,25 @@ create table result_type as select x*(1-y) as amount from t where id=1;
 select data_type,numeric_precision,numeric_scale from information_schema.columns where table_schema='decimal_mul_sub' and table_name='result_type' and column_name='amount';
 data_type	numeric_precision	numeric_scale
 decimal	37	4
+alter table t add column z decimal(15,2);
+update t set z=0.08;
+select sum(x*(1-y)*(1+z)) as charge from t;
+charge
+37.800000
+select sum((x+y)-z) as adjusted from t;
+adjusted
+0.11
+select sum(x*z+y) as mixed_scale from t;
+mixed_scale
+0.3500
+prepare charge from 'select sum(x*(1-y)*(1+z)) as amount from t where id<=?';
+set @id=1;
+execute charge using @id;
+amount
+102.600000
+set @id=2;
+execute charge using @id;
+amount
+297.000000
+deallocate prepare charge;
 drop database decimal_mul_sub;

@@ -26,6 +26,7 @@ import datetime
 import getpass
 import json
 import logging
+import math
 import string
 import sys
 from pathlib import Path
@@ -419,14 +420,16 @@ def _parse_duration(value: str) -> datetime.timedelta:
     except ValueError:
         raise ValueError(f"Unable to parse duration '{value}'. Use formats like 5m, 30s, 1.5h.") from None
 
+    if not math.isfinite(amount):
+        raise ValueError("Duration must be finite.")
     if amount < 0:
         raise ValueError("Duration must be non-negative.")
 
-    if unit is None:
-        return datetime.timedelta(minutes=amount)
-
-    kwargs = {units[unit]: amount}
-    return datetime.timedelta(**kwargs)
+    kwargs = {units[unit] if unit is not None else 'minutes': amount}
+    try:
+        return datetime.timedelta(**kwargs)
+    except OverflowError:
+        raise ValueError("Duration exceeds the supported range.") from None
 
 
 def _format_duration(delta: datetime.timedelta) -> str:

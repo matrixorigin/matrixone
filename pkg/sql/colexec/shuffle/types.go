@@ -18,8 +18,10 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -42,7 +44,53 @@ type Shuffle struct {
 	ShuffleExpr        *plan.Expr
 	DrainAllBuckets    bool
 	StringHashKey      bool
+	// ShuffleKeyColumns selects a complete equality tuple for local-only
+	// synchronous hash routing. It is not part of the remote pipeline format.
+	ShuffleKeyColumns []int32
+	// OwnedOutput selects statement-accounted local exchange buffers.
+	OwnedOutput       bool
+	OwnedColumnCount  int
+	allocationAccount *mpool.AllocationAccount
+	outputAllocation  *vector.AllocationAccountSelection
+	retiredOwnedPool  *ShufflePool
 	vm.OperatorBase
+}
+
+// Ordinary shuffle can forward a selected batch; admit upstream views only
+// when its destination can keep that representation. Owned complete-key mode
+// consumes selected rows directly into its accounted partition buffers.
+func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
+	return shuffle.dictionaryInputSupported(child) &&
+		(shuffle.OwnedOutput || shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+}
+
+// Mechanical capability is independent of negotiated output admission. Using
+// AcceptsDictionary here would make capability discovery depend on a state
+// which boundary configuration has not yet established.
+func (shuffle *Shuffle) dictionaryInputSupported(child int) bool {
+	if child == 0 && !shuffle.OwnedOutput && len(shuffle.ShuffleKeyColumns) == 0 && shuffle.ShuffleExpr == nil && shuffle.BucketNum > 0 {
+		return shuffle.ShuffleType == int32(plan.ShuffleType_Hash) || shuffle.ShuffleType == int32(plan.ShuffleType_Range)
+	}
+	return child == 0 && shuffle.OwnedOutput && shuffle.DrainAllBuckets &&
+		len(shuffle.ShuffleKeyColumns) > 0 && shuffle.ShuffleExpr == nil &&
+		shuffle.ShuffleType == int32(plan.ShuffleType_Hash)
+}
+
+// Marker forwarding can preserve a dictionary even though ordinary owned
+// partitions stay flat. Declare that edge so unknown destinations remain safe.
+func (shuffle *Shuffle) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
+	if !shuffle.OwnedOutput && shuffle.dictionaryInputSupported(0) && len(shuffle.Children) > 0 {
+		if child, ok := shuffle.GetChildren(0).(vm.DictionaryProducer); ok {
+			return child.DictionaryOutput()
+		}
+	}
+	return shuffle.OwnedOutput, shuffle.outputAllocation
+}
+func (shuffle *Shuffle) DictionaryOutputState() *vm.DictionaryOutputState {
+	return &shuffle.ctr.dictionaryBoundary
+}
+func (shuffle *Shuffle) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return shuffle.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
 }
 
 func (shuffle *Shuffle) GetOperatorBase() *vm.OperatorBase {
@@ -84,11 +132,14 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	ending               bool
-	sels                 [][]int32
-	buf                  *batch.Batch
-	pendingBat           *batch.Batch
-	pendingBucket        int
+	dictionaryBoundary vm.DictionaryOutputState
+	ending             bool
+	pendingWholeBucket bool
+	sels               [][]int32
+	buf                *batch.Batch
+	pendingBat         *batch.Batch
+	// Mixed input saves a visit ordinal; whole input saves its physical bucket.
+	pendingPosition      int
 	pendingOffset        int
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool
@@ -104,11 +155,16 @@ type container struct {
 	producerRows    int64
 	producerSize    int64
 
-	directBatches chan directHandoff
-	directAck     chan struct{}
-	consumerDone  chan struct{}
-	consumerOnce  sync.Once
-	bufFromPool   bool
+	directBatches     chan directHandoff
+	directAck         chan struct{}
+	consumerDone      chan struct{}
+	consumerOnce      sync.Once
+	bufFromPool       bool
+	keyVectors        []*vector.Vector
+	keyHashes         *vector.Vector
+	selectionBacking  []int32
+	selectionOffsets  []int
+	selectionMetadata *process.ExecutionTransientMemoryReservation
 }
 
 type directHandoff struct {
@@ -124,6 +180,70 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 	return shuffle.ctr.shufflePool
 }
 
+func (shuffle *Shuffle) ActivatesAllocationAccountLifecycle() bool {
+	return shuffle.OwnedOutput
+}
+
+func (shuffle *Shuffle) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if !shuffle.OwnedOutput {
+		return nil
+	}
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if shuffle.allocationAccount != nil && shuffle.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	if err != nil {
+		return err
+	}
+	shuffle.allocationAccount, shuffle.outputAllocation = account, selection
+	return nil
+}
+
+func (shuffle *Shuffle) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if !shuffle.OwnedOutput || shuffle.allocationAccount == nil {
+		return nil
+	}
+	if shuffle.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if shuffle.ctr.held || shuffle.ctr.keyHashes != nil ||
+		shuffle.ctr.selectionBacking != nil || shuffle.ctr.selectionMetadata != nil {
+		return mpool.ErrAllocationAccountLive
+	}
+	if shuffle.ctr.shufflePool != nil && shuffle.ctr.shufflePool.hasOwnedResources() {
+		return mpool.ErrAllocationAccountLive
+	}
+	if shuffle.retiredOwnedPool != nil {
+		if err := shuffle.retiredOwnedPool.releaseOwnedReservation(); err != nil {
+			return err
+		}
+		shuffle.retiredOwnedPool = nil
+	}
+	shuffle.allocationAccount, shuffle.outputAllocation = nil, nil
+	return nil
+}
+
+// ResolvePipelineError publishes a sender's first failure before Dispatch
+// sends its terminal signal. Non-owned shuffles retain their existing result.
+func (shuffle *Shuffle) ResolvePipelineError(err error) error {
+	if !shuffle.OwnedOutput || shuffle.ctr.shufflePool == nil {
+		return err
+	}
+	pool := shuffle.ctr.shufflePool
+	pool.holderLock.Lock()
+	defer pool.holderLock.Unlock()
+	if pool.abortErr != nil {
+		return pool.abortErr
+	}
+	if err != nil {
+		pool.abortLocked(err)
+	}
+	return err
+}
+
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
 		abortErr := err
@@ -131,6 +251,11 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 			abortErr = context.Canceled
 		}
 		shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+	} else if shuffle.OwnedOutput && !shuffle.ctr.held && shuffle.ctr.shufflePool != nil {
+		// A runtime clone can be stopped before Prepare. It will never become
+		// one of the expected producers, so wake its siblings rather than
+		// leaving them waiting for a terminal event that cannot arrive.
+		shuffle.ctr.shufflePool.abort(proc.Mp())
 	}
 	if !shuffle.DrainAllBuckets {
 		if shuffle.ctr.held {
@@ -175,12 +300,16 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 			shuffle.OpAnalyzer.SetMemUsed(peak)
 		}
 	}
+	if shuffle.OwnedOutput && shuffle.ctr.shufflePool != nil {
+		shuffle.retiredOwnedPool = shuffle.ctr.shufflePool
+	}
 	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 	shuffle.ctr.pendingBat = nil
-	shuffle.ctr.pendingBucket = 0
+	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0
+	shuffle.ctr.pendingWholeBucket = false
 	shuffle.ctr.runtimeFilterHandled = false
 	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
@@ -196,6 +325,25 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.consumerDone = nil
 	shuffle.ctr.consumerOnce = sync.Once{}
 	shuffle.ctr.bufFromPool = false
+	shuffle.freeKeyScratch(proc)
+}
+
+func (shuffle *Shuffle) freeKeyScratch(proc *process.Process) {
+	clear(shuffle.ctr.keyVectors)
+	shuffle.ctr.keyVectors = nil
+	if shuffle.ctr.keyHashes != nil {
+		shuffle.ctr.keyHashes.Free(proc.Mp())
+		shuffle.ctr.keyHashes = nil
+	}
+	if shuffle.ctr.selectionBacking != nil {
+		mpool.FreeSlice(proc.Mp(), shuffle.ctr.selectionBacking)
+		shuffle.ctr.selectionBacking = nil
+	}
+	shuffle.ctr.selectionOffsets = nil
+	if shuffle.ctr.selectionMetadata != nil {
+		shuffle.ctr.selectionMetadata.Release()
+		shuffle.ctr.selectionMetadata = nil
+	}
 }
 
 func (shuffle *Shuffle) closeLocalConsumer(proc *process.Process) {
@@ -228,8 +376,12 @@ func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
+	shuffle.freeKeyScratch(proc)
 	shuffle.ctr.buf = nil
 	shuffle.ctr.pendingBat = nil
+	shuffle.ctr.pendingPosition = 0
+	shuffle.ctr.pendingOffset = 0
+	shuffle.ctr.pendingWholeBucket = false
 	shuffle.ctr.shufflePool = nil
 	if shuffle.ctr.exprExec != nil {
 		shuffle.ctr.exprExec.Free()

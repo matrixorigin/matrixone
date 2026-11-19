@@ -2537,7 +2537,7 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 		         LIMIT 1)
 		  FROM nation n`, 1)
 	require.NoError(t, parseErr)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true, nil)
 	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 
 	_, err = runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
@@ -2711,7 +2711,7 @@ func TestWrappedCorrelatedScalarProjectionAdmission(t *testing.T) {
 		  FROM nation n`, 1)
 	require.NoError(t, err)
 	defer preparedStmt.Free()
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true, nil)
 	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 
 	for _, sql := range []string{

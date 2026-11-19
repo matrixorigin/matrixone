@@ -122,7 +122,7 @@ func buildIvfFulltextMembershipTestPlan(t *testing.T, ctx CompilerContext, sql s
 	stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, prepare)
+	p, err := BuildPlan(ctx, stmt, prepare, nil)
 	require.NoError(t, err)
 	return p.GetQuery()
 }

@@ -68,7 +68,13 @@ const (
 	OptionalFallbackNone OptionalFallbackKind = iota
 	OptionalFallbackBudgetAdmission
 	OptionalFallbackAllocation
+	OptionalFallbackSize
 )
+
+// ErrOptionalKeySize is a producer preflight refusal, not an allocator
+// failure. Only use it before attempting growth when an indivisible key or
+// the legacy IN wire payload cannot fit. Raw allocator limits remain fatal.
+var ErrOptionalKeySize = moerr.NewInvalidInputNoCtx("runtime-filter key encoding exceeds the single-buffer size limit")
 
 // ClassifyOptionalFallback is deliberately fatal-first. Only a typed capacity
 // admission rejection or an error marked at an exact optional allocation
@@ -107,6 +113,9 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 	// must never override a lifecycle or accounting failure wrapped below it.
 	if errors.Is(err, process.ErrExecutionResourceAdmission) {
 		return OptionalFallbackNone
+	}
+	if errors.Is(err, ErrOptionalKeySize) {
+		return OptionalFallbackSize
 	}
 
 	if IsOptionalAllocationError(err) &&

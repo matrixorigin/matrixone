@@ -45,7 +45,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	varlen := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(varlen, dead, false, mp))
 	require.NoError(t, vector.AppendBytes(varlen, live, false, mp))
-	varlen.Shrink([]int64{1}, false)
+	require.NoError(t, varlen.Shrink([]int64{1}, false, mp))
 	require.Greater(t, len(varlen.GetArea()), len(live))
 
 	constVec, err := vector.NewConstBytes(
@@ -149,7 +149,7 @@ func BenchmarkCopyBatchCompact(b *testing.B) {
 		for row := 0; row < 1024; row += 8 {
 			sels = append(sels, int64(row))
 		}
-		vec.Shrink(sels, false)
+		require.NoError(b, vec.Shrink(sels, false, mp))
 		src.SetVector(int32(col), vec)
 	}
 	src.SetRowCount(128)
@@ -235,4 +235,129 @@ func copyBatchWithUnionAll(src *batch.Batch, mp *mpool.MPool) (*batch.Batch, err
 	}
 	dst.SetRowCount(src.RowCount())
 	return dst, nil
+}
+
+func TestCopyBatchDestinationAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	src := batch.NewWithSize(2)
+	src.Attrs = []string{"id", "payload"}
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+	src.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+	require.NoError(t, vector.AppendFixedList(src.Vecs[0], []int64{1, 2}, []bool{false, true}, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte("a sufficiently long variable payload"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(src.Vecs[1], nil, true, proc.Mp()))
+	src.SetRowCount(2)
+	defer src.Clean(proc.Mp())
+	for _, limit := range []uint64{1, 32, 1 << 20} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(2, 1024)
+			require.NoError(t, err)
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+			require.NoError(t, err)
+			dst, err := CopyBatchWithAllocation(src, proc, selection)
+			if limit == 1<<20 {
+				require.NoError(t, err)
+				require.Positive(t, account.Snapshot().Used)
+				require.NotNil(t, dst.AllocationAccountSelection())
+				require.Equal(t, src.RowCount(), dst.RowCount())
+				require.Equal(t, src.Vecs[1].GetBytesAt(0), dst.Vecs[1].GetBytesAt(0))
+				dst.Clean(proc.Mp())
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Nil(t, dst)
+			}
+			require.Zero(t, account.Snapshot().Used)
+			require.Equal(t, int64(1), vector.MustFixedColNoTypeCheck[int64](src.Vecs[0])[0])
+			_, _, err = registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	src := batch.NewWithSize(1)
+	src.Attrs = []string{"payload"}
+	src.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for range 32 {
+		require.NoError(b, vector.AppendBytes(src.Vecs[0], []byte("a moderately wide variable payload for a workspace batch"), false, proc.Mp()))
+	}
+	src.SetRowCount(32)
+	defer src.Clean(proc.Mp())
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1024)
+	require.NoError(b, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(b, err)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	require.NoError(b, err)
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(b, err)
+	cnRegistry, err := generation.AllocationAccountRegistry()
+	require.NoError(b, err)
+	cnAccount, err := cnRegistry.OpenWithController(generation.Cap(), generation)
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		require.Zero(b, cnAccount.Snapshot().Used)
+		_, _, err := cnRegistry.CompleteTerminal(cnAccount)
+		require.NoError(b, err)
+		generation.Close()
+	})
+	cnSelection, err := vector.NewAllocationAccountSelection(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	require.NoError(b, err)
+	for _, tc := range []struct {
+		name      string
+		selection *vector.AllocationAccountSelection
+	}{{"generic", nil}, {"workspace", selection}, {"workspace_cn", cnSelection}} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				dst, err := CopyBatchWithAllocation(src, proc, tc.selection)
+				if err != nil {
+					b.Fatal(err)
+				}
+				dst.Clean(proc.Mp())
+			}
+		})
+	}
+	require.Zero(b, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(b, err)
+}
+
+func TestCopyBatchKeepsSourceAndDestinationChargesIndependent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1024)
+	require.NoError(t, err)
+	source, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	target, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerDML, 1, 2, 3, 4)
+	require.NoError(t, err)
+	dstSelection, err := vector.NewAllocationAccountSelection(target, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	require.NoError(t, err)
+	src := batch.NewOffHeapWithSize(1)
+	require.NoError(t, src.SetAllocationAccount(srcSelection))
+	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	defer src.Clean(proc.Mp())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, proc.Mp()))
+	src.SetRowCount(1)
+	used := source.Snapshot().Used
+	dst, err := CopyBatchWithAllocation(src, proc, dstSelection)
+	require.NoError(t, err)
+	defer dst.Clean(proc.Mp())
+	require.Equal(t, used, source.Snapshot().Used)
+	require.Positive(t, target.Snapshot().Used)
+	src.Clean(proc.Mp())
+	require.Zero(t, source.Snapshot().Used)
+	require.Positive(t, target.Snapshot().Used)
+	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](dst.Vecs[0])[0])
+	dst.Clean(proc.Mp())
+	require.Zero(t, target.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(source)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(target)
+	require.NoError(t, err)
 }

@@ -115,6 +115,25 @@ func TestParseOptimizeHintsGlobalAndPerStatement(t *testing.T) {
 	require.Equal(t, 1, b.optimizerHints.applyIndices, "per-statement hint applied on top")
 }
 
+func TestParseOptimizeHintsUsesSessionValueNotCNRuntime(t *testing.T) {
+	b := builderWithHintCtx(t, "")
+	svc := b.compCtx.GetProcess().GetService()
+	setPlanTestGlobalVariable(t, svc, "optimizer_hints", "applyIndices=1")
+	mock := b.compCtx.(*MockCompilerContext)
+	mock.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+		if name == "optimizer_hints" {
+			require.True(t, system)
+			require.False(t, global)
+			return "aggPushDown=1", nil
+		}
+		return nil, nil
+	}
+	b.parseOptimizeHints()
+	require.NotNil(t, b.optimizerHints)
+	require.Equal(t, 0, b.optimizerHints.applyIndices)
+	require.Equal(t, 1, b.optimizerHints.aggPushDown)
+}
+
 func TestPreparedBlockFilterDisabledHintPersistsInPlan(t *testing.T) {
 	for _, tc := range []struct {
 		name, global, statement string
@@ -138,7 +157,7 @@ func TestPreparedBlockFilterDisabledHintPersistsInPlan(t *testing.T) {
 				"select a from select_test.bind_select where a=?", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock, stmt, true)
+			built, err := BuildPlan(mock, stmt, true, nil)
 			require.NoError(t, err)
 			// A later session hint change cannot change this prepared plan's decision.
 			setPlanTestGlobalVariable(t, svc, "optimizer_hints", "blockFilter=1")

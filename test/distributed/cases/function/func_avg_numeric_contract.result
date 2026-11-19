@@ -11,4 +11,34 @@ union all
 select cast(0.20 as decimal(18,2))
 ) x;
 ➤ decimal_avg[12,-1,0]  𝄀
-0.15000000
+0.150000
+drop table if exists decimal64_dense_numeric_contract;
+create table decimal64_dense_numeric_contract (g int, v decimal(12,2));
+insert into decimal64_dense_numeric_contract select result, cast(1.25 as decimal(12,2)) from generate_series(1,257) s;
+insert into decimal64_dense_numeric_contract select result, cast(-0.25 as decimal(12,2)) from generate_series(1,257) s;
+insert into decimal64_dense_numeric_contract select result, null from generate_series(1,257) s;
+select count(*) as groups_seen, min(total) = 1.00 and max(total) = 1.00 as sum_ok, min(mean) = 0.50 and max(mean) = 0.50 as avg_ok, min(n) = 2 and max(n) = 2 as count_ok from (select g, sum(v) total, avg(v) mean, count(v) n from decimal64_dense_numeric_contract where g <= 1 group by g) a;
+➤ groups_seen[-5,64,0]  ¦  sum_ok[-6,8,0]  ¦  avg_ok[-6,8,0]  ¦  count_ok[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select count(*) as groups_seen, min(total) = 1.00 and max(total) = 1.00 as sum_ok, min(mean) = 0.50 and max(mean) = 0.50 as avg_ok, min(n) = 2 and max(n) = 2 as count_ok from (select g, sum(v) total, avg(v) mean, count(v) n from decimal64_dense_numeric_contract where g <= 255 group by g) a;
+➤ groups_seen[-5,64,0]  ¦  sum_ok[-6,8,0]  ¦  avg_ok[-6,8,0]  ¦  count_ok[-6,8,0]  𝄀
+255  ¦  1  ¦  1  ¦  1
+select count(*) as groups_seen, min(total) = 1.00 and max(total) = 1.00 as sum_ok, min(mean) = 0.50 and max(mean) = 0.50 as avg_ok, min(n) = 2 and max(n) = 2 as count_ok from (select g, sum(v) total, avg(v) mean, count(v) n from decimal64_dense_numeric_contract where g <= 256 group by g) a;
+➤ groups_seen[-5,64,0]  ¦  sum_ok[-6,8,0]  ¦  avg_ok[-6,8,0]  ¦  count_ok[-6,8,0]  𝄀
+256  ¦  1  ¦  1  ¦  1
+select count(*) as groups_seen, min(total) = 1.00 and max(total) = 1.00 as sum_ok, min(mean) = 0.50 and max(mean) = 0.50 as avg_ok, min(n) = 2 and max(n) = 2 as count_ok from (select g, sum(v) total, avg(v) mean, count(v) n from decimal64_dense_numeric_contract group by g) a;
+➤ groups_seen[-5,64,0]  ¦  sum_ok[-6,8,0]  ¦  avg_ok[-6,8,0]  ¦  count_ok[-6,8,0]  𝄀
+257  ¦  1  ¦  1  ¦  1
+select cast(sum(distinct v) as char) as distinct_sum, cast(avg(distinct v) as char) as distinct_avg from decimal64_dense_numeric_contract where g = 1;
+➤ distinct_sum[12,65535,0]  ¦  distinct_avg[12,65535,0]  𝄀
+1.00  ¦  0.500000
+select cast(sum(cast(0.25 as decimal(12,2))) as char) as constant_sum, cast(avg(cast(0.25 as decimal(12,2))) as char) as constant_avg from decimal64_dense_numeric_contract where g = 1;
+➤ constant_sum[12,65535,0]  ¦  constant_avg[12,65535,0]  𝄀
+0.75  ¦  0.250000
+select sum(v) is null as sum_null, avg(v) is null as avg_null from decimal64_dense_numeric_contract where v is null;
+➤ sum_null[-6,8,0]  ¦  avg_null[-6,8,0]  𝄀
+1  ¦  1
+select sum(v) is null as sum_empty, avg(v) is null as avg_empty from decimal64_dense_numeric_contract where g = 0;
+➤ sum_empty[-6,8,0]  ¦  avg_empty[-6,8,0]  𝄀
+1  ¦  1
+drop table decimal64_dense_numeric_contract;

@@ -271,7 +271,7 @@ t_column_charset  ¦  CREATE TABLE `t_column_charset` (
   PRIMARY KEY (`id`)
 )
 DESC t_column_charset;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 name_default  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -388,28 +388,28 @@ INSERT INTO t_sort_ci VALUES (6, 'APPLE');
 INSERT INTO t_sort_ci VALUES (7, 'banana');
 INSERT INTO t_sort_ci VALUES (8, 'Banana');
 INSERT INTO t_sort_ci VALUES (9, 'BANANA');
-SELECT * FROM t_sort_ci ORDER BY name;
+SELECT * FROM t_sort_ci ORDER BY name, id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+4  ¦  apple  𝄀
+5  ¦  Apple  𝄀
+6  ¦  APPLE  𝄀
+7  ¦  banana  𝄀
+8  ¦  Banana  𝄀
+9  ¦  BANANA  𝄀
+1  ¦  zebra  𝄀
+2  ¦  Zebra  𝄀
+3  ¦  ZEBRA
+SELECT * FROM t_sort_ci ORDER BY name DESC, id DESC;
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+3  ¦  ZEBRA  𝄀
+2  ¦  Zebra  𝄀
+1  ¦  zebra  𝄀
+9  ¦  BANANA  𝄀
+8  ¦  Banana  𝄀
+7  ¦  banana  𝄀
 6  ¦  APPLE  𝄀
 5  ¦  Apple  𝄀
-9  ¦  BANANA  𝄀
-8  ¦  Banana  𝄀
-3  ¦  ZEBRA  𝄀
-2  ¦  Zebra  𝄀
-4  ¦  apple  𝄀
-7  ¦  banana  𝄀
-1  ¦  zebra
-SELECT * FROM t_sort_ci ORDER BY name DESC;
-➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-1  ¦  zebra  𝄀
-7  ¦  banana  𝄀
-4  ¦  apple  𝄀
-2  ¦  Zebra  𝄀
-3  ¦  ZEBRA  𝄀
-8  ¦  Banana  𝄀
-9  ¦  BANANA  𝄀
-5  ¦  Apple  𝄀
-6  ¦  APPLE
+4  ¦  apple
 CREATE TABLE t_sort_bin (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -450,14 +450,14 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_distinct_ci VALUES ('Apple'), ('apple'), ('APPLE');
 INSERT INTO t_distinct_ci VALUES ('Banana'), ('banana'), ('BANANA');
-SELECT DISTINCT name FROM t_distinct_ci ORDER BY name;
-➤ name[12,100,0]  𝄀
-APPLE  𝄀
-Apple  𝄀
-BANANA  𝄀
-Banana  𝄀
-apple  𝄀
-banana
+SELECT DISTINCT name, CONVERT(name USING BINARY) AS nb FROM t_distinct_ci ORDER BY name, nb;
+➤ name[12,100,0]  ¦  nb[-3,100,0]  𝄀
+APPLE  ¦  APPLE  𝄀
+Apple  ¦  Apple  𝄀
+apple  ¦  apple  𝄀
+BANANA  ¦  BANANA  𝄀
+Banana  ¦  Banana  𝄀
+banana  ¦  banana
 SELECT COUNT(DISTINCT name) FROM t_distinct_ci;
 ➤ COUNT(distinct name)[-5,64,0]  𝄀
 6
@@ -483,13 +483,13 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_group_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_group_ci VALUES (4, 'Banana'), (5, 'banana'), (6, 'BANANA');
-SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name;
+SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name, CONVERT(name USING BINARY);
 ➤ name[12,100,0]  ¦  cnt[-5,64,0]  𝄀
 APPLE  ¦  1  𝄀
 Apple  ¦  1  𝄀
+apple  ¦  1  𝄀
 BANANA  ¦  1  𝄀
 Banana  ¦  1  𝄀
-apple  ¦  1  𝄀
 banana  ¦  1
 CREATE TABLE t_group_bin (
 id INT,
@@ -515,9 +515,14 @@ INSERT INTO t_like_ci VALUES (3, 'Application');
 INSERT INTO t_like_ci VALUES (4, 'Banana');
 SELECT * FROM t_like_ci WHERE name LIKE 'app%' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-2  ¦  apple
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  Application
 SELECT * FROM t_like_ci WHERE name LIKE 'APP%' ORDER BY id;
-➤ id[4,32,0]  ¦  name[12,100,0]
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  Application
 SELECT * FROM t_like_ci WHERE name LIKE '%le' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  Apple  𝄀
@@ -577,24 +582,18 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_union1_ci VALUES ('Apple'), ('Banana');
 INSERT INTO t_union2_ci VALUES ('apple'), ('Cherry');
-SELECT name FROM t_union1_ci
-UNION
-SELECT name FROM t_union2_ci
-ORDER BY name;
+SELECT name FROM (SELECT name FROM t_union1_ci UNION SELECT name FROM t_union2_ci) AS u ORDER BY name, CONVERT(name USING BINARY);
 ➤ name[12,100,0]  𝄀
 Apple  𝄀
+apple  𝄀
 Banana  𝄀
-Cherry  𝄀
-apple
-SELECT name FROM t_union1_ci
-UNION ALL
-SELECT name FROM t_union2_ci
-ORDER BY name;
+Cherry
+SELECT name FROM (SELECT name FROM t_union1_ci UNION ALL SELECT name FROM t_union2_ci) AS u ORDER BY name, CONVERT(name USING BINARY);
 ➤ name[12,100,0]  𝄀
 Apple  𝄀
+apple  𝄀
 Banana  𝄀
-Cherry  𝄀
-apple
+Cherry
 CREATE TABLE t_functions (
 id INT PRIMARY KEY,
 data VARCHAR(200)

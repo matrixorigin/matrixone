@@ -6,21 +6,21 @@ create table bf16(id bigint primary key, v vecbf16(2));
 create table f32(id bigint primary key, v vecf32(2));
 create table f64(id bigint primary key, v vecf64(2));
 insert into f16 values(9, '[100000,100000]');
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECF16, element 100000
 insert into bf16 values(9, '[3.4e38,3.4e38]');
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECBF16, element 3.4e38
 insert into f32 values(9, '[NaN,1]');
-internal error: vector element cannot be NaN or Inf: NaN
+invalid input: vector element cannot be NaN or Inf: NaN
 insert into f64 values(9, '[Inf,1]');
-internal error: vector element cannot be NaN or Inf: +Inf
+invalid input: vector element cannot be NaN or Inf: +Inf
 load data infile {'filepath'='$resources/parquet_vector_nonfinite/f16_overflow.parquet', 'format'='parquet'} into table f16;
-internal error: vector element cannot be NaN or Inf: +Inf
+invalid input: vector element cannot be NaN or Inf: +Inf
 load data infile {'filepath'='$resources/parquet_vector_nonfinite/bf16_overflow.parquet', 'format'='parquet'} into table bf16;
-internal error: vector element cannot be NaN or Inf: +Inf
+invalid input: vector element cannot be NaN or Inf: +Inf
 load data infile {'filepath'='$resources/parquet_vector_nonfinite/f32_nan.parquet', 'format'='parquet'} into table f32;
-internal error: vector element cannot be NaN or Inf: NaN
+invalid input: vector element cannot be NaN or Inf: NaN
 load data infile {'filepath'='$resources/parquet_vector_nonfinite/f64_inf.parquet', 'format'='parquet'} into table f64;
-internal error: vector element cannot be NaN or Inf: +Inf
+invalid input: vector element cannot be NaN or Inf: +Inf
 select count(*) from f16;
 ➤ count(*)[-5,64,0]  𝄀
 0

@@ -32,14 +32,14 @@ func TestBuildMembershipFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, payload)
 
-	_, err = BuildMembershipFilter(proc, []byte{1, 2, 3})
-	require.Error(t, err, "a malformed key vector is rejected")
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1, 2, 3})
 
 	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed[int64](keys, 7, false, proc.Mp()))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
-	payload, err = BuildMembershipFilter(proc, data)
+	payload, err = BuildMembershipFilter(proc, testutil.RuntimeKeyPayload(t, data))
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 }

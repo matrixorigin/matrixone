@@ -1204,7 +1204,13 @@ func (r *taskRunner) mergeTasks(tasksSlice ...[]task.DaemonTask) []task.DaemonTa
 			if _, ok := taskIDs[t.ID]; ok {
 				continue
 			}
-			if !r.canClaimDaemonTask(t.Account) {
+			// Stopping work already owned by this runner needs no new placement
+			// authority. HAKeeper discovery failure must not veto local controls.
+			localStop := t.TaskRunner == r.runnerID &&
+				(t.TaskStatus == task.TaskStatus_PauseRequested ||
+					t.TaskStatus == task.TaskStatus_Paused ||
+					t.TaskStatus == task.TaskStatus_CancelRequested)
+			if !localStop && !r.canClaimDaemonTask(t.Account) {
 				continue
 			}
 			taskIDs[t.ID] = struct{}{}

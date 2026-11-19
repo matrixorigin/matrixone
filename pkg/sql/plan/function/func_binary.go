@@ -1319,7 +1319,35 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
-	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
+	return boolValueBranchesAsNumeric(overloads, inputs, coalesceValueArgument, coalesceCheckTypes)
+}
+
+func coalesceValueArgument(_, _ int) bool {
+	return true
+}
+
+func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, func(int) bool { return true }); ok {
+		return castFromWidened(coalesceCheck(overloads, widened), widened)
+	}
+	if target, ok := sameLowPrecisionFloatType(inputs); ok {
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Oid == target.Oid
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+	}
+	if target, hasVector, ok := commonVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
@@ -7135,6 +7163,9 @@ func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, is
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
 	case types.T_float32:
 		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, idx)
+		return strconv.FormatFloat(float64(f), 'g', -1, 64), false, false, nil
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
 	case types.T_decimal64:
@@ -7839,7 +7870,7 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
@@ -7852,6 +7883,12 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		shaType, isnull2 := shaTypes.GetValue(i)
 
 		if isnull1 || isnull2 {
@@ -7882,7 +7919,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 // as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
 // string wrapper preserves binary bytes and avoids the lossy implicit cast to
 // VARCHAR that would otherwise happen before execution.
-func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaLengths := vector.GenerateFunctionStrParameter(args[1])
@@ -7905,6 +7942,12 @@ func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		var isnull2 bool
 		var shaType int64
 		if lengthIsConst {
@@ -8663,23 +8706,119 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		return opTernaryStrFixedStrToFixed[uint64, Tr](ivecs, result, proc, length, findSetMember, selectList)
 	}
 
-	findInStrList := func(str, strlist string) Tr {
-		if strlist == "" {
-			return toResult(0)
+	// FIND_IN_SET honors the resolved collation of its string-list (container)
+	// operand: utf8mb4_general_ci compares per-character weights and the
+	// unicode_ci family compares the same collation keys as =/IN, so
+	// membership agrees with LIKE and with equality (issue #31175). A binary
+	// needle or list row keeps the byte-wise membership test, matching
+	// INSTR's domain routing and MySQL's both-argument comparison resolution.
+	fold := likeFoldModeFor(ivecs[1].GetType().Charset)
+	listType := *ivecs[1].GetType()
+	needleBinary, needlePerRow := stringDomainMode(ivecs[0])
+	listBinary, listPerRow := stringDomainMode(ivecs[1])
+	needles := vector.GenerateFunctionStrParameter(ivecs[0])
+	lists := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
+			}
+			continue
 		}
-		for position := uint64(1); ; position++ {
-			member, rest, more := strings.Cut(strlist, ",")
-			if member == str {
-				return toResult(position)
+		strBytes, null1 := needles.GetStrValue(row)
+		listBytes, null2 := lists.GetStrValue(row)
+		if null1 || null2 {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
 			}
-			if !more {
-				return toResult(0)
+			continue
+		}
+		rowFold := fold != likeFoldNone &&
+			!binaryStringAt(ivecs[0], int(row), needleBinary, needlePerRow) &&
+			!binaryStringAt(ivecs[1], int(row), listBinary, listPerRow)
+		// The needle's comparison representation is row-invariant: prepare
+		// it once and reuse it across every list member instead of folding
+		// or keying the needle again per member (issue #31175 review).
+		var needleKey, foldedNeedle []byte
+		if rowFold {
+			if fold == likeFoldUnicodeCI {
+				needleKey = types.CollationKeyOrOriginal(listType.Charset,
+					appendFindInSetSentinel(strBytes))
+			} else {
+				foldedNeedle = generalCILikeFold(strBytes)
 			}
-			strlist = rest
+		}
+		position := uint64(0)
+		if len(listBytes) != 0 {
+			// Walk members with Cut so the scan never materializes a member
+			// slice per row, matching the upstream no-allocation iteration.
+			j := 0
+			for rest := listBytes; ; {
+				member, r, more := bytes.Cut(rest, commaSeparator)
+				if j&findInSetMemberScanCancelMask == findInSetMemberScanCancelMask {
+					// A long member scan must stay cancellable, exactly
+					// like the other extended scans in this package.
+					if err = proc.Ctx.Err(); err != nil {
+						return err
+					}
+				}
+				if bytes.Equal(member, strBytes) ||
+					(rowFold && findInSetMemberEqual(fold, listType, member, needleKey, foldedNeedle)) {
+					position = uint64(j + 1)
+					break
+				}
+				if !more {
+					break
+				}
+				rest = r
+				j++
+			}
+		}
+		if err = rs.Append(toResult(position), false); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
+var commaSeparator = []byte{','}
+
+// findInSetMemberScanCancelMask paces the cancellation checks inside one
+// row's member scan: the context is probed every 1024 members, so a
+// pathologically long list stays interruptible without taxing short lists.
+const findInSetMemberScanCancelMask = 1023
+
+// findInSetMemberEqual compares one list member with the needle under the
+// list operand's resolved collation: the unicode_ci family compares the same
+// collation keys as =/IN, while utf8mb4_general_ci compares per-character
+// weight runes (issue #31175). The needle side arrives already prepared for
+// the row (its sentinel-appended collation key or its fold), so the member
+// loop pays the needle transformation once per row instead of once per
+// member (issue #31175 review).
+func findInSetMemberEqual(fold likeFoldMode, listType types.Type, member, needleKey, foldedNeedle []byte) bool {
+	if fold == likeFoldUnicodeCI {
+		// MySQL tests list membership with the unpadded my_strnncoll, so
+		// trailing spaces stay significant even under a PAD SPACE
+		// collation. Appending one weighted non-space character makes
+		// every trailing space non-trailing, keeping the whole-key
+		// comparison (and its expansion semantics) intact while the key
+		// builder's PAD SPACE trimming can no longer equate 'a ' with 'a'
+		// (issue #31175 review).
+		return bytes.Equal(types.CollationKeyOrOriginal(listType.Charset,
+			appendFindInSetSentinel(member)), needleKey)
+	}
+	return bytes.Equal(generalCILikeFold(member), foldedNeedle)
+}
+
+// appendFindInSetSentinel appends the weighted non-space character that
+// keeps trailing spaces significant in FIND_IN_SET membership. '0' has a
+// real UCA 4.0.0 weight distinct from SPACE, and the pinned table has no
+// contractions, so key(x+'0') is exactly key(x) followed by key('0').
+func appendFindInSetSentinel(value []byte) []byte {
+	out := make([]byte, 0, len(value)+1)
+	out = append(out, value...)
+	return append(out, '0')
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -8815,8 +8954,25 @@ func evalRight(str string, length int64) string {
 }
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+	// Overflow/underflow and NaN/Inf-input results stay row-local NULLs (#28375).
+	// A finite negative base with a finite non-integer exponent has no real
+	// value, so an evaluated row rejects with the DOUBLE out-of-range error
+	// (MySQL 1690, SQLSTATE 22003) instead of a silent NULL: the #28375
+	// contract's domain-shaped exception for the #31155 Expected. NULL
+	// inputs, skipped rows and all other results keep the #28375 contract.
+	// A zero-length batch evaluates no rows: the constant/constant template
+	// shape still invokes the callback once, so the domain check stays off
+	// for length 0 (colexec passes empty-batch row counts).
+	var domainErr error
+	err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if length > 0 && v1 < 0 && !math.IsInf(v1, 0) &&
+			!math.IsNaN(v2) && !math.IsInf(v2, 0) && v2 != math.Trunc(v2) {
+			if domainErr == nil {
+				domainErr = moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
+			return 0, nil
+		}
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
 			return 0, moerr.NewOutOfRangeNoCtxf(
@@ -8824,6 +8980,10 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		}
 		return res, nil
 	}, selectList)
+	if domainErr != nil {
+		return domainErr
+	}
+	return err
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

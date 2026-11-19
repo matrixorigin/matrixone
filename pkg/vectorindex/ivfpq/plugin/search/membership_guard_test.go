@@ -33,7 +33,7 @@ func TestNewReaderRequiresPresentMembershipFilter(t *testing.T) {
 	require.ErrorContains(t, err, "requires a membership filter that is missing")
 
 	r, err = Hooks{}.NewReader(proc, nil, searchplugin.Request{
-		HasMembershipFilter: true, MembershipFilterRequired: true, MembershipFilter: []byte{1},
+		HasMembershipFilter: true, MembershipFilterRequired: true,
 	})
 	require.Nil(t, r)
 	require.ErrorContains(t, err, "ivfpq index search is missing source or index metadata")

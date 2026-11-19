@@ -454,22 +454,42 @@ func TestEngineCloseWaitsForExpiredGCToReturn(t *testing.T) {
 		deletion := <-fs.entered
 		closed := make(chan error, 1)
 		go func() { closed <- owner.Close() }()
+		// The round-11 review (issue #25590) bounds the whole shutdown
+		// tail: the pool release still covers the parked storage work
+		// with the remaining budget, but a context-blind deletion that
+		// no expiry can move cannot hold Close past it.
 		deadline, ok := deletion.Deadline()
 		require.True(t, ok)
+		time.Sleep(1 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			t.Fatalf("close returned while its budget still covers the parked storage work: %v", err)
+		default:
+		}
+		// Past the deletion's own deadline the storage STILL owns the
+		// request; past the shutdown budget Close returns bounded, the
+		// release's deadline status being the visible report of the
+		// unfinished work.
 		time.Sleep(time.Until(deadline))
 		synctest.Wait()
 		require.ErrorIs(t, deletion.Err(), context.DeadlineExceeded)
 		select {
 		case err := <-closed:
-			t.Fatalf("close returned while storage still owns request: %v", err)
-		default:
+			require.ErrorIs(t, err, context.DeadlineExceeded,
+				"past the budget the bounded pool release reports the deadline")
+		case <-time.After(2 * time.Second):
+			t.Fatal("close must return bounded once the shutdown budget expired")
 		}
 		close(fs.release)
 		released = true
 		<-fs.returned
-		require.NoError(t, <-closed)
-		require.Zero(t, pool.Running())
-		require.NoError(t, owner.Close())
+		require.Eventually(t, func() bool {
+			return pool.Running() == 0
+		}, 5*time.Second, 10*time.Millisecond,
+			"the lifetime of the released work is its own: the worker finishes and exits")
+		require.ErrorIs(t, owner.Close(), context.DeadlineExceeded,
+			"the repeat Close keeps reporting the first shutdown's bounded status")
 	})
 }
 

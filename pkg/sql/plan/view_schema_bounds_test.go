@@ -32,7 +32,7 @@ func TestResultScanWithoutQueryIDReturnsArgumentError(t *testing.T) {
 	statements, err := mysql.Parse(t.Context(), "select * from result_scan() as missing_query", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	_, err = BuildPlan(f.compiler, statements[0], false)
+	_, err = BuildPlan(f.compiler, statements[0], false, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "missing query ID must be rejected before catalog or execution: %v", err)
 }
 

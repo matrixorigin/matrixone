@@ -424,6 +424,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	vector.resetCacheAdmission()
 	if _, err := parseFilePathAtService(vector.FilePath, l.name); err != nil {
 		return err
 	}
@@ -681,7 +682,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(ctx, cr, nil, l)
+				cacheData, err = entry.ToCacheData(ctx, cr, nil, entry.allocatorForDecode(l))
 				if err != nil {
 					return err
 				}
@@ -835,7 +836,7 @@ func (l *LocalFS) handleReadCloserForRead(
 				defer file.Close()
 				defer fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
+				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), entry.allocatorForDecode(l))
 				if err != nil {
 					return err
 				}
@@ -1028,6 +1029,13 @@ func deleteLocalFile(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath 
 
 	err = os.Remove(nativePath)
 	if err != nil {
+		// A concurrent deletion already removed the file between this
+		// check's Stat and its Remove: the file is gone, which is the
+		// documented not-found outcome, not an error (the cleanup
+		// subsystem's drains race benignly over one-ownership names).
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 
@@ -1317,6 +1325,23 @@ func removeMutableLocalFile(ctx context.Context, name, filePath string, native f
 	return os.Remove(path)
 }
 
+// createAndRemoveMutableLocalFile owns the descriptor until unlink succeeds.
+func createAndRemoveMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string, unlink func(*os.File) error) (*os.File, error) {
+	f, err := createMutableLocalFile(ctx, name, filePath, native)
+	if err != nil {
+		return nil, err
+	}
+	if err = unlink(f); err != nil {
+		closeOnError(&err, f)
+		return nil, err
+	}
+	return f, nil
+}
+
+func unlinkLocalFile(f *os.File) error {
+	return os.Remove(f.Name())
+}
+
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
@@ -1520,22 +1545,5 @@ func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.Create(nativePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// do not check error for this one
-	os.Remove(nativePath)
-	return f, nil
+	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkLocalFile)
 }

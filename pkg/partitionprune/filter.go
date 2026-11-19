@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -151,7 +152,7 @@ func hashFilterExpr(
 			if !matchesPartitionColumns(left.Col, colPosition, metadata) {
 				return nil, false, nil
 			}
-			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1], proc.Mp())
 			if !canPrune {
 				return nil, false, nil
 			}
@@ -270,7 +271,7 @@ func rangeFilterExpr(
 			if !matchesPartitionColumns(left.Col, colPosition, metadata) {
 				return nil, false, nil
 			}
-			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1], proc.Mp())
 			if !canPrune {
 				return nil, false, nil
 			}
@@ -407,11 +408,12 @@ func filterResult(
 // The general expression executor intentionally does not own Fold values. A
 // clone keeps this storage optimization from mutating the reusable scan filter.
 // False means that pruning must conservatively scan every partition.
-func normalizePartitionValue(value *plan.Expr) (*plan.Expr, bool) {
+func normalizePartitionValue(value *plan.Expr, mp *mpool.MPool) (*plan.Expr, bool) {
 	if !p.HasFoldValExpr(value) {
 		return value, true
 	}
-	return convertFoldExprToNormal(p.DeepCopyExpr(value))
+	normalized, ok, _ := convertFoldExprWithPool(p.DeepCopyExpr(value), mp)
+	return normalized, ok
 }
 
 // mustReplaceCol substitutes every reference after callers establish that all
@@ -651,7 +653,7 @@ func listFilterExpr(
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
 	expr = p.DeepCopyExpr(expr)
-	expr, canPrune := convertFoldExprToNormal(expr)
+	expr, canPrune, _ := convertFoldExprWithPool(expr, proc.Mp())
 	if !canPrune {
 		return nil, false, nil
 	}
@@ -816,48 +818,47 @@ func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (
 // general expression executor. The boolean is false when a Fold value cannot
 // be represented losslessly. Partition pruning is optional, so callers must
 // fail open instead of evaluating a partial or ambiguous conversion.
-func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
+func convertFoldExprWithPool(expr *plan.Expr, mp *mpool.MPool) (*plan.Expr, bool, error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
 		if ef.Fold == nil {
-			return nil, false
+			return nil, false, nil
 		}
 		if ef.Fold.IsConst {
 			c, ok := getConstantFromBytes(ef.Fold.Data, expr.Typ)
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Lit{
 					Lit: c,
 				},
-			}, true
+			}, true, nil
 		} else {
-			vec := vector.NewVec(types.T_any.ToType())
+			vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
+			defer vec.Free(mp)
 			err := vec.UnmarshalBinary(ef.Fold.Data)
 			if err != nil {
-				return nil, false
+				return nil, false, nil
 			}
 			vecType := vec.GetType()
 			if int32(vecType.Oid) != expr.Typ.Id || vecType.Scale != expr.Typ.Scale ||
 				(expr.Typ.Width != 0 && vecType.Width != expr.Typ.Width) ||
 				(expr.Typ.Charset != 0 && uint32(vecType.Charset) != expr.Typ.Charset) {
-				return nil, false
+				return nil, false, nil
 			}
-			// InplaceSortAndCompact's ordinary value-only path does not move the
-			// null bitmap with the reordered payload. A nullable Fold could
-			// therefore turn {1, NULL} into {0, NULL} and make pruning omit the
-			// partition that contains 1. Nullable predicates retain their SQL
-			// residual filter, so failing open is both safe and cheaper than
-			// materializing a null-aware copy solely for optional pruning.
+			// Preserve the existing conservative nullable-fold boundary: the SQL
+			// residual evaluates NULL semantics when pruning cannot represent it.
 			if vec.IsConstNull() || vec.GetNulls().Any() {
-				return nil, false
+				return nil, false, nil
 			}
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(mp); err != nil {
+				return nil, false, err
+			}
 			data, err := vec.MarshalBinary()
 			if err != nil {
-				return nil, false
+				return nil, false, nil
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
@@ -867,21 +868,24 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 						Data: data,
 					},
 				},
-			}, true
+			}, true, nil
 		}
 
 	case *plan.Expr_F:
 		for i := range ef.F.Args {
-			newExpr, ok := convertFoldExprToNormal(ef.F.Args[i])
+			newExpr, ok, err := convertFoldExprWithPool(ef.F.Args[i], mp)
+			if err != nil {
+				return nil, false, err
+			}
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			ef.F.Args[i] = newExpr
 		}
-		return expr, true
+		return expr, true, nil
 
 	default:
-		return expr, true
+		return expr, true, nil
 	}
 }
 
@@ -890,7 +894,16 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 // boolean form above because an unrepresentable optimization input is a safe
 // reason to scan all partitions, not a query error.
 func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
-	normalized, ok := convertFoldExprToNormal(expr)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return convertFoldExprStrictWithPool(expr, mp)
+}
+
+func convertFoldExprStrictWithPool(expr *plan.Expr, mp *mpool.MPool) (*plan.Expr, error) {
+	normalized, ok, err := convertFoldExprWithPool(expr, mp)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, moerr.NewInvalidInputNoCtx("fold expression cannot be converted losslessly")
 	}

@@ -16,7 +16,9 @@ package frontend
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -839,6 +841,311 @@ func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
 	require.Equal(t, []int32{2, 3, -4, 5, -6}, vector.MustFixedColNoTypeCheck[int32](vec))
 }
 
+// pickBinaryKeyExprs parses a real "data branch pick src into dst keys(...)"
+// statement so a fixture exercises the parser's actual literal categories
+// (P_char, P_hexnum, P_ScoreBinaryHexnum, ...), not hand-built AST nodes.
+func pickBinaryKeyExprs(t *testing.T, keysSQL string) []tree.Expr {
+	t.Helper()
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys("+keysSQL+")",
+		1,
+	)
+	require.NoError(t, err)
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.NotNil(t, stmt.Keys)
+	return stmt.Keys.KeyExprs
+}
+
+// requireBinaryKeys appends each KEYS expression to a fresh typed vector and
+// compares every produced row, in pickup order, against an independent hex
+// oracle.
+func requireBinaryKeys(t *testing.T, pkType types.Type, keyExprs []tree.Expr, want []string) {
+	t.Helper()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+	for _, expr := range keyExprs {
+		require.NoError(t, appendExprToVec(vec, expr, pkType, time.UTC, mp))
+	}
+	require.Equal(t, len(want), vec.Length())
+	for i, wantHex := range want {
+		expected, decodeErr := hex.DecodeString(wantHex)
+		require.NoError(t, decodeErr)
+		require.Equal(t, expected, vec.GetBytesAt(i), "key %d", i)
+	}
+}
+
+func TestAppendExprToVec_BinaryPKLiteralAndHexForms(t *testing.T) {
+	// 'a', x'61' and 0x61 address the same stored 0x61 byte key while '0x61'
+	// remains four ASCII bytes; NUL/multibyte literals keep their verbatim
+	// bytes and BINARY(4) zero-pads to the declared width.
+	keyExprs := pickBinaryKeyExprs(t, `'a', x'61', 0x61, '0x61', _binary '61', _binary x'61', 0x6, 'a\0b', '中', '', x''`)
+	require.Equal(t, 11, len(keyExprs))
+	requireBinaryKeys(t, types.New(types.T_binary, 4, 0), keyExprs, []string{
+		"61000000", // 'a': zero-padded to BINARY(4)
+		"61000000", // x'61': same key bytes as 'a'
+		"61000000", // 0x61: plain-hex spelling of x'61'
+		"30783631", // '0x61': plain string stays four ASCII bytes
+		"36310000", // _binary '61': string introducer form, padded
+		"61000000", // _binary x'61': hexadecimal introducer form
+		"06000000", // 0x6: odd hex digits get a high zero nibble
+		"61006200", // 'a\0b': embedded NUL is content, not padding
+		"e4b8ad00", // '中': multibyte UTF-8 bytes padded by byte length
+		"00000000", // '': empty string pads to the full width
+		"00000000", // x'': empty hexadecimal literal pads to the full width
+	})
+}
+
+func TestAppendExprToVec_VarbinaryPKLiteralForms(t *testing.T) {
+	// VARBINARY keeps the original byte length: no padding, a trailing zero
+	// byte is data, and hex-looking strings are never decoded a second time.
+	keyExprs := pickBinaryKeyExprs(t, `'a', x'61', 0x6, '0x61', 'ab\0', '', x''`)
+	require.Equal(t, 7, len(keyExprs))
+	requireBinaryKeys(t, types.New(types.T_varbinary, 8, 0), keyExprs, []string{
+		"61",       // 'a'
+		"61",       // x'61'
+		"06",       // 0x6
+		"30783631", // '0x61': four ASCII bytes
+		"616200",   // 'ab\0': trailing zero byte preserved, length 3
+		"",         // '': raw empty key
+		"",         // x'': raw empty key
+	})
+}
+
+func TestAppendExprToVec_BinaryPKOverCapacityAndUnsupportedLiterals(t *testing.T) {
+	tests := []struct {
+		name    string
+		keys    string
+		wantErr string
+	}{
+		{"string over binary width", `'abcde'`, "range"},
+		{"hex over binary width", `x'6161616161'`, "range"},
+		{"signed unary on binary key", `-0x61`, "unary expression not supported"},
+		{"integer literal", `1`, "is not a string or hexadecimal"},
+		{"decimal literal", `1.5`, "is not a string or hexadecimal"},
+		{"bit literal", `b'01'`, "is not a string or hexadecimal"},
+		{"boolean literal", `true`, "is not a string or hexadecimal"},
+		{"null literal", `null`, "is not a string or hexadecimal"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			keyExprs := pickBinaryKeyExprs(t, tc.keys)
+			require.Equal(t, 1, len(keyExprs))
+
+			pkType := types.New(types.T_binary, 4, 0)
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+
+			vec := vector.NewVec(pkType)
+			defer vec.Free(mp)
+
+			require.ErrorContains(t, appendExprToVec(vec, keyExprs[0], pkType, time.UTC, mp), tc.wantErr)
+
+			// The failed conversion appended nothing, and the same vector
+			// still serves a legal key afterwards.
+			require.Zero(t, vec.Length())
+			require.NoError(t, appendNumericStringToVec(vec, "a", pkType, time.UTC, mp))
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, []byte{'a', 0, 0, 0}, vec.GetBytesAt(0))
+		})
+	}
+
+	// The shared converter serves string constants and prepare-parameter
+	// bytes with the same capacity enforcement for VARBINARY.
+	t.Run("varbinary over capacity via shared converter", func(t *testing.T) {
+		pkType := types.New(types.T_varbinary, 3, 0)
+		mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+		require.NoError(t, err)
+		defer mp.Free(nil)
+
+		vec := vector.NewVec(pkType)
+		defer vec.Free(mp)
+
+		require.ErrorContains(t, appendNumericStringToVec(vec, "abcd", pkType, time.UTC, mp), "range")
+		require.Zero(t, vec.Length())
+		require.NoError(t, appendNumericStringToVec(vec, "ab", pkType, time.UTC, mp))
+		require.Equal(t, []byte("ab"), vec.GetBytesAt(0))
+	})
+}
+
+// TestAppendNumericStringToVec_BinaryWidthBoundaries pins the declared-width
+// legality guard on the shared converter (string constants and prepare
+// parameters): illegal metadata is rejected before any allocation, while
+// legal extremes keep the assignment contract.
+func TestAppendNumericStringToVec_BinaryWidthBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		pkType  types.Type
+		input   string
+		wantHex string
+		wantErr string
+	}{
+		{name: "binary negative width", pkType: types.New(types.T_binary, -1, 0), input: "a", wantErr: "invalid declared length"},
+		{name: "binary width over limit", pkType: types.New(types.T_binary, types.MaxBinaryLen+1, 0), input: "a", wantErr: "invalid declared length"},
+		{name: "binary width MaxInt32", pkType: types.New(types.T_binary, math.MaxInt32, 0), input: "a", wantErr: "invalid declared length"},
+		{name: "varbinary negative width", pkType: types.New(types.T_varbinary, -1, 0), input: "a", wantErr: "invalid declared length"},
+		{name: "varbinary width over limit", pkType: types.New(types.T_varbinary, types.MaxVarBinaryLen+1, 0), input: "a", wantErr: "invalid declared length"},
+		{name: "binary legal maximum pads", pkType: types.New(types.T_binary, types.MaxBinaryLen, 0), input: "a",
+			wantHex: "61" + strings.Repeat("00", types.MaxBinaryLen-1)},
+		{name: "varbinary legal maximum keeps raw bytes", pkType: types.New(types.T_varbinary, types.MaxVarBinaryLen, 0), input: "a", wantHex: "61"},
+		{name: "binary width zero accepts empty", pkType: types.New(types.T_binary, 0, 0), input: "", wantHex: ""},
+		{name: "binary width zero rejects non-empty", pkType: types.New(types.T_binary, 0, 0), input: "a", wantErr: "range"},
+		{name: "binary multibyte over capacity", pkType: types.New(types.T_binary, 2, 0), input: "中", wantErr: "range"},
+		{name: "varbinary trailing NUL is content", pkType: types.New(types.T_varbinary, 4, 0), input: "a\x00", wantHex: "6100"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+
+			vec := vector.NewVec(tc.pkType)
+			defer vec.Free(mp)
+
+			appendErr := appendNumericStringToVec(vec, tc.input, tc.pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, appendErr, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, appendErr)
+			require.Equal(t, 1, vec.Length())
+			expected, decodeErr := hex.DecodeString(tc.wantHex)
+			require.NoError(t, decodeErr)
+			require.Equal(t, expected, vec.GetBytesAt(0))
+		})
+	}
+}
+
+func TestAppendExprToVec_BinaryPKPreparedParams(t *testing.T) {
+	// The SQL PREPARE and native COM_STMT prepared callers converge on the
+	// same prepare-parameter vector: bound bytes participate verbatim, with
+	// no second hexadecimal decoding.
+	binaryType := types.New(types.T_binary, 4, 0)
+	varbinaryType := types.New(types.T_varbinary, 8, 0)
+
+	for _, tc := range []struct {
+		name   string
+		pkType types.Type
+		values []string
+		want   []string
+	}{
+		{name: "binary(4) pads bound bytes", pkType: binaryType,
+			values: []string{"a", "0x61", "a\x00b", "\xff\x61", ""},
+			want:   []string{"61000000", "30783631", "61006200", "ff610000", "00000000"}},
+		{name: "varbinary(8) keeps raw length", pkType: varbinaryType,
+			values: []string{"a", "ab\x00", "0x61", "\xff\xfe", ""},
+			want:   []string{"61", "616200", "30783631", "fffe", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+
+			params := vector.NewVec(types.T_text.ToType())
+			defer params.Free(mp)
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
+			}
+
+			vec := vector.NewVec(tc.pkType)
+			defer vec.Free(mp)
+			for i := range tc.values {
+				require.NoError(t, appendExprToVecWithPrepareParams(
+					vec, tree.NewParamExpr(i+1), tc.pkType, time.UTC, mp, params))
+			}
+			require.Equal(t, len(tc.want), vec.Length())
+			for i, wantHex := range tc.want {
+				expected, decodeErr := hex.DecodeString(wantHex)
+				require.NoError(t, decodeErr)
+				require.Equal(t, expected, vec.GetBytesAt(i), "bound value %d", i)
+			}
+		})
+	}
+
+	t.Run("param errors leave the target vector untouched", func(t *testing.T) {
+		pkType := binaryType
+		mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+		require.NoError(t, err)
+		defer mp.Free(nil)
+
+		params := vector.NewVec(types.T_text.ToType())
+		defer params.Free(mp)
+		require.NoError(t, vector.AppendBytes(params, nil, true, mp))              // 1: NULL
+		require.NoError(t, vector.AppendBytes(params, []byte("abcde"), false, mp)) // 2: over capacity
+		require.NoError(t, vector.AppendBytes(params, []byte("a"), false, mp))     // 3: legal
+
+		vec := vector.NewVec(pkType)
+		defer vec.Free(mp)
+
+		require.ErrorContains(t, appendExprToVecWithPrepareParams(
+			vec, tree.NewParamExpr(1), pkType, time.UTC, mp, params), "must not be NULL")
+		require.Zero(t, vec.Length())
+
+		require.ErrorContains(t, appendExprToVecWithPrepareParams(
+			vec, tree.NewParamExpr(2), pkType, time.UTC, mp, params), "range")
+		require.Zero(t, vec.Length())
+
+		require.ErrorContains(t, appendExprToVecWithPrepareParams(
+			vec, tree.NewParamExpr(1), pkType, time.UTC, mp, nil), "has no execution value")
+		require.Zero(t, vec.Length())
+
+		// Rejections never partially apply; the same vector and parameters
+		// then serve a legal key.
+		require.NoError(t, appendExprToVecWithPrepareParams(
+			vec, tree.NewParamExpr(3), pkType, time.UTC, mp, params))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []byte{'a', 0, 0, 0}, vec.GetBytesAt(0))
+	})
+}
+
+func TestAppendExprToVec_CompositeBinaryPKComponents(t *testing.T) {
+	// Mirrors materializeCompositeValuesUnified: every tuple element flows
+	// through the converter with its own column type, and the real serial()
+	// encoding (already exercised by typed-subquery PICK) accepts the binary
+	// component.
+	keyExprs := pickBinaryKeyExprs(t, `(1, 'a'), (2, x'62'), (3, _binary '63')`)
+	require.Len(t, keyExprs, 3)
+
+	intType := types.T_int32.ToType()
+	binType := types.New(types.T_binary, 2, 0)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	intVec := vector.NewVec(intType)
+	binVec := vector.NewVec(binType)
+	defer intVec.Free(mp)
+	defer binVec.Free(mp)
+
+	for _, expr := range keyExprs {
+		tup, ok := expr.(*tree.Tuple)
+		require.True(t, ok)
+		require.Len(t, tup.Exprs, 2)
+		require.NoError(t, appendExprToVec(intVec, tup.Exprs[0], intType, time.UTC, mp))
+		require.NoError(t, appendExprToVec(binVec, tup.Exprs[1], binType, time.UTC, mp))
+	}
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](intVec))
+	require.Equal(t, "6100", hex.EncodeToString(binVec.GetBytesAt(0))) // 'a': string zero-padded
+	require.Equal(t, "6200", hex.EncodeToString(binVec.GetBytesAt(1))) // x'62': hex byte zero-padded
+	require.Equal(t, "3633", hex.EncodeToString(binVec.GetBytesAt(2))) // _binary '63': ASCII digits are data
+
+	// One serial()-encoded composite key per tuple.
+	encodedVec := encodeCompositePK(t, []*vector.Vector{intVec, binVec})
+	defer encodedVec.Free(mp)
+	require.Equal(t, 3, encodedVec.Length())
+}
+
 func TestAppendExprToVec_IntegerPKNumericLiteralBoundaries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1028,7 +1335,7 @@ func TestPKFilterPruning_SinglePK_Int32(t *testing.T) {
 	for _, v := range []int32{10, 20, 30, 50, 51, 52} {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1070,7 +1377,7 @@ func TestPKFilterPruning_SinglePK_Varchar(t *testing.T) {
 	for _, s := range []string{"apple", "banana", "mango"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1107,7 +1414,7 @@ func TestPKFilterPruning_Decimal64(t *testing.T) {
 		require.NoError(t, parseErr)
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1143,7 +1450,7 @@ func TestPKFilterPruning_SeqnumPreserved(t *testing.T) {
 
 	vec := vector.NewVec(pkType)
 	require.NoError(t, vector.AppendFixed(vec, int64(100), false, mp))
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	// Simulate a schema where PK is at column index 2 but seqnum 5
 	// (e.g., after dropping columns).
@@ -1168,7 +1475,7 @@ func TestPKFilterPruning_LargeKeySet(t *testing.T) {
 	for i := int64(0); i < 1000; i++ {
 		require.NoError(t, vector.AppendFixed(vec, i*10, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	vec.Free(mp)
@@ -1243,7 +1550,7 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 	require.Equal(t, 3, encodedVec.Length())
 
 	// Sort (lexicographic order on serial-encoded bytes).
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	// The __mo_cpkey_col type in production is T_varchar.
 	cpkType := types.T_varchar.ToType()
@@ -1310,7 +1617,7 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	col1.Free(mp)
 	col2.Free(mp)
 
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	cpkType := types.T_varchar.ToType()
 	pkFilter := buildPKFilterFromVec(encodedVec, cpkType, 0)
@@ -1438,7 +1745,7 @@ func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
 	}
 	require.Equal(t, 3, vec.Length())
 
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	require.NotNil(t, pkFilter)
@@ -1668,7 +1975,7 @@ func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		called++
 		return nil, wantErr
@@ -1736,7 +2043,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}
@@ -1813,7 +2120,7 @@ func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("order_id"), nil
 	}
@@ -1878,7 +2185,7 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k1", "k2"), nil
 	}
@@ -1943,7 +2250,7 @@ func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}

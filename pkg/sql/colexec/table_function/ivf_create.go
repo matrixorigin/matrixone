@@ -22,6 +22,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +30,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
@@ -57,86 +59,52 @@ var (
 	// vector types live in one place — the IVF-FLAT plugin's catalog hooks.
 	ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
-	ivf_runSql = sqlexec.RunSql
+	ivf_runSql     = sqlexec.RunSql
+	ivf_getVersion = ivfflat.GetVersion
 )
 
 type ivfCreateState struct {
-	inited       bool
-	param        vectorindex.IvfParam
-	tblcfg       vectorindex.IndexTableConfig
-	idxcfg       vectorindex.IndexConfig
-	data32       [][]float32
-	data64       [][]float64
-	nsample      uint
-	sample_ratio float64
-	offset       int
+	inited         bool
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	param          vectorindex.IvfParam
+	tblcfg         vectorindex.IndexTableConfig
+	idxcfg         vectorindex.IndexConfig
+	data32         [][]float32
+	data64         [][]float64
+	nsample        uint
+	sample_ratio   float64
+	offset         int
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
 
+func ivfSampleSQL(cfg vectorindex.IndexTableConfig, ratio float64, limit uint) string {
+	return fmt.Sprintf("SELECT SAMPLE(%s, %f PERCENT) FROM %s WHERE %s IS NOT NULL LIMIT %d",
+		sqlquote.Ident(cfg.KeyPart), ratio*100, sqlquote.QualifiedIdent(cfg.DbName, cfg.SrcTable),
+		sqlquote.Ident(cfg.KeyPart), limit)
+}
+
 func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc *process.Process, data [][]T) error {
-
-	var clusterer kmeans.Clusterer
-	var err error
-	var ok bool
-
-	version, err := ivfflat.GetVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
+	version, err := ivf_getVersion(sqlproc, u.tblcfg)
 	if err != nil {
 		return err
 	}
 
-	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
-
-	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
-	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
-	var centers [][]T
-	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
-	if clusterer, err = device.NewKMeans(
-		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
-		defaultKmeansDeltaThreshold,
-		metric.MetricType(u.idxcfg.Ivfflat.Metric),
-		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
-		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
-		int(nworker),
-		gpuMode); err != nil {
+	var values []string
+	if len(data) < int(u.idxcfg.Ivfflat.Lists) {
+		// the rows the index cannot store are no samples: fewer samples than lists seed one NULL
+		// centroid, as a table with fewer rows does
+		values = []string{fmt.Sprintf("(%d, 1, NULL)", version)}
+	} else if values, err = kmeansCentroids(u, proc, data, version); err != nil {
 		return err
-	}
-	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
-	defer func() {
-		if clusterer != nil {
-			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
-			clusterer.Close()
-			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
-		}
-	}()
-
-	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
-	anycenters, err := clusterer.Cluster(proc.Ctx)
-	if err != nil {
-		return err
-	}
-	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
-
-	centers, ok = anycenters.([][]T)
-	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
-	}
-
-	// insert into centroid table
-	values := make([]string, 0, len(centers))
-	for i, c := range centers {
-		s := types.ArrayToString(c)
-		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
-	}
-
-	if len(values) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
 	logutil.Infof("IVFFLAT START: After Kmeans clustering, insert centroids to table")
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
+	sql := fmt.Sprintf("INSERT INTO %s (`%s`, `%s`, `%s`) VALUES %s", sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.IndexTable),
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
@@ -146,7 +114,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	sqls := []string{sql}
 	for _, s := range sqls {
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), s)
+		res, err := ivf_runSql(sqlproc, s)
 		if err != nil {
 			return err
 		}
@@ -165,14 +133,14 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
 		qmin, qmax := quantizer.TrainInt8(data)
 		insSQL := fmt.Sprintf(
-			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
+			"INSERT INTO %s (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
 				"ON DUPLICATE KEY UPDATE `%s` = VALUES(`%s`)",
-			u.tblcfg.DbName, u.tblcfg.MetadataTable,
+			sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.MetadataTable),
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, qmin,
 			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax, qmax,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val)
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), insSQL)
+		res, err := ivf_runSql(sqlproc, insSQL)
 		if err != nil {
 			return err
 		}
@@ -183,9 +151,67 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	return nil
 }
 
+// kmeansCentroids returns the rows of the centroids k-means trains on data.
+func kmeansCentroids[T types.RealNumbers](u *ivfCreateState, proc *process.Process, data [][]T, version int64) ([]string, error) {
+	var clusterer kmeans.Clusterer
+	var err error
+	var ok bool
+
+	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
+
+	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
+	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
+	var centers [][]T
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+	if clusterer, err = device.NewKMeans(
+		data, int(u.idxcfg.Ivfflat.Lists),
+		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
+		defaultKmeansDeltaThreshold,
+		metric.MetricType(u.idxcfg.Ivfflat.Metric),
+		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
+		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
+		int(nworker),
+		gpuMode); err != nil {
+		return nil, err
+	}
+	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
+	defer func() {
+		if clusterer != nil {
+			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
+			clusterer.Close()
+			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
+		}
+	}()
+
+	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
+	anycenters, err := clusterer.Cluster(proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
+
+	centers, ok = anycenters.([][]T)
+	if !ok {
+		return nil, moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
+	}
+
+	// insert into centroid table
+	values := make([]string, 0, len(centers))
+	for i, c := range centers {
+		s := types.ArrayToString(c)
+		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
+	}
+
+	if len(values) == 0 {
+		return nil, moerr.NewInternalError(proc.Ctx, "output centroids is empty")
+	}
+
+	return values, nil
+}
+
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
-	if !u.inited || (len(u.data32) == 0 && len(u.data64) == 0) {
+	if !u.inited || u.policy == nil || (u.data32 == nil && u.data64 == nil) {
 		return nil
 	}
 
@@ -197,6 +223,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 }
 
 func (u *ivfCreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -238,7 +265,32 @@ func ivfCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	admit := func() error {
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+		}
+		if !cfgVec.IsConst() {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivf_create", cfgstr, u.admittedConfig, u.inited, ivfflatrt.MaintenanceOperands)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+		return nil
+	}
+	if u.inited && u.policy == nil {
+		if err = admit(); err != nil {
+			return err
+		}
+	}
 	if !u.inited {
 		if len(tf.Params) > 0 {
 			// Wrap the JSON decode error in a stable message: sonic's error text is
@@ -271,20 +323,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
-		// IndexTableConfig
-		cfgVec := tf.ctr.argVecs[0]
-		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
-		}
-		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
-		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
-		}
-		err := sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
+		if err = admit(); err != nil {
 			return err
 		}
 
@@ -331,17 +370,13 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 
 		// run SQL
-		sql := fmt.Sprintf("SELECT SAMPLE(`%s`, %f PERCENT) FROM `%s`.`%s` WHERE `%s` IS NOT NULL LIMIT %d",
-			u.tblcfg.KeyPart,
-			u.sample_ratio*100,
-			u.tblcfg.DbName,
-			u.tblcfg.SrcTable,
-			u.tblcfg.KeyPart,
-			u.nsample)
+		sql := ivfSampleSQL(u.tblcfg, u.sample_ratio, u.nsample)
 
 		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
 
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), sql)
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		res, err := ivf_runSql(sqlproc, sql)
 		if err != nil {
 			return err
 		}
@@ -372,9 +407,15 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
 		//elemsz := res.Batches[0].Vecs[0].GetType().GetArrayElementSize()
 
+		// a row the index cannot store does not train the centroids; its int8/uint8 range is not
+		// known before they are trained
+		storage := ivfflat.NewStorage(embedvec.GetType().Oid, u.param.Quantization, 0, 0, false)
 		for _, bat := range res.Batches {
 			evec := bat.Vecs[0]
 			for i := 0; i < bat.RowCount(); i++ {
+				if storage.Check(evec.GetBytesAt(i)) != nil {
+					continue
+				}
 				var f32a []float32
 				switch evec.GetType().Oid {
 				case types.T_array_float32:

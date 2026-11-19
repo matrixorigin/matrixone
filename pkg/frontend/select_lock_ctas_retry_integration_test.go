@@ -93,7 +93,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 				defer statement.Free()
 				// Establish the original authorized binding before the catalog transition.
 				withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-					p, err := plan.BuildPlan(compiler, statement, prepared)
+					p, err := plan.BuildPlan(compiler, statement, prepared, nil)
 					require.NoError(t, err)
 					require.Nil(t, p.GetQuery())
 					require.Equal(t, prepared, p.GetDdl().GetQuery() != nil)
@@ -102,7 +102,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 				exec("alter view " + database + ".v as select id from " + database + ".b")
 				retry := func(allowed bool) {
 					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-						source, err := plan.BuildPlan(compiler, statement.(*tree.CreateTable).AsSource, false)
+						source, err := plan.BuildPlan(compiler, statement.(*tree.CreateTable).AsSource, false, nil)
 						require.NoError(t, err)
 						require.Len(t, source.GetQuery().SelectLockReferences, 1)
 						require.Equal(t, "b", source.GetQuery().SelectLockReferences[0].ObjectRef.ObjName)
@@ -142,7 +142,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 			require.NoError(t, err)
 			defer statement.Free()
 			withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-				p, err := plan.BuildPlan(compiler, statement, false)
+				p, err := plan.BuildPlan(compiler, statement, false, nil)
 				require.NoError(t, err)
 				require.Len(t, p.GetQuery().SelectLockReferences, 2)
 				checked, ok, err := frontend.AuthorizeNativeSelectLockBatchForTest(readerCtx, compiler, p.GetQuery())
@@ -153,7 +153,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 			for _, scenario := range []string{"boundary error", "boundary error and rollback failure", "prefix success and commit failure", "target error and rollback failure", "denial and commit failure", "begin failure"} {
 				t.Run(scenario, func(t *testing.T) {
 					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-						p, err := plan.BuildPlan(compiler, statement, false)
+						p, err := plan.BuildPlan(compiler, statement, false, nil)
 						require.NoError(t, err)
 						frontend.AssertNativeSelectLockFinalizationForTest(t, readerCtx, compiler, p.GetQuery(), scenario)
 					})
@@ -162,7 +162,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 			for _, change := range []string{"generation", "principal", "minimum", "cancel"} {
 				t.Run(change, func(t *testing.T) {
 					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-						p, err := plan.BuildPlan(compiler, statement, false)
+						p, err := plan.BuildPlan(compiler, statement, false, nil)
 						require.NoError(t, err)
 						reads, ok, err := frontend.AuthorizeNativeSelectLockBoundaryForTest(readerCtx, compiler, p.GetQuery(), change)
 						if change == "generation" {
@@ -214,7 +214,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 					statement, err := mysql.ParseOne(readerCtx, "select id from v for update", 1)
 					require.NoError(t, err)
 					defer statement.Free()
-					p, err := plan.BuildPlan(compiler, statement, false)
+					p, err := plan.BuildPlan(compiler, statement, false, nil)
 					require.NoError(t, err)
 					checked, ok, err := frontend.AuthorizeNativeSelectLockBatchForTest(readerCtx, compiler, p.GetQuery())
 					require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 				statement, err := mysql.ParseOne(readerCtx, "select v.id from v join a on v.id=a.id for update", 1)
 				require.NoError(t, err)
 				defer statement.Free()
-				p, err := plan.BuildPlan(compiler, statement, false)
+				p, err := plan.BuildPlan(compiler, statement, false, nil)
 				require.NoError(t, err)
 				require.Len(t, p.GetQuery().SelectLockReferences, 3)
 				require.NotEmpty(t, p.GetQuery().SelectLockReferences[0].ViewPath)

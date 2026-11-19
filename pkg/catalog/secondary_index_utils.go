@@ -122,6 +122,10 @@ const (
 	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamMaxBadRecords is the number of source rows an index may leave out because
+	// it cannot store them. Recorded only when specified; absence means 0.
+	IndexAlgoParamMaxBadRecords = "max_bad_records"
+
 	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
 	// per built segment. Bounds per-segment build memory regardless of doc size —
 	// max_index_capacity (docs) is a poor memory proxy since a doc can hold one token
@@ -328,6 +332,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
+	}
+
+	if val, ok := result[IndexAlgoParamMaxBadRecords]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxBadRecords, val)
 	}
 
 	// POSITION_FREE is recorded only when TRUE (absence ⇒ positional). Render it so a
@@ -638,6 +646,26 @@ func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
 		return 1
 	}
 	return n
+}
+
+// IndexParamMaxBadRecords returns the max_bad_records of an index's algo params, 0 when unset.
+func IndexParamMaxBadRecords(indexAlgoParams string) (int64, error) {
+	if indexAlgoParams == "" {
+		return 0, nil
+	}
+	params, err := IndexParamsStringToMap(indexAlgoParams)
+	if err != nil {
+		return 0, err
+	}
+	val, ok := params[IndexAlgoParamMaxBadRecords]
+	if !ok {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || n < 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid %s: %q", IndexAlgoParamMaxBadRecords, val)
+	}
+	return n, nil
 }
 
 // IndexParamAsync reports whether the user opted into async maintenance via the

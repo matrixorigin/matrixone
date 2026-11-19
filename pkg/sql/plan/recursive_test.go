@@ -396,7 +396,7 @@ func TestRecursiveCteConsumerColumnAliasList(t *testing.T) {
 	aliased := join.Left.(*tree.AliasedTableExpr)
 	aliased.As.Cols = tree.IdentifierList{tree.Identifier("renamed_n")}
 
-	logicPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, false)
+	logicPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"renamed_n", "renamed_n"}, logicPlan.GetQuery().Headings)
 }

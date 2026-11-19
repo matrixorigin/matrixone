@@ -823,7 +823,7 @@ func (exec *hllStateExec) makeHLLSketch(
 func canonicalValueNeedsScratch(typ types.Type) bool {
 	switch typ.Oid {
 	case types.T_json, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -969,7 +969,7 @@ func hllAddUsesCanonicalTypedKey(arg types.Type) bool {
 	switch arg.Oid {
 	case types.T_char, types.T_json, types.T_float32, types.T_float64,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

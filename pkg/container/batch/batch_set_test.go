@@ -27,6 +27,118 @@ const (
 	TestBatchMaxRow = 8192
 )
 
+func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	queue := NewBatchSet(3)
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		input.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
+	input.SetRowCount(7)
+	_, err := queue.UnionRange(mp, input, 1, 2, nil)
+	require.NoError(t, err)
+	_, err = queue.UnionRange(mp, input, 3, 4, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, []int64{11, 12, 13}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+	require.Equal(t, []int64{14, 15, 16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(1).Vecs[0]))
+	queue.Clean(mp)
+	_, err = queue.UnionRange(mp, input, 0, input.RowCount(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, queue.Length(), "a whole input must still respect the output row limit")
+	require.Equal(t, []int64{16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(2).Vecs[0]))
+}
+
+func TestBatchSetOwnedDestinationAcrossInputProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
+	require.NoError(t, err)
+	destination, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	source, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	dstSelection, err := vector.NewAllocationAccountSelection(destination, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	require.NoError(t, err)
+	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	require.NoError(t, err)
+	queue := NewBatchSetWithAllocation(4, dstSelection)
+	var inputs []*Batch
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		for _, input := range inputs {
+			input.Clean(mp)
+		}
+		for _, account := range []*mpool.AllocationAccount{destination, source} {
+			require.Zero(t, account.Seal().Used)
+			_, err := registry.Finalize(account)
+			require.NoError(t, err)
+		}
+		require.Zero(t, mp.CurrNB())
+	})
+	newInput := func(selection *vector.AllocationAccountSelection, values ...int64) *Batch {
+		input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+		inputs = append(inputs, input)
+		if selection != nil {
+			require.NoError(t, input.SetAllocationAccount(selection))
+		}
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, mp))
+		input.SetRowCount(len(values))
+		return input
+	}
+
+	first := newInput(nil, 1, 2)
+	require.Zero(t, queue.ReadyDeltaFor(first, first.RowCount()))
+	_, err = queue.Extend(mp, first, nil)
+	require.NoError(t, err)
+	second := newInput(srcSelection, 3, 4)
+	require.Equal(t, 1, queue.ReadyDeltaFor(second, second.RowCount()))
+	_, err = queue.Union(mp, second, []int32{0, 1}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, queue.ReadyCount())
+	full := queue.PopFront()
+	require.Same(t, dstSelection, full.AllocationAccountSelection())
+	require.Same(t, srcSelection, second.AllocationAccountSelection(), "copy must not relabel the input")
+	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColNoTypeCheck[int64](full.Vecs[0]))
+
+	third := newInput(nil, 5, 6, 7)
+	consumed, err := queue.Union(mp, third, []int32{0, 2}, full)
+	require.NoError(t, err)
+	require.True(t, consumed, "a matching owned batch can be recycled")
+	require.Equal(t, []int64{5, 7}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+	require.Same(t, dstSelection, queue.Get(0).AllocationAccountSelection())
+	// Push transfers ownership; an input with different provenance cannot be
+	// silently published as an owned destination.
+	require.ErrorIs(t, queue.Push(mp, third), mpool.ErrAllocationAccountMismatch)
+}
+
+func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	require.NoError(t, err)
+	queue := NewBatchSetWithAllocation(4, selection)
+	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		input.Clean(mp)
+		require.Zero(t, account.Seal().Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{1, 2}, nil, mp))
+	input.SetRowCount(2)
+	_, err = queue.Extend(mp, input, nil)
+	require.Error(t, err)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+}
+
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 	for _, tc := range []struct {
 		name string

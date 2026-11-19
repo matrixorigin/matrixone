@@ -496,18 +496,24 @@ const (
 	CondSQLTaskTriggerType
 	CondSQLTaskRunner
 	CondLastRun
+	condSQLTaskUnclaimed
+	condSQLTaskLane
+	condSQLTaskParentExcluded
 )
 
 var (
 	whereConditionCodes = map[condCode]struct{}{
-		CondTaskID:           {},
-		CondTaskRunner:       {},
-		CondTaskStatus:       {},
-		CondTaskEpoch:        {},
-		CondTaskParentTaskID: {},
-		CondTaskExecutor:     {},
-		CondCronTaskId:       {},
-		CondTaskMetadataId:   {},
+		CondTaskID:                {},
+		CondTaskRunner:            {},
+		CondTaskStatus:            {},
+		CondTaskEpoch:             {},
+		CondTaskParentTaskID:      {},
+		CondTaskExecutor:          {},
+		CondCronTaskId:            {},
+		CondTaskMetadataId:        {},
+		condSQLTaskUnclaimed:      {},
+		condSQLTaskLane:           {},
+		condSQLTaskParentExcluded: {},
 	}
 	daemonWhereConditionCodes = map[condCode]struct{}{
 		CondTaskID:        {},
@@ -530,6 +536,62 @@ func newConditions(conds ...Condition) *conditions {
 		cond(c)
 	}
 	return c
+}
+
+// SQL task firings with a durable run owner must not be refetched and take
+// runner capacity from unrelated work. This condition is used by the runner,
+// not by scheduler queries that need to account for every running task.
+type sqlTaskUnclaimedCond struct{}
+
+func (sqlTaskUnclaimedCond) eval(v any) bool {
+	row, ok := v.(sqlTaskAsyncOwnership)
+	return ok && (row.task.Metadata.Executor != task.TaskCode_SQLTask || row.runID == 0)
+}
+
+func (sqlTaskUnclaimedCond) sql() string {
+	return fmt.Sprintf("(task_metadata_executor is null or task_metadata_executor<>%d or sql_task_run_id=0)", task.TaskCode_SQLTask)
+}
+
+type sqlTaskAsyncOwnership struct {
+	task  task.AsyncTask
+	runID uint64
+}
+
+func withSQLTaskUnclaimed() Condition {
+	return func(c *conditions) { (*c)[condSQLTaskUnclaimed] = sqlTaskUnclaimedCond{} }
+}
+
+type sqlTaskLaneCond bool
+
+func (c sqlTaskLaneCond) eval(v any) bool {
+	executor, ok := v.(task.TaskCode)
+	return ok && (executor == task.TaskCode_SQLTask) == bool(c)
+}
+
+func (c sqlTaskLaneCond) sql() string {
+	if c {
+		return fmt.Sprintf("task_metadata_executor=%d", task.TaskCode_SQLTask)
+	}
+	return fmt.Sprintf("(task_metadata_executor is null or task_metadata_executor<>%d)", task.TaskCode_SQLTask)
+}
+
+func withSQLTaskLane(sqlLane bool) Condition {
+	return func(c *conditions) { (*c)[condSQLTaskLane] = sqlTaskLaneCond(sqlLane) }
+}
+
+type sqlTaskParentExcludedCond uint64
+
+func (c sqlTaskParentExcludedCond) eval(v any) bool {
+	parent, ok := v.(string)
+	return ok && parent != fmt.Sprintf("sql-task:%d", c)
+}
+
+func (c sqlTaskParentExcludedCond) sql() string {
+	return fmt.Sprintf("(task_parent_id is null or task_parent_id<>'sql-task:%d')", c)
+}
+
+func withSQLTaskParentExcluded(id uint64) Condition {
+	return func(c *conditions) { (*c)[condSQLTaskParentExcluded] = sqlTaskParentExcludedCond(id) }
 }
 
 // WithTaskIDDesc set query with order by task id desc
@@ -678,9 +740,15 @@ func WithSQLTaskRunnerCond(op Op, value string) Condition {
 
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
+// Decorators must pass the caller's context, or a derived context preserving
+// its values, deadline and cancellation, to delegated operations.
 type TaskService interface {
 	// Close close the task service
 	Close() error
+	// SQLTaskService returns the service that owns SQL task recovery. Wrappers
+	// must return an owner using the same authoritative TaskStorage object.
+	// Return nil if SQL task execution is unsupported.
+	SQLTaskService() TaskService
 
 	// CreateAsyncTask Creates an asynchronous task that executes a single time, this method is idempotent, the
 	// same task is not created repeatedly based on multiple calls.
@@ -793,7 +861,9 @@ type TaskRunner interface {
 	Stop() error
 	// Parallelism maximum number of concurrently executing Tasks
 	Parallelism() int
-	// RegisterExecutor register the task executor
+	// RegisterExecutor registers a task executor. An SQLTask wrapper may run
+	// side-effect-free checks first, but must delegate business execution to
+	// SQLTaskExecutor and preserve its context so ownership can be tracked.
 	RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 	// GetExecutor returns the task executor
 	GetExecutor(code task.TaskCode) TaskExecutor
@@ -801,7 +871,8 @@ type TaskRunner interface {
 	Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error
 }
 
-// TaskStorage task storage
+// TaskStorage task storage. Decorators must preserve the caller's context
+// values, deadline and cancellation when delegating an operation.
 type TaskStorage interface {
 	// Close close the task storage
 	Close() error
@@ -869,29 +940,61 @@ type TaskStorage interface {
 
 	// AddSQLTask adds sql tasks and returns number of successful added.
 	AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error)
-	// UpdateSQLTask updates sql tasks and returns number of successful updated.
-	UpdateSQLTask(ctx context.Context, tasks []SQLTask, conds ...Condition) (int, error)
+	// AlterSQLTask updates only the fields owned by action, comparing the
+	// observed schedule state when the action changes scheduling.
+	AlterSQLTask(ctx context.Context, observed, updated SQLTask, action SQLTaskAlterAction) (int, error)
 	// DeleteSQLTask atomically deletes SQL tasks and their child async tasks,
 	// and returns the number of SQL task definitions deleted.
 	DeleteSQLTask(ctx context.Context, conds ...Condition) (int, error)
 	// QuerySQLTask queries sql tasks by conditions.
 	QuerySQLTask(ctx context.Context, conds ...Condition) ([]SQLTask, error)
 
-	// AddSQLTaskRun adds sql task run records.
-	AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error)
-	// UpdateSQLTaskRun updates sql task run records.
-	UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conds ...Condition) (int, error)
 	// QuerySQLTaskRun queries sql task run records.
 	QuerySQLTaskRun(ctx context.Context, conds ...Condition) ([]SQLTaskRun, error)
 	// QueryLatestSQLTaskRun returns the newest run for each task in taskIDs under the given account.
 	QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error)
 	// AcquireSQLTaskRun atomically acquires execution ownership and creates a RUNNING run record.
-	AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error)
-	// CompleteSQLTaskRun updates the terminal state of a sql task run.
-	CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error)
+	// The run's task ID, account ID and name must match the canonical definition.
+	AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun, admission *SQLTaskRunAdmission) (uint64, error)
+	// PublishSQLTaskReceipt atomically reconciles an exact execution and its
+	// async claim; it must be safe to retry after an uncertain acknowledgement.
+	PublishSQLTaskReceipt(context.Context, SQLTaskReceiptRequest) (bool, error)
+	// TransitionSQLTaskRun atomically completes an attempt and admits its retry.
+	// The returned transition, including its commit flag and tentative run ID,
+	// must be preserved by decorators even when an error is returned.
+	TransitionSQLTaskRun(context.Context, SQLTaskRetryRequest) (SQLTaskRetryTransition, error)
+	// ReconcileSQLTaskRetry resolves an uncertain transition under the same
+	// storage locks, without starting any business SQL.
+	ReconcileSQLTaskRetry(context.Context, SQLTaskRetryRequest, uint64) (SQLTaskRetryResolution, error)
+	// ForceRecoverSQLTaskRun resolves exactly one run after the caller has
+	// isolated its old executor; it neither stops SQL nor rolls back effects.
+	ForceRecoverSQLTaskRun(context.Context, uint32, string, uint64, string) (bool, error)
+	// FinishSQLTaskUnclaimed completes only a SQL firing matching its ID,
+	// runner and epoch while its ownership pointer remains zero.
+	FinishSQLTaskUnclaimed(context.Context, SQLTaskClaim, task.ExecuteResult, int64) error
+	// DeleteStaleSQLTaskBatch removes at most 128 unclaimed old-generation SQL
+	// firings for one task, serialized with admission and schedule changes.
+	DeleteStaleSQLTaskBatch(context.Context, uint64) (int, error)
+	// ScanAsyncTaskPage reads an unfiltered, ordered primary-key page in
+	// (after, high], without decoding task metadata. The page is limited to 32.
+	// Known headers must reflect the persisted row, even through decorators.
+	ScanAsyncTaskPage(context.Context, uint64, uint64, bool, int) ([]AsyncTaskScanRow, error)
 
 	// TriggerSQLTask updates persisted trigger state and inserts an async task in one transaction.
 	TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error)
+}
+
+// AsyncTaskScanRow is a lightweight snapshot used to avoid decoding rows that
+// cannot match a fetch lane. Unknown headers must be checked through the
+// regular task query; a known header is never an execution claim.
+type AsyncTaskScanRow struct {
+	ID           uint64
+	Status       task.TaskStatus
+	Runner       string
+	Executor     task.TaskCode
+	Parent       string
+	SQLTaskRunID uint64
+	Known        bool
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create

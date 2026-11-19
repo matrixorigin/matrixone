@@ -27,7 +27,7 @@ import (
 
 func buildGeneratedInsertPlan(t *testing.T, ctx *MockCompilerContext, stmt tree.Statement, prepared bool) (*Plan, error) {
 	t.Helper()
-	return BuildPlan(ctx, stmt, prepared)
+	return BuildPlan(ctx, stmt, prepared, nil)
 }
 
 func TestImplicitInsertValueColumnsIncludeVisibleGeneratedColumns(t *testing.T) {
@@ -256,7 +256,7 @@ func TestPreparedGeneratedInsertDoesNotMutateRetainedAST(t *testing.T) {
 			}
 
 			for range 2 {
-				preparedPlan, _, err := getPreparePlan(ctx, stmt)
+				preparedPlan, _, err := getPreparePlan(ctx, stmt, nil)
 				if tc.wantErr {
 					require.Error(t, err)
 				} else {

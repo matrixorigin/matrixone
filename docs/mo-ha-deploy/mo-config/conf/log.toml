@@ -1,0 +1,22 @@
+service-type = "LOG"
+data-dir = "/mo-data"
+
+# LogService never uses object storage; its data (HAKeeper metadata + dragonboat
+# raft logdb) lives on local disk, which is the DRBD-protected volume.
+uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+
+# Fixed hostname so dragonboat's on-disk directory layout stays identical on
+# both nodes and across machine swaps. Must NOT depend on container/VM hostname.
+explicit-hostname = "__MO_HOSTNAME__"
+
+[log]
+level = "info"
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

@@ -18,5 +18,17 @@ select id, v from issue_29842_t order by id;
 insert into issue_29842_t values (3, '{"a":3}');
 select count(*) from issue_29842_t;
 
+-- Independently framed object records in multiple files must not leak state.
+truncate table issue_29842_t;
+load data infile {'filepath'='$resources/load_data/issue_32055_files/part_*.jl','format'='jsonline','jsondata'='object'} into table issue_29842_t;
+select id, v from issue_29842_t order by id;
+
+-- Array records can span physical lines; incomplete input rolls back all rows.
+truncate table issue_29842_t;
+load data infile {'filepath'='$resources/load_data/issue_32055_array_unfinished.jl','format'='jsonline','jsondata'='array'} into table issue_29842_t;
+select count(*) from issue_29842_t;
+load data infile {'filepath'='$resources/load_data/issue_32055_array.jl','format'='jsonline','jsondata'='array'} into table issue_29842_t;
+select id, v from issue_29842_t order by id;
+
 drop table issue_29842_t;
 set sql_mode = @saved_sql_mode;

@@ -1,0 +1,38 @@
+SET @old_sql_mode = @@session.sql_mode;
+drop table if exists t31232_prepare_rebuild;
+create table t31232_prepare_rebuild(id int primary key, s varchar(20), flag int);
+SET SESSION sql_mode = '';
+PREPARE p31232_rebuild FROM "LOAD DATA INLINE FORMAT='csv', DATA='1,alpha,0\n2,beta,7\n' INTO TABLE t31232_prepare_rebuild FIELDS TERMINATED BY ',' SET flag=NULLIF(flag,0)";
+EXECUTE p31232_rebuild;
+select id, s, ifnull(flag, 'N') as f_isnull from t31232_prepare_rebuild order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  f_isnull[12,11,0]  𝄀
+1  ¦  alpha  ¦  N  𝄀
+2  ¦  beta  ¦  7
+truncate table t31232_prepare_rebuild;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+EXECUTE p31232_rebuild;
+select id, s, ifnull(flag, 'N') as f_isnull from t31232_prepare_rebuild order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  f_isnull[12,11,0]  𝄀
+1  ¦  alpha  ¦  N  𝄀
+2  ¦  beta  ¦  7
+DEALLOCATE PREPARE p31232_rebuild;
+drop table if exists t31232_prepare_rebuild;
+drop table if exists t31232_prepare_rebuild_rowvar;
+create table t31232_prepare_rebuild_rowvar(id int primary key, payload varchar(32) default 'fallback');
+SET SESSION sql_mode = '';
+PREPARE p31232_rowvar FROM "LOAD DATA INLINE FORMAT='csv', DATA='1,keep\n2,sentinel\n' INTO TABLE t31232_prepare_rebuild_rowvar FIELDS TERMINATED BY ',' (id, @v) SET payload=NULLIF(@v,'sentinel')";
+EXECUTE p31232_rowvar;
+select id, payload, payload is null as is_sql_null from t31232_prepare_rebuild_rowvar order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  ¦  is_sql_null[-6,8,0]  𝄀
+1  ¦  keep  ¦  0  𝄀
+2  ¦  null  ¦  1
+truncate table t31232_prepare_rebuild_rowvar;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+EXECUTE p31232_rowvar;
+select id, payload, payload is null as is_sql_null from t31232_prepare_rebuild_rowvar order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  ¦  is_sql_null[-6,8,0]  𝄀
+1  ¦  keep  ¦  0  𝄀
+2  ¦  null  ¦  1
+DEALLOCATE PREPARE p31232_rowvar;
+SET SESSION sql_mode = @old_sql_mode;
+drop table if exists t31232_prepare_rebuild_rowvar;

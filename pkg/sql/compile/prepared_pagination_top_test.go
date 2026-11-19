@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,6 +28,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedPaginationScanBoundRebindAndOverflow(t *testing.T) {
+	c := newMergeTopFallbackTestCompile(t)
+	c.isPrepare = false
+	c.pn = &plan.Plan{IsPrepare: true}
+	params := vector.NewVec(types.T_text.ToType())
+	c.proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		c.proc.SetPrepareParams(nil)
+		params.Free(c.proc.Mp())
+		c.proc.Free()
+	})
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{param, target})
+	require.NoError(t, err)
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(5), Offset: bound}
+	for _, tc := range []struct {
+		value string
+		want  uint64
+		ok    bool
+	}{
+		{value: "500000", want: 500005, ok: true},
+		{value: "18446744073709551610", want: math.MaxUint64, ok: true},
+		{value: "18446744073709551611"},
+		{value: "18446744073709551616"},
+		{value: "-1"},
+		{value: "2", want: 7, ok: true},
+	} {
+		params.Reset(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, c.proc.Mp()))
+		got, ok := c.preparedPaginationScanBound(node)
+		require.Equal(t, tc.ok, ok, tc.value)
+		if ok {
+			require.Equal(t, tc.want, got, tc.value)
+		}
+	}
+	for _, tc := range []struct {
+		typ  types.T
+		want uint64
+	}{
+		{types.T_int16, math.MaxInt16}, {types.T_uint16, math.MaxUint16},
+		{types.T_int32, math.MaxInt32}, {types.T_uint32, math.MaxUint32},
+		{types.T_int64, math.MaxInt64}, {types.T_uint64, math.MaxUint64},
+	} {
+		maximum := uint64(math.MaxUint64)
+		require.True(t, preparedPaginationSourceDomain(tc.typ, &maximum, false))
+		require.Equal(t, tc.want, maximum, tc.typ)
+	}
+}
 
 func TestPreparedPaginationTopRebindsCurrentBounds(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)

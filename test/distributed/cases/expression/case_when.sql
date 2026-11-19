@@ -565,3 +565,14 @@ select case when cond then cast(case when id = 3 then '7' else 'bad' end as deci
 from t_case_nullable_condition where id = 4;
 show warnings;
 drop table t_case_nullable_condition;
+
+-- @case
+-- @desc:searched CASE mixing a string value branch with a BOOL value branch resolves to VARCHAR (issue #31294)
+-- @label:bvt
+select case when 1 then 'x' else false end as case_str_bool_t, case when 0 then 'x' else false end as case_str_bool_f;
+select case when 0 then true else 'y' end as case_bool_str_f;
+drop table if exists t_case_str_bool;
+create table t_case_str_bool (id int primary key, s varchar(10), b bool);
+insert into t_case_str_bool values (1, 'abc', true), (2, 'def', false);
+select id, case when b then s else b end as case_col from t_case_str_bool order by id;
+drop table t_case_str_bool;

@@ -16,7 +16,7 @@ set @wait_initial_sql = concat(
 '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_initial from @wait_initial_sql;
 execute wait_initial;
-➤ ready[-7,1,0]  𝄀
+➤ ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_initial;
 alter table renamed rename column status to state;
@@ -41,7 +41,7 @@ set @wait_rebuild_sql = concat(
 '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_rebuild from @wait_rebuild_sql;
 execute wait_rebuild;
-➤ ready[-7,1,0]  𝄀
+➤ ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_rebuild;
 set @capture_baseline_sql = concat(
@@ -56,7 +56,7 @@ set @wait_incr_sql = concat(
 '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_incr from @wait_incr_sql;
 execute wait_incr;
-➤ ready[-7,1,0]  𝄀
+➤ ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_incr;
 select id from renamed where match(body) against('alpha') order by id;
@@ -78,8 +78,8 @@ renamed  ¦  CREATE TABLE `renamed` (
 )
 drop table if exists plain;
 create table plain (id bigint primary key, body text, note int);
-create fulltext2 index ft_plain on plain (body) include (note);
 insert into plain values (1, 'gamma text', 7);
+create fulltext2 index ft_plain on plain (body) include (note);
 alter table plain rename column id to pk;
 show create table plain;
 ➤ Table[12,5,0]  ¦  Create Table[12,190,0]  𝄀

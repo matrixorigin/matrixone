@@ -60,7 +60,7 @@ func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
 
 	spillDir := t.TempDir()
 	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", mockMoIndexes(),
-		int32(types.T_array_float32), 3, spillDir)
+		int32(types.T_array_float32), 3, spillDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, countHnswSpillFiles(t, spillDir),
 		"both downloaded models must spill into the resolved directory, not os.TempDir()")
@@ -93,7 +93,7 @@ func TestNewHnswSyncRemovesCommittedFilesOnDownloadAllError(t *testing.T) {
 
 	spillDir := t.TempDir()
 	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", mockMoIndexes(),
-		int32(types.T_array_float32), 3, spillDir)
+		int32(types.T_array_float32), 3, spillDir, nil)
 	require.Error(t, err, "a failed model download must surface the error")
 	require.Equal(t, 0, countHnswSpillFiles(t, spillDir),
 		"the committed earlier model must not orphan on the DownloadAll error path")

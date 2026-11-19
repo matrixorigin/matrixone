@@ -702,7 +702,8 @@ SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
 Data truncation: data out of range: data type int64, value '-1e+30'
 DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
-invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
+➤ cast(cast(01-01-01 as date) as unsigned)[-5,64,0]  𝄀
+20010101
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
 ➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
 20010101
@@ -722,7 +723,8 @@ set time_zone="+00:00";
 create table t1(s1 timestamp);
 insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
-invalid input: 20201203111111.000000 beyond the range, can't be converted to Decimal64(7,2).
+➤ cast(s1 as decimal(7, 2))[3,7,2]  𝄀
+99999.99
 drop table t1;
 set time_zone="+00:00";
 create table ts_cast_time(id int primary key, event_ts timestamp(6));
@@ -855,10 +857,10 @@ drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');
 select * from t1 where field < '2006-11-06 04:08:36.0';
-➤ field[91,64,0]
-select * from t1 where field = '2006-11-06 04:08:36.0';
 ➤ field[91,64,0]  𝄀
 2006-11-06
+select * from t1 where field = '2006-11-06 04:08:36.0';
+➤ field[91,64,0]
 select * from t1 where field = '2006-11-06';
 ➤ field[91,64,0]  𝄀
 2006-11-06
@@ -866,7 +868,8 @@ select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
 ➤ field[91,64,0]  𝄀
 2006-11-06
 select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
-➤ field[91,64,0]
+➤ field[91,64,0]  𝄀
+2006-11-06
 drop table t1;
 create table t1 (a int(11) unsigned, b int(11) unsigned);
 insert into t1 values (1,0), (1,1), (4294967295,1);

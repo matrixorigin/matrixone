@@ -2288,7 +2288,7 @@ func (ses *Session) Close() {
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
-	ses.respr = nil
+	ses.feSessionImpl.setResponser(nil)
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -2756,7 +2756,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	be := ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
+	be := ses.InitBackExec(txnOp, ses.GetResponser().GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
 	be.(*backExec).backSes.ReplaceDerivedStmt(true)
 	return be
@@ -3232,8 +3232,8 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 		return prepareStmt, nil
 	}
 	var connID uint32
-	if ses.respr != nil {
-		connID = ses.respr.GetU32(CONNID)
+	if r := ses.GetResponser(); r != nil {
+		connID = r.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
@@ -4818,7 +4818,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 
 func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
 	switch strings.ToLower(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
 	case "disable_agg_statement":
 		boolVal := InitSystemVariableBoolType("_")

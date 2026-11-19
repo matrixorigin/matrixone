@@ -306,7 +306,7 @@ func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
 	source.Vecs[0].GetNulls().Add(31)
-	source.Shrink([]int64{0, 1, 2, 3, 4}, false)
+	require.NoError(t, source.Shrink([]int64{0, 1, 2, 3, 4}, false, mp))
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalBinaryTo(&encoded))
@@ -721,7 +721,7 @@ func TestBatchSetStartsNewTailWhenVectorProvenanceChanges(t *testing.T) {
 	mp := mpool.MustNewZero()
 	set := NewBatchSet(4)
 	unaccounted := newBatchAllocationTestSource(t, mp, nil)
-	unaccounted.Shrink([]int64{0, 1}, false)
+	require.NoError(t, unaccounted.Shrink([]int64{0, 1}, false, mp))
 	mixed := newMixedBatchAllocationSource(t, mp, state.selection, 3)
 
 	_, err := set.Extend(mp, unaccounted, nil)
@@ -764,12 +764,12 @@ func TestBatchSetPreservesUniformBatchAllocationContext(t *testing.T) {
 	mp := mpool.MustNewZero()
 	set := NewBatchSet(16)
 	first := newBatchAllocationTestSource(t, mp, state.selection)
-	first.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false)
+	require.NoError(t, first.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
 	second := newBatchAllocationTestSource(t, mp, state.selection)
-	second.Shrink([]int64{
+	require.NoError(t, second.Shrink([]int64{
 		0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
 		10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-	}, false)
+	}, false, mp))
 
 	_, err := set.Extend(mp, first, nil)
 	require.NoError(t, err)
@@ -790,7 +790,7 @@ func TestBatchSetPreservesUniformBatchAllocationContext(t *testing.T) {
 	)
 	require.NoError(t, reuse.SetAllocationAccount(state.selection))
 	third := newBatchAllocationTestSource(t, mp, state.selection)
-	third.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false)
+	require.NoError(t, third.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
 	consumed, err := set.Extend(mp, third, reuse)
 	require.NoError(t, err)
 	require.True(t, consumed)

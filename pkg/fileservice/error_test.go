@@ -31,9 +31,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	smithy "github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 )
+
+// awsError is the error the AWS SDK returns once it stops retrying a request that got
+// statusCode with the API error code.
+func awsError(statusCode int, code string) error {
+	return &smithy.OperationError{
+		ServiceID:     "S3",
+		OperationName: "GetObject",
+		Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: statusCode}},
+				Err:      &smithy.GenericAPIError{Code: code, Message: "api error"},
+			},
+		},
+	}
+}
+
+// cosError is the error the COS SDK returns for a GetObject response with statusCode and the
+// API error code.
+func cosError(statusCode int, code string) error {
+	return &cos.ErrorResponse{
+		Response: &http.Response{
+			StatusCode: statusCode,
+			Header:     http.Header{},
+			Request:    &http.Request{Method: http.MethodGet, URL: &url.URL{Scheme: "https", Host: "bucket.cos.example.com", Path: "/object"}},
+		},
+		Code: code,
+	}
+}
 
 func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 	tests := []struct {
@@ -57,7 +91,21 @@ func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 			},
 			want: true,
 		},
+		{name: "aws too many requests", err: awsError(http.StatusTooManyRequests, "SlowDown"), want: true},
+		{name: "aws service unavailable", err: awsError(http.StatusServiceUnavailable, "ServiceUnavailable"), want: true},
+		{name: "oss service unavailable", err: oss.ServiceError{StatusCode: http.StatusServiceUnavailable}, want: true},
+		{name: "cos service unavailable", err: &cos.ErrorResponse{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}}, want: true},
+		{name: "aws request timeout code", err: awsError(http.StatusBadRequest, "RequestTimeout"), want: true},
+		{name: "aws throttling code", err: awsError(http.StatusBadRequest, "Throttling"), want: true},
+		{name: "minio request timeout code", err: minio.ErrorResponse{StatusCode: http.StatusBadRequest, Code: "RequestTimeout"}, want: true},
+		{name: "oss request timeout code", err: oss.ServiceError{StatusCode: http.StatusBadRequest, Code: "RequestTimeout"}, want: true},
+		{name: "cos request timeout code", err: cosError(http.StatusBadRequest, "RequestTimeout"), want: true},
 		{name: "bad request", err: minio.ErrorResponse{StatusCode: http.StatusBadRequest}, want: false},
+		{name: "aws invalid request", err: awsError(http.StatusBadRequest, "InvalidRequest"), want: false},
+		{name: "minio invalid argument", err: minio.ErrorResponse{StatusCode: http.StatusBadRequest, Code: "InvalidArgument"}, want: false},
+		{name: "oss invalid argument", err: oss.ServiceError{StatusCode: http.StatusBadRequest, Code: "InvalidArgument"}, want: false},
+		{name: "cos invalid argument", err: cosError(http.StatusBadRequest, "InvalidArgument"), want: false},
+		{name: "aws forbidden", err: awsError(http.StatusForbidden, "AccessDenied"), want: false},
 		{name: "unauthorized", err: minio.ErrorResponse{StatusCode: http.StatusUnauthorized}, want: false},
 		{name: "forbidden", err: minio.ErrorResponse{StatusCode: http.StatusForbidden}, want: false},
 		{name: "not found", err: minio.ErrorResponse{StatusCode: http.StatusNotFound}, want: false},
@@ -79,6 +127,23 @@ func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, IsRetryableStartupError(test.err))
 		})
+	}
+}
+
+func TestIsRetryableStartupErrorMatchesAWSRetryer(t *testing.T) {
+	retryer := retry.NewStandard()
+	for _, err := range []error{
+		awsError(http.StatusBadRequest, "RequestTimeout"),
+		awsError(http.StatusBadRequest, "RequestTimeoutException"),
+		awsError(http.StatusBadRequest, "Throttling"),
+		awsError(http.StatusServiceUnavailable, "SlowDown"),
+		awsError(http.StatusInternalServerError, "InternalError"),
+		awsError(http.StatusBadRequest, "InvalidRequest"),
+		awsError(http.StatusBadRequest, "BadDigest"),
+		awsError(http.StatusForbidden, "AccessDenied"),
+		awsError(http.StatusForbidden, "SignatureDoesNotMatch"),
+	} {
+		require.Equal(t, retryer.IsErrorRetryable(err), IsRetryableStartupError(err), "%v", err)
 	}
 }
 

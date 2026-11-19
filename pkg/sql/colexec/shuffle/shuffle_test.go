@@ -44,6 +44,136 @@ const (
 	Rows = 8192 // default rows
 )
 
+func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	arg := NewArgument()
+	t.Cleanup(func() { arg.Reset(proc, true, context.Canceled); arg.Free(proc, false, nil); arg.Release() })
+	arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+	arg.ShuffleKeyColumns, arg.DrainAllBuckets = []int32{0, 1}, true
+	for round := 0; round < 2; round++ {
+		func() {
+			inputs := make([]*batch.Batch, 2)
+			want := make(map[string]int)
+			tuple := func(b *batch.Batch, row int) string {
+				first := "null"
+				if b.Vecs[0].GetGrouping().Contains(uint64(row)) {
+					first = "grouping"
+				}
+				return fmt.Sprintf("%s/%d", first, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
+			}
+			for i := range inputs {
+				b := batch.NewWithSize(2)
+				inputs[i] = b
+				defer b.Clean(mp)
+				b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 32, mp)
+				b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				for row := 0; row < 32; row++ {
+					require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(row%16), false, mp))
+					if row%8 == 0 {
+						b.Vecs[0].GetGrouping().Add(uint64(row))
+					}
+				}
+				b.SetRowCount(32)
+				for row := 0; row < 32; row++ {
+					want[tuple(b, row)]++
+				}
+			}
+			source := colexec.NewMockOperator().WithBatchs(inputs)
+			defer source.ResetBatchs()
+			arg.ResetChildren()
+			arg.AppendChild(source)
+			require.NoError(t, vm.Prepare(arg, proc))
+			got, owners := make(map[string]int), make(map[string]int32)
+			buckets := make(map[int32]bool)
+			for {
+				res, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if res.Batch == nil || res.Status == vm.ExecStop {
+					break
+				}
+				b := res.Batch
+				if b.RowCount() == 0 {
+					continue
+				}
+				buckets[b.ShuffleIDX] = true
+				for row := 0; row < b.RowCount(); row++ {
+					key := tuple(b, row)
+					if prev, exists := owners[key]; exists {
+						require.Equal(t, prev, b.ShuffleIDX)
+					}
+					owners[key] = b.ShuffleIDX
+					got[key]++
+				}
+			}
+			require.Equal(t, want, got)
+			require.Greater(t, len(buckets), 1, "a constant first column must not collapse complete-key routing")
+			for _, v := range arg.ctr.keyVectors {
+				require.Nil(t, v)
+			}
+			arg.Reset(proc, false, nil)
+			require.Nil(t, arg.ctr.keyHashes)
+			arg.Free(proc, false, nil)
+		}()
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func TestCompleteKeyShuffleRejectsInvalidMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := NewArgument()
+	defer arg.Release()
+	defer arg.Free(proc, true, context.Canceled)
+	defer arg.Reset(proc, true, context.Canceled)
+	arg.ShuffleKeyColumns, arg.BucketNum = []int32{1}, 2
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	require.Error(t, arg.Prepare(proc), "fixed-bucket mode is outside the local complete-key contract")
+	arg.DrainAllBuckets = true
+	require.NoError(t, arg.Prepare(proc))
+	b := batch.NewWithSize(1)
+	defer b.Clean(proc.Mp())
+	b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	b.SetRowCount(1)
+	_, err := arg.shuffleCompleteKey(b, proc)
+	require.Error(t, err)
+	require.Nil(t, arg.ctr.keyVectors[0])
+}
+
+func TestCompleteKeyShuffleScratchFailureAndAbort(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	arg := NewArgument()
+	t.Cleanup(func() { arg.Reset(proc, true, context.Canceled); arg.Free(proc, true, context.Canceled); arg.Release() })
+	arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+	arg.ShuffleKeyColumns, arg.DrainAllBuckets = []int32{0}, true
+	b := batch.NewWithSize(1)
+	t.Cleanup(func() { b.Clean(mp) })
+	b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1<<18, mp)
+	b.SetRowCount(1 << 18)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = arg.shuffleCompleteKey(b, proc)
+	require.Error(t, err, "2 MiB hash scratch cannot fit the 1 MiB pool")
+	require.Nil(t, arg.ctr.keyVectors[0])
+	arg.Reset(proc, true, err)
+	require.Zero(t, mp.CurrNB())
+
+	// The next generation can allocate normally and release live scratch on abort.
+	b.Vecs[0].SetLength(16)
+	b.SetRowCount(16)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = arg.shuffleCompleteKey(b, proc)
+	require.NoError(t, err)
+	require.Positive(t, mp.CurrNB())
+	arg.Reset(proc, true, context.Canceled)
+	arg.Free(proc, true, context.Canceled)
+	require.Nil(t, arg.ctr.keyHashes)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
 	for _, drainAll := range []bool{false, true} {
 		for _, cause := range []error{context.Canceled, context.DeadlineExceeded, errors.New("upstream execution failure")} {
@@ -735,11 +865,47 @@ func TestEvalAndShuffleConstRoutesForeignBucketThroughPool(t *testing.T) {
 	output, err := arg.evalAndShuffle(input, proc)
 	require.NoError(t, err)
 	require.Nil(t, output)
+	require.Empty(t, arg.ctr.sels[0], "whole-bucket routing must not construct identity indices")
 	pooled := arg.ctr.shufflePool.getLastBatch(0)
 	require.NotNil(t, pooled)
 	require.Equal(t, int32(0), pooled.ShuffleIDX)
 	require.Equal(t, input.RowCount(), pooled.RowCount())
 	pooled.Clean(mp)
+}
+
+func TestBucketSelectionsDefersAndBackfills(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		buckets []uint64
+		want    [][]int32
+		mixed   bool
+	}{
+		{"single", []uint64{1, 1, 1, 1}, [][]int32{nil, nil}, false},
+		{"early", []uint64{1, 0, 1, 0}, [][]int32{{1, 3}, {0, 2}}, true},
+		{"middle", []uint64{1, 1, 0, 1}, [][]int32{{2}, {0, 1, 3}}, true},
+		{"last", []uint64{1, 1, 1, 0}, [][]int32{{3}, {0, 1, 2}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			part := bucketSelections{sels: make([][]int32, 2)}
+			var valuesForBucket [2]int64
+			for bucket := range valuesForBucket {
+				for value := int64(0); ; value++ {
+					if plan2.SimpleInt64HashToRange(uint64(value), 2) == uint64(bucket) {
+						valuesForBucket[bucket] = value
+						break
+					}
+				}
+			}
+			values := make([]int64, len(tc.buckets))
+			for row, bucket := range tc.buckets {
+				values[row] = valuesForBucket[bucket]
+			}
+			partitionIntegerHash(values, 2, &part)
+			require.Equal(t, tc.mixed, part.mixed)
+			require.Equal(t, tc.want, part.sels)
+			require.Equal(t, uint64(1), part.first)
+		})
+	}
 }
 
 func TestEvalAndShuffleSingleBucketExpressionRoutesForeignBucketThroughPool(t *testing.T) {
@@ -1676,7 +1842,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vec.Free(proc.Mp())
 
 		ap := newArg()
-		sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+		partition := bucketSelections{sels: ap.clearSels()}
+		getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+		if !partition.mixed && vec.Length() > 0 {
+			partition.startMixed(vec.Length())
+		}
+		sels := partition.sels
 		require.Equal(t, bucketOf(sels, 0), bucketOf(sels, 2), "equal varbinary values must share a bucket")
 		require.NotEqual(t, -1, bucketOf(sels, 1))
 	})
@@ -1689,7 +1860,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vec.Free(proc.Mp())
 
 		ap := newArg()
-		sels := getShuffledSelsByHashWithNull(ap, batchOf(vec))
+		partition := bucketSelections{sels: ap.clearSels()}
+		getShuffledSelsByHashWithNull(ap, batchOf(vec), &partition)
+		if !partition.mixed && vec.Length() > 0 {
+			partition.startMixed(vec.Length())
+		}
+		sels := partition.sels
 		require.Equal(t, 0, bucketOf(sels, 1), "null key routes to bucket 0")
 		require.NotEqual(t, -1, bucketOf(sels, 0))
 	})
@@ -1701,7 +1877,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
 
 			ap := newArg()
-			sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+			partition := bucketSelections{sels: ap.clearSels()}
+			getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+			if !partition.mixed && vec.Length() > 0 {
+				partition.startMixed(vec.Length())
+			}
+			sels := partition.sels
 			require.NotEqual(t, -1, bucketOf(sels, 0), oid.String())
 			vec.Free(proc.Mp())
 		}
@@ -1722,7 +1903,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vec.Free(proc.Mp())
 
 		ap := newArg()
-		sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+		partition := bucketSelections{sels: ap.clearSels()}
+		getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+		if !partition.mixed && vec.Length() > 0 {
+			partition.startMixed(vec.Length())
+		}
+		sels := partition.sels
 		require.Equal(t, bucketOf(sels, 0), bucketOf(sels, 2), "equal uuid values must share a bucket")
 	})
 
@@ -1739,7 +1925,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vec.Free(proc.Mp())
 
 		ap := newArg()
-		sels := getShuffledSelsByHashWithNull(ap, batchOf(vec))
+		partition := bucketSelections{sels: ap.clearSels()}
+		getShuffledSelsByHashWithNull(ap, batchOf(vec), &partition)
+		if !partition.mixed && vec.Length() > 0 {
+			partition.startMixed(vec.Length())
+		}
+		sels := partition.sels
 		require.Equal(t, 0, bucketOf(sels, 1), "null uuid keys route to bucket 0")
 		require.NotEqual(t, -1, bucketOf(sels, 0))
 		require.NotEqual(t, -1, bucketOf(sels, 2))
@@ -1760,4 +1951,13 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vb.Free(proc.Mp())
 		require.Less(t, shuffleConstVectorByHash(ap, batchOf(vb)), uint64(ap.BucketNum))
 	})
+}
+
+// Materialize the routing decision only for legacy selector-based test oracles.
+func appendStringHashSels(ap *Shuffle, sels [][]int32, vec *vector.Vector, col []types.Varlena, area []byte, buckets uint64, withNull bool) {
+	partition := bucketSelections{sels: sels}
+	appendStringHashBuckets(ap, &partition, vec, col, area, buckets, withNull)
+	if !partition.mixed && len(col) > 0 {
+		partition.startMixed(len(col))
+	}
 }

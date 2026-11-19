@@ -21,6 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -73,6 +76,12 @@ type executionAllocationAccountActivationPolicy interface {
 	ActivatesAllocationAccountLifecycle() bool
 }
 
+func (c *Compile) reusesTPFlatExecutors() bool {
+	// Prepared compilation currently rejects AP. Keep the execution-type guard
+	// here so a future prepare policy change cannot disable AP accounting.
+	return c.isPrepare && c.IsTpQuery()
+}
+
 func hasAllocationAccountActivator(
 	owners []executionAllocationAccountOwner,
 ) bool {
@@ -89,10 +98,11 @@ func hasAllocationAccountActivator(
 // MessageBoard pointer is captured at open so prepared/retry Reset cannot make
 // terminal cleanup drain a newer board.
 type statementAllocationAttempt struct {
-	registry *mpool.AllocationAccountRegistry
-	account  *mpool.AllocationAccount
-	board    *message.MessageBoard
-	exporter func(mpool.AllocationAccountTerminalSnapshot)
+	reuseTPExpressions bool
+	registry           *mpool.AllocationAccountRegistry
+	account            *mpool.AllocationAccount
+	board              *message.MessageBoard
+	exporter           func(mpool.AllocationAccountTerminalSnapshot)
 
 	ownersMu sync.Mutex
 	owners   []executionAllocationAccountOwner
@@ -120,7 +130,7 @@ func (c *Compile) beginAllocationAccountAttempt() (
 	owners := c.allocationAccountOwners
 	var err error
 	if owners == nil {
-		owners, err = collectAllocationAccountOwners(c.scopes)
+		owners, err = collectExecutionAllocationAccountOwners(c.scopes, c.reusesTPFlatExecutors())
 		if err != nil {
 			return nil, err
 		}
@@ -168,12 +178,13 @@ func (c *Compile) beginAllocationAccountAttempt() (
 		return nil, err
 	}
 	attempt := &statementAllocationAttempt{
-		registry: c.allocationAccountRegistry,
-		account:  account,
-		board:    c.MessageBoard,
-		exporter: c.allocationTerminalExporter,
-		owners:   owners,
-		ownerSet: make(map[executionAllocationAccountOwner]struct{}, len(owners)),
+		reuseTPExpressions: c.reusesTPFlatExecutors(),
+		registry:           c.allocationAccountRegistry,
+		account:            account,
+		board:              c.MessageBoard,
+		exporter:           c.allocationTerminalExporter,
+		owners:             owners,
+		ownerSet:           make(map[executionAllocationAccountOwner]struct{}, len(owners)),
 	}
 	for _, owner := range owners {
 		attempt.ownerSet[owner] = struct{}{}
@@ -189,7 +200,7 @@ func (a *statementAllocationAttempt) attachRuntimeOwners(scopes []*Scope) error 
 	if a == nil || a.account == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	owners, err := collectAllocationAccountOwners(scopes)
+	owners, err := collectExecutionAllocationAccountOwners(scopes, a.reuseTPExpressions)
 	if err != nil || len(owners) == 0 {
 		return err
 	}
@@ -221,7 +232,7 @@ func (c *Compile) attachRuntimeAllocationOwners(scopes []*Scope) error {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if c.allocationAttempt == nil {
-		owners, err := collectAllocationAccountOwners(scopes)
+		owners, err := collectExecutionAllocationAccountOwners(scopes, c.reusesTPFlatExecutors())
 		if err != nil {
 			return err
 		}
@@ -263,6 +274,13 @@ func configureAllocationAccountOwners(
 func collectAllocationAccountOwners(
 	scopes []*Scope,
 ) ([]executionAllocationAccountOwner, error) {
+	return collectExecutionAllocationAccountOwners(scopes, false)
+}
+
+func collectExecutionAllocationAccountOwners(
+	scopes []*Scope,
+	reuseTPExpressions bool,
+) ([]executionAllocationAccountOwner, error) {
 	owners := make([]executionAllocationAccountOwner, 0)
 	seen := make(map[executionAllocationAccountOwner]struct{})
 	var inspect func(*Scope) error
@@ -271,6 +289,16 @@ func collectAllocationAccountOwners(
 			return nil
 		}
 		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			// Prepared TP compiles reuse flat executors across statements. Binding
+			// these operators to a statement account forces Reset to destroy them.
+			// Keep selected execution for uncached TP and AP; retaining operators such as
+			// Group, Sort and HashBuild still own an account on both paths.
+			if reuseTPExpressions {
+				switch op.(type) {
+				case *table_scan.TableScan, *filter.Filter, *projection.Projection:
+					return nil
+				}
+			}
 			if owner, ok := op.(executionAllocationAccountOwner); ok {
 				if _, exists := seen[owner]; !exists {
 					seen[owner] = struct{}{}
@@ -298,14 +326,14 @@ func collectAllocationAccountOwners(
 
 // ensureAllocationAccountLifecycle installs one account whenever the physical
 // plan contains an activating allocation owner. Implementing the owner
-// contract is the boundary: there is no per-owner activation switch.
+// contract is the boundary, subject to the TP flat-execution policy above.
 func (c *Compile) ensureAllocationAccountLifecycle(
 	exporter func(mpool.AllocationAccountTerminalSnapshot),
 ) error {
 	if c == nil {
 		return nil
 	}
-	owners, err := collectAllocationAccountOwners(c.scopes)
+	owners, err := collectExecutionAllocationAccountOwners(c.scopes, c.reusesTPFlatExecutors())
 	if err != nil {
 		return err
 	}

@@ -26,7 +26,7 @@ type preparedAnalyzeCompilerContext struct {
 	CompilerContext
 	defaultDatabase string
 	snapshot        *Snapshot
-	resolve         func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	resolve         func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *preparedAnalyzeCompilerContext) DefaultDatabase() string {
@@ -35,12 +35,13 @@ func (c *preparedAnalyzeCompilerContext) DefaultDatabase() string {
 
 func (c *preparedAnalyzeCompilerContext) Resolve(
 	databaseName, tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if c.resolve != nil {
-		return c.resolve(databaseName, tableName, snapshot)
+		return c.resolve(databaseName, tableName, snapshot, nil)
 	}
-	return c.CompilerContext.Resolve(databaseName, tableName, snapshot)
+	return c.CompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 }
 
 func (c *preparedAnalyzeCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
@@ -50,8 +51,7 @@ func (c *preparedAnalyzeCompilerContext) ResolveSnapshotWithSnapshotName(string)
 func TestBuildPreparedAnalyze(t *testing.T) {
 	t.Run("frontend carrier and deduplicated dependencies", func(t *testing.T) {
 		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt",
-			"analyze table nation(n_nationkey), tpch.nation(n_name), nation"),
-			NewMockCompilerContext(true, newPlanTestProcess(t)))
+			"analyze table nation(n_nationkey), tpch.nation(n_name), nation"), NewMockCompilerContext(true, newPlanTestProcess(t)), nil)
 		require.NoError(t, err)
 		prepare := prepared.GetDcl().GetPrepare()
 		require.NotNil(t, prepare)
@@ -70,13 +70,12 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
 			defaultDatabase: "bvt_test1",
-			resolve: func(databaseName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 				resolvedDatabase = databaseName
-				return base.Resolve(databaseName, tableName, snapshot)
+				return base.Resolve(databaseName, tableName, snapshot, nil)
 			},
 		}
-		prepared, err := buildPrepare(
-			tree.NewPrepareString("analyze_stmt", "analyze table t1(a)"), ctx)
+		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt", "analyze table t1(a)"), ctx, nil)
 		require.NoError(t, err)
 		require.Equal(t, "bvt_test1", resolvedDatabase)
 		require.Equal(t, "bvt_test1", prepared.GetDcl().GetPrepare().Schemas[0].SchemaName)
@@ -89,13 +88,13 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 			CompilerContext: base,
 			defaultDatabase: "tpch",
 			snapshot:        snapshot,
-			resolve: func(databaseName, tableName string, actual *Snapshot) (*ObjectRef, *TableDef, error) {
+			resolve: func(databaseName, tableName string, actual *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 				require.Equal(t, snapshot, actual)
-				return base.Resolve(databaseName, tableName, actual)
+				return base.Resolve(databaseName, tableName, actual, nil)
 			},
 		}
 		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt",
-			"analyze table nation {snapshot = 'prepared_analyze_snapshot'}"), ctx)
+			"analyze table nation {snapshot = 'prepared_analyze_snapshot'}"), ctx, nil)
 		require.NoError(t, err)
 		require.Equal(t, snapshot, prepared.GetDcl().GetPrepare().Schemas[0].Snapshot)
 	})
@@ -129,7 +128,7 @@ func TestBuildPreparedAnalyzeRejectsInvalidDependencies(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := buildPrepare(tree.NewPrepareString("analyze_stmt", testCase.sql), testCase.ctx)
+			_, err := buildPrepare(tree.NewPrepareString("analyze_stmt", testCase.sql), testCase.ctx, nil)
 			require.ErrorContains(t, err, testCase.match)
 		})
 	}
@@ -139,15 +138,15 @@ func TestBuildPreparedAnalyzeRejectsInvalidDependencies(t *testing.T) {
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
 			defaultDatabase: "tpch",
-			resolve: func(databaseName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-				objRef, tableDef, err := base.Resolve(databaseName, tableName, snapshot)
+			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+				objRef, tableDef, err := base.Resolve(databaseName, tableName, snapshot, nil)
 				for _, col := range tableDef.Cols {
 					col.Hidden = true
 				}
 				return objRef, tableDef, err
 			},
 		}
-		_, err := buildPrepare(tree.NewPrepareString("analyze_stmt", "analyze table nation"), ctx)
+		_, err := buildPrepare(tree.NewPrepareString("analyze_stmt", "analyze table nation"), ctx, nil)
 		require.ErrorContains(t, err, "ANALYZE TABLE: no visible columns found for table nation")
 	})
 }

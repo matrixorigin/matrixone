@@ -424,6 +424,10 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			ctr.freeLocalRankIndex()
 			ctr.freeRunningAgg()
 			ctr.freeFullPartitionResults(proc.Mp())
+			ctr.freeAggregateStates(proc.Mp())
+			if len(window.WinSpecList) > 1 {
+				ctr.aggregateStates = make([]windowAggregateState, len(window.WinSpecList))
+			}
 			// The civil-order index describes this generation's row range; the
 			// next generation reuses the accumulated batch's storage vectors,
 			// so an entry kept across generations could answer a cache lookup
@@ -450,7 +454,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 				}
 			}
 
-			// Query planning creates one Window operator per window expression.
+			// Compatible expressions share this materialized and sorted partition.
 			// Keep the materialized and sorted logical partition, then evaluate it
 			// lazily in bounded output chunks. A LIMIT consumer can stop after the
 			// first chunk without forcing the remaining frame calculations.
@@ -483,13 +487,26 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			result := vm.NewCallResult()
 			start := ctr.emitOffset
 			end := min(start+colexec.DefaultBatchSize, ctr.bat.RowCount())
-			vec, err := ctr.processFuncRange(0, window, proc, analyzer, start, end)
-			if err != nil {
-				return result, err
+			var singleResult [1]*vector.Vector
+			vecs := singleResult[:]
+			if len(window.WinSpecList) > 1 {
+				vecs = make([]*vector.Vector, len(window.WinSpecList))
 			}
-			result.Batch, err = ctr.makeResultBatch(start, end, vec)
+			for i := range vecs {
+				vecs[i], err = ctr.processFusedFuncRange(i, window, proc, analyzer, start, end)
+				if err != nil {
+					break
+				}
+			}
+			if err == nil {
+				result.Batch, err = ctr.makeResultBatch(start, end, vecs...)
+			}
 			if err != nil {
-				vec.Free(proc.Mp())
+				for _, vec := range vecs {
+					if vec != nil {
+						vec.Free(proc.Mp())
+					}
+				}
 				return result, err
 			}
 
@@ -512,18 +529,33 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 	}
 }
 
-func (ctr *container) makeResultBatch(start, end int, vec *vector.Vector) (*batch.Batch, error) {
-	if vec == nil || vec.Length() != end-start {
-		return nil, moerr.NewInternalErrorNoCtx("window result length does not match output chunk")
+func (ctr *container) makeResultBatch(start, end int, vecs ...*vector.Vector) (*batch.Batch, error) {
+	for _, vec := range vecs {
+		if vec == nil || vec.Length() != end-start {
+			return nil, moerr.NewInternalErrorNoCtx("window result length does not match output chunk")
+		}
 	}
 	rBat, err := ctr.bat.Window(start, end)
 	if err != nil {
 		return nil, err
 	}
-	rBat.Vecs = append(rBat.Vecs, vec)
+	rBat.Vecs = append(rBat.Vecs, vecs...)
 	rBat.SetRowCount(end - start)
 	ctr.rBat = rBat
 	return rBat, nil
+}
+
+func (ctr *container) processFusedFuncRange(idx int, ap *Window, proc *process.Process,
+	analyzer process.Analyzer, start, end int) (*vector.Vector, error) {
+	if len(ctr.aggregateStates) == 0 {
+		return ctr.processFuncRange(idx, ap, proc, analyzer, start, end)
+	}
+	ctr.windowAggregateState = ctr.aggregateStates[idx]
+	defer func() {
+		ctr.aggregateStates[idx] = ctr.windowAggregateState
+		ctr.windowAggregateState = windowAggregateState{}
+	}()
+	return ctr.processFuncRange(idx, ap, proc, analyzer, start, end)
 }
 
 // processFunc retains the full-range helper used by focused cancellation
@@ -668,7 +700,7 @@ func (ctr *container) newAggregateExecutor(
 			ap.OpAnalyzer.SetMemUsed(retainedMemory)
 		},
 	)
-	if err = exec.GroupGrow(groupCount); err != nil {
+	if err = aggexec.GrowWindowGroups(exec, groupCount); err != nil {
 		return nil, err
 	}
 	succeeded = true
@@ -1346,7 +1378,36 @@ func (ctr *container) processOrderFuncRange(
 ) (*vector.Vector, error) {
 	n := ctr.bat.RowCount()
 	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
-	// Each ranking implementation builds one eight-byte value per output row
+	if funcName == "row_number" {
+		if err := checkCanceled(proc, 0); err != nil {
+			return nil, err
+		}
+		count := outputEnd - outputStart
+		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		if err != nil {
+			return nil, err
+		}
+		if err = vec.PreExtend(count, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(count)
+		values := vector.MustFixedColNoTypeCheck[uint64](vec)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				vec.Free(proc.Mp())
+				return nil, err
+			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = uint64(j - partitionStart + 1)
+		}
+		return vec, nil
+	}
+
+	// The remaining ranking implementations build one eight-byte value per output row
 	// before copying into its owned vector. Include that simultaneous scratch.
 	scratch := uint64(outputEnd-outputStart) * 8
 	if err := ctr.allocation.ReserveMetadata(proc, scratch); err != nil {
@@ -1388,27 +1449,6 @@ func (ctr *container) processOrderFuncRange(
 		return vec, nil
 	}
 	switch funcName {
-	case "row_number":
-		values := make([]uint64, outputEnd-outputStart)
-		for j := outputStart; j < outputEnd; j++ {
-			if err := checkCanceled(proc, j-outputStart); err != nil {
-				return nil, err
-			}
-			partitionStart := 0
-			if ctr.ps != nil {
-				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
-			}
-			values[j-outputStart] = uint64(j - partitionStart + 1)
-		}
-		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
-		if err != nil {
-			return nil, err
-		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
-			vec.Free(proc.Mp())
-			return nil, err
-		}
-		return vec, nil
 	case "ntile":
 		values := make([]int64, outputEnd-outputStart)
 		bucketCount, err := ctr.ntileBucketCount(idx)

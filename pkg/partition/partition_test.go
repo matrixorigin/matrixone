@@ -225,6 +225,34 @@ func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
 	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, diffs, nil, vec))
 }
 
+func TestPartitionForOrderGeneralCIPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "b", "C", "c"}, nil, mp))
+
+	sels := []int64{0, 1, 2, 3, 4}
+	orderDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, orderDiffs, nil, vec),
+		"utf8mb4_general_ci folds case for ORDER BY peers")
+
+	// GROUP BY value identity keeps byte semantics; case-insensitive equality
+	// is tracked separately from #31174.
+	identityDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 1, 2, 3, 4}, Partition(sels, identityDiffs, nil, vec))
+}
+
+func TestPartitionForOrderKeepsBytePeersForBinaryCollation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a"}, nil, mp))
+
+	sels := []int64{0, 1}
+	diffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 1}, PartitionForOrder(sels, diffs, nil, vec))
+}
+
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())

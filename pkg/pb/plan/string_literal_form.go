@@ -1033,7 +1033,13 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 			}
 			fn := current.GetF()
-			if fn != nil && fn.Func != nil {
+			// The remaining contracts describe function expressions. Keep checks
+			// for other expression kinds above this guard; VisitExprTree still
+			// traverses their children after this visitor returns.
+			if fn == nil {
+				return nil
+			}
+			if fn.Func != nil {
 				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				// LAST_INSERT_ID() is function237/overload0; remote evaluation
@@ -1248,11 +1254,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.IntegerArithmeticDomains = true
 				}
 			}
-			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+			if !features.NumericPrefix && current.Typ.Charset == 255 && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
 			}
-			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
+			if !features.JSONComparisonParam && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
 			}
@@ -1269,7 +1275,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
 				features.TypedConversionFunctions = true
 			}
-			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == convFunctionID && len(fn.Args) == 3 {
+			if fn.Func != nil && int32(fn.Func.Obj>>32) == convFunctionID && len(fn.Args) == 3 {
 				for _, base := range fn.Args[1:] {
 					// Only literal INT64 bases prove the pre-v65 constant-vector
 					// contract. Unknown or not-yet-folded expressions fail closed.
@@ -1296,10 +1302,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.ExpressionResultMetadataContracts && isExpressionResultMetadataContract(current) {
 				features.ExpressionResultMetadataContracts = true
 			}
-			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
+			if !features.IPFunctionSemantics && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
-			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+			if !features.SpatialDistanceSemantics && fn.Func != nil {
 				functionID := int32(fn.Func.Obj >> 32)
 				overloadID := int32(fn.Func.Obj)
 				switch functionID {
@@ -1516,6 +1522,7 @@ func isPlanNumericType(id int32) bool {
 		20, 21, 22, 23, // signed integers
 		25, 26, 27, 28, // unsigned integers
 		30, 31, // floating point
+		73, 74, 75, 76, // bf16, float16, float8, float4
 		32, 33, 34: // decimals
 		return true
 	default:
@@ -1737,7 +1744,10 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
 	}
-	pending := []*Expr{expr}
+	// Most expression trees need only a small pending stack. Wider trees grow
+	// the same slice without changing their traversal order.
+	var local [16]*Expr
+	pending := append(local[:0], expr)
 	for len(pending) > 0 {
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]

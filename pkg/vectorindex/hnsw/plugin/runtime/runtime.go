@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
@@ -35,11 +36,27 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 
 type CatalogHooks struct{}
 
+// MaintenanceOperands projects config fields onto the relations HNSW consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.Hnsw_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.Hnsw_TblType_Storage, Name: cfg.IndexTable},
+	}
+	if cfg.DictTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.Hnsw_TblType_Dict, Name: cfg.DictTable})
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Hnsw_TblType_Metadata,
 		catalog.Hnsw_TblType_Storage,
 		catalog.Hnsw_TblType_Dict,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -207,6 +224,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if idx.IndexOption.MaxIndexCapacity > 0 {
 		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+	}
+
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 
 	if len(idx.IndexOption.Quantization) > 0 {

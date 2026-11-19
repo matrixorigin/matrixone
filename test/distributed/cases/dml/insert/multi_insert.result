@@ -310,7 +310,9 @@ Multi Update  𝄀
         ->  Join  𝄀
               Join Type: DEDUP (FAIL)  𝄀
               Join Cond: (customers_us.id = __mo_multi_insert_source.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on multi_insert_db.customers_us [ForceOneCN]  𝄀
+                    Runtime Filter Probe: customers_us.id  𝄀
               ->  Lock  𝄀
                     ->  Filter  𝄀
                           Filter Cond: #[0,3]  𝄀
@@ -321,7 +323,9 @@ Multi Update  𝄀
   ->  Join  𝄀
         Join Type: DEDUP (FAIL)  𝄀
         Join Cond: (customers_other.id = __mo_multi_insert_source.id)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on multi_insert_db.customers_other [ForceOneCN]  𝄀
+              Runtime Filter Probe: customers_other.id  𝄀
         ->  Lock  𝄀
               ->  Filter  𝄀
                     Filter Cond: (#[0,3] IS NOT TRUE)  𝄀

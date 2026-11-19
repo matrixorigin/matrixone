@@ -484,13 +484,13 @@ select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relnam
 ➤ count(*)[-5,64,0]  𝄀
 0
 DESC `information_schema`.`character_sets` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 CHARACTER_SET_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DEFAULT_COLLATE_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DESCRIPTION  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 MAXLEN  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`engines` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 ENGINE  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SUPPORT  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COMMENT  ¦  varchar(160)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -498,25 +498,25 @@ TRANSACTIONS  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 XA  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SAVEPOINTS  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`key_column_usage` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 constraint_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-column_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`keywords` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 WORD  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 RESERVED  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`parameters` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 SPECIFIC_CATALOG  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SPECIFIC_SCHEMA  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SPECIFIC_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -534,7 +534,7 @@ COLLATION_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DTD_IDENTIFIER  ¦  mediumtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ROUTINE_TYPE  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `mo_catalog`.`mo_columns` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 att_uniq_name  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_id  ¦  int unsigned  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 att_database_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -574,16 +574,16 @@ Unknown database mo_sample_data_tpch_sf1
 DESC `mo_sample_data_tpch_sf1`.`supplier` ;
 Unknown database mo_sample_data_tpch_sf1
 DESC `mysql`.`columns_priv` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 DESC `mysql`.`db` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -607,7 +607,7 @@ Execute_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Event_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦  
 DESC `mysql`.`procs_priv` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -615,19 +615,19 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦  
 DESC `mysql`.`tables_priv` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 DESC `mysql`.`user` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Select_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
@@ -680,7 +680,7 @@ Password_reuse_time  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦   
 Password_require_current  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 User_attributes  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`metric` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 metric_name  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...  𝄀
 collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦  metric data collect time  𝄀
 value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦  metric value  𝄀
@@ -690,7 +690,7 @@ account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  account name  𝄀
 account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦  account id  𝄀
 type  ¦  varchar(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
@@ -698,7 +698,7 @@ role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
 account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`server_storage_usage` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
@@ -706,7 +706,7 @@ role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
 account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`sql_statement_errors` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
@@ -715,7 +715,7 @@ account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
 account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 type  ¦  varchar(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`sql_transaction_total` ;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀

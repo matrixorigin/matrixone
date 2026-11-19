@@ -161,7 +161,7 @@ func (b *LimitBinder) foldConstant(expr *plan.Expr) (*plan.Expr, error) {
 	if proc == nil || expr == nil || expr.GetF() == nil || containsDynamicParam(expr) {
 		return expr, nil
 	}
-	if defines.IsPublicationViewBinding(b.GetContext()) {
+	if defines.IsNoEvaluationViewBinding(b.GetContext()) {
 		// Publication scope validation (#27767) binds the LIMIT/OFFSET of a
 		// stored definition without evaluating it: folding here would execute
 		// every function of the bound expression during validation. The

@@ -36,7 +36,7 @@ internal error: l2 distance: vector magnitude is too large, the result overflows
 select inner_product('[1e30,1e30]', '[1e30,1e30]');
 internal error: inner product: vector magnitude is too large, the result overflows the element domain
 select l2_distance('[]', '[]');
-internal error: malformed vector input: []
+invalid input: malformed vector input: []
 select inner_product(cast('[1,2]' as vecf64(2)), cast('[3,4]' as vecf32(2))) mixed;
 ➤ mixed[8,53,31]  𝄀
 -11.0
@@ -177,7 +177,7 @@ select cast(cast('[-300,300,1.6,-1.6]' as vecf32(4)) as vecint8(4)) i8, cast(cas
 ➤ i8[12,4,0]  ¦  u8[12,3,0]  𝄀
 [-128, 127, 2, -2]  ¦  [0, 255, 2]
 select cast(cast('[70000]' as vecf32(1)) as vecf16(1));
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECF16, element 70000
 insert into v values (2, '[3,4,12]', '[3,4,12]', '[3,4,12]', '[3,4,12]', '[3,4,12]', '[3,4,12]');
 select count(distinct a32), count(distinct a64), count(distinct ab), count(distinct ah), count(distinct ai), count(distinct au) from v;
 ➤ count(distinct a32)[-5,64,0]  ¦  count(distinct a64)[-5,64,0]  ¦  count(distinct ab)[-5,64,0]  ¦  count(distinct ah)[-5,64,0]  ¦  count(distinct ai)[-5,64,0]  ¦  count(distinct au)[-5,64,0]  𝄀
@@ -533,4 +533,126 @@ Project  𝄀
         Limit: 2  𝄀
         ->  Vector Index Scan on ix8 [cosine_distance]  𝄀
               Vector Index: ix8, Metric: cosine_distance, Candidate Limit: 2, NProbe: 5
+create table vb (id bigint primary key, a8 vecf8(3), b8 vecf8(3), a4 vecf4(3), b4 vecf4(3), b32 vecf32(3), z8 vecf8(3));
+insert into vb values (1,'[1,2,3]','[4,5,6]','[1,2,3]','[4,6,6]','[4,5,6]','[0,0,0]');
+select inner_product(a8,b8) ip, cosine_similarity(a8,b8) cs, cosine_distance(a8,b8) cd, l2_distance(a8,b8) l2, l2_distance_sq(a8,b8) l2sq, l1_distance(a8,b8) l1 from vb;
+➤ ip[8,53,31]  ¦  cs[8,53,31]  ¦  cd[8,53,31]  ¦  l2[8,53,31]  ¦  l2sq[8,53,31]  ¦  l1[8,53,31]  𝄀
+-32.0  ¦  0.9746318459510803  ¦  0.025368154048919678  ¦  5.196152210235596  ¦  27.0  ¦  9.0
+select inner_product(a4,b4) ip, cosine_similarity(a4,b4) cs, cosine_distance(a4,b4) cd, l2_distance(a4,b4) l2, l2_distance_sq(a4,b4) l2sq, l1_distance(a4,b4) l1 from vb;
+➤ ip[8,53,31]  ¦  cs[8,53,31]  ¦  cd[8,53,31]  ¦  l2[8,53,31]  ¦  l2sq[8,53,31]  ¦  l1[8,53,31]  𝄀
+-34.0  ¦  0.9686648845672607  ¦  0.031335100531578064  ¦  5.830951690673828  ¦  34.0  ¦  10.0
+select inner_product(a8,b32) f8_f32, l2_distance(a8,b4) f8_f4, l2_distance(a4,b32) f4_f32, inner_product(a8,'[4,5,6]') f8_text from vb;
+➤ f8_f32[8,53,31]  ¦  f8_f4[8,53,31]  ¦  f4_f32[8,53,31]  ¦  f8_text[8,53,31]  𝄀
+-32.0  ¦  5.830951690673828  ¦  5.196152210235596  ¦  -32.0
+select l2_distance(cast('[3,1]' as vecf8(2)), cast('[3,1]' as vecf64(2))) f8_f64;
+➤ f8_f64[8,53,31]  𝄀
+0.0
+select l2_distance(cast('[3,1]' as vecf8(2)), cast('[3,1]' as vecbf16(2)));
+invalid argument function l2_distance, bad value [VECF8 VECBF16]
+select inner_product(cast('[3,1]' as vecf4(2)), cast('[3,1]' as vecuint8(2)));
+invalid argument function inner_product, bad value [VECF4 VECUINT8]
+select l2_distance(cast('[3,1]' as vecf8(2)), '[0,0]') l2_f8, l2_distance(cast('[3,1]' as vecf4(2)), '[0,0]') l2_f4, l2_distance(cast('[3,1]' as vecf32(2)), '[0,0]') l2_f32;
+➤ l2_f8[8,53,31]  ¦  l2_f4[8,53,31]  ¦  l2_f32[8,53,31]  𝄀
+3.1622776985168457  ¦  3.1622776985168457  ¦  3.1622776985168457
+select l2_distance_sq(cast('[0]' as vecf8(1)), cast('[3.1]' as vecf64(1))) l2sq_f8, l2_distance_sq(cast('[0]' as vecf32(1)), cast('[3.1]' as vecf32(1))) l2sq_f32, l2_distance(cast('[0]' as vecf8(1)), cast('[3.1]' as vecf64(1))) l2_f8;
+➤ l2sq_f8[8,53,31]  ¦  l2sq_f32[8,53,31]  ¦  l2_f8[8,53,31]  𝄀
+9.609999408721933  ¦  9.609999656677246  ¦  3.0999999046325684
+select inner_product(a8,z8) ip, cosine_distance(a8,z8) cd, cosine_distance(z8,z8) cd_both from vb;
+➤ ip[8,53,31]  ¦  cd[8,53,31]  ¦  cd_both[8,53,31]  𝄀
+-0.0  ¦  1.0  ¦  1.0
+select cosine_similarity(a8,z8) from vb;
+internal error: cosine similarity: one of the vector is zero
+select l2_distance(a8, null) l2, inner_product(null, a4) ip from vb;
+➤ l2[8,53,31]  ¦  ip[8,53,31]  𝄀
+null  ¦  null
+select inner_product(a8, cast('[1,2]' as vecf8(2))) from vb;
+invalid input: vector ops between different dimensions (3, 2) is not permitted.
+select l2_distance(a4, '[1,2]') from vb;
+invalid input: vector ops between different dimensions (3, 2) is not permitted.
+create table vbig (v vecf8(2));
+insert into vbig values ('[448,448]');
+select l2_distance_sq(v, '[-1e20,0]') from vbig;
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select cast('[3000,-12,0.001,1000000]' as vecf8(4)) f8, cast('[3000,-12,0.001,1000000]' as vecf4(4)) f4;
+➤ f8[12,4,0]  ¦  f4[12,4,0]  𝄀
+[3072, -16, 0, 983040]  ¦  [0, 0, 0, 999999.94]
+select vecblock_json(cast('[1,2,3]' as vecf8(3))) f8, vecblock_json(cast('[1,2,3]' as vecf4(3))) f4;
+➤ f8[-1,16383,0]  ¦  f4[-1,16383,0]  𝄀
+{"g":1,"s":[0.0078125],"v":[128,256,384]}  ¦  {"g":0.0011160715,"s":[448],"v":[2,4,6]}
+select cast(vecblock_json(a4) as vecf4(3)) = a4 json_round_trip, cast(vecblock_binary(a8) as vecf8(3)) = a8 binary_round_trip from vb;
+➤ json_round_trip[-6,8,0]  ¦  binary_round_trip[-6,8,0]  𝄀
+1  ¦  1
+create table vq (v vecf8(4));
+insert into vq values ('[3000,-12,0.001,1000000]');
+select v, v = '[3000,-12,0.001,1000000]' matches_inserted_text from vq;
+➤ v[12,4,0]  ¦  matches_inserted_text[-6,8,0]  𝄀
+[3072, -16, 0, 983040]  ¦  1
+select summation(a8) s8, l1_norm(a8) n1, l2_norm(a8) n2, vector_dims(a8) d8, summation(a4) s4, vector_dims(a4) d4 from vb;
+➤ s8[8,53,31]  ¦  n1[8,53,31]  ¦  n2[8,53,31]  ¦  d8[-5,64,0]  ¦  s4[8,53,31]  ¦  d4[-5,64,0]  𝄀
+6.0  ¦  6.0  ¦  3.7416573867739413  ¦  3  ¦  6.0  ¦  3
+select normalize_l2(a8) n8, normalize_l2(a4) n4, normalize_l2(z8) nz from vb;
+➤ n8[12,3,0]  ¦  n4[12,3,0]  ¦  nz[12,3,0]  𝄀
+[0.28125, 0.5625, 0.8125]  ¦  [0.26726127, 0.53452253, 0.8017838]  ¦  [0, 0, 0]
+create table vr as select normalize_l2(a8) n8, normalize_l2(a4) n4, subvector(a8,2) s8, subvector(a4,1,2) s4, abs(a8) ab8, abs(a4) ab4, sqrt(a8) sq8, sqrt(a4) sq4, a8+b8 p8, a8*2 m8, a4-b32 d4, a8/b4 q84, coalesce(a8,b8) c8, if(id=1,a4,b4) i4, case when id=1 then a8 else b8 end k8 from vb;
+show create table vr;
+➤ Table[12,2,0]  ¦  Create Table[12,493,0]  𝄀
+vr  ¦  CREATE TABLE `vr` (
+  `n8` vecf8(3) DEFAULT NULL,
+  `n4` vecf4(3) DEFAULT NULL,
+  `s8` vecf32(65535) DEFAULT NULL,
+  `s4` vecf32(65535) DEFAULT NULL,
+  `ab8` vecf32(3) DEFAULT NULL,
+  `ab4` vecf32(3) DEFAULT NULL,
+  `sq8` vecf64(3) DEFAULT NULL,
+  `sq4` vecf64(3) DEFAULT NULL,
+  `p8` vecf32(3) DEFAULT NULL,
+  `m8` vecf32(3) DEFAULT NULL,
+  `d4` vecf32(3) DEFAULT NULL,
+  `q84` vecf32(3) DEFAULT NULL,
+  `c8` vecf8(3) DEFAULT NULL,
+  `i4` vecf4(3) DEFAULT NULL,
+  `k8` vecf8(3) DEFAULT NULL
+)
+select * from vr;
+➤ n8[12,3,0]  ¦  n4[12,3,0]  ¦  s8[12,65535,0]  ¦  s4[12,65535,0]  ¦  ab8[12,3,0]  ¦  ab4[12,3,0]  ¦  sq8[12,3,0]  ¦  sq4[12,3,0]  ¦  p8[12,3,0]  ¦  m8[12,3,0]  ¦  d4[12,3,0]  ¦  q84[12,3,0]  ¦  c8[12,3,0]  ¦  i4[12,3,0]  ¦  k8[12,3,0]  𝄀
+[0.28125, 0.5625, 0.8125]  ¦  [0.26726127, 0.53452253, 0.8017838]  ¦  [2, 3]  ¦  [1, 2]  ¦  [1, 2, 3]  ¦  [1, 2, 3]  ¦  [1, 1.4142135623730951, 1.7320508075688772]  ¦  [1, 1.4142135623730951, 1.7320508075688772]  ¦  [5, 7, 9]  ¦  [2, 4, 6]  ¦  [-3, -3, -3]  ¦  [0.25, 0.33333334, 0.5]  ¦  [1, 2, 3]  ¦  [1, 2, 3]  ¦  [1, 2, 3]
+create table vr2 as select any_value(a8) av8, any_value(a4) av4 from vb group by a8, a4;
+show create table vr2;
+➤ Table[12,3,0]  ¦  Create Table[12,83,0]  𝄀
+vr2  ¦  CREATE TABLE `vr2` (
+  `av8` vecf8(3) DEFAULT NULL,
+  `av4` vecf4(3) DEFAULT NULL
+)
+select hex(a8) from vb;
+invalid argument function hex, bad value [VECF8]
+select to_base64(a4) from vb;
+invalid argument function to_base64, bad value [VECF4]
+select a8 < b8 lt, a8 in ('[1,2,3]') in_list, a4 <> b4 ne from vb;
+➤ lt[-6,8,0]  ¦  in_list[-6,8,0]  ¦  ne[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select count(distinct a8) cd8, count(distinct a4) cd4 from vb;
+➤ cd8[-5,64,0]  ¦  cd4[-5,64,0]  𝄀
+1  ¦  1
+select min(a8) from vb;
+invalid argument aggregate function min, bad value [VECF8]
+select avg(a4) from vb;
+invalid argument aggregate function avg, bad value [VECF4]
+select cast(a8 as vecf32(3)) to_f32, cast(a8 as vecf4(3)) to_f4, cast(a4 as vecf8(3)) to_f8, cast(b32 as vecf8(3)) from_f32 from vb;
+➤ to_f32[12,3,0]  ¦  to_f4[12,3,0]  ¦  to_f8[12,3,0]  ¦  from_f32[12,3,0]  𝄀
+[1, 2, 3]  ¦  [1, 2, 3]  ¦  [1, 2, 3]  ¦  [4, 5, 6]
+select cast(a8 as vecf64(3)) from vb;
+➤ cast(a8 as vecf64(3))[12,3,0]  𝄀
+[1, 2, 3]
+select cast(a4 as vecbf16(3)) from vb;
+invalid argument operator cast, bad value [VECF4 VECBF16]
+select cast(cast('[1,2,3]' as vecint8(3)) as vecf8(3));
+invalid argument operator cast, bad value [VECINT8 VECF8]
+create index ix_vb using ivfflat on vb(a8) lists = 1 op_type 'vector_l2_ops';
+not supported: IVFFLAT only supports VECFXX column types
+create index ix_vb using hnsw on vb(a4) op_type 'vector_l2_ops';
+not supported: HNSW only supports VECF32, VECF64, VECF16, VECBF16, VECINT8 and VECUINT8 column types
+create index ix_vb on vb(a8);
+not supported: VECTOR column 'a8' cannot be in index
+create table vpk (v vecf8(3) primary key);
+not supported: VECTOR column 'v' cannot be in primary key
 drop database vec_distance_semantics;

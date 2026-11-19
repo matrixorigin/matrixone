@@ -455,3 +455,7 @@ func TestCagraValidateReindexParams_Quantization(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "int8", got[catalog.Quantization])
 }
+
+func (s *stubCompileContext) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return s.RunSql(sql)
+}

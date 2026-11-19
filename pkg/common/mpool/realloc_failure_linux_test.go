@@ -84,6 +84,31 @@ func TestReallocRetiresMetadataBeforeCachePublication(t *testing.T) {
 	require.False(t, profilePresent.Load(), "released address must not retain old profile identity")
 }
 
+// restrictAddressSpaceBelow tightens RLIMIT_AS to the current resident set
+// plus headroom so the next oversized physical request fails inside the OS
+// allocator: a real post-detach native failure, never a capacity precheck
+// rejection. The returned release restores the original limit; it must run
+// before any further allocation or assertion, and the registered cleanup
+// keeps every failure path closed (double restore is idempotent).
+func restrictAddressSpaceBelow(t *testing.T, headroom uint64) func() {
+	stat, err := os.ReadFile("/proc/self/statm")
+	require.NoError(t, err)
+	pages, err := strconv.ParseUint(strings.Fields(string(stat))[0], 10, 64)
+	require.NoError(t, err)
+	var limit unix.Rlimit
+	require.NoError(t, unix.Getrlimit(unix.RLIMIT_AS, &limit))
+	restricted := limit
+	restricted.Cur = pages*uint64(os.Getpagesize()) + headroom
+	require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &restricted))
+	release := func() {
+		require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &limit))
+	}
+	t.Cleanup(func() {
+		_ = unix.Setrlimit(unix.RLIMIT_AS, &limit)
+	})
+	return release
+}
+
 func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 	const (
 		child                     = "MO_TEST_REALLOC_PHYSICAL_FAILURE"
@@ -107,7 +132,10 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			mp := MustNew("physical-realloc-failure")
 			var old []byte
 			t.Cleanup(func() {
-				mp.Free(old)
+				if old != nil {
+					mp.Free(old)
+					old = nil
+				}
 				DeleteMPool(mp)
 			})
 			var err error
@@ -124,23 +152,16 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			require.True(t, ok)
 			before := GlobalStats().NumCurrBytes.Load()
 			profileBefore := ProfileTrackedCount()
-			stat, err := os.ReadFile("/proc/self/statm")
-			require.NoError(t, err)
-			pages, err := strconv.ParseUint(strings.Fields(string(stat))[0], 10, 64)
-			require.NoError(t, err)
-			var limit unix.Rlimit
-			require.NoError(t, unix.Getrlimit(unix.RLIMIT_AS, &limit))
-			restricted := limit
-			restricted.Cur = pages*uint64(os.Getpagesize()) + physicalFailureHeadroom
-			require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &restricted))
-			// Stay below MPoolStats' 1 GiB high-watermark logging boundary. The
-			// RLIMIT_AS budget remains below the requested mapping, while leaving
-			// enough headroom for the Go runtime to construct and return the expected
-			// allocation error in coverage-instrumented test binaries.
+			// Stay below MPoolStats' 1 GiB high-watermark logging boundary: the
+			// RLIMIT_AS budget remains below the requested mapping, while
+			// leaving enough headroom for the Go runtime to construct and
+			// return the expected allocation error in coverage-instrumented
+			// test binaries. The helper registers its own cleanup, so every
+			// failure path restores the limit.
+			release := restrictAddressSpaceBelow(t, physicalFailureHeadroom)
 			next, resizeErr := mp.ReallocZero(old, physicalFailureTargetSize, true)
 			// Restore before assertions or other test work can allocate memory.
-			restoreErr := unix.Setrlimit(unix.RLIMIT_AS, &limit)
-			require.NoError(t, restoreErr)
+			release()
 			require.ErrorContains(t, resizeErr, "physical allocator rejected")
 			require.Nil(t, next)
 			var restoredLease allocationLease
@@ -160,4 +181,102 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			finalizeTestAllocationAccount(t, registry, account)
 		}
 	}
+
+	// Named toggle case inside the same child-process fixture: profiling is
+	// disabled between a plain alloc and the real post-detach physical
+	// failure, and the following Free must still retire the restored record -
+	// the transition the profileDetach toggle guard leaked forever. No second
+	// subprocess or duplicated rlimit setup: it shares this fixture's own
+	// restrictAddressSpaceBelow seam and failure discriminators.
+	runReallocFailureAfterDisableCase(t, physicalFailureTargetSize, physicalFailureHeadroom)
+}
+
+// runReallocFailureAfterDisableCase runs the disable-before-failure variant of
+// TestReallocPhysicalFailureRestoresOwnership. It keeps every discriminator of
+// the loop cases - the physical allocator rejection itself (never a capacity
+// precheck), restored ownership metadata, contents, byte counts - and adds the
+// exact-same-sample rollback plus the final Free-retirement assertions.
+func runReallocFailureAfterDisableCase(t *testing.T, targetSize int, headroom uint64) {
+	wasEnabled := ProfilingEnabled()
+	defer func() {
+		if wasEnabled {
+			EnableProfiling()
+		} else {
+			DisableProfiling()
+		}
+	}()
+	EnableProfiling()
+	size := 128 << 10
+	mp := MustNew("physical-realloc-failure-after-disable")
+	var old []byte
+	// FailNow resource closure: the live slice is the real owner handle and
+	// must be freed before pool deletion on every path.
+	t.Cleanup(func() {
+		if old != nil {
+			mp.Free(old)
+			old = nil
+		}
+		DeleteMPool(mp)
+	})
+	trackedBefore := ProfileTrackedCount()
+	poolBefore := mp.CurrNB()
+	globalBefore := GlobalStats().NumCurrBytes.Load()
+
+	var err error
+	old, err = mp.Alloc(size, true)
+	require.NoError(t, err)
+	old[0], old[size-1] = 0x5a, 0x7f
+	ptr := unsafe.Pointer(unsafe.SliceData(old))
+	oldPtr := uintptr(ptr)
+	require.Equal(t, trackedBefore+1, ProfileTrackedCount(),
+		"alloc while profiling must record the pointer identity")
+	recorded, found := lookupProfileRecord(oldPtr)
+	require.True(t, found)
+	var lease allocationLease
+	hdr, ok := mp.getPtrMetadata(ptr, &lease)
+	require.True(t, ok)
+	bytesInuse := recorded.Bytes.Inuse.Load()
+	objectsInuse := recorded.Objects.Inuse.Load()
+
+	DisableProfiling()
+	require.False(t, ProfilingEnabled())
+	release := restrictAddressSpaceBelow(t, headroom)
+	next, resizeErr := mp.ReallocZero(old, targetSize, true)
+	// Restore before assertions or other test work can allocate memory; the
+	// helper's own registered cleanup keeps every failure path closed.
+	release()
+	require.ErrorContains(t, resizeErr, "physical allocator rejected")
+	require.Nil(t, next)
+	require.Equal(t, byte(0x5a), old[0])
+	require.Equal(t, byte(0x7f), old[size-1])
+
+	// The failed realloc must roll the exact detached sample back in and
+	// leave ownership metadata untouched while profiling is disabled.
+	require.Equal(t, trackedBefore+1, ProfileTrackedCount(),
+		"failed realloc must not lose the disabled-switch record")
+	restored, stillThere := lookupProfileRecord(oldPtr)
+	require.True(t, stillThere,
+		"failed realloc must restore the address-keyed record")
+	require.Same(t, recorded, restored,
+		"rollback must restore the exact sample detached before the native call")
+	var restoredLease allocationLease
+	restoredHdr, restoredOk := mp.getPtrMetadata(ptr, &restoredLease)
+	require.True(t, restoredOk)
+	require.Equal(t, hdr, restoredHdr)
+	require.Equal(t, lease, restoredLease)
+	require.Equal(t, poolBefore+int64(size), mp.CurrNB())
+	require.Equal(t, globalBefore+int64(size), GlobalStats().NumCurrBytes.Load())
+
+	// Final retire through the same real Free while profiling stays disabled:
+	// the recovery loop only closes when rollback and retirement both hold.
+	mp.Free(old)
+	old = nil
+	require.Equal(t, trackedBefore, ProfileTrackedCount(),
+		"free after failed-realloc rollback must retire the restored record")
+	_, retired := lookupProfileRecord(oldPtr)
+	require.False(t, retired)
+	require.Equal(t, bytesInuse-int64(size), recorded.Bytes.Inuse.Load())
+	require.Equal(t, objectsInuse-1, recorded.Objects.Inuse.Load())
+	require.Equal(t, poolBefore, mp.CurrNB())
+	require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
 }

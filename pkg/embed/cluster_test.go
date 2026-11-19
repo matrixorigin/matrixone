@@ -21,11 +21,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1670,7 +1673,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 	require.NoError(t, err)
 }
 
-func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+func TestRetiredTransactionTracePreservesHistoricalArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
 	require.NoError(t, CloseBaseClusterTests())
@@ -1725,13 +1728,17 @@ load-to-mo = true
 		if seed {
 			var count int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
-			require.Equal(t, 9, count)
-			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='disable'").Scan(&count))
-			require.Equal(t, 5, count)
-			// Historical collector rows are seeded through its former internal SQL
-			// ownership path; public writes remain subject to catalog authorization.
+			require.Zero(t, count, "fresh clusters must not create retired trace tables")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='mo_debug'").Scan(&count))
+			require.Zero(t, count, "fresh clusters must not create the retired trace database")
+			// Recreate the relevant released layout through internal SQL to exercise
+			// preservation; public writes remain subject to catalog authorization.
 			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
 			for _, query := range []string{
+				"create database mo_debug",
+				trace.TraceStatementTableSQL,
+				trace.FeaturesTablesSQL,
+				"insert into mo_debug.trace_features values ('txn','disable'),('txn-action','disable'),('data','disable'),('statement','disable'),('txn-workspace','disable')",
 				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
 				"update mo_debug.trace_features set state='enable'",
 			} {
@@ -1795,4 +1802,55 @@ func TestClusterAndLegacyPortAllocatorsShareLeases(t *testing.T) {
 		require.NoError(t, contender.lock.Close())
 	}
 	require.False(t, locked)
+}
+
+// A frontend constructor can fail after the engine starts catalog replay and
+// before the CN heartbeat is published. Teardown must retire both owners.
+func TestCNFrontendConstructionFailureReleasesResources(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), strings.Repeat("s", 160))
+	var frontendAddress string
+	value, err := NewCluster(WithTesting(), WithCNCount(1), WithPreStart(func(op ServiceOperator) {
+		if op.ServiceType() == metadata.ServiceType_CN {
+			op.Adjust(func(cfg *ServiceConfig) {
+				cfg.CN.Frontend.UnixSocketAddress = socket
+				frontendAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(cfg.CN.Frontend.Port)))
+			})
+		}
+	}))
+	require.NoError(t, err)
+	c := value.(*cluster)
+	t.Cleanup(func() {
+		require.NoError(t, c.Close())
+		require.True(t, c.CloseComplete())
+		require.NoError(t, os.RemoveAll(c.options.dataPath))
+	})
+	failure := errors.New("injected Unix frontend construction failure")
+	var panicValue any
+	var failed cnservice.Service
+	// Recover only at the existing test seam, in the constructor's goroutine;
+	// the real production constructor and rollback still own every resource.
+	c.startFn = func(op *operator) (err error) {
+		if op.serviceType == metadata.ServiceType_CN {
+			defer func() {
+				if value := recover(); value != nil {
+					panicValue = value
+					failed, _ = op.reset.svc.(cnservice.Service)
+					err = failure
+				}
+			}()
+		}
+		return op.StartContext(c.startup.context())
+	}
+	require.ErrorIs(t, c.Start(), failure)
+	require.NotNil(t, panicValue)
+	require.Contains(t, fmt.Sprint(panicValue), "listen unix "+socket)
+	require.NotNil(t, failed)
+	state, ok := failed.(interface{ CloseComplete() bool })
+	require.True(t, ok)
+	require.True(t, state.CloseComplete(), "failed CN construction must finish its owned cleanup")
+	require.NoError(t, c.Close())
+	require.True(t, c.CloseComplete())
+	rebound, err := net.Listen("tcp", frontendAddress)
+	require.NoError(t, err, "failed frontend handoff must release its TCP listener")
+	require.NoError(t, rebound.Close())
 }

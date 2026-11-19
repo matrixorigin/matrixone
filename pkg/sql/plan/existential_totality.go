@@ -25,13 +25,13 @@ import (
 // total and free of observable effects. This proof is deliberately narrower
 // than arbitrary deterministic expressions: an unchosen CASE arm must also
 // be safe, and a cast may neither raise an error nor emit a warning.
-func existentialPredicateIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Expr) bool) bool {
+func (builder *QueryBuilder) existentialPredicateIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Expr) bool) bool {
 	if expr == nil || types.T(expr.Typ.Id) != types.T_bool {
 		return false
 	}
 	fn := expr.GetF()
 	if fn == nil {
-		return existentialValueIsTotal(expr, storedTextIsBounded)
+		return builder.existentialValueIsTotal(expr, storedTextIsBounded)
 	}
 	if fn.Func == nil {
 		return false
@@ -43,23 +43,23 @@ func existentialPredicateIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
 	switch id {
 	case function.AND, function.OR, function.XOR:
-		return len(fn.Args) == 2 && existentialPredicateIsTotal(fn.Args[0], storedTextIsBounded) && existentialPredicateIsTotal(fn.Args[1], storedTextIsBounded)
+		return len(fn.Args) == 2 && builder.existentialPredicateIsTotal(fn.Args[0], storedTextIsBounded) && builder.existentialPredicateIsTotal(fn.Args[1], storedTextIsBounded)
 	case function.NOT:
-		return len(fn.Args) == 1 && existentialPredicateIsTotal(fn.Args[0], storedTextIsBounded)
+		return len(fn.Args) == 1 && builder.existentialPredicateIsTotal(fn.Args[0], storedTextIsBounded)
 	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
 		function.LESS_THAN, function.LESS_EQUAL, function.IS, function.ISNOT:
-		return len(fn.Args) == 2 && existentialValueIsTotal(fn.Args[0], storedTextIsBounded) &&
-			existentialValueIsTotal(fn.Args[1], storedTextIsBounded) &&
+		return len(fn.Args) == 2 && builder.existentialValueIsTotal(fn.Args[0], storedTextIsBounded) &&
+			builder.existentialValueIsTotal(fn.Args[1], storedTextIsBounded) &&
 			comparisonEvaluationIsTotal(id, fn.Args[0].Typ, fn.Args[1].Typ)
 	case function.ISNULL, function.ISNOTNULL, function.ISTRUE, function.ISNOTTRUE,
 		function.ISFALSE, function.ISNOTFALSE:
-		return len(fn.Args) == 1 && existentialValueIsTotal(fn.Args[0], storedTextIsBounded)
+		return len(fn.Args) == 1 && builder.existentialValueIsTotal(fn.Args[0], storedTextIsBounded)
 	default:
 		return false
 	}
 }
 
-func existentialValueIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Expr) bool) bool {
+func (builder *QueryBuilder) existentialValueIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Expr) bool) bool {
 	if expr == nil {
 		return false
 	}
@@ -76,11 +76,18 @@ func existentialValueIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Exp
 	}
 	id, variant := function.DecodeOverloadID(fn.Func.Obj)
 	switch id {
+	case function.PLUS, function.MINUS, function.MULTI, function.UNARY_PLUS, function.UNARY_MINUS:
+		// Reuse the exact integer proof rather than treating determinism as
+		// totality. It checks the bound overload and every intermediate range,
+		// and rejects overflow and execution-dependent prepared expressions.
+		// The caller separately verifies all referenced column origins.
+		_, total := exactAffineIntegerRange(builder.GetContext(), expr)
+		return total
 	case function.CAST:
 		// Assignment and set-operation casts have additional session-dependent
 		// behavior; certify only normal, explicit and comparison casts here.
 		if variant < 0 || variant > 2 || len(fn.Args) != 2 || fn.Args[1].GetT() == nil ||
-			!isSameColumnType(fn.Args[1].Typ, expr.Typ) || !existentialValueIsTotal(fn.Args[0], storedTextIsBounded) {
+			!isSameColumnType(fn.Args[1].Typ, expr.Typ) || !builder.existentialValueIsTotal(fn.Args[0], storedTextIsBounded) {
 			return false
 		}
 		if singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ) || existentialStringCastIsTotal(fn.Args[0].Typ, expr.Typ) {
@@ -101,14 +108,14 @@ func existentialValueIsTotal(expr *plan.Expr, storedTextIsBounded func(*plan.Exp
 			return false
 		}
 		for i := 0; i+1 < len(fn.Args); i += 2 {
-			if !existentialPredicateIsTotal(fn.Args[i], storedTextIsBounded) || fn.Args[i+1].Typ.Id != expr.Typ.Id ||
-				!existentialValueIsTotal(fn.Args[i+1], storedTextIsBounded) {
+			if !builder.existentialPredicateIsTotal(fn.Args[i], storedTextIsBounded) || fn.Args[i+1].Typ.Id != expr.Typ.Id ||
+				!builder.existentialValueIsTotal(fn.Args[i+1], storedTextIsBounded) {
 				return false
 			}
 		}
 		if len(fn.Args)%2 == 1 {
 			last := fn.Args[len(fn.Args)-1]
-			return last.Typ.Id == expr.Typ.Id && existentialValueIsTotal(last, storedTextIsBounded)
+			return last.Typ.Id == expr.Typ.Id && builder.existentialValueIsTotal(last, storedTextIsBounded)
 		}
 		return true
 	default:

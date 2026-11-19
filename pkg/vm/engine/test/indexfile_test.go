@@ -25,17 +25,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -94,7 +99,22 @@ func (e *indexFileEngine) flush() {
 	e.flushTable("idx")
 }
 
+// flushTable persists the rows last written to table into a new storage object. A flush
+// started before the TN's dirty tree has the write flushes nothing, so it is repeated
+// until the table has another object.
 func (e *indexFileEngine) flushTable(table string) {
+	before := len(e.objectNames(table))
+	for deadline := time.Now().Add(time.Minute); ; {
+		e.flushTableOnce(table)
+		if len(e.objectNames(table)) > before {
+			return
+		}
+		require.True(e.t, time.Now().Before(deadline), "a flush of %s writes an object", table)
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (e *indexFileEngine) flushTableOnce(table string) {
 	op := e.txn()
 	db, err := e.de.Engine.Database(e.ctx, "ifdb", op)
 	require.NoError(e.t, err)
@@ -268,6 +288,12 @@ func (r *prefetchRecorder) seen(paths []string) bool {
 }
 
 func (e *indexFileEngine) objectPaths(table string) []string {
+	out := e.objectNames(table)
+	require.NotEmpty(e.t, out)
+	return out
+}
+
+func (e *indexFileEngine) objectNames(table string) []string {
 	res, err := e.exec.Exec(e.ctx,
 		"select distinct object_name from metadata_scan('ifdb."+table+"', '*') g",
 		executor.Options{}.WithDisableIncrStatement())
@@ -279,7 +305,6 @@ func (e *indexFileEngine) objectPaths(table string) []string {
 			out = append(out, bat.Vecs[0].GetStringAt(i))
 		}
 	}
-	require.NotEmpty(e.t, out)
 	return out
 }
 
@@ -319,4 +344,41 @@ func TestIndexFileRebuildPrefetchFollowsPolicy(t *testing.T) {
 	require.Eventually(t, func() bool { return rec.seen(control) }, time.Minute, 10*time.Millisecond,
 		"a read-write rebuild prefetches its objects")
 	require.False(t, rec.seen(restricted), "read and none rebuilds must not prefetch")
+}
+
+// A background read, with only a SqlContext, prefetches a four-block scan through the IO
+// pipeline of its CN's service, not of the empty service.
+func TestIndexFileBackgroundRebuildPrefetchesUnderCNService(t *testing.T) {
+	e := setupIndexFileEngine(t)
+	data := indexFileBytes(4*indexfile.ChunkSize, 5)
+	for i := 0; i < 4; i++ {
+		chunk := data[i*indexfile.ChunkSize : (i+1)*indexfile.ChunkSize]
+		e.run(nil, fmt.Sprintf("insert into ifdb.idx values ('bg:1', %d, unhex('%s'), 0)", i, hex.EncodeToString(chunk)))
+		e.flush()
+	}
+	ref := indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "bg:1", Size: int64(len(data)), Checksum: md5HexOf(data)}
+
+	const service = "indexfile-background-cn"
+	ctrl := gomock.NewController(t)
+	ls := mock_lock.NewMockLockService(ctrl)
+	ls.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	empty := moruntime.ServiceRuntime("")
+	pipeline, ok := empty.GetGlobalVariables("blockio")
+	require.True(t, ok)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.LockService, ls)
+	rt.SetGlobalVariables("blockio", pipeline)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	require.True(t, empty.CompareAndDeleteGlobalVariables("blockio", pipeline))
+	t.Cleanup(func() { empty.SetGlobalVariables("blockio", pipeline) })
+
+	txn := e.txn()
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(e.ctx, service, txn, catalog.System_Account, nil))
+	f, err := indexfile.OpenWithProcess(sqlproc, &indexfile.Files{Engine: e.de.Engine}, ref, t.TempDir())
+	require.NoError(t, err)
+	got, err := io.ReadAll(io.NewSectionReader(f.File(), 0, f.Size()))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.Equal(t, data, got)
+	require.NoError(t, txn.Commit(e.ctx))
 }

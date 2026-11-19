@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -195,7 +196,11 @@ func (exec *jsonArrayAggExec) Flush() (_ []*vector.Vector, retErr error) {
 					if isNull {
 						arr = append(arr, bytejson.Null)
 					} else {
-						arr = append(arr, types.DecodeJson(data))
+						value, err := jsonAggregateOutputValue(data, jsonAggregateTextType(exec.argTypes[0].Oid))
+						if err != nil {
+							return err
+						}
+						arr = append(arr, value)
 					}
 					return nil
 				})
@@ -410,9 +415,13 @@ func (exec *jsonObjectAggExec) Flush() (_ []*vector.Vector, retErr error) {
 						return nil
 					}
 					if field == 0 {
-						key = string(data)
+						key = jsonAggregateValidText(data)
 					} else {
-						val = types.DecodeJson(data)
+						var err error
+						val, err = jsonAggregateOutputValue(data, jsonAggregateTextType(exec.argTypes[1].Oid))
+						if err != nil {
+							return err
+						}
 					}
 					return nil
 				}); err != nil {
@@ -815,7 +824,7 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		if vectors[0].IsNull(uint64(keyRow)) {
 			return moerr.NewInvalidInputNoCtx("json_objectagg key cannot be NULL")
 		}
-		key, err := getStringKey(vectors[0], uint64(keyRow))
+		key, err := getRawStringKey(vectors[0], uint64(keyRow))
 		if err != nil {
 			return err
 		}
@@ -833,7 +842,7 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		}
 		binary.BigEndian.PutUint16(scratch[:kAggArgPrefixSz], y)
 		binary.BigEndian.PutUint32(scratch[kAggArgPrefixSz:header], state.argCnt[y])
-		payload := appendJSONPayloadField(scratch[header:header], []byte(key))
+		payload := appendJSONPayloadField(scratch[header:header], key)
 		valueHeader := len(payload)
 		payload = payload[:valueHeader+5]
 		payload[valueHeader] = 1
@@ -903,6 +912,101 @@ func jsonEntryValue(entry jsonAggregateEntry) (bytejson.ByteJson, error) {
 		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("invalid json aggregate value")
 	}
 	return types.DecodeJson(entry.value), nil
+}
+
+func jsonAggregateTextType(oid types.T) bool {
+	return oid == types.T_char || oid == types.T_varchar || oid == types.T_text
+}
+
+func jsonAggregateValueText(value []byte) ([]byte, error) {
+	if len(value) == 2 && value[0] == bytejson.TpCodeLiteral && value[1] == bytejson.LiteralNull {
+		return nil, nil
+	}
+	if len(value) < 2 || value[0] != bytejson.TpCodeString {
+		return nil, moerr.NewInvalidInputNoCtx("invalid json aggregate text")
+	}
+	n, prefix := binary.Uvarint(value[1:])
+	if prefix <= 0 || n != uint64(len(value)-1-prefix) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid json aggregate text")
+	}
+	return value[1+prefix:], nil
+}
+
+func jsonAggregateOutputValue(data []byte, text bool) (bytejson.ByteJson, error) {
+	if len(data) == 0 {
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("invalid json aggregate value")
+	}
+	if text {
+		value, err := jsonAggregateValueText(data)
+		if err != nil {
+			return bytejson.ByteJson{}, err
+		}
+		if value != nil && !utf8.Valid(value) {
+			return bytejson.CreateByteJSONWithCheck(jsonAggregateValidText(value))
+		}
+	}
+	return types.DecodeJson(data), nil
+}
+
+// JSON aggregate state retains the original bytes for DISTINCT and merge.
+// Normalize text only when constructing the final document. Each invalid
+// UTF-8 byte becomes one replacement character, as in vector_matmul's JSON.
+func normalizeJSONAggregateEntries(entries []jsonAggregateEntry, keys, text bool, allocation *AllocationAccount, mp *mpool.MPool) ([]byte, error) {
+	var total int
+	add := func(n int) error {
+		if n < 0 || n > math.MaxInt-total || uint64(n) > math.MaxUint32 {
+			return moerr.NewInvalidInputNoCtx("json aggregate text is too large")
+		}
+		total += n
+		return nil
+	}
+	for _, entry := range entries {
+		if keys && !utf8.Valid(entry.key) {
+			if err := add(jsonValidUTF8Len(entry.key)); err != nil {
+				return nil, err
+			}
+		}
+		if text {
+			value, err := jsonAggregateValueText(entry.value)
+			if err != nil {
+				return nil, err
+			}
+			if value != nil && !utf8.Valid(value) {
+				n := jsonValidUTF8Len(value)
+				if err := add(1 + jsonUvarintSize(uint64(n)) + n); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	backing, err := makeAccountedScratch[byte](allocation, mp, total)
+	if err != nil {
+		return nil, err
+	}
+	pos := 0
+	for i := range entries {
+		entry := &entries[i]
+		if keys && !utf8.Valid(entry.key) {
+			start := pos
+			pos += putJSONValidUTF8(backing[pos:], entry.key)
+			entry.key = backing[start:pos]
+		}
+		if text {
+			value, _ := jsonAggregateValueText(entry.value) // validated in the sizing pass
+			if value != nil && !utf8.Valid(value) {
+				start := pos
+				backing[pos] = bytejson.TpCodeString
+				pos++
+				pos += binary.PutUvarint(backing[pos:], uint64(jsonValidUTF8Len(value)))
+				pos += putJSONValidUTF8(backing[pos:], value)
+				entry.value = backing[start:pos]
+			}
+		}
+	}
+	return backing, nil
 }
 
 type jsonArrayEntrySource []jsonAggregateEntry
@@ -991,6 +1095,10 @@ func (exec *jsonArrayAggExec) flushAccounted() (_ []*vector.Vector, retErr error
 				}
 				count = out
 			}
+			var normalized []byte
+			if err == nil {
+				normalized, err = normalizeJSONAggregateEntries(entries[:count], false, jsonAggregateTextType(exec.argTypes[0].Oid), exec.allocation, exec.mp)
+			}
 			if err == nil {
 				slices.SortFunc(entries[:count], func(left, right jsonAggregateEntry) int {
 					return int(left.ordinal) - int(right.ordinal)
@@ -999,6 +1107,7 @@ func (exec *jsonArrayAggExec) flushAccounted() (_ []*vector.Vector, retErr error
 					jsonArrayEntrySource(entries[:count]))
 				err = vector.AppendByteJsonEncoded(vecs[chunk], encoder, exec.mp)
 			}
+			mpool.FreeSlice(exec.mp, normalized)
 			mpool.FreeSlice(exec.mp, entries)
 			if err != nil {
 				return nil, err
@@ -1050,6 +1159,10 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 				}
 				return err
 			})
+			var normalized []byte
+			if err == nil {
+				normalized, err = normalizeJSONAggregateEntries(entries[:count], true, jsonAggregateTextType(exec.argTypes[1].Oid), exec.allocation, exec.mp)
+			}
 			if err == nil {
 				slices.SortFunc(entries[:count], func(left, right jsonAggregateEntry) int {
 					if cmp := bytes.Compare(left.key, right.key); cmp != 0 {
@@ -1072,6 +1185,7 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 					jsonObjectEntrySource(entries[:count]))
 				err = vector.AppendByteJsonEncoded(vecs[chunk], encoder, exec.mp)
 			}
+			mpool.FreeSlice(exec.mp, normalized)
 			mpool.FreeSlice(exec.mp, entries)
 			if err != nil {
 				return nil, err
@@ -1225,10 +1339,27 @@ func isSharedJSONArrayValueType(oid types.T) bool {
 }
 
 func getStringKey(vec *vector.Vector, row uint64) (string, error) {
+	data, err := getRawStringKey(vec, row)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func getRawStringKey(vec *vector.Vector, row uint64) ([]byte, error) {
 	if !vec.GetType().Oid.IsMySQLString() {
-		return "", moerr.NewInvalidInputNoCtxf("json_objectagg key must be a string, got %v", vec.GetType().String())
+		return nil, moerr.NewInvalidInputNoCtxf("json_objectagg key must be a string, got %v", vec.GetType().String())
 	}
 	param := vector.GenerateFunctionStrParameter(vec)
 	data, _ := param.GetStrValue(row)
-	return string(data), nil
+	return data, nil
+}
+
+func jsonAggregateValidText(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	valid := make([]byte, jsonValidUTF8Len(data))
+	putJSONValidUTF8(valid, data)
+	return string(valid)
 }

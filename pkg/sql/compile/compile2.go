@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -148,11 +149,29 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
+	requiresCapturedExecution := plan2.HasCapturedExecutionAccess(queryPlan)
+	if requiresCapturedExecution && (!c.capturedExecutionAllowed(execTopContext) || !c.capturedExecutionPlacementAllowed(queryPlan)) {
+		return ErrExecutionIntentDrift
+	}
+	if c.preflightPending && (c.capturedExecutionTopology || requiresCapturedExecution) &&
+		!c.capturedExecutionAllowed(execTopContext) {
+		return ErrExecutionIntentDrift
+	}
+	if c.preflightPending {
+		if c.txnOffsetPending {
+			c.TxnOffset = txnOffsetOfCompile(c.proc)
+			c.txnOffsetPending = false
+		}
+		c.proc.SetMessageBoard(c.MessageBoard)
+		c.preflightPending = false
+	}
+
 	// Reject unsupported lock policies before query scheduling, source/scope
 	// construction, Sirius offload, or any later MergeRun can publish work.
 	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
 		return err
 	}
+	c.capturedExecutionTopology = c.capturedExecutionTopology || requiresCapturedExecution
 
 	// Refresh borrowed CREATE plans before effects without advancing or
 	// rolling back the caller's workspace statement. This also covers
@@ -183,6 +202,12 @@ func (c *Compile) Compile(
 	}
 	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
 		return err
+	}
+	if c.indexMaintenanceSpec != nil {
+		c.indexMaintenanceNodeID, err = selectIndexMaintenanceNode(queryPlan.GetQuery(), c.indexMaintenanceSpec, c.indexMaintenanceLiterals)
+		if err != nil {
+			return err
+		}
 	}
 
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
@@ -774,19 +799,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// duplicated.
 		if retryState := c.proc.GetSequenceRetryState(); retryState != nil {
 			if pendings := retryState.ConsumePendings(); len(pendings) > 0 {
-				admitted, cancelErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
+				admitted, verdictErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
 				if !admitted {
 					resourceRecorder.finishAttempt(
 						uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 						attemptScopes, attemptAnal, c.addr, false,
 					)
 					attemptOpen = false
-					// The caller's own cancellation (F2, v21 precedence)
-					// surfaces unchanged; otherwise a declined verdict
-					// surfaces the named terminal of the FIRST-recorded
-					// pending entry exactly once (B3) — never a stale
-					// pending error in place of a live cancellation.
-					cause := cancelErr
+					// Prefer cancellation or the expiry decision's named
+					// terminal; ordinary declines retain the first pending.
+					cause := verdictErr
 					if cause == nil {
 						cause = pendings[0].Pending.Original
 					}
@@ -830,7 +852,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		// Retry compilation can itself emit expression diagnostics.
 		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
-		nextRunC, buildErr := c.buildRetryCompile(defChanged)
+		nextRunC, buildErr := c.buildRetryCompile(defChanged, false, nil)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
 		if buildErr != nil {
@@ -1050,8 +1072,18 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
+func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffset *int) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
+	if safeFallback {
+		rebuildPlan = true
+	}
+	if !safeFallback && c.capturedExecutionRetryNeedsRebuild() {
+		if c.buildFallbackPlanFunc == nil {
+			return nil, moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
+		}
+		rebuildPlan = true
+		safeFallback = true
+	}
 	// Invalidate a completed proof before a different logical generation can be
 	// built or observed.
 	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
@@ -1067,9 +1099,37 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	// each retried compilation restart (and so indefinitely extend) the
 	// statement's bounded retry window.
 	seqRetryState := c.proc.GetSequenceRetryState()
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	setup := ImmediateSetup
+	labels := c.cnLabel
+	if c.executionIntent != nil {
+		labels = maps.Clone(labels)
+		setup = RetryPreflightSetup
+		if existingOffset != nil {
+			setup = PreflightSetup
+		}
+	}
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, labels, c.startAt, setup)
+	runC.indexMaintenanceSpec = c.indexMaintenanceSpec.Clone()
+	runC.indexMaintenanceLiterals = append([]string(nil), c.indexMaintenanceLiterals...)
 	if seqRetryState != nil {
 		c.proc.ReplaceSequenceRetryState(seqRetryState)
+	}
+	keepRun := false
+	releaseRun := func() {
+		if c.executionIntent != nil {
+			releaseRetryCompile(runC)
+		} else {
+			runC.Release()
+		}
+	}
+	defer func() {
+		if !keepRun && runC != nil {
+			releaseRun()
+		}
+	}()
+	if existingOffset != nil {
+		runC.TxnOffset = *existingOffset
+		runC.txnOffsetPending = false
 	}
 	runC.temporaryDropRetryStage = c.temporaryDropRetryStage
 	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
@@ -1088,22 +1148,31 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
+	if !safeFallback {
+		runC.SetValidatedExecutionIntent(c.executionIntent)
+	}
+	if !rebuildPlan {
+		runC.capturedExecutionTopology = c.capturedExecutionTopology
+	}
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			runC.Release()
-			panic(recovered)
-		}
-		if e != nil {
-			runC.Release()
-		}
-	}()
 	planForRetry := c.pn
 	if rebuildPlan {
 		runC.preparedJoinDiagnosticFree = false
-		planForRetry, e = c.buildPlanFunc(topContext)
+		if safeFallback {
+			if c.buildFallbackPlanFunc == nil {
+				e = moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
+				return nil, e
+			}
+			planForRetry, e = c.buildFallbackPlanFunc(topContext)
+		} else {
+			planForRetry, e = c.buildPlanFunc(topContext)
+		}
 		if e != nil {
+			return nil, e
+		}
+		if safeFallback && plan2.HasCapturedExecutionAccess(planForRetry) {
+			e = moerr.NewInternalError(topContext, "unscoped retry retained captured execution")
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
@@ -1121,6 +1190,12 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		return nil, e
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
+		if errors.Is(e, ErrExecutionIntentDrift) && !safeFallback {
+			offset := runC.TxnOffset
+			releaseRun()
+			runC = nil
+			return c.buildRetryCompile(true, true, &offset)
+		}
 		return nil, e
 	}
 	if rebuildPlan {
@@ -1128,6 +1203,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.capturedExecutionTopology = runC.capturedExecutionTopology
 		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
@@ -1136,6 +1212,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 			c.anal.qry = qry.Query
 		}
 	}
+	keepRun = true
 	return runC, nil
 }
 

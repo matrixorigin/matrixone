@@ -71,7 +71,7 @@ invalid input: __mo_read_size value out of range: 9223372036854775807
 insert into kt values (1, 'x');
 invalid input: cannot insert/update/delete from external table
 desc kt;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table kt_like like kt;

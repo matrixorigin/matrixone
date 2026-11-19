@@ -224,7 +224,9 @@ SELECT COUNT(*) FROM t_where_case WHERE code = 'abc123';
 1
 SELECT * FROM t_where_case WHERE code LIKE 'abc%' ORDER BY id;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀
-2  ¦  abc123
+1  ¦  ABC123  𝄀
+2  ¦  abc123  𝄀
+3  ¦  Abc123
 CREATE TABLE t_agg_test (
 id INT,
 category VARCHAR(50),
@@ -235,26 +237,26 @@ INSERT INTO t_agg_test VALUES (2, 'apple', 20);
 INSERT INTO t_agg_test VALUES (3, 'APPLE', 30);
 INSERT INTO t_agg_test VALUES (4, 'Banana', 40);
 INSERT INTO t_agg_test VALUES (5, 'banana', 50);
-SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
 ➤ category[12,-1,0]  ¦  total[-5,64,0]  𝄀
 APPLE  ¦  30  𝄀
 Apple  ¦  10  𝄀
-Banana  ¦  40  𝄀
 apple  ¦  20  𝄀
+Banana  ¦  40  𝄀
 banana  ¦  50
-SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
 ➤ category[12,-1,0]  ¦  avg_val[8,54,0]  𝄀
 APPLE  ¦  30.0  𝄀
 Apple  ¦  10.0  𝄀
-Banana  ¦  40.0  𝄀
 apple  ¦  20.0  𝄀
+Banana  ¦  40.0  𝄀
 banana  ¦  50.0
-SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
 ➤ category[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 APPLE  ¦  1  𝄀
 Apple  ¦  1  𝄀
-Banana  ¦  1  𝄀
 apple  ¦  1  𝄀
+Banana  ¦  1  𝄀
 banana  ¦  1
 CREATE TABLE t_outer (
 id INT PRIMARY KEY,

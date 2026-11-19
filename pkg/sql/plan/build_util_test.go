@@ -383,6 +383,75 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 	}
 }
 
+// TestGetTypeFromAstLowPrecFloat covers getTypeFromAst's disambiguation of the scalar
+// low-precision float types (#20567): they share MYSQL_TYPE_FLOAT and are resolved by
+// FamilyString, carrying no width/scale.
+func TestGetTypeFromAstLowPrecFloat(t *testing.T) {
+	for _, tc := range []struct {
+		def  string
+		want types.T
+	}{
+		{"bf16", types.T_bf16},
+		{"float16", types.T_float16},
+		{"float8", types.T_float8},
+		{"float4", types.T_float4},
+	} {
+		t.Run(tc.def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+tc.def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), typ.Id)
+			require.Equal(t, int32(-1), typ.Scale)
+		})
+	}
+}
+
+func TestGetTypeFromAstVectorTypes(t *testing.T) {
+	for _, tc := range []struct {
+		def   string
+		want  types.T
+		width int32
+	}{
+		{"vecf32(3)", types.T_array_float32, 3},
+		{"vecf64(3)", types.T_array_float64, 3},
+		{"vecbf16(3)", types.T_array_bf16, 3},
+		{"vecf16(3)", types.T_array_float16, 3},
+		{"vecint8(3)", types.T_array_int8, 3},
+		{"vecuint8(3)", types.T_array_uint8, 3},
+		{"vecf8(3)", types.T_array_float8, 3},
+		{"vecf4(1024)", types.T_array_float4, 1024},
+		{"vecf8", types.T_array_float8, types.MaxArrayDimension},
+		{"vecf4(65535)", types.T_array_float4, types.MaxArrayDimension},
+	} {
+		t.Run(tc.def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+tc.def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+	for _, def := range []string{"vecf8(65536)", "vecf4(0)"} {
+		t.Run(def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = getTypeFromAst(context.Background(), column.Type)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestGetTypeFromAstCharCastCharset(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -1593,6 +1662,32 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		binaryWant := "cast_assign"
+		if test.ignore {
+			binaryWant = "cast_ignore"
+		}
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			binaryTarget := plan.Type{Id: int32(oid), Width: 1}
+			require.True(t, useAssignmentStrictCast(binaryTarget))
+			require.True(t, useSqlModeStringAssignmentCast(binaryTarget))
+			require.True(t, needsSameTypeAssignmentCast(binaryTarget))
+			require.Equal(t, binaryWant, assignmentCastFunctionName(binaryTarget, test.ignore, proc))
+			same := MakePlan2StringConstExprWithType(string([]byte{0xc3, 0xa9}))
+			same.Typ = binaryTarget
+			projected, err := forceCastExpr2WithProcess(t.Context(), DeepCopyExpr(same), makeTypeByPlan2Type(binaryTarget),
+				&plan.Expr{Typ: binaryTarget, Expr: &plan.Expr_T{T: &plan.TargetType{}}}, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, projected.GetF().GetFunc().GetObjName())
+			forced, err := forceAssignmentCastExprWithProcess(t.Context(), DeepCopyExpr(same), binaryTarget, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, forced.GetF().GetFunc().GetObjName())
+			ddl, err := makePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+			stored, err := MakePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_assign", stored.GetF().GetFunc().GetObjName())
+		}
 		blobTargetType := &plan.Expr{
 			Typ:  blobTarget,
 			Expr: &plan.Expr_T{T: &plan.TargetType{}},

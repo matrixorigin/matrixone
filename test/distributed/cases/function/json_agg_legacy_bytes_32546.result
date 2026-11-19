@@ -1,0 +1,18 @@
+DROP DATABASE IF EXISTS json_agg_legacy_bytes_32546;
+CREATE DATABASE json_agg_legacy_bytes_32546;
+USE json_agg_legacy_bytes_32546;
+CREATE TABLE t(k VARCHAR(20), v VARCHAR(20));
+INSERT INTO t VALUES (x'ff', x'fe');
+SELECT HEX(k) AS source_key, HEX(v) AS source_value FROM t;
+source_key    source_value
+FF    FE
+SELECT HEX(JSON_UNQUOTE(JSON_EXTRACT(JSON_ARRAYAGG(v), '$[0]'))) AS array_value FROM t;
+array_value
+EFBFBD
+SELECT HEX(JSON_UNQUOTE(JSON_EXTRACT(JSON_KEYS(JSON_OBJECTAGG(k, v)), '$[0]'))) AS object_key FROM t;
+object_key
+EFBFBD
+SELECT HEX(JSON_UNQUOTE(JSON_EXTRACT(JSON_OBJECTAGG(k, v), '$."�"'))) AS object_value FROM t;
+object_value
+EFBFBD
+DROP DATABASE json_agg_legacy_bytes_32546;

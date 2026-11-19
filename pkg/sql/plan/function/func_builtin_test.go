@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -248,6 +249,10 @@ func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
 		types.New(types.T_float64, 25, -1),
 		types.New(types.T_float64, 18, 6),
 		types.New(types.T_decimal128, 20, 6),
+		types.T_bf16.ToType(),
+		types.T_float16.ToType(),
+		types.T_float8.ToType(),
+		types.T_float4.ToType(),
 		types.T_year.ToType(),
 		types.T_date.ToType(),
 		types.T_varchar.ToType(),
@@ -267,8 +272,9 @@ func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
 		NewFunctionTestResult(
 			types.T_int64.ToType(),
 			false,
-			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 0, 0, 0},
-			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
+			// bf16/float16/float8/float4: the significand bits
+			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 8, 11, 4, 2, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
 		),
 		builtInInternalNumericPrecision,
 	)
@@ -2686,6 +2692,64 @@ func TestSerialExtractUUID(t *testing.T) {
 	}
 }
 
+func TestSerialExtractBlockScaledCell(t *testing.T) {
+	cell8, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{1, -2, 3})
+	require.NoError(t, err)
+	cell4, err := types.AppendBlockScaled(nil, types.BlockScaledNVFP4, []float32{1, -2, 3})
+	require.NoError(t, err)
+	nanScale := bytes.Clone(cell8)
+	nanScale[types.BlockScaledHeaderSize] = 0xff
+	pack := func(b []byte) string {
+		ps := types.NewPacker()
+		defer ps.Close()
+		ps.EncodeStringType(b)
+		return string(ps.Bytes())
+	}
+	vecf8 := func(dim int32) types.Type { return types.New(types.T_array_float8, dim, 0) }
+	vecf4 := func(dim int32) types.Type { return types.New(types.T_array_float4, dim, 0) }
+	run := func(t *testing.T, typ types.Type, element []byte, constant bool, wantErr string) {
+		proc := testutil.NewProcess(t)
+		packed := vecBlockVector(t, proc, types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(packed, []byte(pack(element)), false, proc.Mp()))
+		index := vecBlockVector(t, proc, types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(index, int64(0), false, proc.Mp()))
+		if constant {
+			index.SetClass(vector.CONSTANT)
+		}
+		target := vector.NewConstNull(typ, 1, proc.Mp())
+		t.Cleanup(func() { target.Free(proc.Mp()) })
+		got, err := runVecBlockFn(t, proc, builtInSerialExtract, typ, packed, index, target)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, element, got.GetBytesAt(0))
+	}
+	for _, tc := range []struct {
+		name    string
+		typ     types.Type
+		element []byte
+		wantErr string
+	}{
+		{"vecf8 cell", vecf8(3), cell8, ""},
+		{"vecf4 cell", vecf4(3), cell4, ""},
+		{"undeclared dimension", vecf8(types.MaxArrayDimension), cell8, ""},
+		{"plain string", vecf8(1), []byte("x"), "too short"},
+		{"string of cell length", vecf8(1), bytes.Repeat([]byte("a"), types.BlockScaledCellSize(types.BlockScaledMXFP8, 1)), "unsupported block-scaled vector version 97"},
+		{"vecf4 cell as vecf8", vecf8(3), cell4, "is not a vecf8 cell"},
+		{"vecf8 cell as vecf4", vecf4(3), cell8, "is not a vecf4 cell"},
+		{"dimension mismatch", vecf8(4), cell8, "expected vector dimension 4 != actual dimension 3"},
+		{"NaN scale", vecf8(3), nanScale, "NaN scale"},
+	} {
+		for _, constant := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/constant=%v", tc.name, constant), func(t *testing.T) {
+				run(t, tc.typ, tc.element, constant, tc.wantErr)
+			})
+		}
+	}
+}
+
 func TestSerialExtractDecimal256(t *testing.T) {
 	typ := types.New(types.T_decimal256, 65, 2)
 	testSerialExtractNamedType(
@@ -3498,6 +3562,27 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 	}
 }
 
+func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := vector.NewVec(types.T_int64.ToType())
+	defer arg.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(arg, int64(6), false, proc.Mp()))
+	arg.SetNull(0) // A reused non-constant vector can retain its previous data.
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{{"now", builtInCurrentTimestamp}, {"sysdate", builtInSysdate}} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn([]*vector.Vector{arg}, result, proc, 1, nil))
+			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
+		})
+	}
+}
+
 // TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
 // overload ID while changing the statement timestamp. This mirrors repeated
 // executions of a cached NOW() plan and proves the value is read at execution
@@ -4249,7 +4334,11 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		want  string
 	}{
 		{"x", typWithLen, "short type encoding"},
-		{string(encoded), 255, "the second argument must be in [0, 6]"},
+		{string(encoded), 255, "the second argument must be in [0, 7]"},
+		// Every default-decoding mode surfaces the payload decode error.
+		{"x", defaultExpr, "unexpected EOF"},
+		{"x", defExprInShowColumns, "unexpected EOF"},
+		{"x", generatedDefaultExtra, "unexpected EOF"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -4262,6 +4351,19 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
+
+	// A NULL mode argument is rejected before any payload decoding.
+	t.Run("null mode", func(t *testing.T) {
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0}, []bool{true}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+		t.Cleanup(testCase.Free)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil),
+			"the second argument must be in [0, 7], but got NULL")
+		require.Zero(t, testCase.result.GetResultVector().Length())
+	})
 }
 
 func TestEmptyDomainVisibleMetadata(t *testing.T) {

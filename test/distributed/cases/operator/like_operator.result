@@ -6,7 +6,7 @@ SELECT 'ae' LIKE 'a';
 0
 SELECT 'MYSQL' LIKE 'mysql';
 ➤ MYSQL like mysql[-7,1,0]  𝄀
-0
+1
 SELECT 'David!' LIKE 'David_';
 ➤ David! like David_[-7,1,0]  𝄀
 1
@@ -116,7 +116,11 @@ SELECT * FROM like_test WHERE str1 LIKE '%s';
 ➤ str1[12,-1,0]  𝄀
 D:\System_files
 SELECT * FROM like_test WHERE str1 LIKE 'd%';
-➤ str1[12,-1,0]
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+D:\System_files  𝄀
+D:\System_files\
 SELECT * FROM like_test WHERE str1 LIKE '%%';
 ➤ str1[12,-1,0]  𝄀
 D:  𝄀
@@ -283,7 +287,10 @@ SELECT * FROM like_test WHERE str1 LIKE '% ';
 DHINA IS OUR HOMELAN   ¦  THIS MAN PUSH HIM  𝄀
    ¦  
 SELECT * FROM like_test WHERE str1 LIKE '%s%';
-➤ str1[12,-1,0]  ¦  str2[1,50,0]
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀
+DHINA IS OUR HOMELAN   ¦  THIS MAN PUSH HIM  𝄀
+ HINA IS OUR HOMELAND%  ¦  HE LIKE WHORE
 SELECT * FROM like_test WHERE str1 LIKE '%C%' AND str1 LIKE '%D%';
 ➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
 CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀

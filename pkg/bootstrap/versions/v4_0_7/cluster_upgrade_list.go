@@ -37,6 +37,9 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upgradeDaemonClaimPrecision,
 	publicationDatabaseIndex(),
 	snapshotQuotaIndex(),
+	addSQLTaskRunClaim,
+	addSQLTaskScheduleGeneration,
+	addSQLTaskRunningIndex,
 }
 
 // EnsureViewMetadataCatalogs prepares the metadata required by CN admission.

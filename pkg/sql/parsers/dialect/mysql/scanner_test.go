@@ -168,6 +168,13 @@ func TestCharsetIntroducer(t *testing.T) {
 		{"_utf8mb4 X'6'", "", LEX_ERROR},
 		{"_utf8mb4 X'zz'", "", LEX_ERROR},
 		{"_utf8mb4 X'61", "", LEX_ERROR},
+		{"_utf8mb4 0x41", "A", STRING},
+		{"_UTF8MB4 \t 0X41", "A", STRING},
+		{"_utf8mb4 0x615c62", `a\b`, STRING},
+		{"_utf8mb4 0xc3a95ce7958c", `é\界`, STRING},
+		{"_utf8mb4 0x4", "\x04", STRING},
+		{"_utf8mb4 0x", "", LEX_ERROR},
+		{"_utf8mb4 0xzz", "", LEX_ERROR},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			scanner := NewScanner(dialect.MYSQL, tc.input)
@@ -270,6 +277,49 @@ func TestUnquotedIdentifierRejectsPunctuationBeforeUnicode(t *testing.T) {
 				if token != test.wantNextToken || value != test.wantNextValue {
 					t.Fatalf("Scan(%q) next = (%s, %q), want (%s, %q)",
 						test.input, tokenName(token), value, tokenName(test.wantNextToken), test.wantNextValue)
+				}
+			}
+		})
+	}
+}
+
+func TestNumericExponentTokens(t *testing.T) {
+	tests := []struct {
+		input     string
+		token     int
+		value     string
+		nextToken int
+		nextValue string
+	}{
+		{input: "1.5e", token: LEX_ERROR, value: "1.5e"},
+		{input: "1.e", token: LEX_ERROR, value: "1.e"},
+		{input: ".5E", token: LEX_ERROR, value: ".5E"},
+		{input: "1.5efoo", token: LEX_ERROR, value: "1.5e"},
+		{input: "1.5e_", token: LEX_ERROR, value: "1.5e"},
+		{input: "1.5e数量", token: LEX_ERROR, value: "1.5e"},
+		{input: "1.5e;select 2", token: LEX_ERROR, value: "1.5e", nextToken: int(';')},
+		{input: "1.5e,2", token: LEX_ERROR, value: "1.5e", nextToken: int(',')},
+		{input: "1e", token: ID, value: "1e"},
+		{input: "1e数量", token: ID, value: "1e数量"},
+		{input: "1.e5", token: FLOAT, value: "1.e5"},
+		{input: ".5E-2", token: FLOAT, value: ".5e-2"},
+		{input: "1.5foo", token: FLOAT, value: "1.5", nextToken: ID, nextValue: "foo"},
+		{input: "1.5e1foo", token: FLOAT, value: "1.5e1", nextToken: ID, nextValue: "foo"},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != test.token || value != test.value || scanner.Pos != len(test.value) {
+				t.Fatalf("Scan(%q) = (%s, %q, pos=%d), want (%s, %q, pos=%d)",
+					test.input, tokenName(token), value, scanner.Pos, tokenName(test.token), test.value, len(test.value))
+			}
+			if test.nextToken != 0 {
+				token, value = scanner.Scan()
+				if token != test.nextToken || value != test.nextValue {
+					t.Fatalf("next Scan() = (%s, %q), want (%s, %q)",
+						tokenName(token), value, tokenName(test.nextToken), test.nextValue)
 				}
 			}
 		})

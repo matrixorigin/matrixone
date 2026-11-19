@@ -426,23 +426,11 @@ func (t Time) TruncateToScaleWithoutRounding(scale int32) Time {
 }
 
 func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, error) {
-	tToStr := t.NumericString(scale)
-	ret, err := ParseDecimal64(tToStr, width, scale)
-	if err != nil {
-		return ret, moerr.NewInternalError(ctx, "exist time cant't cast to decimal64")
-	}
-
-	return ret, nil
+	return ParseDecimal64WithContext(ctx, t.NumericString(scale), width, scale)
 }
 
 func (t Time) ToDecimal128(ctx context.Context, width, scale int32) (Decimal128, error) {
-	tToStr := t.NumericString(scale)
-	ret, err := ParseDecimal128(tToStr, width, scale)
-	if err != nil {
-		return ret, moerr.NewInternalError(ctx, "exist time cant't cast to decimal128")
-	}
-
-	return ret, nil
+	return ParseDecimal128WithContext(ctx, t.NumericString(scale), width, scale)
 }
 
 func TimeFromClock(isNegative bool, hour uint64, minute, sec uint8, msec uint32) Time {

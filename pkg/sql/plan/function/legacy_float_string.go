@@ -71,6 +71,28 @@ func LegacyFloatStringFormatting(ctx context.Context) bool {
 	return legacy
 }
 
+// The explicit binary-to-text nullability era predates the conservative
+// inference added for #31921 (function.go
+// explicitBinaryToTextCastMaySynthesizeNull): historical catalogs were
+// persisted with explicit char/varchar/text CAST nodes inferred NOT NULL.
+type legacyExplicitCastNullabilityKey struct{}
+
+// WithLegacyExplicitCastNullability is solely for historical catalog-origin
+// rebinding proof (migration verification of persisted expressions), so a
+// frozen tree compares against the same inference era that authored it. It
+// must never be installed on an authoring or executing binder.
+func WithLegacyExplicitCastNullability(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyExplicitCastNullabilityKey{}, true)
+}
+
+func LegacyExplicitCastNullability(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(legacyExplicitCastNullabilityKey{}).(bool)
+	return legacy
+}
+
 func legacyFloatToBytes(v float64, bitSize int) []byte {
 	format := byte('f')
 	if v >= 1e15 || v > 0 && v < 1e-13 || v < 0 && v > -1e-13 || v <= -1e15 {

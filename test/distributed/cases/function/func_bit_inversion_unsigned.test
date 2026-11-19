@@ -1,0 +1,15 @@
+-- @suite:func_bit_inversion_unsigned
+-- @case:issue31905
+-- @desc:numeric unary-tilde zero boundary must use the unsigned 64-bit numeric domain
+-- @author:meow-31905
+create database if not exists bvt31905;
+use bvt31905;
+drop table if exists t31905;
+create table t31905 (id int primary key, tu tinyint unsigned, su smallint unsigned, iu int unsigned, ts tinyint, si smallint, ii int, bi bigint);
+insert into t31905 values (1, 0, 0, 0, -1, -32768, -2147483648, -9223372036854775808);
+insert into t31905 values (2, 255, 65535, 4294967295, 127, 32767, 2147483647, 9223372036854775807);
+select ~tu, ~su, ~iu from t31905 order by id;
+select ~iu >> 32, ~tu & 256 from t31905 where id = 1;
+select ~ts, ~si, ~ii, ~bi from t31905 order by id;
+drop table t31905;
+drop database bvt31905;

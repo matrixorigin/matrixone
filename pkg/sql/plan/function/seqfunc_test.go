@@ -109,6 +109,48 @@ func TestCurrvalResolvesDatabaseOncePerBatch(t *testing.T) {
 	}
 }
 
+// CURRVAL resolves through the same session policy boundary: the vector
+// argument must reach the relation lookup under the spelling CREATE stored —
+// mode 1 folds identifiers while the mixed mode 2 keeps them, exactly like
+// the mysql lexer's mode-1-only GetDbOrTblName folding.
+func TestCurrvalAppliesSessionCasePolicy(t *testing.T) {
+	newCase := func(policy int64, arg, lookup string) func(t *testing.T) {
+		return func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			txn := mock_frontend.NewMockTxnOperator(ctrl)
+
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.InitSeq()
+			proc.Base.TxnOperator = txn
+			proc.Base.SessionInfo.Database = "session_db"
+			proc.Base.SessionInfo.SeqCurValues[314] = "4242"
+			proc.SetResolveVariableFunc(sequenceCasePolicyResolver(policy))
+			proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, eng)
+
+			eng.EXPECT().Database(gomock.Any(), "session_db", txn).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), lookup, nil).Return(rel, nil)
+			rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(314))
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(arg), 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 1, nil))
+			require.Equal(t, []byte("4242"), result.GetResultVector().GetBytesAt(0))
+		}
+	}
+
+	t.Run("mode 1 folds the argument to the stored lowercase name", newCase(1, "MySeq", "myseq"))
+	t.Run("mode 2 reaches the lookup with the created spelling", newCase(2, "MySeq", "MySeq"))
+}
+
 func TestSequenceHiddenOverloadExecutors(t *testing.T) {
 	for _, test := range []struct {
 		name       string

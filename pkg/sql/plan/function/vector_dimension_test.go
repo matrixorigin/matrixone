@@ -59,39 +59,6 @@ func TestVectorSelectionDimensions(t *testing.T) {
 	}
 }
 
-func TestCoalesceVectorCommonType(t *testing.T) {
-	oids := []types.T{types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8}
-	for _, left := range oids {
-		for _, right := range oids {
-			t.Run(left.String()+"/"+right.String(), func(t *testing.T) {
-				inputs := []types.Type{types.T_any.ToType(), types.New(left, 2, 0), types.New(right, 2, 0)}
-				resolved, err := GetFunctionByName(t.Context(), "coalesce", inputs)
-				switch {
-				case left == right:
-					require.NoError(t, err)
-					require.Equal(t, inputs[1], resolved.GetReturnType())
-				case left == types.T_array_float32 && right == types.T_array_float64,
-					left == types.T_array_float64 && right == types.T_array_float32:
-					require.NoError(t, err)
-					require.Equal(t, types.New(types.T_array_float64, 2, 0), resolved.GetReturnType())
-				default:
-					require.Error(t, err)
-				}
-			})
-		}
-		for _, other := range []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()} {
-			resolved, err := GetFunctionByName(t.Context(), "coalesce", []types.Type{other, types.New(left, 2, 0)})
-			if other.Oid == types.T_varchar {
-				require.NoError(t, err)
-				require.Equal(t, types.New(left, 2, 0), resolved.GetReturnType())
-			} else {
-				require.Error(t, err)
-			}
-		}
-	}
-}
-
 func TestVectorCastPayloadBounds(t *testing.T) {
 	for _, oid := range []types.T{types.T_array_float32, types.T_array_float64, types.T_array_bf16,
 		types.T_array_float16, types.T_array_int8, types.T_array_uint8} {

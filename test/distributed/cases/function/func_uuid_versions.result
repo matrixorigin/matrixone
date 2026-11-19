@@ -115,7 +115,7 @@ select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)
 1  ¦  1
 create table uuid_extract_ctas as select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)) v, uuid_extract_timestamp(uuid_v4()) ts;
 desc uuid_extract_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 v  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ts  ¦  timestamp(6)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select v is null, ts is null from uuid_extract_ctas;
@@ -124,7 +124,7 @@ select v is null, ts is null from uuid_extract_ctas;
 drop table uuid_extract_ctas;
 create view uuid_extract_view as select uuid_extract_version(uuid_v4()) v, uuid_extract_timestamp(uuid_v4()) ts;
 desc uuid_extract_view;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 v  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ts  ¦  timestamp(6)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view uuid_extract_view;

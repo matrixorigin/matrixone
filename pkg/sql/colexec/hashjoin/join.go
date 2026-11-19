@@ -250,6 +250,7 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	hashJoin.ctr.dictionaryBoundary.BeginCall()
 	if hashJoin.AsofBuildLeft {
 		return hashJoin.callAsofBuildLeft(proc)
 	}
@@ -741,6 +742,12 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 		}
 	}
+	var probeCopy vector.UnionMultiFunc = (*vector.Vector).UnionMulti
+	if hashJoin.NonEqCond == nil && !ctr.probeHashOnPK && !batchMembership && ctr.probeRightSemiAnti {
+		// This invocation retains one probe input through every continuation.
+		// Refresh the stateless choice on the next call, including reused headers.
+		probeCopy = vector.GetUnionMultiFunction(ctr.leftBat.Vecs)
+	}
 
 	for {
 		switch ctr.probeState {
@@ -996,11 +1003,20 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if ctr.probeRightSemiAnti {
 					for j, rp := range hashJoin.ResultCols {
 						if rp.Rel == 0 {
-							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
+							err = probeCopy(ctr.resBat.Vecs[j], ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
 							if err != nil {
 								return err
 							}
 						} else {
+							dst := ctr.resBat.Vecs[j]
+							// Tiny matches do not amortize gather setup; leave them on
+							// the scalar path irrespective of estimates or query shape.
+							if len(sels) >= 8 && !dst.GetType().IsVarlen() {
+								if err = ctr.appendFixedBuildColumn(dst, rp.Pos, sels, proc); err != nil {
+									return err
+								}
+								continue
+							}
 							for _, sel := range sels {
 								idx1 := sel / colexec.DefaultBatchSize
 								idx2 := sel % colexec.DefaultBatchSize
@@ -1668,6 +1684,32 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 	return nil
 }
 
+func (ctr *container) appendFixedBuildColumn(dst *vector.Vector, column int32, sels []int32, proc *process.Process) error {
+	var sources [hashmap.UnitLimit]vector.FixedSourceRow
+	for len(sels) > 0 {
+		n := min(len(sels), len(sources))
+		for i, sel := range sels[:n] {
+			sources[i] = vector.FixedSourceRow{
+				Vec: ctr.rightBats[sel/colexec.DefaultBatchSize].Vecs[column],
+				Row: int64(sel % colexec.DefaultBatchSize),
+			}
+		}
+		used, err := dst.TryUnionFlatFixedRows(sources[:n], proc.Mp())
+		if err != nil {
+			return err
+		}
+		if !used {
+			for _, row := range sources[:n] {
+				if err = dst.UnionOne(row.Vec, row.Row, proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+		sels = sels[n:]
+	}
+	return nil
+}
+
 func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) error {
 	ctr.bitmapSynced = true
 
@@ -1861,6 +1903,52 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 				return 0, err
 			}
 		}
+	}
+	// A bounded gather amortizes per-row projection across physical batches.
+	// Decide per column: one out-of-line string must not disable fixed-width
+	// or inline-string copies for the rest of the build tuple.
+	if matched >= 8 && rightRows[0]/colexec.DefaultBatchSize != rightRows[matched-1]/colexec.DefaultBatchSize {
+		var sources [hashmap.UnitLimit]vector.FixedSourceRow
+		// Probe outputs are already copied; reuse their selection scratch for
+		// build-local ordinals instead of allocating another per-chunk array.
+		selections := leftRows[:matched]
+		for i, row := range rightRows[:matched] {
+			selections[i] = row % colexec.DefaultBatchSize
+		}
+		for j, rp := range hashJoin.ResultCols {
+			if rp.Rel == 0 {
+				continue
+			}
+			for i, row := range rightRows[:matched] {
+				sources[i] = vector.FixedSourceRow{
+					Vec: ctr.rightBats[row/colexec.DefaultBatchSize].Vecs[rp.Pos],
+					Row: selections[i],
+				}
+			}
+			dst := ctr.resBat.Vecs[j]
+			used, err := dst.TryUnionFlatFixedRows(sources[:matched], proc.Mp())
+			if err != nil {
+				return 0, err
+			}
+			if !used {
+				for start := 0; start < matched; {
+					end := start + 1
+					for end < matched && sources[end].Vec == sources[start].Vec {
+						end++
+					}
+					if end-start == 1 {
+						err = dst.UnionOne(sources[start].Vec, selections[start], proc.Mp())
+					} else {
+						err = dst.Union(sources[start].Vec, selections[start:end], proc.Mp())
+					}
+					if err != nil {
+						return 0, err
+					}
+					start = end
+				}
+			}
+		}
+		return matched, nil
 	}
 	// Only consecutive rows from the same build batch can share a Union call:
 	// grouping all matches by batch would reorder the result stream.

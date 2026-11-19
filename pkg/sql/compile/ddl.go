@@ -890,6 +890,9 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	if opt.MaxBadRecordsSet {
+		m[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(opt.MaxBadRecords, 10)
+	}
 	addInt(catalog.IndexAlgoParamMaxPostingsCapacity, opt.MaxPostingsCapacity)
 	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
 	// position_free is emitted as an explicit true/false when specified (tri-state:
@@ -4241,7 +4244,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return moerr.NewCCPRReadOnly(c.proc.Ctx)
 	}
 
-	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
+	if tableDef := rel.GetTableDef(c.proc.Ctx); tableDef.TableType == catalog.SystemExternalRel {
+		// Terminal truncation decision on the live relation: cached and
+		// synthesized TRUNCATE scopes execute without the planner admission,
+		// so a read-only file external mapping must fail here too instead of
+		// being silently acknowledged as a no-op (issue #31920). Writable
+		// mappings get their dedicated rejection; other external mappings
+		// keep the existing no-op contract.
+		if err := plan2.RejectFileExternalTruncate(c.proc.Ctx, tableDef, table); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -6005,7 +6017,11 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 			minValue = 0
 		}
 	} else {
-		minValue = getValue[T](stmt.MinValue.Minus, stmt.MinValue.Num)
+		val, valErr := getSequenceValue[T](ctx, "MINVALUE", stmt.MinValue.Minus, stmt.MinValue.Num)
+		if valErr != nil {
+			return 0, 0, 0, 0, valErr
+		}
+		minValue = val
 	}
 
 	if stmt.MaxValue == nil {
@@ -6013,7 +6029,11 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 		// We will get real value later.
 		maxValue = 0
 	} else {
-		maxValue = getValue[T](stmt.MaxValue.Minus, stmt.MaxValue.Num)
+		val, valErr := getSequenceValue[T](ctx, "MAXVALUE", stmt.MaxValue.Minus, stmt.MaxValue.Num)
+		if valErr != nil {
+			return 0, 0, 0, 0, valErr
+		}
+		maxValue = val
 	}
 
 	if stmt.StartWith == nil {
@@ -6024,7 +6044,11 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 			startNum = maxValue
 		}
 	} else {
-		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
+		val, valErr := getSequenceValue[T](ctx, "STARTVALUE", stmt.StartWith.Minus, stmt.StartWith.Num)
+		if valErr != nil {
+			return 0, 0, 0, 0, valErr
+		}
+		startNum = val
 	}
 
 	return incrNum, minValue, maxValue, startNum, nil
@@ -6055,7 +6079,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	// if alter minValue of sequence
 	preMinValue := result[1]
 	if stmt.MinValue != nil {
-		minValue = getValue[T](stmt.MinValue.Minus, stmt.MinValue.Num)
+		val, valErr := getSequenceValue[T](ctx, "MINVALUE", stmt.MinValue.Minus, stmt.MinValue.Num)
+		if valErr != nil {
+			return 0, 0, 0, 0, 0, false, false, valErr
+		}
+		minValue = val
 	} else {
 		minValue = getInterfaceValue[T](preMinValue)
 	}
@@ -6063,7 +6091,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	// if alter maxValue of sequence
 	preMaxValue := result[2]
 	if stmt.MaxValue != nil {
-		maxValue = getValue[T](stmt.MaxValue.Minus, stmt.MaxValue.Num)
+		val, valErr := getSequenceValue[T](ctx, "MAXVALUE", stmt.MaxValue.Minus, stmt.MaxValue.Num)
+		if valErr != nil {
+			return 0, 0, 0, 0, 0, false, false, valErr
+		}
+		maxValue = val
 	} else {
 		maxValue = getInterfaceValue[T](preMaxValue)
 	}
@@ -6091,7 +6123,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		// restart is persisted in the row, so the next NEXTVAL in every
 		// session returns exactly n; the altering session's curval cache is
 		// irrelevant here.
-		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
+		startVal, startValErr := getSequenceValue[T](ctx, "STARTVALUE", stmt.StartWith.Minus, stmt.StartWith.Num)
+		if startValErr != nil {
+			return 0, 0, 0, 0, 0, false, false, startValErr
+		}
+		startNum = startVal
 		if (incrNum > 0 && startNum > preLastSeqNum) || (incrNum < 0 && startNum < preLastSeqNum) {
 			lastNum = startNum
 			isCalled = false
@@ -6223,6 +6259,91 @@ func getInterfaceValue[T constraints.Integer](val interface{}) T {
 		return T(val)
 	}
 	return 0
+}
+
+// getSequenceValue converts one explicitly supplied CREATE/ALTER sequence
+// parameter to the sequence's declared integer type, rejecting any literal
+// whose magnitude or sign does not fit that domain instead of narrowing it
+// silently (#31908: smallint START WITH 70000 came back from nextval as
+// 4464, smallint unsigned START WITH -1 as 65535). The error reports the
+// value the user wrote, never a wrapped replica of it. INCREMENT stays
+// outside this contract: it is persisted as int64 with its own well-formed
+// input check and keeps accepting any representable int64 literal.
+func getSequenceValue[T constraints.Integer](ctx context.Context, clause string, minus bool, num any) (T, error) {
+	// The grammar splits a leading minus into its own token, so Num is the
+	// literal's magnitude (int64 up to MaxInt64, uint64 beyond); keep a
+	// defensive path for a signed magnitude.
+	neg := minus
+	var mag uint64
+	switch n := num.(type) {
+	case uint64:
+		mag = n
+	case int64:
+		if n < 0 {
+			mag = uint64(-n)
+			neg = !neg
+		} else {
+			mag = uint64(n)
+		}
+	default:
+		return 0, moerr.NewInvalidInputf(ctx, "%s value for sequence must be an integer", clause)
+	}
+	orig := strconv.FormatUint(mag, 10)
+	if neg {
+		orig = "-" + orig
+	}
+	signed := false
+	var maxPos, maxNeg uint64
+	switch any(T(0)).(type) {
+	case int16:
+		signed, maxPos, maxNeg = true, math.MaxInt16, 1<<15
+	case int32:
+		signed, maxPos, maxNeg = true, math.MaxInt32, 1<<31
+	case int64:
+		signed, maxPos, maxNeg = true, math.MaxInt64, 1<<63
+	case uint16:
+		maxPos = math.MaxUint16
+	case uint32:
+		maxPos = math.MaxUint32
+	case uint64:
+		maxPos = math.MaxUint64
+	}
+	if neg && mag == 0 {
+		// -0 is exactly 0 and fits every integer domain.
+		return 0, nil
+	}
+	if (neg && (!signed || mag > maxNeg)) || (!neg && mag > maxPos) {
+		return 0, moerr.NewInvalidInputf(ctx, "%s (%s) is out of range for sequence data type %s", clause, orig, sequenceTypeName[T]())
+	}
+	if neg {
+		// |mag| <= 2^(w-1): int64(mag) is exact below the sign boundary and
+		// becomes Go's two's-complement MinInt64 at the int64 boundary, so
+		// the negation wraps back to exactly -2^63 for T=int64 and stays
+		// exact for the narrower signed kinds.
+		return T(-int64(mag)), nil
+	}
+	return T(mag), nil
+}
+
+// sequenceTypeName returns the SQL name of the declared sequence integer
+// type, matching types.T String() for the six kinds the sequence switch
+// instantiates.
+func sequenceTypeName[T constraints.Integer]() string {
+	switch any(T(0)).(type) {
+	case int16:
+		return "SMALLINT"
+	case int32:
+		return "INT"
+	case int64:
+		return "BIGINT"
+	case uint16:
+		return "SMALLINT UNSIGNED"
+	case uint32:
+		return "INT UNSIGNED"
+	case uint64:
+		return "BIGINT UNSIGNED"
+	}
+	return "INTEGER"
 }
 
 func doLockTable(
@@ -7737,18 +7858,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
 				if startTs, err = CDCStrToTime(value, c.proc.GetSessionInfo().TimeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.StartTs = startTs.Format(time.RFC3339)
+				opts.StartTs = startTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_EndTs:
 			if value != "" {
 				if endTs, err = CDCStrToTime(value, c.proc.GetSessionInfo().TimeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.EndTs = endTs.Format(time.RFC3339)
+				opts.EndTs = endTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_MaxSqlLength:
 			if value != "" {

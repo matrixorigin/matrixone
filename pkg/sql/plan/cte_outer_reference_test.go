@@ -486,7 +486,7 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+			logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			assertReachablePlanHasNoCorrelatedExpr(t, query)

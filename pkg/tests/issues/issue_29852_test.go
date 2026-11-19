@@ -820,6 +820,8 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 		// With statement rollback configured, retain the preceding statement.
 		_, err = db.ExecContext(ctx, "insert into "+database+".branch_dst values(4,30)")
 		require.NoError(t, err)
+		// Fixture cloning must not consume the failed transaction's budget.
+		nextPhase()
 		failedTxn, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		defer failedTxn.Rollback()
@@ -843,10 +845,12 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 		_, err = db.ExecContext(ctx, "delete from "+database+".branch_dst where id=4")
 		require.NoError(t, err)
 
-		for _, commit := range []bool{false, true} {
+		checkMerge := func(commit bool) {
+			t.Helper()
 			nextPhase()
 			tx, err := db.BeginTx(ctx, nil)
 			require.NoError(t, err)
+			defer tx.Rollback()
 			_, err = tx.ExecContext(ctx, "insert into "+database+".existing values(8,'2023-11-12 10:00:01')")
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, "data branch merge "+database+".branch_src into "+database+".branch_dst when conflict accept")
@@ -874,6 +878,8 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like '__mo_diff_%'", database).Scan(&stages))
 			require.Zero(t, stages)
 		}
-
+		for _, commit := range []bool{false, true} {
+			checkMerge(commit)
+		}
 	})
 }

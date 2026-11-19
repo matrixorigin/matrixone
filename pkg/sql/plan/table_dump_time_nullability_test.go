@@ -41,7 +41,7 @@ func TestTableDumpTimeStringNullabilityEra(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	build := func(ctx context.Context) *plan.TableDef {
-		built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: ctx, increment: 4}, stmt, false)
+		built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: ctx, increment: 4}, stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}
@@ -70,7 +70,7 @@ func TestTableDumpTimeLiteralNullabilityEra(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	bind := func() *plan.TableDef {
-		built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false)
+		built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}
@@ -111,7 +111,7 @@ func TestTableDumpTimeIntermediateEraCombined(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ddl, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false)
+	built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false, nil)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef()
 	require.NotEmpty(t, def.Checks)

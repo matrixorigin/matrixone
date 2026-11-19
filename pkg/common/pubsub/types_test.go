@@ -18,6 +18,24 @@ import (
 	"testing"
 )
 
+func TestPublicationSourceOwnerAuthorized(t *testing.T) {
+	for _, tc := range []struct {
+		publisher, owner uint32
+		ownerOnly, want  bool
+	}{
+		{22, 22, false, true},
+		{0, 41, false, true},
+		{22, 41, false, false},
+		{22, 41, true, true},
+		{22, 0, true, true},
+		{22, 0, false, false},
+	} {
+		if got := PublicationSourceOwnerAuthorized(tc.publisher, tc.owner, tc.ownerOnly); got != tc.want {
+			t.Errorf("source admission (%d, %d, %t) = %t; want %t", tc.publisher, tc.owner, tc.ownerOnly, got, tc.want)
+		}
+	}
+}
+
 func TestPubInfo_InSubAccounts(t *testing.T) {
 	type fields struct {
 		PubName        string

@@ -30,6 +30,7 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
+		builder:             builder,
 		groupByAst:          make(map[string]int32),
 		groupByCanonicalAst: make(map[string]int32),
 		groupByParamAst:     make(map[string]int32),
@@ -43,16 +44,17 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 		projectColByAst: make(map[string]int32),
 
-		aliasMap:       make(map[string]*aliasItem),
-		aliasFrequency: make(map[string]int),
-		bindingByTag:   make(map[int32]*Binding),
-		bindingByTable: make(map[string]*Binding),
-		bindingByCol:   make(map[string]*Binding),
-		outerUsingCols: make(map[string][]string),
-		sqlUdfArgs:     make(map[string]*plan.Expr),
-		parent:         parent,
-		boundCtes:      make(map[string]*CTERef),
-		boundViews:     make(map[[2]string]*tree.CreateView),
+		aliasMap:         make(map[string]*aliasItem),
+		aliasFrequency:   make(map[string]int),
+		bindingByTag:     make(map[int32]*Binding),
+		nullExtendedTags: make(map[int32]bool),
+		bindingByTable:   make(map[string]*Binding),
+		bindingByCol:     make(map[string]*Binding),
+		outerUsingCols:   make(map[string][]string),
+		sqlUdfArgs:       make(map[string]*plan.Expr),
+		parent:           parent,
+		boundCtes:        make(map[string]*CTERef),
+		boundViews:       make(map[[2]string]*tree.CreateView),
 	}
 
 	if builder != nil {
@@ -268,6 +270,24 @@ func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool)
 	return CteBindState{}, false
 }
 
+// initStmtInBinding reports whether the exact CTE declaration is currently
+// being bound as the initial statement of a recursive CTE somewhere in the
+// BindContext chain. bindRecursiveCte records that state only while it binds
+// the anchor, so a reference that resolves to the same declaration inside the
+// anchor re-enters bindCte before the declaration is published and rebinds the
+// anchor again without bound. Only the resolved declaration counts: the same
+// word bound to a different CTE (an inner WITH) or used as a derived-table
+// alias resolves to a different declaration and stays resolvable.
+func (bc *BindContext) initStmtInBinding(cte *CTERef) bool {
+	for cur := bc; cur != nil; cur = cur.parent {
+		state := cur.cteState
+		if state.cte == cte && state.cteBindType == CteBindTypeInitStmt {
+			return true
+		}
+	}
+	return false
+}
+
 func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
 	cur := bc
 	pair := [2]string{schema, name}
@@ -296,6 +316,12 @@ func (bc *BindContext) recordViews(views []string) {
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
+	for tag := range left.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
+	for tag := range right.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)
@@ -462,6 +488,11 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesceArms []string) (*plan.Expr, error) {
 	if len(coalesceArms) < 2 {
 		colPos := binding.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(binding, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			return read, nil
+		}
 		return &plan.Expr{
 			Typ: *binding.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -476,6 +507,12 @@ func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesc
 	for _, t := range coalesceArms {
 		b := bc.bindingByTable[t]
 		colPos := b.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(b, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			args = append(args, read)
+			continue
+		}
 		args = append(args, &plan.Expr{
 			Typ: *b.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -903,6 +940,18 @@ func (bc *BindContext) isAliasExpansion(expr tree.Expr) (*tree.ParenExpr, int32,
 	}
 	projectPos, ok := bc.aliasExpandedExprs[wrapper]
 	return wrapper, projectPos, ok
+}
+
+// DeepCopyExpr does not detach the query/program graph behind a scalar call.
+// Rebind such aliases from their AST before a consumer can lower their output
+// or decorrelate them; the published projection must retain its own graph.
+func aliasProjectionNeedsRebind(expr *plan.Expr) bool {
+	needsRebind := false
+	_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+		needsRebind = needsRebind || e.GetSub() != nil || e.GetDependent() != nil
+		return nil
+	})
+	return needsRebind
 }
 
 func (bc *BindContext) projectedExprPosition(expr tree.Expr) int32 {

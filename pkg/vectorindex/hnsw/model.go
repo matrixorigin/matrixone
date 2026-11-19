@@ -32,9 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -89,6 +92,56 @@ type HnswModel[T types.ArrayElement] struct {
 
 	// view memory byffer for search
 	buffer []byte
+
+	// hold keeps the index-file cache entry a viewed model maps; set only once the model is
+	// loaded.
+	hold *fileservice.IndexFileHold
+
+	// files is the storage engine and index-file cache the model file is read through when
+	// the caller's sqlproc has no process, as for the sync that owns the model; nil takes them
+	// from the process.
+	files *indexfile.Files
+}
+
+// indexFile is an open model file, as indexfile.File.
+type indexFile interface {
+	FDPath() string
+	Keep() *fileservice.IndexFileHold
+	Close() error
+}
+
+// openIndexFile reads a model file through the index-file layer, from files or else from
+// sqlproc's process. It returns nil when there is no storage engine, or no index-file cache
+// and cached is set; the model is then read through SQL. Tests replace it.
+var openIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, ref indexfile.Ref, tempDir string, cached bool) (indexFile, error) {
+	if env := indexfile.NewEnv(sqlproc, files, nil, ""); env.Engine == nil || cached && env.Cache == nil {
+		return nil, nil
+	}
+	f, err := indexfile.OpenWithProcess(sqlproc, files, ref, tempDir)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// writeIndexFile stores a model file through the index-file layer; tests replace it.
+var writeIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, txn client.TxnOperator, ref indexfile.Ref,
+	src io.Reader, tempDir string, run func(sql string) error) (int64, error) {
+	size, _, err := indexfile.Write(sqlproc.GetContext(), indexfile.NewEnv(sqlproc, files, txn, tempDir), ref, src, run)
+	return size, err
+}
+
+// indexFileRef names the model file in tblcfg's storage table by the MD5 its metadata row
+// records: a sync rewrites the model under the same id, so the 32-bit CRC is not used.
+func (idx *HnswModel[T]) indexFileRef(tblcfg vectorindex.IndexTableConfig) indexfile.Ref {
+	return indexfile.Ref{
+		DB:       tblcfg.DbName,
+		Table:    tblcfg.IndexTable,
+		IndexID:  idx.Id,
+		Tag:      int64(vectorindex.Tag_ModelChunk),
+		Size:     idx.FileSize,
+		Checksum: idx.Checksum,
+	}
 }
 
 // New HnswModel struct
@@ -148,6 +201,12 @@ func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig, reserve uint) (e
 
 // Destroy the struct
 func (idx *HnswModel[T]) Destroy() error {
+	return idx.destroy(false)
+}
+
+// destroy is Destroy of a model a newer version has replaced when superseded: its
+// index-file hold is then released without counting as a use.
+func (idx *HnswModel[T]) destroy(superseded bool) error {
 	// Release the index handle, the on-disk file and the buffer independently: they do
 	// not depend on each other, so returning early on the first error used to leak the
 	// remaining two for the lifetime of the process. Collect the outcomes instead.
@@ -172,6 +231,16 @@ func (idx *HnswModel[T]) Destroy() error {
 
 	if idx.buffer != nil {
 		idx.buffer = nil
+	}
+
+	// The hold outlives the mapping: it is released only once the index is destroyed.
+	if idx.hold != nil && idx.Index == nil {
+		if superseded {
+			idx.hold.ReleaseSuperseded()
+		} else {
+			idx.hold.Release()
+		}
+		idx.hold = nil
 	}
 
 	return errs
@@ -316,8 +385,11 @@ func (idx *HnswModel[T]) PreparePersistence() error {
 	return err
 }
 
-// PersistChunks opens only the artifact prepared by this model's native owner.
-func (idx *HnswModel[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+// WriteIndexFile writes the artifact prepared by this model's native owner as its chunk rows in
+// txn through the index-file layer, which caches it on this CN; run executes one statement in
+// txn. files is nil when sqlproc's process has the storage engine and the cache.
+func (idx *HnswModel[T]) WriteIndexFile(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, tblcfg vectorindex.IndexTableConfig,
+	txn client.TxnOperator, run func(sql string) error) error {
 	if idx.Path == "" || idx.FileSize == 0 {
 		return nil
 	}
@@ -326,10 +398,14 @@ func (idx *HnswModel[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
 		return err
 	}
 	defer fp.Close()
-	if _, err = writer.WriteRange(fp, 0, idx.FileSize, idx.Id, 0, int(vectorindex.Tag_ModelChunk)); err != nil {
+	size, err := writeIndexFile(sqlproc, files, txn, idx.indexFileRef(tblcfg), io.NewSectionReader(fp, 0, idx.FileSize), idx.spillDir(sqlproc), run)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+	if size != idx.FileSize {
+		return moerr.NewInternalErrorNoCtxf("hnsw index %s: wrote %d bytes, want %d", idx.Id, size, idx.FileSize)
+	}
+	return nil
 }
 
 func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
@@ -532,11 +608,23 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
+	// file is the model file read through the index-file layer: the model maps it through
+	// its descriptor and keeps the hold on its cache entry until Destroy.
+	var file indexFile
+	if len(idx.Path) == 0 {
+		if file, err = openIndexFile(sqlproc, idx.files, idx.indexFileRef(tblcfg), idx.spillDir(sqlproc), false); err != nil {
+			return err
+		}
+	}
+	if file != nil {
+		defer file.Close()
+	}
+
 	// ownsTempFile records that THIS call created the spill file, so only a file we
 	// created is unlinked after the mapping is established. A caller-supplied Path is
 	// left alone.
 	ownsTempFile := false
-	if len(idx.Path) == 0 {
+	if len(idx.Path) == 0 && file == nil {
 		// Stream index chunks from DB into a temp file, then let usearch
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
@@ -621,13 +709,18 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		fp = nil
 	}
 
-	// verify checksum from file
-	chksum, err := vectorindex.CheckSum(idx.Path)
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
+	path := idx.Path
+	if file != nil {
+		path = file.FDPath()
+	} else {
+		// verify checksum from file
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return err
+		}
+		if chksum != idx.Checksum {
+			return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
+		}
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -655,7 +748,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 	// View() mmaps the file — data stays off Go heap, OS can page out
 	// under memory pressure.
-	err = usearchidx.View(idx.Path)
+	err = usearchidx.View(path)
 	if err != nil {
 		return err
 	}
@@ -692,6 +785,9 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 
+	if file != nil {
+		idx.hold = file.Keep()
+	}
 	return nil
 }
 
@@ -780,7 +876,20 @@ func (idx *HnswModel[T]) LoadIndex(
 		return moerr.NewInternalErrorNoCtx("checksum is empty.  Cannot read index file from database")
 	}
 
+	// file is the model file read through the index-file layer. Load copies it, so it is
+	// closed once loaded and the model holds nothing; a reload after Unload opens it again,
+	// so it is used only with a cache to open it from.
+	var file indexFile
 	if len(idx.Path) == 0 {
+		if file, err = openIndexFile(sqlproc, idx.files, idx.indexFileRef(tblcfg), idx.spillDir(sqlproc), true); err != nil {
+			return err
+		}
+	}
+	if file != nil {
+		defer file.Close()
+	}
+
+	if len(idx.Path) == 0 && file == nil {
 
 		// create tempfile for writing
 		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
@@ -871,13 +980,18 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	}
 
-	// check checksum
-	chksum, err := vectorindex.CheckSum(idx.Path)
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
+	path := idx.Path
+	if file != nil {
+		path = file.FDPath()
+	} else {
+		// check checksum
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return err
+		}
+		if chksum != idx.Checksum {
+			return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
+		}
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -904,13 +1018,13 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 
 	if view {
-		err = usearchidx.Load(idx.Path)
+		err = usearchidx.Load(path)
 		if err != nil {
 			return err
 		}
 		idx.View = true
 	} else {
-		err = usearchidx.Load(idx.Path)
+		err = usearchidx.Load(path)
 		if err != nil {
 			return err
 		}

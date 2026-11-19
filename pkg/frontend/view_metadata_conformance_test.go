@@ -54,10 +54,10 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 	withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
 		ts := op.SnapshotTS()
 		historical = &plan.Snapshot{TS: &ts}
-		_, source, err := compiler.Resolve(database, "conformance_source", nil)
+		_, source, err := compiler.Resolve(database, "conformance_source", nil, nil)
 		require.NoError(t, err)
 		sourceID = source.TblId
-		_, root, err := compiler.Resolve(database, "conformance_root", nil)
+		_, root, err := compiler.Resolve(database, "conformance_root", nil, nil)
 		require.NoError(t, err)
 		rootID = root.TblId
 	})
@@ -121,7 +121,7 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 				exec(t, tc.ddl)
 			}
 			withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
-				_, source, err := compiler.Resolve(database, "conformance_source", nil)
+				_, source, err := compiler.Resolve(database, "conformance_source", nil, nil)
 				require.NoError(t, err)
 				if tc.replaced {
 					require.NotEqual(t, sourceID, source.TblId, "必须真正经过物理对象替换")
@@ -129,7 +129,7 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 					require.Equal(t, sourceID, source.TblId, "metadata-only 对照不能变成 COPY")
 				}
 				sourceID = source.TblId
-				_, root, err := compiler.Resolve(database, "conformance_root", nil)
+				_, root, err := compiler.Resolve(database, "conformance_root", nil, nil)
 				require.NoError(t, err)
 				require.Equal(t, rootID, root.TblId, "源 DDL 不能靠重建根 View 使测试通过")
 				testNativeViewMetadataSameSnapshot(t, ctx, compiler, op, proc, database, tc.width, tc.defaultValue)
@@ -150,10 +150,10 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 	t.Run("restore replaces source without recreating the view", func(t *testing.T) {
 		publicDDL(t, "restore table "+database+".conformance_source {snapshot='view_metadata_conformance'}")
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
-			_, source, err := compiler.Resolve(database, "conformance_source", nil)
+			_, source, err := compiler.Resolve(database, "conformance_source", nil, nil)
 			require.NoError(t, err)
 			require.NotEqual(t, sourceID, source.TblId)
-			_, root, err := compiler.Resolve(database, "conformance_root", nil)
+			_, root, err := compiler.Resolve(database, "conformance_root", nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, rootID, root.TblId)
 			testNativeViewMetadataSameSnapshot(t, ctx, compiler, op, proc, database, 20, "original")

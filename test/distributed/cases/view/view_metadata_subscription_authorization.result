@@ -1,0 +1,212 @@
+drop snapshot if exists view_subscription_snapshot;
+drop publication if exists view_subscription_foreign_pub;
+drop database if exists view_subscription_foreign_source;
+drop account if exists view_subscription_reader;
+drop publication if exists view_subscription_pub;
+drop publication if exists view_subscription_other_pub;
+drop database if exists view_subscription_source;
+drop database if exists view_subscription_remap;
+create account view_subscription_reader admin_name 'admin' identified by '111';
+create database view_subscription_source;
+create table view_subscription_source.src (x varchar(8));
+insert into view_subscription_source.src values ('old');
+create view view_subscription_source.v as select x from view_subscription_source.src;
+create database view_subscription_remap;
+create table view_subscription_remap.src (x varchar(37));
+insert into view_subscription_remap.src values ('remapped-value');
+create view view_subscription_remap.v as select x from view_subscription_remap.src;
+create publication view_subscription_pub database view_subscription_source account view_subscription_reader;
+create database subscribed from sys publication view_subscription_pub;
+select x from subscribed.v;
+➤ x[12,8,0]  𝄀
+old
+create snapshot view_subscription_snapshot for account;
+alter table view_subscription_source.src modify column x varchar(24);
+update view_subscription_source.src set x='new';
+select x from subscribed.v;
+➤ x[12,24,0]  𝄀
+new
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,8,0]  𝄀
+old
+select character_maximum_length from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+24
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+8
+alter publication view_subscription_pub account drop view_subscription_reader;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_pub
+select count(*) from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter publication view_subscription_pub account add view_subscription_reader;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,8,0]  𝄀
+old
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+alter publication view_subscription_pub table src;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+SQL parser error: table "v" does not exist
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='src';
+➤ character_maximum_length[-5,64,0]  𝄀
+8
+drop publication view_subscription_pub;
+create publication view_subscription_pub database view_subscription_source account view_subscription_reader;
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+drop publication view_subscription_pub;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+internal error: there is no publication view_subscription_pub
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+create publication view_subscription_pub database view_subscription_remap account view_subscription_reader;
+select x from subscribed.v;
+➤ x[12,37,0]  𝄀
+remapped-value
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,37,0]  𝄀
+remapped-value
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+37
+drop database subscribed;
+create database subscribed_late from sys publication view_subscription_pub;
+select count(*) from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.columns where table_schema='subscribed_late' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed_late' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,37,0]  𝄀
+remapped-value
+drop database subscribed_late;
+create database subscribed from sys publication view_subscription_pub;
+prepare view_subscription_history_stmt from 'select x from subscribed.v {snapshot=''view_subscription_snapshot''}';
+execute view_subscription_history_stmt;
+➤ x[12,37,0]  𝄀
+remapped-value
+create publication view_subscription_other_pub database view_subscription_source account view_subscription_reader;
+drop database subscribed;
+create database subscribed from sys publication view_subscription_other_pub;
+select x from subscribed.v;
+➤ x[12,24,0]  𝄀
+new
+alter publication view_subscription_other_pub account drop view_subscription_reader;
+select x from subscribed.v;
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_other_pub
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,37,0]  𝄀
+remapped-value
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+37
+execute view_subscription_history_stmt;
+➤ x[12,37,0]  𝄀
+remapped-value
+prepare view_subscription_fresh_stmt from 'select x from subscribed.v {snapshot=''view_subscription_snapshot''}';
+execute view_subscription_fresh_stmt;
+➤ x[12,37,0]  𝄀
+remapped-value
+alter publication view_subscription_pub account drop view_subscription_reader;
+execute view_subscription_history_stmt;
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_pub
+execute view_subscription_fresh_stmt;
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_pub
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter publication view_subscription_pub account add view_subscription_reader;
+execute view_subscription_history_stmt;
+➤ x[12,37,0]  𝄀
+remapped-value
+execute view_subscription_fresh_stmt;
+➤ x[12,37,0]  𝄀
+remapped-value
+deallocate prepare view_subscription_history_stmt;
+deallocate prepare view_subscription_fresh_stmt;
+drop database subscribed;
+drop snapshot view_subscription_snapshot;
+create database view_subscription_foreign_source;
+create table view_subscription_foreign_source.src(x varchar(8)) comment='publisher-decoy';
+insert into view_subscription_foreign_source.src values ('decoy-T');
+create view view_subscription_foreign_source.v as select x from view_subscription_foreign_source.src;
+create database view_subscription_foreign_source;
+create table view_subscription_foreign_source.src(x varchar(37)) comment='physical-owner';
+insert into view_subscription_foreign_source.src values ('owner-before');
+create view view_subscription_foreign_source.v as select x from view_subscription_foreign_source.src;
+create publication view_subscription_foreign_pub database view_subscription_source account view_subscription_reader;
+create database foreign_alias from sys publication view_subscription_foreign_pub;
+create snapshot view_subscription_foreign_snapshot for account;
+drop publication view_subscription_foreign_pub;
+drop database view_subscription_foreign_source;
+create publication view_subscription_foreign_pub database view_subscription_foreign_source account view_subscription_reader;
+create database view_subscription_foreign_source;
+create table view_subscription_foreign_source.src(x varchar(16)) comment='current-decoy';
+insert into view_subscription_foreign_source.src values ('decoy-now');
+create view view_subscription_foreign_source.v as select x from view_subscription_foreign_source.src;
+alter table view_subscription_foreign_source.src modify x varchar(51);
+update view_subscription_foreign_source.src set x='owner-now';
+select x from foreign_alias.src;
+➤ x[12,51,0]  𝄀
+owner-now
+select x from foreign_alias.src {snapshot='view_subscription_foreign_snapshot'};
+➤ x[12,37,0]  𝄀
+owner-before
+select x from foreign_alias.v {snapshot='view_subscription_foreign_snapshot'};
+➤ x[12,37,0]  𝄀
+owner-before
+select table_name, character_maximum_length from information_schema.columns where table_schema='foreign_alias' and column_name='x' order by table_name;
+➤ table_name[12,256,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+src  ¦  51  𝄀
+v  ¦  51
+select table_name, character_maximum_length from information_schema.columns {snapshot='view_subscription_foreign_snapshot'} where table_schema='foreign_alias' and column_name='x' order by table_name;
+➤ table_name[12,256,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+src  ¦  37  𝄀
+v  ¦  37
+select table_name, table_comment from information_schema.tables {snapshot='view_subscription_foreign_snapshot'} where table_schema='foreign_alias' and table_name='src';
+➤ table_name[12,5000,0]  ¦  table_comment[-1,16383,0]  𝄀
+src  ¦  physical-owner
+prepare view_subscription_foreign_stmt from 'select x from foreign_alias.v {snapshot=''view_subscription_foreign_snapshot''}';
+execute view_subscription_foreign_stmt;
+➤ x[12,37,0]  𝄀
+owner-before
+alter publication view_subscription_foreign_pub account drop view_subscription_reader;
+execute view_subscription_foreign_stmt;
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_foreign_pub
+select count(*) from information_schema.columns {snapshot='view_subscription_foreign_snapshot'} where table_schema='foreign_alias';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter publication view_subscription_foreign_pub account add view_subscription_reader;
+execute view_subscription_foreign_stmt;
+➤ x[12,37,0]  𝄀
+owner-before
+deallocate prepare view_subscription_foreign_stmt;
+drop database foreign_alias;
+drop snapshot view_subscription_foreign_snapshot;
+drop publication view_subscription_foreign_pub;
+drop database view_subscription_foreign_source;
+drop database view_subscription_foreign_source;
+drop account view_subscription_reader;
+drop publication view_subscription_pub;
+drop publication view_subscription_other_pub;
+drop database view_subscription_source;
+drop database view_subscription_remap;

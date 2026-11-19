@@ -1691,7 +1691,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 	var arithmetic percentileArithmeticScratch
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
-	for i, x := 0, 0; i < groups; i += lim {
+	for i, x := 0, 0; i < groups; i, x = i+lim, x+1 {
 		n := groups - i
 		if n > lim {
 			n = lim
@@ -1733,7 +1733,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
-	for i, x := 0, 0; i < groups; i += lim {
+	for i, x := 0, 0; i < groups; i, x = i+lim, x+1 {
 		n := groups - i
 		if n > lim {
 			n = lim

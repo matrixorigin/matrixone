@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -127,6 +128,20 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, store.startReplica(10, 1, members, false))
 		require.NoError(t, store.startReplica(20, 1, members, false))
 	}()
+	// Model a crash after Dragonboat renames an exported snapshot into its
+	// final directory, but before it removes the completion flag.
+	mgr := newSnapshotManager(&cfg)
+	dir := mgr.snapshotPath(nodeID{shardID: 10, replicaID: 1}, snapshotIndex(100))
+	require.NoError(t, cfg.FS.MkdirAll(dir, defaultExportedDirMode))
+	for _, name := range []string{
+		cfg.FS.PathBase(dir) + ".gbsnap",
+		"snapshot.metadata",
+		"dragonboat.snapshot.message",
+	} {
+		f, err := cfg.FS.Create(cfg.FS.PathJoin(dir, name))
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+	}
 
 	store, err := getTestStore(func() Config {
 		return cfg
@@ -137,6 +152,8 @@ func TestStartReplicas(t *testing.T) {
 	}()
 	require.NoError(t, store.loadMetadata())
 	require.NoError(t, store.startReplicas(context.Background()))
+	_, err = cfg.FS.Stat(dir)
+	require.True(t, os.IsNotExist(err), "startup must clear the obstructing final directory")
 	done := false
 	for i := 0; i < 1000; i++ {
 		hb := store.getHeartbeatMessage()

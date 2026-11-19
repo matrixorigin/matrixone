@@ -72,7 +72,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fmt.Sprintf("create table t(a %s,g varchar(64) generated always as (%s) stored,check(length(%s)>=0))", tc.sqlType, call, call), 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			original := built.GetDdl().GetCreateTable().GetTableDef()
 			require.NotNil(t, original)
@@ -169,7 +169,7 @@ func TestPersistedIntegerArgumentDefaultOrigin(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a varchar(64) default (substring_index('a.b.c.d','.',"+tc.source+")))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			var def *planpb.Default
 			for _, col := range built.GetDdl().GetCreateTable().GetTableDef().Cols {

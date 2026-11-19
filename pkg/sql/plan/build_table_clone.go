@@ -53,45 +53,9 @@ func buildCloneTable(
 		builder.compCtx.SetSnapshot(old)
 	}()
 
-	if stmt.IsRestore {
-		snapshot := &Snapshot{
-			Tenant: &SnapshotTenant{
-				TenantID: stmt.FromAccount,
-			},
-		}
-
-		builder.compCtx.SetSnapshot(snapshot)
-		builder.isRestore = stmt.IsRestore
-		builder.isRestoreByTs = stmt.IsRestoreByTS
-	}
-
-	if IsSnapshotValid(ctx.GetSnapshot()) {
-		bindCtx.snapshot = ctx.GetSnapshot()
-	}
-
-	if stmt.SrcTable.AtTsExpr != nil {
-		bindCtx.snapshot, err = builder.ResolveTsHint(stmt.SrcTable.AtTsExpr)
-		if err != nil {
-			if IsSnapshotNotFound(err) {
-				return nil, NewSnapshotNotFoundError(
-					builder.GetContext(),
-					stmt.SrcTable.AtTsExpr.SnapshotName,
-				)
-			}
-			return nil, err
-		}
-
-		// the TS and the account id of the data source
-		builder.compCtx.SetSnapshot(bindCtx.snapshot)
-	}
-
-	if srcObj, srcTblDef, err = builder.compCtx.Resolve(
-		string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), bindCtx.snapshot,
-	); err != nil {
+	srcObj, srcTblDef, bindCtx.snapshot, err = resolveCloneTableSource(builder, stmt)
+	if err != nil {
 		return nil, err
-	} else if srcTblDef == nil || srcObj == nil {
-		return nil, moerr.NewParseErrorf(builder.GetContext(),
-			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
 
 	var (
@@ -184,6 +148,105 @@ func buildCloneTable(
 			},
 		},
 	}, nil
+}
+
+// resolveCloneTableSource is shared by the executable clone plan and the
+// source-only carrier for a prepared clone with an explicit target account.
+// Its caller restores the compiler snapshot after it finishes using the source.
+func resolveCloneTableSource(builder *QueryBuilder, stmt *tree.CloneTable) (*ObjectRef, *TableDef, *Snapshot, error) {
+	snapshot, err := builder.ResolveCloneTableSourceSnapshot(stmt)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	obj, def, err := builder.compCtx.Resolve(string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), snapshot, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if obj == nil || def == nil {
+		return nil, nil, nil, moerr.NewParseErrorf(builder.GetContext(),
+			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
+	}
+	return obj, def, snapshot, nil
+}
+
+// buildPrepareCloneTableWithAccount records only the validated source. The
+// destination belongs to another account that the frontend has not resolved
+// yet; its CREATE/FK metadata is planned by the authorized execution owner.
+func buildPrepareCloneTableWithAccount(stmt *tree.CloneTable, ctx CompilerContext) (*Plan, error) {
+	previous := ctx.GetSnapshot()
+	defer ctx.SetSnapshot(previous)
+	builder := NewQueryBuilder(plan.Query_INSERT, ctx, false, true)
+	obj, def, snapshot, err := resolveCloneTableSource(builder, stmt)
+	if err != nil {
+		return nil, err
+	}
+	opAccount, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	srcAccount, dstAccount := opAccount, opAccount
+	if stmt.IsRestoreByTS {
+		srcAccount, dstAccount = stmt.FromAccount, stmt.ToAccountId
+	}
+	if snapshot != nil && snapshot.Tenant != nil {
+		srcAccount = snapshot.Tenant.TenantID
+	}
+	dstDatabase := string(stmt.CreateTable.Table.SchemaName)
+	if dstDatabase == "" {
+		dstDatabase = ctx.DefaultDatabase()
+	}
+	var subMeta *plan.SubscriptionMeta
+	if obj.PubInfo != nil {
+		subMeta, err = ctx.GetSubscriptionMeta(string(stmt.SrcTable.SchemaName), snapshot)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cloneType := tree.DecideCloneStmtType(ctx.GetContext(), stmt, def.DbName, dstDatabase, dstAccount, srcAccount, subMeta)
+	if err = checkPrivilege(ctx.GetContext(), opAccount, srcAccount, subMeta, def, dstDatabase, snapshot, cloneType); err != nil {
+		return nil, err
+	}
+	sourceDatabase := string(stmt.SrcTable.SchemaName)
+	if sourceDatabase == "" {
+		sourceDatabase = ctx.DefaultDatabase()
+	}
+	if _, _, err = prepareCreateLikeSource(ctx, def, snapshot, subMeta, sourceDatabase, string(stmt.SrcTable.ObjectName)); err != nil {
+		return nil, err
+	}
+	return &Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType: plan.DataDefinition_CREATE_TABLE_WITH_CLONE,
+		Definition: &plan.DataDefinition_CloneTable{CloneTable: &plan.CloneTable{
+			SrcTableDef: def, SrcObjDef: obj, ScanSnapshot: snapshot,
+		}},
+	}}}, nil
+}
+
+// ResolveCloneTableSourceSnapshot establishes the same source scope for clone
+// admission and planning. The caller owns restoration of the compiler's prior
+// snapshot; the destination must never inherit this source scope.
+func (builder *QueryBuilder) ResolveCloneTableSourceSnapshot(stmt *tree.CloneTable) (*Snapshot, error) {
+	if stmt.IsRestore {
+		builder.compCtx.SetSnapshot(&Snapshot{Tenant: &SnapshotTenant{TenantID: stmt.FromAccount}})
+		builder.isRestore = true
+		builder.isRestoreByTs = stmt.IsRestoreByTS
+	}
+	var snapshot *Snapshot
+	if IsSnapshotValid(builder.compCtx.GetSnapshot()) {
+		snapshot = builder.compCtx.GetSnapshot()
+	}
+	if stmt.SrcTable.AtTsExpr == nil {
+		return snapshot, nil
+	}
+	var err error
+	snapshot, err = builder.ResolveTsHint(stmt.SrcTable.AtTsExpr)
+	if err != nil {
+		if IsSnapshotNotFound(err) {
+			return nil, NewSnapshotNotFoundError(builder.GetContext(), stmt.SrcTable.AtTsExpr.SnapshotName)
+		}
+		return nil, err
+	}
+	builder.compCtx.SetSnapshot(snapshot)
+	return snapshot, nil
 }
 
 func checkPrivilege(

@@ -19,6 +19,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -77,6 +79,14 @@ type SqlProcess struct {
 	Proc   *process.Process
 	SqlCtx *SqlContext
 
+	// IndexRelationPolicy restricts only SQL issued by a maintenance operator.
+	// It is never populated from SQL arguments or inherited from a session.
+	IndexRelationPolicy *executor.IndexRelationPolicy
+	// Generated InitSQL can attest one function; these are owner-supplied,
+	// never populated from SQL or inherited from a session.
+	IndexMaintenanceSpec      *executor.IndexMaintenanceSpec
+	IndexMaintenanceValidator executor.IndexMaintenanceValidator
+
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the ivf entries scan.
@@ -89,7 +99,7 @@ type SqlProcess struct {
 	// Optional raw runtime-filter payload from the build side for IVF probe path.
 	// This contains serialized unique join keys and must be converted by IVF code
 	// before it is exposed to entries table scans.
-	IvfRuntimeFilterData []byte
+	IvfRuntimeFilterData *keycodec.KeyPayload
 	// True when the runtime-filter producer sent an exact key set. It is
 	// separate from the payload because an empty set is semantically different
 	// from no filter (RF PASS).
@@ -313,7 +323,7 @@ func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 	}
 	if s.Proc != nil && s.Proc.Base != nil {
 		info := s.Proc.GetSessionInfo()
-		option = option.WithSessionIdentity(info.Account, info.Role)
+		option = option.WithSessionIdentity(info.Account, info.Role).WithSessionUser(info.User)
 	}
 	return option
 }
@@ -322,6 +332,44 @@ func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 // transaction callbacks that execute statements through TxnExecutor directly.
 func (s *SqlProcess) StatementOption() executor.StatementOption {
 	return s.executionStatementOption()
+}
+
+// BindIndexMaintenanceView checks a consumed view without executing its
+// expressions or allowing an index owner's generated-target capability to
+// enter the view body.
+func BindIndexMaintenanceView(s *SqlProcess, sql string) error {
+	if s == nil || s.Proc == nil || s.IndexRelationPolicy == nil {
+		return moerr.NewInternalErrorNoCtx("index view binding identity is unavailable")
+	}
+	proc := s.Proc
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(proc.Ctx, "index view binding executor is unavailable")
+	}
+	v, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "index view binding executor is unavailable")
+	}
+	binder, ok := v.(executor.IndexViewBindingExecutor)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "index view binding is unsupported")
+	}
+	account, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	policy := &executor.IndexRelationPolicy{CallerMayAccess: s.IndexRelationPolicy.CallerMayAccess}
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(s.txnForRun(proc)).
+		WithDatabase(s.executionDatabase(proc.GetSessionInfo().Database)).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(s.executionAccountID(account)).
+		WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+		WithFrontend(proc.Base.IsFrontend).
+		WithStatementOption(s.executionStatementOption()).
+		WithIndexRelationPolicy(policy)
+	return binder.BindIndexMaintenanceView(s.executionContext(proc.Ctx), sql, opts)
 }
 
 func (s *SqlProcess) GetContext() context.Context {
@@ -422,7 +470,10 @@ func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Re
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(stmtOpt)
+			WithStatementOption(stmtOpt).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy).
+			WithIndexMaintenanceSpec(sqlproc.IndexMaintenanceSpec).
+			WithIndexMaintenanceValidator(sqlproc.IndexMaintenanceValidator)
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -446,7 +497,10 @@ func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Re
 			WithDatabase(sqlproc.executionDatabase("")).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(stmtOpt)
+			WithStatementOption(stmtOpt).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy).
+			WithIndexMaintenanceSpec(sqlproc.IndexMaintenanceSpec).
+			WithIndexMaintenanceValidator(sqlproc.IndexMaintenanceValidator)
 		return exec.Exec(execCtx, sql, opts)
 
 	}
@@ -562,7 +616,8 @@ func runStreamingSql(
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(stmtOpt)
+			WithStatementOption(stmtOpt).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy)
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -588,7 +643,8 @@ func runStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(stmtOpt)
+			WithStatementOption(stmtOpt).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy)
 		return exec.Exec(ctx, sql, opts)
 
 	}
@@ -625,7 +681,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(sqlproc.StatementOption())
+			WithStatementOption(sqlproc.StatementOption()).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy)
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -648,7 +705,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithAccountID(accountId).
 			WithDatabase(sqlproc.executionDatabase("")).
 			WithStatementOption(sqlproc.StatementOption()).
-			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
+			WithIndexRelationPolicy(sqlproc.IndexRelationPolicy)
 		return exec.ExecTxn(sqlproc.executionContext(sqlctx.Ctx), execFunc, opts)
 	}
 }

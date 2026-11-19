@@ -138,12 +138,7 @@ func (builder *QueryBuilder) setMembershipInputIsTotal(id int32, owners map[int3
 	}
 	seen[id] = true
 	node := builder.qry.Nodes[id]
-	if node.Limit != nil || node.Offset != nil || node.FilterIsBarrier ||
-		node.ExtraOptions != "" || node.RecursiveSink || node.RecursiveCte || node.EmitCompressedRowCount ||
-		len(node.SourceStep) != 0 || len(node.RuntimeFilterProbeList) != 0 || len(node.RuntimeFilterBuildList) != 0 ||
-		len(node.SendMsgList) != 0 || len(node.RecvMsgList) != 0 || len(node.LockTargets) != 0 ||
-		node.IndexReaderParam != nil || node.IndexSearchScan != nil || node.SampleFunc != nil ||
-		node.DedupJoinCtx != nil || node.ExternScan != nil {
+	if !SetMembershipNodeEvaluationIsTotal(node) {
 		return false
 	}
 	switch node.NodeType {
@@ -164,6 +159,29 @@ func (builder *QueryBuilder) setMembershipInputIsTotal(id int32, owners map[int3
 			return false
 		}
 	default:
+		return false
+	}
+	for _, child := range node.Children {
+		if !builder.setMembershipInputIsTotal(child, owners, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+// SetMembershipNodeEvaluationIsTotal proves the local expression and
+// side-effect obligations shared by logical and remapped physical plans. The
+// caller must separately prove graph ownership and column references.
+func SetMembershipNodeEvaluationIsTotal(node *planpb.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Limit != nil || node.Offset != nil || node.FilterIsBarrier ||
+		node.ExtraOptions != "" || node.RecursiveSink || node.RecursiveCte || node.EmitCompressedRowCount ||
+		len(node.SourceStep) != 0 || len(node.RuntimeFilterProbeList) != 0 || len(node.RuntimeFilterBuildList) != 0 ||
+		len(node.SendMsgList) != 0 || len(node.RecvMsgList) != 0 || len(node.LockTargets) != 0 ||
+		node.IndexReaderParam != nil || node.IndexSearchScan != nil || node.SampleFunc != nil ||
+		node.DedupJoinCtx != nil || node.ExternScan != nil {
 		return false
 	}
 	for _, expr := range node.ProjectList {
@@ -188,13 +206,5 @@ func (builder *QueryBuilder) setMembershipInputIsTotal(id int32, owners map[int3
 		unknown = true
 		return nil
 	})
-	if unknown {
-		return false
-	}
-	for _, child := range node.Children {
-		if !builder.setMembershipInputIsTotal(child, owners, seen) {
-			return false
-		}
-	}
-	return true
+	return !unknown
 }

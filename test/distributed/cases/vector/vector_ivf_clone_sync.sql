@@ -37,4 +37,16 @@ select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
 select a from dst order by l2_distance(b,'[100,100,100]') limit 1;
 select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
 
+-- Distinct Unicode names must resolve to their own index groups during reindex.
+create table unicode_indexes(id int primary key, a vecf32(2), b vecf32(2));
+insert into unicode_indexes values (1,'[1,1]','[1,1]'),(2,'[2,2]','[2,2]');
+create index `Σ` using ivfflat on unicode_indexes(a) lists=1 op_type 'vector_l2_ops';
+create index `ς` using ivfflat on unicode_indexes(b) lists=1 op_type 'vector_l2_ops';
+alter table unicode_indexes alter reindex `σ` ivfflat force_sync;
+alter table unicode_indexes alter reindex `ς` ivfflat force_sync;
+select id from unicode_indexes order by l2_distance(a,'[1,1]') limit 1;
+select id from unicode_indexes order by l2_distance(b,'[1,1]') limit 1;
+select count(distinct index_table_name) as physical_tables from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='ivf_clone_sync' and relname='unicode_indexes') and index_table_name<>'';
+
 drop database ivf_clone_sync;

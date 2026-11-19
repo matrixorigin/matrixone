@@ -40,7 +40,7 @@ func TestFunctionalJSONTextEligibility(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(ctx, stmt, false)
+		return BuildPlan(ctx, stmt, false, nil)
 	}
 	for _, expression := range []string{
 		"cast(json_unquote(json_extract(doc,'$.kind')) as char(20))",

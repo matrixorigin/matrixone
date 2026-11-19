@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -108,7 +109,12 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 	for i, col := range node.TableDef.Cols {
 		attrs[i], typs[i] = col.GetOriginCaseName(), col.Typ
 	}
-	return dependentSourceFactory(uint64(unsafe.Sizeof(table_scan.TableScan{})), func(proc *process.Process, sourceAllocation *vector.AllocationAccountSelection) (vm.Operator, error) {
+	// NewArgument coallocates the operator and its private frame. Charge both,
+	// even though the frame is outside the operator's reset range.
+	return dependentSourceFactory(uint64(unsafe.Sizeof(struct {
+		operator table_scan.TableScan
+		frame    colexec.DictionaryInputFrame
+	}{})), func(proc *process.Process, sourceAllocation *vector.AllocationAccountSelection) (vm.Operator, error) {
 		ctx, txn := proc.Ctx, proc.GetTxnOperator()
 		if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil && !node.ScanSnapshot.TS.IsEmpty() && node.ScanSnapshot.TS.Less(txn.Txn().SnapshotTS) {
 			txn = txn.CloneSnapshotOp(*node.ScanSnapshot.TS)
@@ -182,7 +188,7 @@ func dependentSourceFactory(metadata uint64, open func(*process.Process, *vector
 			}
 		}
 		if err == nil {
-			err = s.op.Prepare(proc)
+			err = vm.Prepare(s.op, proc)
 		}
 		if err != nil {
 			return nil, errors.Join(err, s.CloseWithCause(err))
@@ -204,7 +210,7 @@ func (s *dependentNativeSource) Read(ctx context.Context) (*batch.Batch, error) 
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	r, err := s.op.Call(s.proc)
+	r, err := vm.Exec(s.op, s.proc)
 	return r.Batch, err
 }
 func (s *dependentNativeSource) Close() error { return s.CloseWithCause(nil) }
@@ -229,8 +235,8 @@ func (s *dependentNativeSource) CloseWithCause(cause error) error {
 		err = errors.Join(err, closer.CloseReader())
 	}
 	terminal := errors.Join(cause, err)
-	s.op.Reset(s.proc, terminal != nil, terminal)
-	s.op.Free(s.proc, terminal != nil, terminal)
+	vm.Reset(s.op, s.proc, terminal != nil, terminal)
+	vm.Free(s.op, s.proc, terminal != nil, terminal)
 	if owner, ok := s.op.(interface {
 		ClearAllocationAccount(*mpool.AllocationAccount) error
 	}); ok && s.account != nil {

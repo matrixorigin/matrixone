@@ -727,7 +727,7 @@ func TestGetBloomFilterUsesRuntimeFilterPayloadForExactPk(t *testing.T) {
 
 	rawPayload, err := keyVec.MarshalBinary()
 	require.NoError(t, err)
-	sqlproc.IvfRuntimeFilterData = rawPayload
+	sqlproc.IvfRuntimeFilterData = testutil.RuntimeKeyPayload(t, rawPayload)
 
 	idx := &IvfflatSearchIndex[float32]{Version: 3}
 	err = idx.getBloomFilter(sqlproc)
@@ -791,7 +791,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 			RankedCentroidIDs: []int64{101},
 		},
 		SearchRoundLimit:  3,
-		RuntimeFilterData: rawPayload,
+		RuntimeFilterData: testutil.RuntimeKeyPayload(t, rawPayload),
 	}
 
 	idx := &IvfflatSearchIndex[float32]{Version: 7}

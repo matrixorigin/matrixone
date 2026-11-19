@@ -181,7 +181,7 @@ func RebuildNativeSelectLockCTASForTest(ctx context.Context, compiler *TxnCompil
 		ses.SetSql("execute select_lock_ctas")
 		retry = &preparedExecutionRetry{}
 	}
-	return preparedExecutionBuildPlanFunc(ses, statement, false, retry, bindingDatabase, prepared)(ctx)
+	return preparedExecutionBuildPlanFunc(ses, statement, false, retry, bindingDatabase, prepared, nil)(ctx)
 }
 
 // 测试角色只具有一个明确的 active role，直接复用既有 view privilege 查询。

@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -55,11 +54,12 @@ func TestViewsUpgradeRecognizesCatalogNameCase(t *testing.T) {
 					executed = append(executed, sql)
 					return executor.Result{}, nil
 				})
-				require.NoError(t, UpgradeInformationSchemaViewsAfterProtocolCheck(txn, accountID))
+				entry := versions.InformationSchemaViewsUpgradeEntry()
+				require.NoError(t, entry.UpgradeAfterProtocolCheck(txn, accountID))
 				if tc.current {
 					require.Empty(t, executed, "the committed definition is the durable no-op marker")
 				} else {
-					require.Equal(t, []string{upgradeInformationSchemaViews().UpgSql}, executed)
+					require.Equal(t, []string{versions.InformationSchemaViewsUpgradeEntry().UpgSql}, executed)
 				}
 			})
 		}
@@ -83,7 +83,8 @@ func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
 				executed = append(executed, sql)
 				return executor.Result{}, nil
 			})
-			require.ErrorIs(t, UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0), catalogErr)
+			entry := versions.InformationSchemaViewsUpgradeEntry()
+			require.ErrorIs(t, entry.UpgradeAfterProtocolCheck(txn, 0), catalogErr)
 			require.Empty(t, executed, "a failed catalog lookup must not stage DROP or CREATE")
 		})
 	}
@@ -97,7 +98,7 @@ func TestViewsRepairUsesCurrentV407Identity(t *testing.T) {
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeCluster)
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeTenant)
 
-	entry := upgradeInformationSchemaViews()
+	entry := versions.InformationSchemaViewsUpgradeEntry()
 	require.Equal(t, sysview.InformationDBConst, entry.Schema)
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
@@ -118,7 +119,7 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return executor.Result{}, nil
 			})
 
-			entry := upgradeInformationSchemaViews()
+			entry := versions.InformationSchemaViewsUpgradeEntry()
 			entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) {
 				return false, nil
 			}
@@ -132,41 +133,4 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestViewsUpgradeAuthoringProtocolGate(t *testing.T) {
-	rt := moruntime.ServiceRuntime("")
-	old, hadOld := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	t.Cleanup(func() {
-		if hadOld {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, old)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
-		}
-	})
-
-	txn := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
-		return executor.Result{}, nil
-	})
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion113))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion114))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion115))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion116))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion120))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion121))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion122))
-	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion126))
-	require.True(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 }

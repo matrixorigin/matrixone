@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -27,6 +28,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRegularIndexColumnMap(t *testing.T) {
+	integer := planpb.Type{Id: int32(types.T_int64)}
+	datetime := planpb.Type{Id: int32(types.T_datetime), Scale: 6}
+	source := &planpb.Node{BindingTags: []int32{7}, TableDef: &planpb.TableDef{
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "d": 1},
+		Cols:          []*planpb.ColDef{{Name: "id", Typ: integer}, {Name: "d", Typ: datetime}},
+	}}
+	hidden := &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: planpb.Type{Id: int32(types.T_varchar)}}, {Typ: integer}}}
+	leading := GetColExpr(hidden.Cols[0].Typ, 8, 0)
+	index := &IndexDef{Parts: []string{catalog.CreateAlias("d")}}
+
+	mapping, ok, err := buildRegularIndexColumnMap(context.Background(), source, index, hidden, leading, 8)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, leading, mapping[[2]int32{7, 1}], "an aliased single key must map the indexed column")
+	require.NotContains(t, mapping, [2]int32{7, 0})
+
+	index.Parts = []string{catalog.CreateAlias("d"), catalog.CreateAlias("id")}
+	mapping, ok, err = buildRegularIndexColumnMap(context.Background(), source, index, hidden, leading, 8)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "serial_extract", mapping[[2]int32{7, 1}].GetF().Func.ObjName)
+	require.Equal(t, int32(1), mapping[[2]int32{7, 0}].GetCol().ColPos)
+
+	index.Parts[1] = "missing"
+	mapping, ok, err = buildRegularIndexColumnMap(context.Background(), source, index, hidden, leading, 8)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, mapping, "a rejected mapping must not publish an earlier component")
+
+	index.Parts[1] = "id"
+	badLeading := GetColExpr(integer, 8, 0)
+	mapping, ok, err = buildRegularIndexColumnMap(context.Background(), source, index, hidden, badLeading, 8)
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Nil(t, mapping)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("cancel index mapping")
+	cancel(cause)
+	mapping, ok, err = buildRegularIndexColumnMap(ctx, source, index, hidden, leading, 8)
+	require.ErrorIs(t, err, cause)
+	require.False(t, ok)
+	require.Nil(t, mapping)
+}
 
 func TestSerializedIndexComparisonDomains(t *testing.T) {
 	ctx := context.Background()
@@ -136,7 +184,8 @@ func TestRegularIndexComparisonKeepsSafePrefixAndResidual(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []int32{0}, match.filterIdx, "unsafe later component cannot enter the encoded prefix")
 	require.Equal(t, []int32{0}, cost.matchPointBackfill(idx, false))
-	id := builder.applyRegularIndexOnlyScan(idx, node, map[[2]int32]*planpb.Expr{}, &Snapshot{}, match)
+	id, err := builder.applyRegularIndexOnlyScan(idx, node, map[[2]int32]*planpb.Expr{}, &Snapshot{}, match)
+	require.NoError(t, err)
 	require.NotEqual(t, int32(-1), id)
 	scan := builder.qry.Nodes[id]
 	require.Len(t, scan.FilterList, 2)
@@ -262,7 +311,7 @@ func TestIndexDecimalComparisonRejectsOverflowingNormalization(t *testing.T) {
 	value, err := types.ParseDecimal128("12345678901234567890.00", 38, 2)
 	require.NoError(t, err)
 	bound := &planpb.Expr{Typ: makePlan2Type(&source), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{A: int64(value.B0_63), B: int64(value.B64_127)}}}}}
-	require.False(t, analyzeIndexComparisonBound(context.Background(), bound, makePlan2Type(&key)).usable)
+	require.False(t, analyzeIndexComparisonBound(context.Background(), bound, makePlan2Type(&key)).exact())
 }
 
 func TestSerializedIndexComparisonChecksFoldedStringDomain(t *testing.T) {

@@ -542,7 +542,7 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	prepared, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	prepared, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
 	fn := findPlanFunctionExpr(prepared, "st_srid")
@@ -791,7 +791,7 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, true)
+	p, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
 	return p
@@ -810,7 +810,7 @@ func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, true)
+	p, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
 	return p

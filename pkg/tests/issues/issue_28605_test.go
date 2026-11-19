@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,8 @@ func TestCTASDivisionByZero(t *testing.T) {
 		exec("USE `" + name + "`")
 		exec("CREATE TABLE src(id INT PRIMARY KEY,n INT,d INT)")
 		exec("INSERT INTO src VALUES(1,10,2),(2,10,0),(3,9,3)")
+		runtimeExpressions := []string{"n/d", "n DIV d", "n % d", "CAST(n AS DECIMAL(18,4))/d", "CAST(n AS DOUBLE)/d"}
+		allExpressions := append([]string{runtimeExpressions[0], "10/0"}, runtimeExpressions[1:]...)
 		for _, temporary := range []bool{false, true} {
 			t.Run(fmt.Sprintf("temporary=%t", temporary), func(t *testing.T) {
 				prefix := "CREATE TABLE copied"
@@ -77,14 +80,19 @@ func TestCTASDivisionByZero(t *testing.T) {
 					t.Run(mode, func(t *testing.T) {
 						err := execSQL("SET SESSION sql_mode='" + mode + "'")
 						require.NoError(t, err)
-						for _, expression := range []string{"n/d", "10/0", "n DIV d", "n % d", "CAST(n AS DECIMAL(18,4))/d", "CAST(n AS DOUBLE)/d"} {
+						strict := mode == "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO" || mode == "STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO"
+						for _, expression := range allExpressions {
+							// Keep strict failures and constant folding in standalone CTAS
+							// statements. Successful runtime expressions are checked together.
+							if !strict && expression != "10/0" {
+								continue
+							}
 							t.Run(expression, func(t *testing.T) {
 								t.Cleanup(func() {
 									err := execSQL("DROP TABLE IF EXISTS copied")
 									require.NoError(t, err)
 								})
 								err := execSQL(prefix + " AS SELECT id," + expression + " AS v FROM src ORDER BY id")
-								strict := mode == "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO" || mode == "STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO"
 								if strict {
 									var sqlErr *mysql.MySQLError
 									require.ErrorAs(t, err, &sqlErr)
@@ -99,11 +107,32 @@ func TestCTASDivisionByZero(t *testing.T) {
 									var count, nulls int
 									require.NoError(t, queryScan("SELECT COUNT(*),COUNT(*)-COUNT(v) FROM copied", &count, &nulls))
 									require.Equal(t, 3, count)
-									wantNulls := 1
-									if expression == "10/0" {
-										wantNulls = 3
-									}
-									require.Equal(t, wantNulls, nulls)
+									require.Equal(t, 3, nulls)
+								}
+							})
+						}
+						if !strict {
+							t.Run("runtime expressions", func(t *testing.T) {
+								t.Cleanup(func() {
+									err := execSQL("DROP TABLE IF EXISTS copied")
+									require.NoError(t, err)
+								})
+								projections := make([]string, len(runtimeExpressions))
+								for i, expression := range runtimeExpressions {
+									projections[i] = fmt.Sprintf("%s AS v%d", expression, i)
+								}
+								err := execSQL(prefix + " AS SELECT id," + strings.Join(projections, ",") + " FROM src ORDER BY id")
+								require.NoError(t, err)
+								for i, expression := range runtimeExpressions {
+									t.Run(expression, func(t *testing.T) {
+										var count, nulls, zeroDenominatorNulls int
+										column := fmt.Sprintf("v%d", i)
+										require.NoError(t, queryScan("SELECT COUNT(*),COUNT(*)-COUNT("+column+"),"+
+											"COUNT(CASE WHEN id=2 AND "+column+" IS NULL THEN 1 END) FROM copied", &count, &nulls, &zeroDenominatorNulls))
+										require.Equal(t, 3, count)
+										require.Equal(t, 1, nulls)
+										require.Equal(t, 1, zeroDenominatorNulls)
+									})
 								}
 							})
 						}

@@ -37,7 +37,7 @@ func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
 		"UPDATE constraint_test.t_on_update_gen SET val = CASE WHEN id = 1 THEN 111 ELSE val END WHERE id IN (1,2)",
 		1)
 	require.NoError(t, err)
-	plan, err := BuildPlan(ctx, stmts[0], false)
+	plan, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 
 	found := false
@@ -81,7 +81,7 @@ func TestOnUpdateReusesFinalVolatileAssignment(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), "UPDATE "+target+" SET "+assignments, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(ctx, stmts[0], false)
+			p, err := BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			calls := 0
 			for _, node := range p.GetQuery().Nodes {
@@ -268,7 +268,7 @@ func (optimizer *updateIndexBuildTestOptimizer) CurrentContext() CompilerContext
 }
 
 func (optimizer *updateIndexBuildTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false)
+	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -643,6 +643,39 @@ func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
 	coalesceRepeatedPhysicalTargetIrregularIndexes(dmlCtx, irregularIndexes)
 	require.Equal(t, []*IndexDef{irregular}, irregularIndexes[0])
 	require.Empty(t, irregularIndexes[1])
+}
+
+func TestCoalesceRepeatedPhysicalTargetUniqueChecks(t *testing.T) {
+	uniqueA := &IndexDef{IndexName: "uk_a", IndexTableName: "uk_a_table", Unique: true}
+	uniqueB := &IndexDef{IndexName: "uk_b", IndexTableName: "uk_b_table", Unique: true}
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	indexes := []*IndexDef{uniqueA, uniqueB, regular}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b", "c"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: indexes},
+			{TblId: 100, Indexes: indexes},
+			{TblId: 200, Indexes: indexes},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"x": nil},
+			{"x": nil},
+		},
+	}
+
+	checks := [][]bool{
+		{false, false, false},
+		{true, true, true},
+		{true, false, false},
+	}
+	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, checks)
+
+	// All unique checks for one physical table are evaluated once by its owner.
+	require.Equal(t, []bool{true, true, false}, checks[0])
+	require.Equal(t, []bool{false, false, true}, checks[1])
+	// Another physical table keeps its own independent check.
+	require.Equal(t, []bool{true, false, false}, checks[2])
 }
 
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {

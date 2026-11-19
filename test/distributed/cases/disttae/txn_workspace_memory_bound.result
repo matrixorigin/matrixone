@@ -1,0 +1,147 @@
+drop database if exists bvt_workspace_memory;
+create database bvt_workspace_memory;
+use bvt_workspace_memory;
+create table t(pk varchar(128) primary key, v int);
+insert into t values ('one',1),('two',2);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',1,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 1, bvt_workspace_memory)
+1
+insert into t values ('three',3);
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+delete from t where pk='one';
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+update t set v=10 where pk='two';
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
+update t set v=10 where pk='two';
+delete from t where pk='one';
+insert into t values ('three',3);
+select count(*) as n, sum(v) as total from t;
+n	total
+2	13
+create table fits_tx(v tinyint);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',100000,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 100000, bvt_workspace_memory)
+1
+insert into fits_tx select cast(1 as tinyint) from generate_series(1,2048) g;
+select count(*) as n, sum(v) as total from fits_tx;
+n	total
+2048	2048
+insert into fits_tx select cast(9 as tinyint) from generate_series(1,4096) g;
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from fits_tx;
+n	total
+2048	2048
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
+create table copy_tx(v tinyint, payload mediumtext);
+create table rowid_tx(v tinyint);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',65536,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 65536, bvt_workspace_memory)
+1
+begin;
+insert into copy_tx values (1,'prior');
+insert into copy_tx values (9,repeat('x',131072));
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from copy_tx;
+n	total
+1	1
+insert into copy_tx values (3,'later');
+commit;
+select count(*) as n, sum(v) as total from copy_tx;
+n	total
+2	4
+begin;
+insert into rowid_tx values (1);
+insert into rowid_tx select cast(9 as tinyint) from generate_series(1,4096) g;
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from rowid_tx;
+n	total
+1	1
+insert into rowid_tx values (3);
+commit;
+select count(*) as n, sum(v) as total from rowid_tx;
+n	total
+2	4
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
+create table merge_tx(v bigint primary key);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',200000,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 200000, bvt_workspace_memory)
+1
+begin;
+insert into merge_tx select result + 0 from generate_series(0,63) g;
+insert into merge_tx select result + 64 from generate_series(0,63) g;
+insert into merge_tx select result + 128 from generate_series(0,63) g;
+insert into merge_tx select result + 192 from generate_series(0,63) g;
+insert into merge_tx select result + 256 from generate_series(0,63) g;
+insert into merge_tx select result + 320 from generate_series(0,63) g;
+insert into merge_tx select result + 384 from generate_series(0,63) g;
+insert into merge_tx select result + 448 from generate_series(0,63) g;
+insert into merge_tx select result + 512 from generate_series(0,63) g;
+insert into merge_tx select result + 576 from generate_series(0,63) g;
+insert into merge_tx select result + 640 from generate_series(0,63) g;
+insert into merge_tx select result + 704 from generate_series(0,63) g;
+insert into merge_tx select result + 768 from generate_series(0,63) g;
+insert into merge_tx select result + 832 from generate_series(0,63) g;
+insert into merge_tx select result + 896 from generate_series(0,63) g;
+insert into merge_tx select result + 960 from generate_series(0,63) g;
+insert into merge_tx select result + 1024 from generate_series(0,63) g;
+insert into merge_tx select result + 1088 from generate_series(0,63) g;
+insert into merge_tx select result + 1152 from generate_series(0,63) g;
+insert into merge_tx select result + 1216 from generate_series(0,63) g;
+insert into merge_tx select result + 1280 from generate_series(0,63) g;
+insert into merge_tx select result + 1344 from generate_series(0,63) g;
+insert into merge_tx select result + 1408 from generate_series(0,63) g;
+insert into merge_tx select result + 1472 from generate_series(0,63) g;
+insert into merge_tx select result + 1536 from generate_series(0,63) g;
+insert into merge_tx select result + 1600 from generate_series(0,63) g;
+insert into merge_tx select result + 1664 from generate_series(0,63) g;
+insert into merge_tx select result + 1728 from generate_series(0,63) g;
+insert into merge_tx select result + 1792 from generate_series(0,63) g;
+insert into merge_tx select result + 1856 from generate_series(0,63) g;
+commit;
+select count(*) as n, count(distinct v) as unique_values, sum(v) as total from merge_tx;
+n	unique_values	total
+1920	1920	1842240
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
+drop database bvt_workspace_memory;

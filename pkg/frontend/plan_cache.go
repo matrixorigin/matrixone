@@ -91,7 +91,8 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 		return
 	}
 	for i := range stmts {
-		if plans[i] == nil {
+		decision := planReuse(false, plans[i], ordinaryPlanGeneration)
+		if !decision.valid || !decision.reusable {
 			// can not cache and clean all stmts
 			freeStmts(stmts)
 			return
@@ -253,6 +254,14 @@ func (pc *planCache) updatePlanGeneration(
 		len(cached.planSnapshotTS) != len(cached.plans) ||
 		len(cached.planStatsVersions) != len(cached.plans) ||
 		cached.plans[index] != expectedPlan {
+		return false
+	}
+	decision := planReuse(false, newPlan, ordinaryPlanGeneration)
+	if !decision.valid {
+		return false
+	}
+	if !decision.reusable {
+		cached.invalid = true
 		return false
 	}
 	updatedPlanStatsVersions := clonePlanStatsVersions(cached.planStatsVersions)

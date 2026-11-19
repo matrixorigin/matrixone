@@ -41,6 +41,22 @@ func (builder *QueryBuilder) mysqlFullGroupByAllowsColRef(ctx *BindContext, expr
 	return found && allowed
 }
 
+// displayWrappedCorrColRef extracts the nested correlated reference behind an
+// ENUM/SET index-to-value wrapper. Outer ENUM/SET keys bind as
+// cast_index_to_value(<members>, <reference>) (#31568), so their correlation
+// is visible only through the wrapper's final argument. Local keys wrap a
+// plain column reference and return no correlation here.
+func displayWrappedCorrColRef(expr *Expr) *pbplan.CorrColRef {
+	if !isEnumOrSetDisplayValueExpr(expr) {
+		return nil
+	}
+	args := expr.GetF().GetArgs()
+	if len(args) == 0 || args[len(args)-1] == nil {
+		return nil
+	}
+	return args[len(args)-1].GetCorr()
+}
+
 // mysqlFullGroupByAllowsExprColumns handles wrappers introduced while binding
 // a column, notably ENUM/SET index-to-value conversion. Every source column in
 // the wrapper must independently satisfy an ONLY_FULL_GROUP_BY exception.

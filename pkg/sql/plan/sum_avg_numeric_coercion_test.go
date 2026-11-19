@@ -136,9 +136,7 @@ func TestSumAvgPreparedExecutionBinaryNumericLiteral(t *testing.T) {
 				"select cast("+name+"(x'20000000000001') as decimal(38,0)) from nation where n_nationkey <= ?", 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "1", SourceType: types.T_int64.ToType(), HasSourceType: true}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{ParamValue{Value: "1", SourceType: types.T_int64.ToType(), HasSourceType: true}})
 			require.NoError(t, err)
 			agg := sumAvgTestExpression(t, bound.Plan, name)
 			require.Equal(t, int32(types.T_uint64), agg.GetF().Args[0].Typ.Id)

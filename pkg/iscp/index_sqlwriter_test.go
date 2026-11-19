@@ -309,7 +309,7 @@ func TestNewIvfflatSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
@@ -335,7 +335,7 @@ func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
@@ -373,7 +373,7 @@ func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "`__mo_index_include_title`, `__mo_index_include_rank`")
 	require.Contains(t, sql, "CAST(column_2 as VARCHAR")
 	require.Contains(t, sql, "CAST(column_3 as INT")
-	require.Contains(t, sql, "src0, src1, src2, src3")
+	require.Contains(t, sql, "__mo_index_pri_col, src1, src2, src3")
 	require.Contains(t, sql, "'news'")
 	require.Contains(t, sql, "CAST(NULL as")
 }
@@ -470,7 +470,7 @@ func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing
 					sqlBytes, err := writer.ToSql()
 					require.NoError(t, err)
 					sql := string(sqlBytes)
-					require.Contains(t, sql, "SERIAL_EXTRACT(src0, 0 as ENUM('first','second')), ")
+					require.Contains(t, sql, "SERIAL_EXTRACT(__mo_index_pri_col, 0 as ENUM('first','second')), ")
 					require.Contains(t, sql, "), src2, SERIAL_EXTRACT(src3, 0 as ENUM('cold','hot')) FROM src")
 					require.Contains(t, sql, "cast(cast(src1")
 					require.NotContains(t, sql, "src2 *")
@@ -550,7 +550,7 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 				for _, col := range []struct {
 					pattern, members string
 				}{
-					{`(SERIAL_EXTRACT\(src0, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
+					{`(SERIAL_EXTRACT\(__mo_index_pri_col, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
 					{`(SERIAL_EXTRACT\(src2, 0 as ENUM\(.*?\)\))`, tc.includeMembers},
 				} {
 					match := regexp.MustCompile(col.pattern).FindStringSubmatch(sql)

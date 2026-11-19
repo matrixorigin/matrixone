@@ -37,12 +37,13 @@ type subscriberOnlyCompilerContext struct {
 }
 
 func (c *subscriberOnlyCompilerContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if dbName == c.hiddenDB {
 		return nil, nil, nil
 	}
-	obj, def, err := c.subscriptionScopeCompilerContext.Resolve(dbName, tableName, snapshot)
+	obj, def, err := c.subscriptionScopeCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if def != nil && dbName == c.subscription.SubName {
 		def.DbName = c.subscription.DbName
 	}
@@ -86,11 +87,11 @@ func TestBuildCloneTableSubscriptionReplanKeepsAlias(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	first, err := BuildPlan(ctx, stmt, false)
+	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	// Planning the same AST again must still resolve via the subscription.
-	second, err := BuildPlan(ctx, stmt, false)
+	second, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	clone := stmt.(*tree.CloneTable)
 	require.Equal(t, "subdb", string(clone.SrcTable.SchemaName))
@@ -101,4 +102,57 @@ func TestBuildCloneTableSubscriptionReplanKeepsAlias(t *testing.T) {
 	require.Equal(t, "publisherdb", second.GetDdl().GetCloneTable().GetSrcTableDef().GetDbName())
 	require.Equal(t, "localdb", second.GetDdl().GetCloneTable().GetDstDatabaseName())
 	require.Equal(t, "copy", second.GetDdl().GetCloneTable().GetDstTableName())
+}
+
+// When planning fails after the alias was rewritten for the build, the AST
+// must still hold the subscription alias so a later plan of the same AST
+// fails (or succeeds) for the same reason instead of losing the alias.
+func TestBuildCloneTableSubscriptionPlanningErrorKeepsAlias(t *testing.T) {
+	const rootSQL = "CREATE TABLE mysql.copy CLONE subdb.source"
+	base := NewMockCompilerContext(false, newPlanTestProcess(t))
+	base.dbs["localdb"] = true
+	base.dbs["subdb"] = true
+	base.tables["source"] = &plan.TableDef{
+		Name:      "source",
+		DbName:    "publisherdb",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{{
+			Name: "id", OriginName: "id",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	base.objects["source"] = &plan.ObjectRef{
+		SchemaName:       "publisherdb",
+		ObjName:          "source",
+		SubscriptionName: "subdb",
+		PubInfo:          &plan.PubInfo{TenantId: 7},
+	}
+	ctx := &subscriberOnlyCompilerContext{
+		subscriptionScopeCompilerContext: &subscriptionScopeCompilerContext{
+			MockCompilerContext: base,
+			subscription: &SubscriptionMeta{
+				AccountId: 7, DbName: "publisherdb", SubName: "subdb", Tables: "*",
+			},
+		},
+		hiddenDB: "publisherdb",
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	// The destination is a system database, so planning fails after the
+	// subscription resolution. The AST must not leak the publisher names.
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	require.ErrorContains(t, err, "cannot clone data into system database")
+	clone := stmt.(*tree.CloneTable)
+	require.Equal(t, "subdb", string(clone.SrcTable.SchemaName))
+	require.Equal(t, "source", string(clone.SrcTable.ObjectName))
+
+	// Re-planning the same AST must fail for the same reason; a hidden
+	// rewrite of the source name would instead report a resolution error.
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	require.ErrorContains(t, err, "cannot clone data into system database")
+	require.NotContains(t, err.Error(), "does not exist")
 }

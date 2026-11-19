@@ -299,7 +299,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 				proc.Mp(),
 			); err != nil {
 				for i := range checkpoints {
-					ctr.bat.Vecs[i].RollbackAppend(checkpoints[i], processCount)
+					err = vector.JoinAppendRollbackError(err, ctr.bat.Vecs[i].RollbackAppend(checkpoints[i], processCount))
 				}
 				return err
 			}

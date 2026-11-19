@@ -268,7 +268,7 @@ func TestOptimizePushesGroupingExpressionBeforeJoin(t *testing.T) {
 	defer stmt.Free()
 	// This includes ConstantFold and node compaction after createQuery, not
 	// merely BuildPlan or direct invocation of the new rewrite.
-	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 	require.NoError(t, err)
 	wire, err := query.Marshal()
 	require.NoError(t, err)

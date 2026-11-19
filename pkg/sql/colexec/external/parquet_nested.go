@@ -182,17 +182,21 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			if err := h.processRow(row, bat, param, proc); err != nil {
 				for colIdx, vec := range bat.Vecs {
 					if vec != nil {
-						vec.RollbackAppend(checkpoints[colIdx], 1)
+						err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], 1))
 					}
 				}
 				return err
 			}
 			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
 				if rowsRead > 0 {
+					var err error
 					for colIdx, vec := range bat.Vecs {
 						if vec != nil {
-							vec.RollbackAppend(checkpoints[colIdx], 1)
+							err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], 1))
 						}
+					}
+					if err != nil {
+						return err
 					}
 					batchBoundary = true
 					break
@@ -269,12 +273,13 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 	eof := false
 	batchBoundary := false
 
-	rollbackRows := func(checkpoints []vector.AppendCheckpoint, attemptedRows int) {
+	rollbackRows := func(checkpoints []vector.AppendCheckpoint, attemptedRows int) (err error) {
 		for colIdx, vec := range bat.Vecs {
 			if vec != nil {
-				vec.RollbackAppend(checkpoints[colIdx], attemptedRows)
+				err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], attemptedRows))
 			}
 		}
+		return err
 	}
 
 	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
@@ -344,17 +349,14 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 		batchBytesBefore := h.physicalBatchSize(bat)
 		for _, row := range rowBuf[:n] {
 			if err := context.Cause(proc.Ctx); err != nil {
-				rollbackRows(checkpoints, n)
-				return err
+				return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n))
 			}
 			if err := h.processNestedRow(row, bat, param, proc); err != nil {
-				rollbackRows(checkpoints, n)
-				return err
+				return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n))
 			}
 		}
 		if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(n)); err != nil {
-			rollbackRows(checkpoints, n)
-			return h.closePagesOnError(param.Ctx, err)
+			return h.closePagesOnError(param.Ctx, vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n)))
 		}
 
 		accepted := n
@@ -366,26 +368,25 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 				accepted = 0
 			}
 			if accepted < n {
-				rollbackRows(checkpoints, n)
+				if rollbackErr := rollbackRows(checkpoints, n); rollbackErr != nil {
+					return rollbackErr
+				}
 				warnings.Reset()
 				if accepted > 0 {
 					for _, row := range rowBuf[:accepted] {
 						if err := h.processNestedRow(row, bat, param, proc); err != nil {
-							rollbackRows(checkpoints, accepted)
-							return err
+							return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, accepted))
 						}
 					}
 					if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(accepted)); err != nil {
-						rollbackRows(checkpoints, accepted)
-						return h.closePagesOnError(param.Ctx, err)
+						return h.closePagesOnError(param.Ctx, vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, accepted)))
 					}
 				}
 				// The row reader has already decoded n rows. Rewind the unread
 				// suffix so the next batch starts at the same logical row as the
 				// scalar page offsets.
 				if err := h.rowReader.SeekToRow(rowStart + int64(length+accepted)); err != nil {
-					rollbackRows(checkpoints, accepted)
-					return moerr.ConvertGoError(param.Ctx, err)
+					return vector.JoinAppendRollbackError(moerr.ConvertGoError(param.Ctx, err), rollbackRows(checkpoints, accepted))
 				}
 				batchBoundary = true
 			}

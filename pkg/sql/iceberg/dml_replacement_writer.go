@@ -30,6 +30,7 @@ import (
 )
 
 type DMLReplacementDataFilesRequest struct {
+	ParquetOptions      icebergwrite.ParquetOptions
 	TableLocation       string
 	Operation           dml.Operation
 	Base                dml.CommitBase
@@ -86,6 +87,7 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 		writerID += "-" + strconv.Itoa(req.FileSequence)
 	}
 	writer, err := icebergwrite.NewFanoutParquetDataWriter(ctx, icebergwrite.FanoutWriterConfig{
+		ParquetOptions:      req.ParquetOptions,
 		Schema:              req.Schema,
 		PartitionSpec:       req.PartitionSpec,
 		TableLocation:       tableLocation,
