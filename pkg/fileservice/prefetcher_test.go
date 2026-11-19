@@ -563,6 +563,41 @@ func TestPrefetcherDeferredRequestsBounded(t *testing.T) {
 	require.Equal(t, int64(10), e.next.Size, "a request past the queues' bytes is not kept")
 }
 
+// The requests deferred behind several running downloads share the queues' bytes, and
+// release them once queued or dropped.
+func TestPrefetcherDeferredRequestsShareQueueBytes(t *testing.T) {
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- struct{}{}
+		<-release
+	}
+	p := newPrefetcher(2, func() int64 { return 100 }, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	for _, f := range []string{"a", "b"} {
+		p.add(ObjectPrefetch{FilePath: f, Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+		<-started
+	}
+	for _, f := range []string{"a", "b"} {
+		p.add(ObjectPrefetch{FilePath: f, Size: 60, Ranges: []PrefetchRange{{Offset: 100, Size: 60}}})
+	}
+	p.mu.Lock()
+	require.NotNil(t, p.entries["a"].next)
+	require.Nil(t, p.entries["b"].next, "the second request is past the queues' bytes")
+	require.Equal(t, int64(60), p.queuedBytesLocked())
+	p.mu.Unlock()
+	require.False(t, p.remove("a"))
+	p.mu.Lock()
+	require.Equal(t, int64(0), p.queuedBytesLocked(), "a dropped deferred request releases its bytes")
+	p.mu.Unlock()
+	p.add(ObjectPrefetch{FilePath: "b", Size: 60, Ranges: []PrefetchRange{{Offset: 100, Size: 60}}})
+	close(release)
+	<-started
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Equal(t, int64(0), p.deferred, "a queued deferred request moves its bytes to the queue")
+}
+
 // A delete of an object being downloaded drops what later requests asked for beyond the
 // download: nothing is downloaded after it.
 func TestPrefetcherRemoveDropsDeferredRequest(t *testing.T) {

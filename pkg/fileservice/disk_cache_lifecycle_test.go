@@ -1969,3 +1969,40 @@ func TestDiskCacheAsyncCallbacksFollowSubmissionOrder(t *testing.T) {
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	require.Equal(t, []string{"first", "second"}, order)
 }
+
+// Updates that end without running their callbacks, behind a blocked callback, hold
+// neither an admission slot nor a place in the callback order.
+func TestDiskCacheAsyncSkippedCallbacksNotRetained(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	ctx := context.Background()
+	entryOf := func(name string) *IOVector {
+		return &IOVector{FilePath: name, Entries: []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}}}
+	}
+	require.NoError(t, cache.Update(ctx, entryOf("kept"), false))
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	require.NoError(t, cache.Update(OnDiskCacheWritten(ctx, func(string, IOEntry) {
+		close(blocked)
+		<-release
+	}), entryOf("first"), true))
+	<-blocked
+	var skippedRan atomic.Int32
+	skipped := OnDiskCacheWritten(ctx, func(string, IOEntry) { skippedRan.Add(1) })
+	for range 16 {
+		require.NoError(t, cache.Update(skipped, entryOf("kept"), true))
+		cache.flushAsyncUpdates(ctx)
+	}
+	cache.async.callbackMu.Lock()
+	turns := 0
+	for turn := cache.async.callbackHead; turn != nil; turn = turn.next {
+		turns++
+	}
+	cache.async.callbackMu.Unlock()
+	require.Equal(t, 1, turns, "only the blocked update keeps its turn")
+	require.Equal(t, 1, len(cache.async.slots), "only the blocked update keeps its slot")
+	unblock()
+	require.Eventually(t, func() bool { return len(cache.async.slots) == 0 }, diskCacheLifecycleTestTimeout, time.Millisecond)
+	require.Zero(t, skippedRan.Load())
+}

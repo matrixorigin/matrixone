@@ -252,6 +252,7 @@ type prefetcher struct {
 	prefetch fetchQueue // downloads ahead of the reads
 	live     fetchQueue // downloads a read waits for
 	entries  map[string]*prefetchEntry
+	deferred int64 // bytes of the requests deferred behind running downloads
 	seq      uint64
 	closed   bool
 	wg       sync.WaitGroup
@@ -291,10 +292,12 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			if e.next != nil {
 				next, kept = e.next.merge(req), e.next.Size
 			}
-			if grow := next.Size - kept; grow > 0 && p.queuedBytesLocked()+next.Size > p.limit() {
+			grow := next.Size - kept
+			if grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
 				metric.FSPrefetchDroppedCounter.Inc()
 				return
 			}
+			p.deferred += grow
 			e.next = &next
 			e.nextScans = slices.DeleteFunc(e.nextScans, func(s *PrefetchScan) bool { return !s.live() })
 			if !slices.Contains(e.nextScans, req.Scan) {
@@ -355,9 +358,20 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.startLocked()
 }
 
-// queuedBytesLocked returns the bytes of the downloads both queues hold.
+// queuedBytesLocked returns the bytes of the downloads both queues hold and of the
+// requests deferred behind running downloads.
 func (p *prefetcher) queuedBytesLocked() int64 {
-	return p.prefetch.bytes + p.live.bytes
+	return p.prefetch.bytes + p.live.bytes + p.deferred
+}
+
+// takeDeferredLocked returns the request deferred behind e and its scans, and clears them.
+func (p *prefetcher) takeDeferredLocked(e *prefetchEntry) (*ObjectPrefetch, []*PrefetchScan) {
+	next, scans := e.next, e.nextScans
+	if next != nil {
+		p.deferred -= next.Size
+	}
+	e.next, e.nextScans = nil, nil
+	return next, scans
 }
 
 func (p *prefetcher) forgetLocked(e *prefetchEntry) {
@@ -412,7 +426,7 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 				p.forgetLocked(e)
 				q.running--
 				e.start()
-				next, scans := e.next, e.nextScans
+				next, scans := p.takeDeferredLocked(e)
 				p.startLocked()
 				p.mu.Unlock()
 				if next != nil {
@@ -451,7 +465,7 @@ func (p *prefetcher) remove(filePath string) bool {
 	}
 	if e.queue == nil {
 		// The running download's deferred request is not queued after it ends.
-		e.next, e.nextScans = nil, nil
+		p.takeDeferredLocked(e)
 		return false
 	}
 	p.removeLocked(e)

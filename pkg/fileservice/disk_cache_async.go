@@ -54,13 +54,19 @@ type diskCacheAsyncUpdate struct {
 	diskPath  string
 	entry     IOEntry
 	callbacks []OnDiskCacheWrittenFunc
-	// callbacksAfter is closed once the callbacks of the updates submitted before this
-	// one ran; callbacksDone is closed once this update's ran or it ended without them.
-	callbacksAfter chan struct{}
-	callbacksDone  chan struct{}
-	finalize       *diskCacheAsyncFileFinalize
-	releaseOnce    sync.Once
-	resourceOnce   sync.Once
+	// callbackTurn is the update's place in the submission order of callbacks.
+	callbackTurn *asyncCallbackTurn
+	finalize     *diskCacheAsyncFileFinalize
+	releaseOnce  sync.Once
+	resourceOnce sync.Once
+}
+
+// asyncCallbackTurn is an update with callbacks, linked in submission order. An update
+// that ends without running its callbacks is unlinked; the head runs once ready.
+type asyncCallbackTurn struct {
+	prev, next *asyncCallbackTurn
+	job        *diskCacheAsyncUpdate
+	ready      bool
 }
 
 type diskCacheAsyncFileFinalize struct {
@@ -78,11 +84,13 @@ type diskCacheAsyncState struct {
 	slots  chan struct{}
 	done   chan struct{}
 
-	startOnce    sync.Once
-	closeOnce    sync.Once
-	submitters   sync.WaitGroup
-	callbackMu   sync.Mutex
-	callbackTail chan struct{}
+	startOnce       sync.Once
+	closeOnce       sync.Once
+	submitters      sync.WaitGroup
+	callbackMu      sync.Mutex
+	callbackHead    *asyncCallbackTurn
+	callbackTail    *asyncCallbackTurn
+	callbackRunning bool
 
 	mu struct {
 		sync.Mutex
@@ -132,8 +140,6 @@ func (d *DiskCache) initAsyncUpdates() {
 	d.async.mu.maxPendingBytes = diskCacheAsyncMaxPendingBytes
 	d.async.mu.idle = make(chan struct{})
 	close(d.async.mu.idle)
-	d.async.callbackTail = make(chan struct{})
-	close(d.async.callbackTail)
 }
 
 func (d *DiskCache) initWriteFailureState() {
@@ -293,9 +299,15 @@ func (d *DiskCache) scheduleAsyncUpdate(
 		callbacks: append([]OnDiskCacheWrittenFunc(nil), callbacks...),
 	}
 	if len(callbacks) > 0 {
+		turn := &asyncCallbackTurn{job: job}
+		job.callbackTurn = turn
 		a.callbackMu.Lock()
-		job.callbacksAfter, job.callbacksDone = a.callbackTail, make(chan struct{})
-		a.callbackTail = job.callbacksDone
+		if turn.prev = a.callbackTail; turn.prev != nil {
+			turn.prev.next = turn
+		} else {
+			a.callbackHead = turn
+		}
+		a.callbackTail = turn
 		a.callbackMu.Unlock()
 	}
 	select {
@@ -476,10 +488,7 @@ func (d *DiskCache) runAsyncUpdates() {
 			}
 			d.completeAsyncUpdate(job, retainForCallbacks)
 			if retainForCallbacks {
-				// The original admission slot and byte budget stay owned by this
-				// callback goroutine. Callbacks are therefore independent of the
-				// cache worker/Flush/Close wait graph, while blocked callbacks remain
-				// bounded by the same admission limits as cache updates.
+				// The update keeps its admission slot and bytes until its callbacks ran.
 				d.scheduleAsyncUpdateCallbacks(job)
 			}
 		}
@@ -513,11 +522,8 @@ func (d *DiskCache) completeAsyncUpdate(
 				_ = d.observeWriteResult(job.diskPath, cleanupErr)
 			}
 		}
-		if !retainForCallbacks && job.callbacksDone != nil {
-			go func() {
-				<-job.callbacksAfter
-				close(job.callbacksDone)
-			}()
+		if !retainForCallbacks && job.callbackTurn != nil {
+			d.endCallbackTurn(job.callbackTurn)
 		}
 		a := &d.async
 		a.mu.Lock()
@@ -535,14 +541,68 @@ func (d *DiskCache) completeAsyncUpdate(
 // scheduleAsyncUpdateCallbacks runs the callbacks of job once those of the updates
 // submitted before it ran.
 func (d *DiskCache) scheduleAsyncUpdateCallbacks(job *diskCacheAsyncUpdate) {
-	go func() {
-		defer close(job.callbacksDone)
-		defer d.releaseAsyncUpdateResources(job)
-		<-job.callbacksAfter
+	a := &d.async
+	a.callbackMu.Lock()
+	defer a.callbackMu.Unlock()
+	job.callbackTurn.ready = true
+	d.startCallbacksLocked()
+}
+
+// endCallbackTurn unlinks the turn of an update that ends without running its callbacks.
+func (d *DiskCache) endCallbackTurn(turn *asyncCallbackTurn) {
+	a := &d.async
+	a.callbackMu.Lock()
+	defer a.callbackMu.Unlock()
+	d.unlinkCallbackTurnLocked(turn)
+	d.startCallbacksLocked()
+}
+
+func (d *DiskCache) unlinkCallbackTurnLocked(turn *asyncCallbackTurn) {
+	a := &d.async
+	if turn.prev != nil {
+		turn.prev.next = turn.next
+	} else {
+		a.callbackHead = turn.next
+	}
+	if turn.next != nil {
+		turn.next.prev = turn.prev
+	} else {
+		a.callbackTail = turn.prev
+	}
+	turn.prev, turn.next = nil, nil
+}
+
+// startCallbacksLocked starts the runner of callbacks when none runs and the head is ready.
+func (d *DiskCache) startCallbacksLocked() {
+	a := &d.async
+	if a.callbackRunning || a.callbackHead == nil || !a.callbackHead.ready {
+		return
+	}
+	a.callbackRunning = true
+	go d.runAsyncCallbacks()
+}
+
+// runAsyncCallbacks runs the callbacks of the ready head turns, in submission order.
+func (d *DiskCache) runAsyncCallbacks() {
+	a := &d.async
+	for {
+		a.callbackMu.Lock()
+		turn := a.callbackHead
+		if turn == nil || !turn.ready {
+			a.callbackRunning = false
+			a.callbackMu.Unlock()
+			return
+		}
+		a.callbackMu.Unlock()
+		job := turn.job
 		for i, fn := range job.callbacks {
 			d.runAsyncUpdateCallback(job, i, fn)
 		}
-	}()
+		d.releaseAsyncUpdateResources(job)
+		a.callbackMu.Lock()
+		d.unlinkCallbackTurnLocked(turn)
+		a.callbackMu.Unlock()
+	}
 }
 
 // runAsyncUpdateCallback is the panic boundary for callbacks moved from the
