@@ -303,6 +303,12 @@ SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits, BIT_COUNT(CAST(d AS D
 SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 64 AND BIT_COUNT(d) = 64 ORDER BY id;
 SELECT id, BIT_COUNT(SUM(d) OVER(PARTITION BY id)) AS sum_bits, BIT_COUNT(AVG(d) OVER(PARTITION BY id)) AS avg_bits FROM t_bit_count_float ORDER BY id;
 
+# A same-block group key retains the conversion of its original expression.
+SELECT d, BIT_COUNT(CAST(d AS DOUBLE)) AS bits FROM t_bit_count_float WHERE id IN (1,4,5) GROUP BY d, CAST(d AS DOUBLE) ORDER BY d;
+SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float GROUP BY d, CAST(d AS DOUBLE) HAVING BIT_COUNT(CAST(d AS DOUBLE)) = 2 ORDER BY x;
+SELECT d, BIT_COUNT(d) AS bits FROM t_bit_count_float WHERE id IN (1,4) GROUP BY d ORDER BY d;
+SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 GROUP BY CAST(d AS DOUBLE)) s;
+
 # Merged projection forwards the CAST; LIMIT makes the projected value a field.
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
