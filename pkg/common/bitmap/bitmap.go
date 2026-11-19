@@ -37,31 +37,6 @@ type bitmask = uint64
 
 const MarshalHeaderSize = 24
 
-/*
- * Array giving the position of the right-most set bit for each possible
- * byte value. count the right-most position as the 0th bit, and the
- * left-most the 7th bit.  The 0th entry of the array should not be used.
- * e.g. 2 = 0x10 ==> rightmost_one_pos_8[2] = 1, 3 = 0x11 ==> rightmost_one_pos_8[3] = 0
- */
-var rightmost_one_pos_8 = [256]uint8{
-	0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-}
-
 func (n *Bitmap) InitWith(m *Bitmap) {
 	if n == m {
 		return
@@ -98,80 +73,49 @@ func (n *Bitmap) Iterator() Iterator {
 // callers. Iterator keeps its interface return type for compatibility, while
 // callers on hot paths can keep the iterator on their own stack.
 func (n *Bitmap) IteratorValue() BitmapIterator {
-	// When initialization, the itr.i is set to the first rightmost_one position.
-	itr := BitmapIterator{i: 0, bm: n}
-	if pos, has_next := itr.hasNext(0); has_next {
-		itr.i = pos
-		itr.has_next = true
-		return itr
-	}
-	itr.has_next = false
+	itr := BitmapIterator{bm: n}
+	itr.i = itr.nextSet(0)
 	return itr
 }
 
-func rightmost_one_pos_64(word uint64) uint64 {
-	// find out the rightmost_one position.
-	// Firstly, use eight bits as a group to quickly determine whether there is a 1 in it.
-	// if not, then rightmost_one exists in next group, add up the distance with result and shift the word
-	// if rightmost_one exists in this group, get the distance directly from a pre-made hash table
-	var res uint64
-	for {
-		if (word & 0xFF) == 0 {
-			word >>= 8
-			res += 8
-		} else {
-			break
-		}
+// nextSet returns the position of the first set bit at or after i, or numBits
+// if there is none. Bits at or beyond numBits are never read, and words missing
+// from data read as zero.
+func (itr *BitmapIterator) nextSet(i uint64) uint64 {
+	end := uint64(itr.bm.numBits)
+	if i >= end {
+		return end
 	}
-	res += uint64(rightmost_one_pos_8[word&255])
-	return res
+	nwords := min((end+63)/64, uint64(len(itr.bm.data)))
+	mask := ^bitmask(0) << (i & 63)
+	for word := i >> 6; word < nwords; word++ {
+		if v := itr.bm.data[word] & mask; v != 0 {
+			return min(word*64+uint64(bits.TrailingZeros64(v)), end)
+		}
+		mask = ^bitmask(0)
+	}
+	return end
 }
 
-func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
-	// if the uint64 is 0, move forward to next word
-	// if the uint64 is not 0, then calculate the rightest_one position in a word, add up prev result and return.
-	// when there is 1 in Bitmap, return true, otherwise Bitmap is empty and return false.
-	// either case loop over words not bits
-	nwords := (itr.bm.numBits + 63) / 64
-	current_word := i >> 6
-	mask := (^(bitmask)(0)) << (i & 0x3F) // ignore bits check before
-	var result uint64
-
-	for ; current_word < uint64(nwords); current_word++ {
-		word := itr.bm.data[current_word]
-		word &= mask
-
-		if word != 0 {
-			result = rightmost_one_pos_64(word) + current_word*64
-			return result, true
-		}
-		mask = (^(bitmask)(0)) // in subsequent words, consider all bits
-	}
-	return result, false
-}
-
+// HasNext reports whether another set bit remains. An exhausted iterator has
+// i == numBits.
 func (itr *BitmapIterator) HasNext() bool {
-	// maintain a bool var to avoid unnecessary calculations.
-	return itr.has_next
+	return itr.i < uint64(itr.bm.numBits)
 }
 
+// PeekNext returns the next set bit without advancing, or 0 if there is none.
 func (itr *BitmapIterator) PeekNext() uint64 {
-	if itr.has_next {
+	if itr.HasNext() {
 		return itr.i
 	}
 	return 0
 }
 
+// Next returns the next set bit and advances. Call it only after HasNext
+// returns true.
 func (itr *BitmapIterator) Next() uint64 {
-	// When a iterator is initialized, the itr.i is set to the first rightmost_one pos.
-	// so current itr.i is a rightmost_one pos, cal the next one pos and return current pos.
 	res := itr.i
-	if next, has_next := itr.hasNext(itr.i + 1); has_next { // itr.i + 1 to ignore bits check before
-		itr.i = next
-		itr.has_next = true
-		return res
-	}
-	itr.has_next = false
+	itr.i = itr.nextSet(res + 1)
 	return res
 }
 

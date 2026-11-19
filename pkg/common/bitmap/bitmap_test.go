@@ -418,3 +418,35 @@ func TestBitmapPrepareUnmarshal(t *testing.T) {
 	)
 	require.Error(t, err)
 }
+
+func TestBitmapIteratorBounds(t *testing.T) {
+	collect := func(n *Bitmap) []uint64 {
+		var got []uint64
+		itr := n.IteratorValue()
+		for itr.HasNext() {
+			got = append(got, itr.Next())
+		}
+		require.False(t, itr.HasNext())
+		require.Zero(t, itr.PeekNext())
+		return got
+	}
+
+	var empty Bitmap
+	require.Nil(t, collect(&empty))
+
+	// Set bits at or beyond numBits are never returned.
+	stray := Bitmap{numBits: 70, data: []uint64{1 << 3, 1<<5 | 1<<6 | 1<<63}}
+	require.Equal(t, []uint64{3, 69}, collect(&stray))
+	stray.numBits = 69
+	require.Equal(t, []uint64{3}, collect(&stray))
+
+	// Words missing from data read as zero.
+	short := Bitmap{numBits: 200, data: []uint64{1 << 1}}
+	require.Equal(t, []uint64{1}, collect(&short))
+
+	full := newBm(130)
+	full.AddMany([]uint64{0, 63, 64, 127, 128, 129})
+	itr := full.IteratorValue()
+	require.Equal(t, uint64(0), itr.PeekNext())
+	require.Equal(t, []uint64{0, 63, 64, 127, 128, 129}, collect(full))
+}

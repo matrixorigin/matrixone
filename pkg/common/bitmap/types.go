@@ -30,7 +30,7 @@ type Bitmap struct {
 }
 
 type BitmapIterator struct {
-	i        uint64
-	bm       *Bitmap
-	has_next bool
+	// i is the position of the next set bit, or bm.numBits when exhausted.
+	i  uint64
+	bm *Bitmap
 }
