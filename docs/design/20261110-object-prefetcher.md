@@ -148,7 +148,7 @@ download of its object does not download is queued once that download ends (deci
 2026-11-18, v9): before, it was counted as merged and lost, and its scan read those
 columns block by block. Such a request is kept only within the queue's bytes, which the
 requests deferred behind all running downloads count toward, and only for scans that have
-not ended; one whose scans all ended gives up its bytes to a request that needs them.
+not ended; one whose scans all ended gives up its bytes to a request that needs them, before a live queued download is dropped, and is not merged into a later request.
 
 Share comes before due time because a download of an object read only in part
 displaces more useful bytes from the cache. A read that reaches such an object first
@@ -322,8 +322,8 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
-| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
-| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; one prefetch downloads at most 4 ranges at once, and counts as started once its first ranges are under way; the object-storage connections they hold count with whole-object downloads |
+| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed; a prefetch of ranges counts as started once its first ranges are under way, so a read that joined it waits only for its own range; each MemoryPrefetchObject of a prefetch holds one of the object-storage connections downloads may hold while it reads |
+| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; one prefetch downloads at most 4 ranges at once, starts none once its object was deleted, and counts as started once its first ranges are under way; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
 | Cache files kept open for reads, and paths found without a file | the disk cache, and apart the index-file cache | `disk-open-files-max` files each, default 128, 0 keeping none and noting no path missing; past it the least recently read file no read holds is closed; a change or eviction of a path closes its file once no read holds it; a path found without a file is not opened again until it changes, with a fixed number of such paths, forgotten when full; the bound counts against the process's open-file limit, shared by every service of a process, which it must stay well below; warm TPC-H SF10 read as fast at 128 as at 512 or 1024 (decision 2026-11-18, v9: column ranges are cached as separate files, and warm reads opened each again) |

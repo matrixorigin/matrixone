@@ -375,7 +375,7 @@ func (d *DiskCache) prefetchRead(
 	// registered until its range file is cached, so no read reads it again. A run
 	// outlives the read that starts it, which may return before its last bytes arrive.
 	for i, r := range runs {
-		go d.runFlight(ctx, filePath, diskPath, policy, r.flight, open, closing)
+		go d.runFlight(ctx, filePath, diskPath, policy, r.flight, open, closing, false)
 		for j := r.first; j <= r.last; j++ {
 			if blocks[j].needed {
 				blocks[j].state, blocks[j].object = blockInFlight, runs[i].flight
@@ -519,7 +519,7 @@ func (d *DiskCache) fetchRange(
 	}
 	defer o.release()
 	if started != nil {
-		go d.runFlight(ctx, filePath, diskPath, policy, started, open, closing)
+		go d.runFlight(ctx, filePath, diskPath, policy, started, open, closing, false)
 	}
 	// A prefetch object that failed to read the bytes fails the read; one that ended
 	// without them leaves the read to the caller.
@@ -543,11 +543,12 @@ func (d *DiskCache) runFlight(
 	fl *memoryPrefetchObject,
 	open rangeOpener,
 	closing context.Context,
+	background bool,
 ) {
 	defer d.prefetchObjects.reads.Done()
 	defer fl.cancelRead()
 	defer context.AfterFunc(closing, fl.cancelRead)()
-	err := fl.read(fl.ctx, open)
+	err := d.readFlight(fl, open, background)
 	content := fl.content()
 	if err == nil && len(content) == 0 {
 		err = io.ErrUnexpectedEOF
@@ -565,6 +566,18 @@ func (d *DiskCache) runFlight(
 	fl.release()
 }
 
+// readFlight reads the range of fl through open. A background flight holds one of the
+// connections downloads may hold while it reads, so it leaves range reads theirs.
+func (d *DiskCache) readFlight(fl *memoryPrefetchObject, open rangeOpener, background bool) error {
+	if background && d.maxDownloadConns > 0 {
+		if err := d.waitDownloadConns(fl.ctx, 1); err != nil {
+			return err
+		}
+		defer d.releaseDownloadConns(1)
+	}
+	return fl.read(fl.ctx, open)
+}
+
 // errPrefetchClosed is the error of a prefetch the disk cache closed on before it read all
 // its ranges.
 var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache closed during a prefetch")
@@ -574,7 +587,8 @@ var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache clo
 // the error of a flight that did not cache its range. A range a flight already reads is
 // waited for, not read again. Ranges that would pass the bytes of the flights under way
 // wait until they fit, or no flight is under way; a range cached meanwhile is not read.
-// The download counts as started once every range is under way. It reports false,
+// The download counts as started once its first ranges are under way: a read of a range
+// not yet under way reads its own bytes. It reports false,
 // reading nothing, when the cache is closed before a range is under way, and
 // errPrefetchClosed when it closes after.
 func (d *DiskCache) readRanges(
@@ -588,6 +602,7 @@ func (d *DiskCache) readRanges(
 	key := d.rangeObjectKey(filePath)
 	f := &d.prefetchObjects
 	budget := d.flightBytes()
+	started := sync.OnceFunc(func() { downloadStarted(ctx) })
 	var objects []prefetchObject
 	for waited := false; len(ranges) > 0; waited = true {
 		f.mu.Lock()
@@ -634,7 +649,10 @@ func (d *DiskCache) readRanges(
 		}
 		f.mu.Unlock()
 		for _, fl := range flights {
-			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing)
+			go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing, true)
+		}
+		if len(objects) > 0 {
+			started()
 		}
 		ranges = rest
 		if len(rest) == 0 {
@@ -647,7 +665,7 @@ func (d *DiskCache) readRanges(
 		}
 		budget = d.flightBytes()
 	}
-	downloadStarted(ctx)
+	started()
 	if err := waitFlights(ctx, objects); err != nil {
 		return true, err
 	}

@@ -861,7 +861,9 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	}
 	goroutines := runtime.NumGoroutine()
 	done := make(chan error, 1)
-	go func() { done <- fs.prefetchFiles(context.Background(), "object", ranges, open) }()
+	go func() {
+		done <- fs.prefetchFiles(context.Background(), "object", fs.diskCache.deletes.now(), ranges, open)
+	}()
 	release := sync.OnceFunc(func() { close(gate) })
 	defer release()
 	inFlight := func() int {
@@ -882,4 +884,112 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 		_, ok := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
 		require.True(t, ok, "range %d cached", r.Offset)
 	}
+}
+
+// gatedOpener opens ranges of data once gate is closed, and counts the opens under way and
+// in all.
+type gatedOpener struct {
+	data             []byte
+	gate             chan struct{}
+	mu               sync.Mutex
+	cur, most, total int
+}
+
+func (g *gatedOpener) open(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+	g.mu.Lock()
+	g.cur++
+	g.total++
+	g.most = max(g.most, g.cur)
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.cur--
+		g.mu.Unlock()
+	}()
+	select {
+	case <-g.gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return io.NopCloser(bytes.NewReader(g.data[start:end])), nil
+}
+
+func (g *gatedOpener) counts() (cur, most, total int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cur, g.most, g.total
+}
+
+// A prefetch of ranges is joinable once its first ranges are under way, while others wait
+// for the bytes of the flights.
+func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 64<<10)
+	fs.diskCache.prefetchFlightBytes = 1
+	g := &gatedOpener{data: data, gate: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	started := make(chan struct{})
+	ctx := withDownloadStarted(context.Background(), sync.OnceFunc(func() { close(started) }))
+	done := make(chan error, 1)
+	go func() {
+		_, err := fs.diskCache.readRanges(ctx, "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
+			[]PrefetchRange{{Offset: 0, Size: 1 << 10}, {Offset: 32 << 10, Size: 1 << 10}}, g.open)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not joinable while a range waits for the flights' bytes")
+	}
+	release()
+	require.NoError(t, <-done)
+}
+
+// The flights of a background prefetch of ranges hold at most the connections downloads
+// may hold.
+func TestReadRangesHoldDownloadConnections(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	fs.diskCache.maxDownloadConns = 2
+	g := &gatedOpener{data: data, gate: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	ranges := make([]PrefetchRange, 0, 8)
+	for i := range 8 {
+		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := fs.diskCache.readRanges(context.Background(), "object", SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
+		done <- err
+	}()
+	inFlight := func() int { cur, _, _ := g.counts(); return cur }
+	require.Eventually(t, func() bool { return inFlight() == 2 }, 5*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return inFlight() > 2 }, 100*time.Millisecond, time.Millisecond)
+	release()
+	require.NoError(t, <-done)
+	_, most, total := g.counts()
+	require.Equal(t, 2, most)
+	require.Equal(t, 8, total)
+	require.Zero(t, fs.diskCache.downloadConns.Load())
+}
+
+// A prefetch of ranges to files starts no range once its object was deleted.
+func TestPrefetchFilesStopAfterDelete(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	g := &gatedOpener{data: data, gate: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	ranges := make([]PrefetchRange, 0, 14)
+	for i := range 14 {
+		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
+	}
+	deletes := fs.diskCache.deletes.now()
+	done := make(chan error, 1)
+	go func() { done <- fs.prefetchFiles(context.Background(), "object", deletes, ranges, g.open) }()
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
+	fs.diskCache.deletes.deleted(fs.diskCache.pathForFile("object"))
+	release()
+	require.ErrorIs(t, <-done, errPrefetchDeleted)
+	_, _, total := g.counts()
+	require.Equal(t, prefetchFilesAtOnce, total, "no range starts after the delete")
 }

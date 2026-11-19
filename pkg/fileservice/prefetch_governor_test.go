@@ -262,7 +262,7 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 
 // A cold column prefetch of more ranges than the flight bytes hold reads only the ranges
 // that fit, the first one at least; the others wait, and once storage answers every range
-// is read once. The download counts as started only once every range is under way.
+// is read once. The download counts as started, once, when its first ranges are under way.
 func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	const (
 		unit   = 64 << 10
@@ -303,7 +303,7 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	inMemory := f.bytes
 	f.mu.Unlock()
 	require.LessOrEqual(t, inMemory, budget)
-	require.Zero(t, started.Load(), "not started while ranges wait")
+	require.Equal(t, int64(1), started.Load(), "started while ranges wait")
 
 	close(release)
 	select {

@@ -626,6 +626,44 @@ func TestPrefetcherEndedDeferredRequestYieldsBytes(t *testing.T) {
 	require.Empty(t, p.deferredOf)
 }
 
+// A request for a running download does not take over what scans that all ended asked to
+// defer behind it, and the bytes of ended deferred requests make room before a live queued
+// download is dropped.
+func TestPrefetcherEndedDeferredRequestNotInherited(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 100 }, func(ObjectPrefetch) bool { return false }, run)
+	defer p.close(context.Background())
+	defer close(release)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}})
+	require.Equal(t, "a", <-started)
+	ended := &PrefetchScan{}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 80, Ranges: []PrefetchRange{{Offset: 100, Size: 80}}, Scan: ended})
+	ended.End()
+	live := &PrefetchScan{}
+	p.add(ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 500, Size: 1}}, Scan: live})
+	func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		require.Equal(t, int64(1), p.entries["a"].next.Size, "the ended request is dropped, not merged")
+		require.Equal(t, int64(1), p.deferred)
+	}()
+
+	p.add(ObjectPrefetch{FilePath: "a", Size: 79, Ranges: []PrefetchRange{{Offset: 1000, Size: 79}}, Scan: live})
+	live.End()
+	p.add(ObjectPrefetch{FilePath: "b", Size: 20, Due: 20, Ranges: []PrefetchRange{{Offset: 0, Size: 20}}, Scan: &PrefetchScan{}})
+	p.add(ObjectPrefetch{FilePath: "c", Size: 20, Due: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 20}}, Scan: &PrefetchScan{}})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Contains(t, p.entries, "b", "the live queued download stays")
+	require.Contains(t, p.entries, "c")
+	require.Zero(t, p.deferred)
+}
+
 // A delete of an object being downloaded drops what later requests asked for beyond the
 // download: nothing is downloaded after it.
 func TestPrefetcherRemoveDropsDeferredRequest(t *testing.T) {
