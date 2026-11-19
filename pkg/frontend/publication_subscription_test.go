@@ -40,29 +40,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+type publicationSQLMock struct {
+	*mock_frontend.MockBackgroundExec
+}
+
+func (m publicationSQLMock) execWithProcessHook(ctx context.Context, sql string, _ backExecProcessHook) error {
+	return m.Exec(ctx, sql)
+}
+
 func mockPublicationTargetRows(bh *backgroundExecTest, ids ...int32) {
 	rows := make([][]interface{}, 0, len(ids))
 	for _, id := range ids {
 		rows = append(rows, []interface{}{int64(id)})
 	}
-	bh.sql2result["select account_id from mo_catalog.mo_account where account_id in ("+pubsub.JoinAccountIds(ids)+") for share"] =
-		newMrsForRestoreStringRows([]string{"account_id"}, rows)
+	sql := "select account_id from mo_catalog.mo_account where account_id in (" + pubsub.JoinAccountIds(ids) + ")"
+	bh.sql2result[sql] = newMrsForRestoreStringRows([]string{"account_id"}, rows)
+	bh.sql2result[sql+" for share"] = bh.sql2result[sql]
 }
 
 func TestLockPublicationTargetAccounts(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	bh := &backgroundExecTest{}
 	bh.init()
-	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, nil))
-	const query = "select account_id from mo_catalog.mo_account where account_id in (3,8) for share"
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, nil, false))
+	const query = "select account_id from mo_catalog.mo_account where account_id in (3,8)"
 	targets := map[int32]*pubsub.AccountInfo{8: {Id: 8}, 3: {Id: 3}}
 	mockPublicationTargetRows(bh, 3, 8)
-	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets))
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets, true))
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets, false))
 	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(3)}})
-	require.True(t, moerr.IsMoErrCode(lockPublicationTargetAccounts(ctx, bh, targets), moerr.ErrTxnNeedRetry))
+	require.True(t, moerr.IsMoErrCode(lockPublicationTargetAccounts(ctx, bh, targets, false), moerr.ErrTxnNeedRetry))
 	fail := errors.New("locking read failed")
 	bh.sql2err[query] = fail
-	require.ErrorIs(t, lockPublicationTargetAccounts(ctx, bh, targets), fail)
+	require.ErrorIs(t, lockPublicationTargetAccounts(ctx, bh, targets, false), fail)
 }
 
 func TestIsUserDatabaseType(t *testing.T) {
@@ -501,7 +511,7 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 				}
 			}
 			ctrl := gomock.NewController(t)
-			exec := mock_frontend.NewMockBackgroundExec(ctrl)
+			exec := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 			exec.EXPECT().Close().Times(1)
 			exec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(bh.Exec).AnyTimes()
 			exec.EXPECT().GetExecResultSet().DoAndReturn(bh.GetExecResultSet).AnyTimes()
@@ -779,7 +789,7 @@ func Test_doAlterPublication(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -892,7 +902,7 @@ func Test_doAlterPublication2(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
