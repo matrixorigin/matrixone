@@ -120,9 +120,6 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateJSONAggregateOpaquePipelineProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
 	return p.Marshal()
 }
 
@@ -148,9 +145,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		return nil, err
 	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateJSONAggregateOpaqueDestination(proc, p); err != nil {
 		return nil, err
 	}
 	features, err := pipelineExpressionFeatures(p)
@@ -326,9 +320,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateJSONAggregateOpaquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
@@ -994,9 +985,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
 			return ctxId, nil, err
 		}
-		if err := validateJSONAggregateOpaqueAggregateProtocol(proc, t.Aggs); err != nil {
-			return ctxId, nil, err
-		}
 		in.Agg = &pipeline.Group{
 			NeedEval:        t.NeedEval,
 			SpillMem:        t.SpillMem,
@@ -1127,9 +1115,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
 		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateJSONAggregateOpaqueAggregateProtocol(proc, t.Aggs); err != nil {
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{

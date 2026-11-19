@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -812,7 +811,6 @@ func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	protocolVersion := bytejson.MySQLOpaqueProtocolVersion
 	arrayInfo := multiAggInfo{
 		aggID:     AggIdOfJsonArrayAgg,
 		argTypes:  []types.Type{types.T_varbinary.ToType()},
@@ -824,14 +822,12 @@ func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(values, []byte{}, false, mp))
 
 	array := newJsonArrayAggExec(mp, arrayInfo)
-	ConfigureJSONAggregateOpaqueProtocol(array, protocolVersion)
 	require.NoError(t, array.GroupGrow(1))
 	require.NoError(t, array.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
 	var arrayWire bytes.Buffer
 	require.NoError(t, array.SaveIntermediateResult(1, [][]uint8{{1}}, &arrayWire))
 
 	arrayRestored := newJsonArrayAggExec(mp, arrayInfo)
-	ConfigureJSONAggregateOpaqueProtocol(arrayRestored, protocolVersion)
 	require.NoError(t, arrayRestored.UnmarshalFromReader(
 		bytes.NewReader(arrayWire.Bytes()), mp))
 	arrayResult, err := arrayRestored.Flush()
@@ -853,14 +849,12 @@ func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
 		emptyNull: true,
 	}
 	object := newJsonObjectAggExec(mp, objectInfo)
-	ConfigureJSONAggregateOpaqueProtocol(object, protocolVersion)
 	require.NoError(t, object.GroupGrow(1))
 	require.NoError(t, object.BatchFill(0, []uint64{1, 1}, []*vector.Vector{key, bitValues}))
 	var objectWire bytes.Buffer
 	require.NoError(t, object.SaveIntermediateResult(1, [][]uint8{{1}}, &objectWire))
 
 	objectRestored := newJsonObjectAggExec(mp, objectInfo)
-	ConfigureJSONAggregateOpaqueProtocol(objectRestored, protocolVersion)
 	require.NoError(t, objectRestored.UnmarshalFromReader(
 		bytes.NewReader(objectWire.Bytes()), mp))
 	objectResult, err := objectRestored.Flush()
@@ -887,7 +881,6 @@ func TestJSONOpaqueArrayDistinctUsesSourceValueEquality(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	protocolVersion := bytejson.MySQLOpaqueProtocolVersion
 	tests := []struct {
 		name     string
 		typ      types.Type
@@ -923,7 +916,6 @@ func TestJSONOpaqueArrayDistinctUsesSourceValueEquality(t *testing.T) {
 				argTypes: []types.Type{tc.typ}, retType: types.T_json.ToType(),
 				emptyNull: true,
 			})
-			ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.BatchFill(0,
 				[]uint64{1, 1, 1}, []*vector.Vector{values}))

@@ -150,10 +150,10 @@ func TestMySQLOpaqueSizeAppendMatchesBuild(t *testing.T) {
 		{name: "blob-tail", fieldType: 252, payload: []byte{0x00, 0x80}, want: "base64:type252:AIA="},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			size, err := MySQLOpaqueValueSize(MySQLOpaqueProtocolVersion, tc.fieldType, len(tc.payload))
+			size, err := MySQLOpaqueValueSize(tc.fieldType, len(tc.payload))
 			require.NoError(t, err)
 			appended, err := AppendMySQLOpaque(append([]byte(nil), sentinel...),
-				MySQLOpaqueProtocolVersion, tc.fieldType, tc.payload)
+				tc.fieldType, tc.payload)
 			require.NoError(t, err)
 			require.Len(t, appended, len(sentinel)+size)
 			require.Equal(t, sentinel, appended[:len(sentinel)])
@@ -170,13 +170,9 @@ func TestMySQLOpaqueSizeAppendMatchesBuild(t *testing.T) {
 	}
 
 	for _, payloadLen := range []int{-1, math.MaxInt} {
-		_, err := MySQLOpaqueValueSize(MySQLOpaqueProtocolVersion, 252, payloadLen)
+		_, err := MySQLOpaqueValueSize(252, payloadLen)
 		require.Error(t, err)
 	}
-	unchanged := append([]byte(nil), sentinel...)
-	appended, err := AppendMySQLOpaque(unchanged, MySQLOpaqueProtocolVersion-1, 252, []byte("x"))
-	require.Error(t, err)
-	require.Equal(t, sentinel, appended)
 }
 
 func TestMySQLOpaqueRequiresRollingUpgradeAdmission(t *testing.T) {

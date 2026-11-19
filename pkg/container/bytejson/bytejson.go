@@ -426,7 +426,12 @@ const (
 // must pass the minimum protocol version supported by every executing CN;
 // older readers compare tagged and legacy payloads differently.
 func NewMySQLOpaque(protocolVersion int64, fieldType uint8, payload []byte) (ByteJson, error) {
-	data, err := AppendMySQLOpaque(nil, protocolVersion, fieldType, payload)
+	if protocolVersion < MySQLOpaqueProtocolVersion {
+		return ByteJson{}, moerr.NewNotSupportedNoCtxf(
+			"MySQL binary JSON type tags require MORPC protocol version %d",
+			MySQLOpaqueProtocolVersion)
+	}
+	data, err := AppendMySQLOpaque(nil, fieldType, payload)
 	if err != nil {
 		return ByteJson{}, err
 	}
@@ -437,12 +442,7 @@ func NewMySQLOpaque(protocolVersion int64, fieldType uint8, payload []byte) (Byt
 // MySQL opaque scalar in binary JSON, including its type byte and string
 // envelope. It shares the same base64/tag contract as AppendMySQLOpaque while
 // avoiding construction of the encoded value.
-func MySQLOpaqueValueSize(protocolVersion int64, fieldType uint8, payloadLen int) (int, error) {
-	if protocolVersion < MySQLOpaqueProtocolVersion {
-		return 0, moerr.NewNotSupportedNoCtxf(
-			"MySQL binary JSON type tags require MORPC protocol version %d",
-			MySQLOpaqueProtocolVersion)
-	}
+func MySQLOpaqueValueSize(fieldType uint8, payloadLen int) (int, error) {
 	encodedLen, err := mysqlOpaqueEncodedLen(payloadLen)
 	if err != nil {
 		return 0, err
@@ -464,11 +464,10 @@ func MySQLOpaqueValueSize(protocolVersion int64, fieldType uint8, payloadLen int
 // preflighted an allocation account do not create a second encoded payload.
 func AppendMySQLOpaque(
 	dst []byte,
-	protocolVersion int64,
 	fieldType uint8,
 	payload []byte,
 ) ([]byte, error) {
-	valueSize, err := MySQLOpaqueValueSize(protocolVersion, fieldType, len(payload))
+	valueSize, err := MySQLOpaqueValueSize(fieldType, len(payload))
 	if err != nil {
 		return dst, err
 	}

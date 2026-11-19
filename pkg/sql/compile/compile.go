@@ -1519,9 +1519,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainJSONAggregateOpaqueWorkers(qry); err != nil {
-		return nil, err
-	}
 	if err = c.validateGroupingTransportPlacement(qry); err != nil {
 		return nil, err
 	}

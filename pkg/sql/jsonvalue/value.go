@@ -66,13 +66,11 @@ func mysqlOpaqueFieldType(oid types.T) (uint8, bool) {
 }
 
 // OpaqueValueSize returns the exact binary JSON size for a BIT or binary
-// scalar. The protocol version is an execution admission value; an unknown or
-// old version is rejected before any value can be published.
+// scalar.
 func OpaqueValueSize(
 	ctx context.Context,
 	v *vector.Vector,
 	row int,
-	protocolVersion int64,
 ) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -82,14 +80,14 @@ func OpaqueValueSize(
 	}
 	typ := v.GetType()
 	if fieldType, ok := mysqlOpaqueFieldType(typ.Oid); ok {
-		return bytejson.MySQLOpaqueValueSize(protocolVersion, fieldType, len(v.GetBytesAt(row)))
+		return bytejson.MySQLOpaqueValueSize(fieldType, len(v.GetBytesAt(row)))
 	}
 	if typ.Oid == types.T_bit {
 		byteLen, err := bitPayloadLen(typ.Width, ctx)
 		if err != nil {
 			return 0, err
 		}
-		return bytejson.MySQLOpaqueValueSize(protocolVersion, mysqlTypeBit, byteLen)
+		return bytejson.MySQLOpaqueValueSize(mysqlTypeBit, byteLen)
 	}
 	return 0, moerr.NewInvalidInputf(ctx, "unsupported opaque type for JSON conversion: %s", typ.String())
 }
@@ -102,7 +100,6 @@ func AppendOpaqueValue(
 	dst []byte,
 	v *vector.Vector,
 	row int,
-	protocolVersion int64,
 ) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -112,14 +109,14 @@ func AppendOpaqueValue(
 	}
 	typ := v.GetType()
 	if fieldType, ok := mysqlOpaqueFieldType(typ.Oid); ok {
-		return bytejson.AppendMySQLOpaque(dst, protocolVersion, fieldType, v.GetBytesAt(row))
+		return bytejson.AppendMySQLOpaque(dst, fieldType, v.GetBytesAt(row))
 	}
 	if typ.Oid == types.T_bit {
 		raw, byteLen, err := bitPayload(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, ctx)
 		if err != nil {
 			return dst, err
 		}
-		return bytejson.AppendMySQLOpaque(dst, protocolVersion, mysqlTypeBit, raw[8-byteLen:])
+		return bytejson.AppendMySQLOpaque(dst, mysqlTypeBit, raw[8-byteLen:])
 	}
 	return dst, moerr.NewInvalidInputf(ctx, "unsupported opaque type for JSON conversion: %s", typ.String())
 }
@@ -132,23 +129,12 @@ func BuildOpaqueValue(
 	ctx context.Context,
 	v *vector.Vector,
 	row int,
-	protocolVersion int64,
 ) (bytejson.ByteJson, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	data, err := AppendOpaqueValue(ctx, nil, v, row)
+	if err != nil {
+		return bytejson.ByteJson{}, err
 	}
-	if v.IsNull(uint64(row)) || v.GetType().Oid == types.T_any {
-		return bytejson.Null, nil
-	}
-	typ := v.GetType()
-	if fieldType, ok := mysqlOpaqueFieldType(typ.Oid); ok {
-		return bytejson.NewMySQLOpaque(protocolVersion, fieldType, v.GetBytesAt(row))
-	}
-	if typ.Oid == types.T_bit {
-		value, err := bit(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, protocolVersion, ctx)
-		return value, err
-	}
-	return bytejson.ByteJson{}, moerr.NewInvalidInputf(ctx, "unsupported opaque type for JSON conversion: %s", typ.String())
+	return types.DecodeJson(data), nil
 }
 
 // FromVector converts one resolved SQL value to the scalar representation used

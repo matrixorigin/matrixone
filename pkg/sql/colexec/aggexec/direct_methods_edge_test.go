@@ -601,11 +601,11 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	} {
 		vec := vector.NewVec(typ)
 		require.NoError(t, vector.AppendBytes(vec, []byte{1}, false, mp))
-		size, err := jsonAggregateValueSizeWithProtocol(
-			vec, 0, bytejson.MySQLOpaqueProtocolVersion)
+		size, err := jsonAggregateValueSize(
+			vec, 0)
 		require.NoError(t, err)
-		encoded, err := appendJSONAggregateValueWithProtocol(
-			make([]byte, 0, size), vec, 0, bytejson.MySQLOpaqueProtocolVersion)
+		encoded, err := appendJSONAggregateValue(
+			make([]byte, 0, size), vec, 0)
 		require.NoError(t, err)
 		require.Len(t, encoded, size)
 		require.Equal(t, bytejson.TpCodeBlob, types.DecodeJson(encoded).Type)
@@ -613,11 +613,11 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	}
 	bit := vector.NewVec(types.New(types.T_bit, 8, 0))
 	require.NoError(t, vector.AppendFixed(bit, uint64(0xaa), false, mp))
-	size, err := jsonAggregateValueSizeWithProtocol(
-		bit, 0, bytejson.MySQLOpaqueProtocolVersion)
+	size, err := jsonAggregateValueSize(
+		bit, 0)
 	require.NoError(t, err)
-	encoded, err := appendJSONAggregateValueWithProtocol(
-		make([]byte, 0, size), bit, 0, bytejson.MySQLOpaqueProtocolVersion)
+	encoded, err := appendJSONAggregateValue(
+		make([]byte, 0, size), bit, 0)
 	require.NoError(t, err)
 	require.Len(t, encoded, size)
 	value := types.DecodeJson(encoded)

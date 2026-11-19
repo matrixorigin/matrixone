@@ -505,21 +505,9 @@ func runJSONArrayAggregate(
 	allocation *AllocationAccount,
 	locations ...*time.Location,
 ) bytejson.ByteJson {
-	return runJSONArrayAggregateWithProtocol(t, mp, input, allocation, 0, locations...)
-}
-
-func runJSONArrayAggregateWithProtocol(
-	t *testing.T,
-	mp *mpool.MPool,
-	input *vector.Vector,
-	allocation *AllocationAccount,
-	protocolVersion int64,
-	locations ...*time.Location,
-) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, *input.GetType())
 	require.NoError(t, err)
-	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	if len(locations) > 0 {
 		ConfigureGroupConcatTimeZone(exec, locations[0])
 	}
@@ -547,15 +535,10 @@ func runJSONArrayAggregateWithProtocol(
 	return result
 }
 
-func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector) bytejson.ByteJson {
-	return runJSONObjectAggregateWithProtocol(t, mp, input, 0)
-}
-
-func runJSONObjectAggregateWithProtocol(
+func runJSONObjectAggregate(
 	t *testing.T,
 	mp *mpool.MPool,
 	input *vector.Vector,
-	protocolVersion int64,
 ) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(
@@ -566,7 +549,6 @@ func runJSONObjectAggregateWithProtocol(
 		*input.GetType(),
 	)
 	require.NoError(t, err)
-	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	require.NoError(t, exec.GroupGrow(1))
 	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
 	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{keys, input}))
@@ -646,29 +628,8 @@ func fromValueListToVector(
 	return v
 }
 
-func TestJsonArrayAggOpaqueRequiresProtocolAdmission(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     32,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_binary.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec := newJsonArrayAggExec(mg, info)
-	require.NoError(t, exec.GroupGrow(1))
-
-	vec := fromValueListToVector(mg, types.T_binary.ToType(), []string{"abc"}, nil)
-	err := exec.Fill(0, 0, []*vector.Vector{vec})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "MORPC protocol version")
-
-	vec.Free(mg)
-	exec.Free()
-}
-
 func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
-	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
+
 	mg := mpool.MustNewZero()
 
 	tests := []struct {
@@ -722,16 +683,16 @@ func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
 
 			size := func() int {
 				t.Helper()
-				valueSize, err := jsonArrayAggregateValueSizeWithProtocol(input, 0, protocolVersion)
+				valueSize, err := jsonArrayAggregateValueSize(input, 0)
 				require.NoError(t, err)
 				return valueSize
 			}()
-			appended, err := appendJSONArrayAggregateValueWithProtocol(
-				make([]byte, 0, size), input, 0, protocolVersion)
+			appended, err := appendJSONArrayAggregateValue(
+				make([]byte, 0, size), input, 0)
 			require.NoError(t, err)
 			require.Len(t, appended, size)
 
-			built, err := buildJSONArrayValueByteJsonWithProtocol(input, 0, protocolVersion)
+			built, err := buildValueByteJsonWithLocation(input, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, appended, append([]byte{byte(built.Type)}, built.Data...))
 			unquoted, err := built.Unquote()
@@ -740,15 +701,15 @@ func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
 			require.Equal(t, tc.wantType, built.TYPE())
 			requireExactMySQLOpaqueValue(t, built, tc.fieldType, tc.wantPayload)
 
-			regular := runJSONArrayAggregateWithProtocol(t, mg, input, nil, protocolVersion)
+			regular := runJSONArrayAggregate(t, mg, input, nil)
 			registry, account, allocation := newTestAggregateAllocation(t)
-			accounted := runJSONArrayAggregateWithProtocol(t, mg, input, allocation, protocolVersion)
+			accounted := runJSONArrayAggregate(t, mg, input, allocation)
 			finishTestAggregateAllocation(t, registry, account)
 			require.Equal(t, regular.Type, accounted.Type)
 			require.Equal(t, regular.Data, accounted.Data)
 			require.Equal(t, `[`+strconv.Quote(tc.wantValue)+`]`, regular.String())
 
-			object := runJSONObjectAggregateWithProtocol(t, mg, input, protocolVersion)
+			object := runJSONObjectAggregate(t, mg, input)
 			require.Equal(t, `{"v": `+strconv.Quote(tc.wantValue)+`}`, object.String())
 			require.Equal(t, tc.wantType, object.GetObjectVal(0).TYPE())
 		})
@@ -757,7 +718,6 @@ func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
 }
 
 func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
-	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
 
 	for _, tc := range []struct {
 		name                                          string
@@ -810,7 +770,6 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 					})
 					require.NoError(t, owner.SetAllocationAccount(allocation))
 					attached = true
-					ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 					if grow {
 						require.NoError(t, exec.GroupGrow(1))
 					}
@@ -904,7 +863,6 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 					})
 					require.NoError(t, owner.SetAllocationAccount(allocation))
 					attached = true
-					ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 					if grow {
 						require.NoError(t, exec.GroupGrow(1))
 					}
@@ -1122,7 +1080,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
-		{"binary-admission-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "MORPC protocol version"},
+		{"binary", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "base64:type254:YQ==", ""},
 		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 
