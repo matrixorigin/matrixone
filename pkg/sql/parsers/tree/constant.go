@@ -203,6 +203,12 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 				return
 			}
 		case P_ScoreBinary:
+			if ctx.preserveTextLiteralWidth && !ctx.viewDefinition && node.origString != "" {
+				// The inner introducer yields a STRING token, so _binary
+				// keeps both the binary value and its implicit SQL heading.
+				fmt.Fprintf(ctx, "_binary _utf8mb4 X'%x'", node.origString)
+				return
+			}
 			if node.origString == "" {
 				// A bare 0x is tokenized as an identifier. Keep the empty
 				// binary literal executable when mode-independent formatting is

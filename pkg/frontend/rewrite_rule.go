@@ -1124,15 +1124,36 @@ func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[str
 		return cmp.Compare(a.ruleName, b.ruleName)
 	})
 
+	// Retain failures until precedence is settled. A later incompatible rule
+	// can replace the whole failed prefix, but cannot inherit part of it.
+	var pending map[string]error
 	for _, row := range ruleRows {
-		if existingRule, ok := rules[row.ruleName]; ok {
-			mergedRule, err := mergeRewriteRulesWithSQLMode(ctx, existingRule, row.rule, sqlMode)
-			if err != nil {
-				return nil, err
-			}
-			rules[row.ruleName] = mergedRule
-		} else {
+		existingRule, exists := rules[row.ruleName]
+		if !exists {
 			rules[row.ruleName] = row.rule
+			continue
+		}
+		if pending[row.ruleName] != nil {
+			if rewriteRulesKnownIncompatible(ctx, existingRule, row.rule, sqlMode) {
+				delete(pending, row.ruleName)
+			}
+			rules[row.ruleName] = row.rule
+			continue
+		}
+		mergedRule, err := mergeRewriteRulesWithSQLMode(ctx, existingRule, row.rule, sqlMode)
+		if err != nil {
+			if pending == nil {
+				pending = make(map[string]error)
+			}
+			pending[row.ruleName] = err
+			rules[row.ruleName] = row.rule
+			continue
+		}
+		rules[row.ruleName] = mergedRule
+	}
+	for _, row := range ruleRows {
+		if err := pending[row.ruleName]; err != nil {
+			return nil, err
 		}
 	}
 
@@ -1284,7 +1305,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		if mysql.ParseSQLModeFlags(sqlMode) != 0 {
 			// The later rule can independently settle precedence even when
 			// the earlier predicate cannot be parsed in this mode.
-			if ruleIsUnmergeable(ctx, rightRule, sqlMode) || ruleIsUnmergeable(ctx, leftRule, "") {
+			if rewriteRulesKnownIncompatible(ctx, leftRule, rightRule, sqlMode) {
 				return "", false, nil
 			}
 		}
@@ -1319,18 +1340,39 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 	return sql, true, nil
 }
 
-func ruleIsUnmergeable(ctx context.Context, rule, sqlMode string) bool {
-	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
-	if err != nil {
+func rewriteRulesKnownIncompatible(ctx context.Context, left, right, sqlMode string) bool {
+	// The selected rule must parse in the session mode. An alternate-mode
+	// parse of a discarded rule is only evidence about its merge shape.
+	r, rightOK := rewriteRuleShapeForPrecedence(ctx, right, sqlMode, false)
+	if !rightOK {
 		return false
+	}
+	if r == nil {
+		return true
+	}
+	l, leftOK := rewriteRuleShapeForPrecedence(ctx, left, sqlMode, true)
+	return leftOK && (l == nil || l.selectList != r.selectList || l.table != r.table)
+}
+
+func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, allowDefault bool) (*rewriteRuleMergeShape, bool) {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
+	if err != nil && allowDefault && mysql.ParseSQLModeFlags(sqlMode) != 0 {
+		stmt, err = parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	}
+	if err != nil {
+		return nil, false
 	}
 	defer stmt.Free()
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
-		_, mergeable := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
-		return !mergeable
+		shape, _ := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
+		if shape == nil {
+			return nil, true
+		}
+		// Do not retain references to a freed parser tree.
+		return &rewriteRuleMergeShape{selectList: shape.selectList, table: shape.table}, true
 	default:
-		return false
+		return nil, false
 	}
 }
 

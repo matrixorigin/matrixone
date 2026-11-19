@@ -705,24 +705,30 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 	t.Cleanup(ses.Close)
 	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
 	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{11, false}})
-	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{12, false}})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(12)] = newMrsForInheritedRoleIdOfRoleId(nil)
 	const mode = "NO_BACKSLASH_ESCAPES"
 	const left = `select a from db1.t1 where code = 'docs\'notes'`
 	const right = "select a from db1.t1 where a = 2"
 	for _, tc := range []struct {
-		name, left, right string
-		wantErr           bool
+		name, left, middle, right string
+		wantErr                   bool
 	}{
-		{"ineligible earlier rule", left + " order by a", right, false},
-		{"ineligible later rule", left, right + " order by a", false},
-		{"invalid winner", left + " order by a", "select a from", true},
-		{"potentially mergeable earlier rule", left, right, true},
-		{"corrupt earlier rule", "select a from", right, true},
+		{"ineligible earlier rule", left + " order by a", "", right, false},
+		{"ineligible later rule", left, "", right + " order by a", false},
+		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
+		{"ineligible middle rule is superseded", "select a from db1.t1 where a = 1", left + " order by a", right + " order by a", false},
+		{"compatible last rule cannot mask earlier failure", "select a from db1.t1 where a = 1", left, right, true},
+		{"invalid winner", left + " order by a", "", "select a from", true},
+		{"potentially mergeable earlier rule", left, "", right, true},
+		{"corrupt earlier rule", "select a from", "", right, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 11})] = newMrsForRewriteRules([][]interface{}{
-				{10, "db1.t1", tc.left}, {11, "db1.t1", tc.right},
-			})
+			rows := [][]interface{}{{10, "db1.t1", tc.left}, {12, "db1.t1", tc.right}}
+			if tc.middle != "" {
+				rows = append(rows, []interface{}{11, "db1.t1", tc.middle})
+			}
+			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 11, 12})] = newMrsForRewriteRules(rows)
 			rules, err := loadRuleCache(t.Context(), ses, mode)
 			if tc.wantErr {
 				require.Error(t, err)
