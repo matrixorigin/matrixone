@@ -5533,7 +5533,7 @@ var (
 			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
-			output: "create table t1 (a int) ENGINE_ATTRIBUTE = abc",
+			output: "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
 		}, {
 			input: "create table t1 (a int) INSERT_METHOD = NO",
 		}, {
@@ -5544,7 +5544,7 @@ var (
 			input: "create table t1 (a int) START TRANSACTION",
 		}, {
 			input:  "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
-			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = abc",
+			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
 		}, {
 			input:  "create table /*! if not exists */ t1 (a int)",
 			output: "create table if not exists t1 (a int)",
