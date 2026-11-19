@@ -167,6 +167,15 @@ func (t TNMergeTable) ID() uint64 {
 	return t.TableEntry.ID
 }
 
+// GetBlockMaxRows returns the configured data and tombstone block capacity.
+func (t TNMergeTable) GetBlockMaxRows() uint32 {
+	schema := t.GetLastestSchema(false)
+	if schema == nil || schema.Extra == nil {
+		return 0
+	}
+	return schema.Extra.BlockMaxRows
+}
+
 func (t TNMergeTable) IsSpecialBigTable() bool {
 	name := t.GetLastestSchema(false).Name
 	dbName := t.GetDB().GetName()

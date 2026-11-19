@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/require"
@@ -188,4 +190,27 @@ func (h *transferSlabFailureHost) GetObjectMaxBlocks() uint16 {
 
 func (h *transferSlabFailureHost) GetTargetObjSize() uint32 {
 	return 0
+}
+
+func TestEstimateMergeSizeWithBlockRows(t *testing.T) {
+	for _, tc := range []struct {
+		rows          uint32
+		legacy, large int
+	}{
+		{0, 0, 0}, {1, 46137374, 46137374}, {1000, 46166912, 46166912},
+		{2000, 46194912, 46194912}, {8192, 46383104, 46383104},
+		{8193, 46366750, 46370844}, {10000, 40358880, 46422912}, {16384, 29851648, 46628864},
+	} {
+		t.Run(fmt.Sprint(tc.rows), func(t *testing.T) {
+			var obj objectio.ObjectStats
+			require.NoError(t, objectio.SetObjectStatsRowCnt(&obj, tc.rows))
+			require.NoError(t, objectio.SetObjectStatsOriginSize(&obj, 16<<20))
+			objects := func(yield func(*objectio.ObjectStats) bool) { yield(&obj) }
+			require.Equal(t, tc.legacy, EstimateMergeSize(objects))
+			for _, blockRows := range []uint32{0, 1000, objectio.BlockMaxRows} {
+				require.Equal(t, tc.legacy, EstimateMergeSizeWithBlockRows(objects, blockRows))
+			}
+			require.Equal(t, tc.large, EstimateMergeSizeWithBlockRows(objects, 16384))
+		})
+	}
 }
