@@ -137,7 +137,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
-| **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each affected owning package once with `-race`. §6 defines the proportional budget and measurement-test exception. Use the [shared validation scope](../../../.agents/skills/mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr) for normal tests. |
+| **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Apply the shared race protocol linked in §6. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
 untracked files in scope—not just the last file touched. Inspect `git status
@@ -250,81 +250,15 @@ the test matrix from semantic axes; do not reuse a remembered case list.
 
 ### Proportional Go unit-test validation and race stress
 
-For ordinary sequential changes, run the exact focused test(s) and the owning
-package once in normal mode with `GOWORK=off`, `-mod=readonly`, `-count=1`, and a
-bounded `-timeout`. Apply the adaptive race protocol below only when
-**G-RACE-STRESS** is triggered:
+Use the [shared validation scope](../../../.agents/skills/mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr)
+to select focused and owning-package tests. When **G-RACE-STRESS** applies,
+use the [shared race protocol](../../../.agents/skills/mo-dev/references/race-validation.md)
+for the adaptive budget, package scope, and execution mode. Include any
+failing test named in the issue, CI, or review feedback. Record platform or
+build constraints that prevent required validation.
 
-1. Build a minimal focused set from each newly added or modified `TestXxx` plus
-   the individual existing regression test(s) that directly prove the changed
-   behavior or transition. When a shared helper, package/global state, or
-   background worker changes, choose the representative tests for the affected
-   contract; the package-wide run in step 5 covers the broader interaction.
-   If an issue, CI failure, or review comment names a failing `TestXxx`, that
-   exact test is mandatory in the focused set; adjacent tests are not a
-   substitute.
-2. Prove the selection is non-empty: first enumerate it with `GOWORK=off go test -mod=readonly -list`, or
-   verify that the test output names every intended test. A successful command
-   whose `-run` expression matched nothing is not evidence.
-3. Measure each exact test once under `-race`, excluding first-build time, and
-   choose an adaptive repetition count. Read duration `T` from the test's
-   terminal event emitted by `GOWORK=off go test -mod=readonly -json`, not the rounded package summary.
-   With stress budget `B` and measured test duration `T`, use
-   `N = clamp(floor(B/T), 1, 100)`. Default `B` to 30 seconds; if `T` is absent,
-   non-positive, or below timer resolution, use the upper cap `N = 100`.
-   Adjust `B` for the change's risk and CI budget, and record `T`, `B`, and `N`.
-   If a pre-fix reproduction has a known occurrence window, override the formula
-   so the post-fix run covers that window; record why.
-4. Run each focused test separately so a slow test does not reduce repetitions
-   for a fast one:
-   `GOWORK=off go test -mod=readonly -race -count=N -timeout 120s -run '^TestA$' ./pkg/path`.
-   Independent commands may run in parallel when they do not contend for the
-   same external resource. Keep repetitions of one test in the same process so
-   leaked package/global state remains observable.
-5. Then run the entire owning package once under the race detector:
-   `GOWORK=off go test -mod=readonly -race -count=1 -timeout 240s ./pkg/path`.
-6. If the package directly or transitively uses CGo, replace `go test` in all
-   commands with `.agents/skills/mo-dev/scripts/mo-cgo-test`; follow the
-   `mo-dev` environment setup. Do not silently skip tests because the local
-   linker or runtime environment is incomplete.
-
-Every repeated-stress command must contain an exact `-run` expression naming one
-individual test. Never apply adaptive `-count=N` stress to a package pattern or
-the repository; full-package race coverage is step 5 and runs only once.
-
-Use a bounded, test-appropriate `-timeout` when needed. Normal tests,
-non-race `-count=N`, coverage runs, or one focused race run do not substitute
-for this gate.
-
-The only routine exception is a measurement-only allocation/performance test
-whose oracle is invalidated by race-runtime bookkeeping. Isolate only that
-measurement behind `//go:build !race`, keep an equivalent functional test in
-the race build, and stress the functional test with the adaptive race budget.
-Never hide functional behavior or an ordinary timing assertion behind `!race`.
-For any other platform, build-tag, or test-kind constraint, report the exact
-test and technical reason; the gate remains blocked until the constraint is
-resolved or the reviewer explicitly accepts equivalent validation.
-
-Before accepting the stress result, audit the test design against recurring MO
-flake classes:
-
-- synchronize phases with channels, callbacks, barriers, or observable
-  conditions; do not use `time.Sleep` or a tiny deadline as the scheduler;
-- assert durable behavior, not a transient map entry, worker ownership, or
-  which goroutine happened to make progress;
-- register cleanup immediately so it runs after failed assertions too; restore
-  package/global state and stop goroutines, timers, sockets, allocators, and
-  other caller-owned resources;
-- make topology, ordering, IDs, and map-derived choices deterministic; repeated
-  `-count=N` runs share one test process and must not inherit prior-run state;
-- use a generous outer deadline only as a hang guard unless timeout behavior is
-  itself the contract under test.
-
-Race success does not prove a timing-, allocation-, or instrumentation-sensitive
-oracle under non-race or coverage execution. Run the matching CI mode as
-additional evidence when the changed test depends on one of those properties.
-All evidence must contain the real exit status and be newer than the final
-semantic edit or rebase.
+Use the [shared evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md#4-reuse-evidence-by-semantic-validity)
+to verify the result and its applicability to the final change.
 
 On a PR, use the same methodology against the verified PR base. A callable
 review workflow may accelerate discovery, but it does not replace personal
@@ -345,9 +279,9 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
 □ every new/modified and directly affected Go behavioral unit test passed a proven non-empty focused run
-□ when G-RACE-STRESS applies, focused adaptive -race -count=N and one owning-package -race run passed, with T/B/N recorded
+□ when G-RACE-STRESS applies, the required scope and adaptive budget follow the shared race protocol
 □ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
-□ test matrix covers every changed transition and evidence is newer than the final edit/rebase
+□ evidence covers the changed behavior and satisfies the shared validity rules
 □ applicable domain guards passed (index-plugin → §8) — additive to the §1–§4 sweep above, never a substitute for it
 ```
 
