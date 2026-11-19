@@ -6,7 +6,7 @@ on:
 permissions: {}
 jobs:
   package:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'c4f61314f61b0f1d72a99cc10ab8d2beacdd6b88' && github.run_attempt == 1
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '97a155f92d8bc6b0a43de7aa3bac92728358100f' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,7 +25,7 @@ jobs:
           retention-days: 1
   isolate:
     needs: package
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'c4f61314f61b0f1d72a99cc10ab8d2beacdd6b88' && github.run_attempt == 1
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '97a155f92d8bc6b0a43de7aa3bac92728358100f' && github.run_attempt == 1
     runs-on: amd64-mo-shanghai-8c16g
     timeout-minutes: 3
     steps:
@@ -63,7 +63,7 @@ jobs:
             if test -L "$path"; then binds+=(--symlink "$(readlink "$path")" "$path")
             elif test -d "$path"; then binds+=(--ro-bind "$path" "$path"); fi
           done
-          "$b" --unshare-all --disable-userns --cap-drop ALL --new-session --die-with-parent \
+          "$b" --unshare-all --unshare-user --disable-userns --cap-drop ALL --new-session --die-with-parent \
             "${binds[@]}" --proc /proc --dev /dev --tmpfs /tmp --dir /run --dir /var --symlink /run /var/run \
             --clearenv --setenv PATH /usr/bin:/bin --chdir /tmp -- /bin/bash -eu -o pipefail -c '
               for spec in "serviceaccount_token:/var/run/secrets/kubernetes.io/serviceaccount/token" "docker_socket:/var/run/docker.sock" "containerd_socket:/run/containerd/containerd.sock" "host_canary:$1"; do
