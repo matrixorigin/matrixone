@@ -94,6 +94,8 @@ func TestUpgradeStatementOption(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			option := UpgradeStatementOption(test.accountID)
 			require.True(t, option.HasAccountID())
+			require.Equal(t, test.accountID != catalog.System_Account, option.RequiresTenantCatalog())
+			require.False(t, option.WithAccountID(test.accountID).RequiresTenantCatalog())
 			require.Equal(t, test.hasUser, option.HasUserID())
 			require.Equal(t, test.hasRole, option.HasRoleID())
 			require.Equal(t, test.accountID, option.AccountID())

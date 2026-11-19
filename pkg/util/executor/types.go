@@ -99,11 +99,12 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy   lock.WaitPolicy
-	accountId    uint32
-	hasAccountID bool
-	roleId       uint32
-	userId       uint32
+	waitPolicy           lock.WaitPolicy
+	accountId            uint32
+	hasAccountID         bool
+	requireTenantCatalog bool
+	roleId               uint32
+	userId               uint32
 	// accountName and roleName carry the trusted session identity for
 	// synchronous child SQL.  Numeric account/role overrides above remain
 	// catalog execution scope and must not be used as SQL file authority.

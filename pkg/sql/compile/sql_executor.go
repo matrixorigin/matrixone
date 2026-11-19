@@ -460,6 +460,13 @@ func (exec *txnExecutor) exec(
 			// restore context at the end of the function
 			exec.ctx = originCtx
 		}()
+		if statementOption.RequiresTenantCatalog() {
+			if activator, ok := exec.s.eng.(engine.TenantCatalogActivator); ok {
+				if err := activator.ActivateTenantCatalog(exec.ctx, statementOption.AccountID()); err != nil {
+					return executor.Result{}, err
+				}
+			}
+		}
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	if statementOption.IgnoreForeignKey() {
