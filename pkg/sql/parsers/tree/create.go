@@ -2769,10 +2769,28 @@ func NewProperty(k, v string) *Property {
 	return p
 }
 
+// The PROPERTIES grammar accepts only string literals (property_elem:
+// STRING '=' STRING), so the shared option serializer must emit the key and
+// value as single-quoted SQL literals that reparse (PR 32906 review
+// 5967618815). Mirror the OP_TYPE serializer's owner semantics: escape the
+// backslash-escape mode first so the consumer's backslash-aware parse
+// restores the exact bytes, then single-quote doubling.
 func (node *Property) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.Key)
+	key := node.Key
+	if !ctx.NoBackslashEscape() {
+		key = FormatString(key)
+	}
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(key, "'", "''"))
+	ctx.WriteByte('\'')
 	ctx.WriteString(" = ")
-	ctx.WriteString(node.Value)
+	value := node.Value
+	if !ctx.NoBackslashEscape() {
+		value = FormatString(value)
+	}
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+	ctx.WriteByte('\'')
 }
 
 func (node Property) TypeName() string { return "tree.Property" }

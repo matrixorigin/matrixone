@@ -10620,6 +10620,23 @@ index_column:
             Expr,
         )
     }
+|   END length_opt asc_desc_opt
+    {
+        // A bare END column name is already accepted at declaration sites
+        // (column_def) and by inline primary keys; extend the same name
+        // resolution to the unambiguous table-level key position (PR 32906
+        // review 5967618815). END stays a block terminator everywhere else.
+        var ColName = tree.NewUnresolvedName(tree.NewCStr($1, 1))
+        var Length = int($2)
+        var Direction = $3
+        var Expr tree.Expr
+        $$ = tree.NewKeyPart(
+            ColName,
+            Length,
+            Direction,
+            Expr,
+        )
+    }
 |   '(' expression ')' asc_desc_opt
     {
         var ColName *tree.UnresolvedName
