@@ -17,6 +17,7 @@ package logutil
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +37,87 @@ func SetupMOLogger(conf *LogConfig) {
 	}
 	replaceGlobalLogger(logger)
 	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
+}
+
+var loggerTestScopeMu sync.Mutex
+
+type loggerTestState struct {
+	config            *LogConfig
+	logger, skip, err *zap.Logger
+}
+
+func loadLoggerTestState() loggerTestState {
+	return loggerTestState{
+		config: getGlobalLogConfig(), logger: GetGlobalLogger(),
+		skip: GetSkip1Logger(), err: GetErrorLogger(),
+	}
+}
+
+func storeLoggerTestState(state loggerTestState) {
+	gLogConfigs.Store(state.config)
+	_globalLogger.Store(state.logger)
+	_skip1Logger.Store(state.skip)
+	_errorLogger.Store(state.err)
+}
+
+// SetupMOLoggerForTest temporarily configures the process-global logger.
+// The temporary logger must use the console; this scope does not own file sinks.
+// The caller must restore it on every exit path and have exclusive ownership
+// of logger configuration: neither this scope nor other work may concurrently
+// call SetupMOLogger, mutate a LogConfig in place, or start another test scope.
+// Concurrent readers can see the temporary logger. The idempotent restore
+// reports false if it observes different config/logger identities; it does not
+// promise to detect misuse racing with the restore itself.
+func SetupMOLoggerForTest(conf *LogConfig) (restore func() bool) {
+	if conf == nil || (conf.Filename != "" && conf.Filename != "console") {
+		panic("logutil: test logger scope requires console output")
+	}
+	if !loggerTestScopeMu.TryLock() {
+		panic("logutil: overlapping test logger scopes")
+	}
+	previous := loadLoggerTestState()
+	returned := false
+	defer func() {
+		if !returned {
+			if restore != nil {
+				restore()
+			} else {
+				storeLoggerTestState(previous)
+				loggerTestScopeMu.Unlock()
+			}
+		}
+	}()
+
+	// Keep SetupMOLogger's installation sequence, but record ownership before
+	// logging: a reporter callback can itself reconfigure the global logger.
+	setGlobalLogConfig(conf)
+	logger, err := initMOLogger(conf)
+	if err != nil {
+		panic(err)
+	}
+	replaceGlobalLogger(logger)
+	installed := loadLoggerTestState()
+	var once sync.Once
+	var unchanged bool
+	restore = func() bool {
+		once.Do(func() {
+			defer loggerTestScopeMu.Unlock()
+			current := loadLoggerTestState()
+			unchanged = current == installed
+			// A failed SetupMOLogger can replace only the config before it
+			// panics. Restore if all logger objects still belong to this scope.
+			if current.logger == installed.logger && current.skip == installed.skip && current.err == installed.err {
+				storeLoggerTestState(previous)
+			}
+		})
+		return unchanged
+	}
+	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
+	if loadLoggerTestState() != installed {
+		panic("logutil: logger reconfigured during test scope setup")
+	}
+	returned = true
+	return restore
 }
 
 // NewMOLogger new a mo zap logger

@@ -26,8 +26,10 @@ prepare capture from @capture_sql;
 execute capture;
 deallocate prepare capture;
 create snapshot ft2_snap_case_sp for account;
+begin;
 update t set body='current beta' where id=1;
 insert into t values (3,'current beta');
+commit;
 set @wait_upd_sql = concat(
 'select coalesce(max(chunk_id), -1) > @tail_baseline as ready from `', database(), '`.`', @ft2_index,
 '` where index_id = ''cdc_tail'' and tag = 1');

@@ -246,31 +246,38 @@ func TestBackendCreateResetDoesNotExposeLateFactoryError(t *testing.T) {
 	client := rpcClient.(*client)
 	const remote = "reset-remote"
 
-	client.mu.Lock()
-	state := newBackendCreateState(client.backendGenerationLocked(remote))
-	state.markStarted()
-	client.mu.creating[remote] = state
-	client.mu.Unlock()
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"connection_refused", moerr.NewBackendCannotConnectNoCtx("late connection refusal")},
+		{"connect_budget_exhausted", moerr.NewRPCTimeoutNoCtx()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client.mu.Lock()
+			state := newBackendCreateState(client.backendGenerationLocked(remote))
+			state.markStarted()
+			client.mu.creating[remote] = state
+			client.mu.Unlock()
 
-	require.NoError(t, client.CloseBackendFor(remote))
-	factoryErr := moerr.NewBackendCannotConnectNoCtx(
-		errors.New("late connection refusal"),
-	)
-	state.markCompleted(time.Now())
-	client.mu.Lock()
-	client.failBackendCreateLocked(remote, state, factoryErr)
-	client.mu.Unlock()
+			require.NoError(t, client.CloseBackendFor(remote))
+			state.markCompleted(time.Now())
+			client.mu.Lock()
+			client.failBackendCreateLocked(remote, state, test.err)
+			client.mu.Unlock()
 
-	var creationStart time.Time
-	err = client.waitBackendCreateCompletion(
-		context.Background(),
-		remote,
-		&creationStart,
-		state,
-	)
-	require.NoError(t, err)
-	require.Nil(t, state.factoryErr,
-		"reset owns completion and must discard a late old-generation factory error")
+			var creationStart time.Time
+			err := client.waitBackendCreateCompletion(
+				context.Background(),
+				remote,
+				&creationStart,
+				state,
+			)
+			require.NoError(t, err)
+			require.Nil(t, state.factoryErr,
+				"reset owns completion and must discard a late old-generation factory error")
+		})
+	}
 }
 
 // TestAutoCreateWaitTimeoutDeterministic tests bounded wait timeout deterministically

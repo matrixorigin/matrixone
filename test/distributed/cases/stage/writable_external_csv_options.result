@@ -272,8 +272,11 @@ not supported: external write (csv): a value of exactly \N cannot round-trip unl
 drop table if exists t_jln;
 create external table t_jln(a int, b varchar(20))
 infile{'filepath'='stage://cstage/copt_jln_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://cstage/copt_jln_%U.jl'};
-insert into t_jln values (1, '\\N');
-not supported: external write (jsonline): a string value of exactly \N reads back as NULL and cannot round-trip
+insert into t_jln values (1, '\\N'), (2, null);
+select a, coalesce(hex(b), 'NULL') as b_hex, b is null as is_null from t_jln order by a;
+➤ a[4,32,0]  ¦  b_hex[12,160,0]  ¦  is_null[-6,8,0]  𝄀
+1  ¦  5C4E  ¦  0  𝄀
+2  ¦  NULL  ¦  1
 drop table if exists t_jln;
 drop table if exists t_null;
 create external table t_null(a int, b varchar(60))

@@ -126,12 +126,6 @@ func (t batchETLHandler) NewAggregator(ctx context.Context, name string) table.A
 	return nil
 }
 
-type WriteFactoryConfig struct {
-	Account     string
-	Ts          time.Time
-	PathBuilder table.PathBuilder
-}
-
 func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
@@ -350,12 +344,6 @@ func BufferWithType(name string) BufferOption {
 func BufferWithSizeThreshold(size int64) BufferOption {
 	return BufferOption(func(b *BufferConfig) {
 		b.sizeThreshold = int(size)
-	})
-}
-
-func BufferWithFilterItemFunc(f filterItemFunc) BufferOption {
-	return BufferOption(func(b *BufferConfig) {
-		b.filterItemFunc = f
 	})
 }
 

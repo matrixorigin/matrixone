@@ -36,7 +36,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -381,13 +380,7 @@ func tryGetSizeFromMTS(
 	accIds [][]int64,
 ) (sizes map[int64]uint64, ok bool) {
 
-	var (
-		err  error
-		accs []uint64
-		vals [][]any
-
-		de *disttae.Engine
-	)
+	var accs []uint64
 
 	for i := range accIds {
 		for j := range accIds[i] {
@@ -395,8 +388,14 @@ func tryGetSizeFromMTS(
 		}
 	}
 
-	if de, ok = eng.(*disttae.Engine); !ok {
-		de = eng.(*engine.EntireEngine).Engine.(*disttae.Engine)
+	if wrapped, isWrapped := eng.(*engine.EntireEngine); isWrapped {
+		eng = wrapped.Engine
+	}
+	reader, supported := eng.(interface {
+		QueryAccountTableSizes(context.Context, []uint64, bool) (map[uint64]uint64, bool, error)
+	})
+	if !supported {
+		return nil, false
 	}
 
 	// if len(account id) == 1 and is not sys account
@@ -411,13 +410,7 @@ func tryGetSizeFromMTS(
 		forceUpdate = true
 	}
 
-	vals, accs, ok, err = de.QueryTableStatsByAccounts(
-		ctx,
-		[]int{disttae.TableStatsTableSize},
-		accs,
-		forceUpdate,
-		false,
-	)
+	accountSizes, ok, err := reader.QueryAccountTableSizes(ctx, accs, forceUpdate)
 
 	if err != nil || !ok {
 		logutil.Info("show accounts",
@@ -427,13 +420,9 @@ func tryGetSizeFromMTS(
 		return nil, false
 	}
 
-	if len(vals) == 0 {
-		return nil, false
-	}
-
-	sizes = make(map[int64]uint64)
-	for i := range accs {
-		sizes[int64(accs[i])] += uint64(vals[0][i].(float64))
+	sizes = make(map[int64]uint64, len(accountSizes))
+	for account, size := range accountSizes {
+		sizes[int64(account)] = size
 	}
 
 	return sizes, true

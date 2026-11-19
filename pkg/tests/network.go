@@ -19,14 +19,19 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 )
 
-var (
-	maxPort   = 65535
-	curPort   = 10000 // curPort indicates allocated port.
-	curPortMu sync.Mutex
-)
+// Returned ports retain their range reservation until process exit, including
+// while callers wait for admission and between service listener restarts.
+var processPorts portAllocator
+
+type portAllocator struct {
+	sync.Mutex
+	ranges    portlease.Allocator
+	next, end uint64
+	leases    []*portlease.Lease
+}
 
 // GetAddressBatch generates service addresses by batch.
 func GetAddressBatch(host string, batch int) ([]string, error) {
@@ -41,27 +46,33 @@ func GetAddressBatch(host string, batch int) ([]string, error) {
 	return addrs, nil
 }
 
-// GetAvailablePort gets available port on host address.
-func GetAvailablePort(host string) (string, error) {
-	curPortMu.Lock()
-	defer curPortMu.Unlock()
+// GetAvailablePort gets an available port and reserves its range against other
+// cooperating test allocators until process exit. The probe skips listeners
+// already owned by unrelated applications, which do not honor these leases.
+func GetAvailablePort(host string) (string, error) { return processPorts.allocate(host) }
 
-	port := 0
-	for curPort < maxPort {
-		curPort++
-
-		ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(host), Port: curPort})
+func (a *portAllocator) allocate(host string) (string, error) {
+	a.Lock()
+	defer a.Unlock()
+	for {
+		if a.next == a.end {
+			lease, err := a.ranges.Acquire()
+			if err != nil {
+				return "", err
+			}
+			a.leases = append(a.leases, lease)
+			a.next = lease.Base()
+			a.end = a.next + portlease.Span
+		}
+		port := a.next
+		a.next++
+		ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(host), Port: int(port)})
 		if err != nil {
 			continue
 		}
-		ln.Close()
-
-		port = curPort
-		break
+		if err = ln.Close(); err != nil {
+			return "", err
+		}
+		return strconv.FormatUint(port, 10), nil
 	}
-
-	if port == 0 {
-		return "", moerr.NewInternalErrorNoCtx("failed to allocate")
-	}
-	return strconv.Itoa(port), nil
 }

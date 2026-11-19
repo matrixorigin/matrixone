@@ -171,6 +171,17 @@ type RoleIDKey struct{}
 type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
+
+// SQLTaskBackgroundKey marks internal statements of a scheduled SQL task for
+// bounded operational logging. It is not propagated to remote query contexts.
+type SQLTaskBackgroundKey struct{}
+
+// TemporaryTableAccessKey marks trusted internal catalog maintenance that must
+// resolve a temporary table by its exact physical name. It is intentionally
+// separate from InternalExecutorKey: ordinary internal SQL keeps the same
+// session-isolation rules as user SQL unless its owner explicitly attaches
+// this capability.
+type TemporaryTableAccessKey struct{}
 type LockWriterFairKey struct{}
 
 func IsInternalExecutor(ctx context.Context) bool {
@@ -189,6 +200,22 @@ func IsInternalExecutor(ctx context.Context) bool {
 // see through its own session roles.
 func AttachInternalExecutor(ctx context.Context) context.Context {
 	return context.WithValue(ctx, InternalExecutorKey{}, true)
+}
+
+// AttachTemporaryTableAccess grants the narrow capability used by session
+// reset/disconnect, orphan-GC cleanup, and validated ISCP index maintenance.
+// Ordinary SQL cannot set context
+// values, and InternalExecutorKey alone does not grant this access.
+func AttachTemporaryTableAccess(ctx context.Context) context.Context {
+	return context.WithValue(ctx, TemporaryTableAccessKey{}, true)
+}
+
+func HasTemporaryTableAccess(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(TemporaryTableAccessKey{}).(bool)
+	return v
 }
 
 // AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
@@ -297,6 +324,15 @@ type IgnoreForeignKey struct{}
 // recreate), so the schema-wide duplicate-name scan is skipped.
 type TrustedCheckConstraintNames struct{}
 
+// TrustedForeignKeyLayout bridges StatementOption.WithTrustedForeignKeyLayout to
+// the planner's CREATE validation: the statement physically reconstructs an
+// existing table unchanged (TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE), so foreign-key layout rules that gate
+// NEWLY authored constraints — like #30282's 1830 for SET NULL over a NOT NULL
+// column — must not reject the historical layout being reinstalled. Never
+// propagate this into user-visible CREATE TABLE planning.
+type TrustedForeignKeyLayout struct{}
+
 type AlterCopyOpt struct{}
 
 // OptimizerHints carries a per-statement optimizer_hints string (same key=value
@@ -315,6 +351,23 @@ type BgKey struct{}
 // refused with a distinguishable error.
 type PublicationViewBinding struct{}
 
+type persistentViewBindingKey struct{}
+
+// WithPersistentViewBinding excludes session temporary aliases while rebinding
+// a stored View body. It changes only name resolution, not authorization,
+// transaction visibility, or whether the resulting plan can execute.
+func WithPersistentViewBinding(ctx context.Context) context.Context {
+	if IsPersistentViewBinding(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, persistentViewBindingKey{}, true)
+}
+
+func IsPersistentViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(persistentViewBindingKey{}).(bool)
+	return value
+}
+
 // WithPublicationViewBinding marks ctx as a publication-view metadata binding
 // statement.
 func WithPublicationViewBinding(ctx context.Context) context.Context {
@@ -326,6 +379,28 @@ func WithPublicationViewBinding(ctx context.Context) context.Context {
 func IsPublicationViewBinding(ctx context.Context) bool {
 	value, _ := ctx.Value(PublicationViewBinding{}).(bool)
 	return value
+}
+
+type indexMaintenanceViewBindingKey struct{}
+
+// WithIndexMaintenanceViewBinding marks a private bind-only view probe.
+func WithIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, true)
+}
+
+// WithoutIndexMaintenanceViewBinding prevents a separately executed nested
+// catalog statement from inheriting the probe's no-evaluation semantics.
+func WithoutIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, false)
+}
+
+func IsIndexMaintenanceViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(indexMaintenanceViewBindingKey{}).(bool)
+	return value
+}
+
+func IsNoEvaluationViewBinding(ctx context.Context) bool {
+	return IsPublicationViewBinding(ctx) || IsIndexMaintenanceViewBinding(ctx)
 }
 
 // Sp variable scope
@@ -397,7 +472,3 @@ type AutoIncrCache struct {
 	MaxNum uint64
 	Step   uint64
 }
-
-// HnswSnapshotFallbackKey requests a source scan only for a coverage retry.
-// It is statement-local and never changes the session search mode or SQL AST.
-type HnswSnapshotFallbackKey struct{}

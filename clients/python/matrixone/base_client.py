@@ -16,9 +16,15 @@
 Base client functionality for MatrixOne clients
 """
 
-from numbers import Number
+# No imports needed for this module
 
-from numpy import bool_ as numpy_bool
+
+def insert_row_values(row, columns):
+    """One batch policy: first-row columns, missing NULL, no extra fields."""
+    unexpected = set(row) - set(columns)
+    if unexpected:
+        raise ValueError('unexpected INSERT columns: ' + ', '.join(sorted(unexpected)))
+    return [row.get(column) for column in columns]
 
 
 class BaseMatrixOneClient:
@@ -56,6 +62,34 @@ class BaseMatrixOneClient:
     actual database operations.
     """
 
+    def set_query_observer(self, observer=None):
+        """Set a synchronous, optional callback receiving immutable QueryEvent.
+
+        Events contain timings/outcomes, never SQL, binds or credentials.
+        Missing phase measurements are None, not fabricated zero durations.
+        """
+        import inspect
+
+        if observer is not None and (
+            not callable(observer)
+            or inspect.iscoroutinefunction(observer)
+            or inspect.iscoroutinefunction(getattr(observer, '__call__', None))
+        ):
+            raise TypeError('query observer must be a synchronous callable or None')
+        self._query_observer = observer
+        return self
+
+    def _reset_compatibility(self, overrides=None):
+        from .capabilities import validate_overrides
+        from .version import new_version_manager
+
+        checked = validate_overrides(overrides)
+        self._compatibility_generation = getattr(self, '_compatibility_generation', 0) + 1
+        self._capability_cache_token = object()
+        self._capability_overrides = checked
+        self._version_manager = new_version_manager()
+        self._backend_version = None
+
     def _build_insert_sql(self, table_name: str, data: dict) -> str:
         """
         Build INSERT SQL statement from data dictionary.
@@ -69,89 +103,49 @@ class BaseMatrixOneClient:
 
             SQL INSERT statement string
         """
-        import json
+        from ._sql_literals import sql_identifier, sql_literal
 
-        columns = list(data.keys())
-        values = list(data.values())
+        if hasattr(table_name, '__table__'):
+            from sqlalchemy import insert, inspect
+            from ._query_compilation import compile_expression
 
-        # Convert values to appropriate SQL format
-        formatted_values = []
-        for value in values:
-            if value is None:
-                formatted_values.append("NULL")
-            elif isinstance(value, dict):
-                # JSON type: serialize dict to JSON string
-                json_str = json.dumps(value)
-                formatted_values.append(f"'{json_str}'")
-            elif isinstance(value, list):
-                # Vector type: format as [1,2,3]
-                formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
-            else:
-                formatted_values.append(f"'{str(value)}'")
+            mapper = inspect(table_name).mapper
+            values = {mapper.attrs[key].columns[0]: value for key, value in data.items()}
+            return compile_expression(insert(mapper.local_table).values(values))
 
-        columns_str = ", ".join(columns)
-        values_str = ", ".join(formatted_values)
-
-        return f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        columns = list(data)
+        return "INSERT INTO %s (%s) VALUES (%s)" % (
+            sql_identifier(table_name, qualified=True),
+            ", ".join(sql_identifier(column) for column in columns),
+            ", ".join(sql_literal(data[column]) for column in columns),
+        )
 
     def _build_batch_insert_sql(self, table_name: str, data_list: list) -> str:
-        """
-        Build batch INSERT SQL statement from list of data dictionaries.
-
-        Args:
-
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns:
-
-            SQL batch INSERT statement string
-
-        Numeric and boolean values retain their SQL type. Pass a string when
-        textual storage is intended.
-        """
-        import json
+        """Build checked literal values for the legacy batch SQL interface."""
+        from ._sql_literals import sql_identifier, sql_literal
 
         if not data_list:
             return ""
+        columns = list(data_list[0])
+        if hasattr(table_name, '__table__'):
+            from sqlalchemy import insert, inspect
+            from ._query_compilation import compile_expression
 
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if value is None:
-                    formatted_values.append("NULL")
-                elif isinstance(value, str):
-                    escaped_value = str(value).replace("'", "''")
-                    formatted_values.append(f"'{escaped_value}'")
-                elif isinstance(value, (int, float)):
-                    formatted_values.append(str(value))
-                elif isinstance(value, dict):
-                    # JSON type: serialize dict to JSON string
-                    json_str = json.dumps(value)
-                    # Escape single quotes in JSON string to prevent SQL injection
-                    escaped_json = json_str.replace("'", "''")
-                    formatted_values.append(f"'{escaped_json}'")
-                elif isinstance(value, list):
-                    # Vector type: format as [1,2,3]
-                    formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
-                elif isinstance(value, (Number, numpy_bool)):
-                    formatted_values.append(str(value))
-                else:
-                    # Escape single quotes in string values to prevent SQL injection
-                    escaped_value = str(value).replace("'", "''")
-                    formatted_values.append(f"'{escaped_value}'")
-            values_str = "(" + ", ".join(formatted_values) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        return f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+            mapper = inspect(table_name).mapper
+            rows = [
+                {mapper.attrs[key].columns[0]: value for key, value in zip(columns, values)}
+                for values in (insert_row_values(row, columns) for row in data_list)
+            ]
+            return compile_expression(insert(mapper.local_table).values(rows))
+        values = [
+            "(" + ", ".join(sql_literal(value) for value in row) + ")"
+            for row in (insert_row_values(record, columns) for record in data_list)
+        ]
+        return "INSERT INTO %s (%s) VALUES %s" % (
+            sql_identifier(table_name, qualified=True),
+            ", ".join(sql_identifier(column) for column in columns),
+            ", ".join(values),
+        )
 
 
 class BaseMatrixOneExecutor:

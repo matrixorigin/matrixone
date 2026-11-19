@@ -152,13 +152,13 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 
 		// FitPredictFloat
-		labels, _, _, err := km.FitPredictFloat(dataset, n_vectors)
+		_, _, _, err = km.FitPredictFloat(dataset, n_vectors)
 		if err != nil {
 			t.Fatalf("FitPredictFloat failed: %v", err)
 		}
 
 		queries := make([]float32, 2*uint64(dimension))
-		labels, _, err = km.PredictFloat(queries, 2)
+		labels, _, err := km.PredictFloat(queries, 2)
 		if err != nil {
 			t.Fatalf("PredictFloat failed: %v", err)
 		}

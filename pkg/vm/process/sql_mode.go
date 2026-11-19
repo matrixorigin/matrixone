@@ -177,3 +177,20 @@ func (proc *Process) DivisionByZeroWarningsEnabled() bool {
 	}
 	return proc.GetSessionInfo() != nil && IsDivisionByZeroMode(proc.GetSessionInfo().SqlMode)
 }
+
+// IsDMLStatement requires positive outer-statement classification. In particular,
+// an older remote sender's absent SELECT flag does not establish DML intent.
+func (proc *Process) IsDMLStatement() bool {
+	if proc == nil || proc.Base == nil || proc.Base.StmtProfile == nil {
+		return false
+	}
+	statement, query, _ := proc.GetStmtProfile().GetStatementRuntimeProfile()
+	if strings.EqualFold(strings.TrimSpace(query), "DML") {
+		return true
+	}
+	switch strings.ToUpper(strings.TrimSpace(statement)) {
+	case "INSERT", "UPDATE", "REPLACE", "LOAD":
+		return true
+	}
+	return false
+}

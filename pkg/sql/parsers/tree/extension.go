@@ -37,6 +37,9 @@ type CreateExtension struct {
 	Filename Identifier
 }
 
+func (node *CreateExtension) GetStatementType() string { return "Create Extension" }
+func (node *CreateExtension) GetQueryType() string     { return QueryTypeDDL }
+
 func NewCreateExtension(language string, name, filename Identifier) *CreateExtension {
 	c := reuse.Alloc[CreateExtension](nil)
 	c.Language = language
@@ -68,6 +71,9 @@ type LoadExtension struct {
 	statementImpl
 	Name Identifier
 }
+
+func (node *LoadExtension) GetStatementType() string { return "Load Extension" }
+func (node *LoadExtension) GetQueryType() string     { return QueryTypeOth }
 
 func NewLoadExtension(name Identifier) *LoadExtension {
 	c := reuse.Alloc[LoadExtension](nil)

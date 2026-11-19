@@ -15,6 +15,9 @@
 package v2
 
 import (
+	"strconv"
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -159,7 +162,138 @@ var (
 	TxnPKMayBeChangedMemHitCounter        = txnPKMayBeChangedCounter.WithLabelValues("mem_hit")
 	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
 	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
+
+	// TxnAObjectMaxCommitStateGauge is the current number of appendable
+	// objects in each max-commit state, split by table and data/tombstone.
+	// pending means the object is still accepting appends (or its append
+	// history is unavailable); sealed_waiting means it is sealed but at least
+	// one AppendNode is still non-terminal; finalized means max commit TS is
+	// available.
+	TxnAObjectMaxCommitStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "aobject_max_commit_state",
+			Help:      "Current number of appendable objects by max-commit state.",
+		}, []string{"table_id", "type", "state"})
+
+	TxnAObjectMaxCommitTableTotalGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "aobject_max_commit_table_total",
+			Help:      "Current number of tables with at least one tracked appendable object.",
+		})
+
+	txnAObjectMetricMu sync.Mutex
+	// table -> data/tombstone -> pending/sealed_waiting/finalized counts.
+	txnAObjectMetricCounts = make(map[uint64][2][3]int)
+	txnAObjectMetricTables = make(map[uint64]struct{})
+
+	// TxnTNPrePrepareObjectScanCounter splits the object-list scan by object
+	// kind without a table-id label. Table IDs are unbounded over the life of
+	// a TN; a counter child for every historical table would never be evicted.
+	TxnTNPrePrepareObjectScanCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_scan_total",
+			Help:      "Objects reached by TN incremental dedup, split by phase and object kind.",
+		}, []string{"phase", "type", "group", "result"})
+
+	// TxnTNPrePrepareObjectBookmarkCounter records whether the appendable-create
+	// group could use its prefix max-commit bookmark and how many entries that
+	// bookmark proved safe to skip. valid/invalid are per group scan; the
+	// prefix_skipped value is an object count.
+	TxnTNPrePrepareObjectBookmarkCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_bookmark_total",
+			Help:      "Bookmark decisions and prefix objects skipped by TN incremental dedup, split by phase.",
+		}, []string{"phase", "type", "group", "result"})
 )
+
+// UpdateTxnAObjectMaxCommitState publishes one table/object-list snapshot.
+// It is intentionally called only on object lifecycle transitions, not from
+// the PrePrepare dedup scan.
+func UpdateTxnAObjectMaxCommitState(
+	tableID uint64,
+	isTombstone bool,
+	pending, sealedWaiting, finalized int,
+) {
+	if tableID == 0 {
+		return
+	}
+	typ := "data"
+	listIndex := 0
+	if isTombstone {
+		typ = "tombstone"
+		listIndex = 1
+	}
+	counts := [3]int{pending, sealedWaiting, finalized}
+	txnAObjectMetricMu.Lock()
+	defer txnAObjectMetricMu.Unlock()
+	all, exists := txnAObjectMetricCounts[tableID]
+	if !exists && counts == [3]int{} {
+		return
+	}
+	labelID := strconv.FormatUint(tableID, 10)
+	for i, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
+		if counts[i] == 0 {
+			TxnAObjectMaxCommitStateGauge.DeleteLabelValues(labelID, typ, state)
+		} else {
+			TxnAObjectMaxCommitStateGauge.WithLabelValues(labelID, typ, state).Set(float64(counts[i]))
+		}
+	}
+	oldActive := false
+	for _, list := range all {
+		if list[0]+list[1]+list[2] > 0 {
+			oldActive = true
+			break
+		}
+	}
+	all[listIndex] = counts
+	newActive := false
+	for _, list := range all {
+		if list[0]+list[1]+list[2] > 0 {
+			newActive = true
+			break
+		}
+	}
+	if !oldActive && newActive {
+		txnAObjectMetricTables[tableID] = struct{}{}
+		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
+	} else if oldActive && !newActive {
+		delete(txnAObjectMetricTables, tableID)
+		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
+	}
+	if newActive {
+		txnAObjectMetricCounts[tableID] = all
+	} else {
+		delete(txnAObjectMetricCounts, tableID)
+	}
+}
+
+// RemoveTxnAObjectMaxCommitState evicts a table's metric children when its
+// catalog entry is removed. The caller must first stop both ObjectLists from
+// publishing, so a late append-max transition cannot recreate these children.
+func RemoveTxnAObjectMaxCommitState(tableID uint64) {
+	if tableID == 0 {
+		return
+	}
+	txnAObjectMetricMu.Lock()
+	defer txnAObjectMetricMu.Unlock()
+	labelID := strconv.FormatUint(tableID, 10)
+	for _, typ := range [...]string{"data", "tombstone"} {
+		for _, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
+			TxnAObjectMaxCommitStateGauge.DeleteLabelValues(labelID, typ, state)
+		}
+	}
+	delete(txnAObjectMetricCounts, tableID)
+	delete(txnAObjectMetricTables, tableID)
+	TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
+}
 
 var (
 	txnQueueSizeGauge = prometheus.NewGaugeVec(
@@ -173,6 +307,41 @@ var (
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
 	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
+
+	// txnTNCommitQueueStageDurationHistogram measures one transaction's time
+	// in each TN commit-queue stage.  The queue-wait stages are measured from
+	// enqueue to dequeue; the other stages cover the work done by that queue
+	// worker.  Keep this separate from tn_side_duration_seconds so queue
+	// latency is not confused with the client transaction lifecycle metrics.
+	TxnTNCommitQueueStageDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_commit_queue_stage_duration_seconds",
+			Help:      "Duration of individual TN transaction commit queue stages.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"stage"})
+	TxnTNPreWalQueueWaitDurationHistogram = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_wal_queue_wait")
+	TxnTNPrePrepareDurationHistogram      = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_prepare")
+	TxnTNPrepareTSDurationHistogram       = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_ts")
+	TxnTNPrepareCommitDurationHistogram   = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_commit")
+	TxnTNPreApplyCommitDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_apply_commit")
+	TxnTNWalQueueWaitDurationHistogram    = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("wal_queue_wait")
+	TxnTNPrepareWalDurationHistogram      = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_wal")
+	TxnTNApplyQueueWaitDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_queue_wait")
+	TxnTNWaitWalAndTailDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("wait_wal_and_tail")
+	TxnTNApplyCommitDurationHistogram     = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_commit")
+
+	// Freeze runs before the serialized pre-WAL queue; measure the entire
+	// transaction-store phase separately from the per-table dedup histogram.
+	TxnTNFreezeDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_freeze_duration_seconds",
+			Help:      "Duration of the TN transaction-store Freeze phase before queue admission.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	TxnDeadlockDetectorQueueDepthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{

@@ -18,18 +18,77 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
 type rollbackCleanupErrorStore struct {
 	NoopTxnStore
 	err error
+}
+
+type oversizeWALTestStore struct {
+	NoopTxnStore
+	reject           bool
+	preparedRollback bool
+	appliedRollback  bool
+}
+
+func (s *oversizeWALTestStore) PrepareWAL() error {
+	if s.reject {
+		return wal.NewRecordTooLargeError(101, 100)
+	}
+	return nil
+}
+
+func (s *oversizeWALTestStore) PrepareRollback() error {
+	s.preparedRollback = true
+	return nil
+}
+
+func (s *oversizeWALTestStore) ApplyRollback() error {
+	s.appliedRollback = true
+	return nil
+}
+
+func TestOversizeWALRollsBackBeforeAppend(t *testing.T) {
+	firstStore := &oversizeWALTestStore{reject: true}
+	secondStore := &oversizeWALTestStore{}
+	var started atomic.Int32
+	mgr := NewTxnManager(func() txnif.TxnStore {
+		if started.Add(1) == 1 {
+			return firstStore
+		}
+		return secondStore
+	}, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	first, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	err = first.Commit(context.Background())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+	require.ErrorContains(t, err, "WAL record is too large")
+	require.True(t, firstStore.preparedRollback)
+	require.True(t, firstStore.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, first.GetTxnState(false))
+
+	second, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, second.Commit(context.Background()))
+	require.Equal(t, txnif.TxnStateCommitted, second.GetTxnState(false))
 }
 
 func (store *rollbackCleanupErrorStore) Close() error {
@@ -419,5 +478,134 @@ func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
 	)
 	require.Panics(t, func() {
 		_ = replayTxn.rollback1PC(context.Background())
+	})
+}
+
+func TestCommitQueueStageMetricsFollowExecutedWork(t *testing.T) {
+	// Stopping the producer cannot drain heartbeat work already in the queues;
+	// WaitEmpty tracks ordinary transactions, not those heartbeat operations.
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+	waitTxnManagerEmpty(t, mgr)
+	stages := []string{"pre_wal_queue_wait", "pre_prepare", "prepare_ts", "prepare_commit", "pre_apply_commit", "wal_queue_wait", "prepare_wal", "apply_queue_wait", "wait_wal_and_tail", "apply_commit"}
+	count := func(stage string) uint64 {
+		var metric dto.Metric
+		child := v2.TxnTNCommitQueueStageDurationHistogram.WithLabelValues(stage).(prometheus.Metric)
+		require.NoError(t, child.Write(&metric))
+		return metric.GetHistogram().GetSampleCount()
+	}
+	before := make(map[string]uint64, len(stages))
+	for _, stage := range stages {
+		before[stage] = count(stage)
+	}
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		require.Equal(t, before[stage]+1, count(stage), stage)
+		before[stage] = count(stage)
+	}
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Rollback(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		want := before[stage]
+		switch stage {
+		case "pre_wal_queue_wait", "prepare_ts", "wal_queue_wait", "apply_queue_wait":
+			want++ // Rollback traverses the queues but skips commit work.
+		}
+		require.Equal(t, want, count(stage), stage)
+	}
+}
+
+func TestTxnWaiterLazyNotification(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var waiter txnWaiter
+		waiter.Add()
+		waiter.Add()
+		require.Nil(t, waiter.emptyCh)
+		ctx, cancel := context.WithCancel(t.Context())
+		first := make(chan error, 1)
+		second := make(chan error, 1)
+		go func() { first <- waiter.Wait(ctx) }()
+		go func() { second <- waiter.Wait(t.Context()) }()
+		synctest.Wait()
+		require.NotNil(t, waiter.emptyCh)
+		cancel()
+		require.ErrorIs(t, <-first, context.Canceled)
+		waiter.Done()
+		synctest.Wait()
+		select {
+		case <-second:
+			t.Fatal("waiter returned before the final transaction completed")
+		default:
+		}
+		waiter.Done()
+		require.NoError(t, <-second)
+		require.Nil(t, waiter.emptyCh)
+		waiter.Add()
+		require.Nil(t, waiter.emptyCh)
+		waiter.Done()
+	})
+}
+
+func BenchmarkTxnWaiterGeneration(b *testing.B) {
+	var waiter txnWaiter
+	b.ReportAllocs()
+	for b.Loop() {
+		waiter.Add()
+		waiter.Done()
+	}
+}
+
+// Done gates Wait after it has captured the current generation channel.
+type gatedWaitContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c gatedWaitContext) Done() <-chan struct{} {
+	close(c.entered)
+	<-c.release
+	return c.Context.Done()
+}
+
+func TestTxnWaiterOverlappingGenerations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var waiter txnWaiter
+		waiter.Add()
+		entered, release := make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		old := make(chan error, 1)
+		go func() { old <- waiter.Wait(gatedWaitContext{Context: ctx, entered: entered, release: release}) }()
+		<-entered
+		waiter.Done()
+		waiter.Add()
+		current := make(chan error, 1)
+		go func() { current <- waiter.Wait(ctx) }()
+		synctest.Wait()
+		select {
+		case <-current:
+			t.Fatal("new generation reported empty")
+		default:
+		}
+		releaseOnce.Do(func() { close(release) })
+		require.NoError(t, <-old)
+		synctest.Wait()
+		select {
+		case <-current:
+			t.Fatal("old generation released new waiter")
+		default:
+		}
+		waiter.Done()
+		require.NoError(t, <-current)
 	})
 }

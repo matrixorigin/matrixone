@@ -245,15 +245,15 @@ select o.k, (0,null) <=>
        (select count(1),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as real_rows_only
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (0,null) <=>
-       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as limited_empty_value
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (0,null) <=>
-       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as expression_value
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
-       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as composed_value
 from row_scalar_outer_28295 o order by o.k;
-select 1 as query_after_rejections;
+select 1 as query_after_aggregates;
 insert into row_scalar_inner_28295 values (1,20);
 select o.k, (select group_concat(i.v order by i.v desc separator '~')
              from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat
@@ -300,5 +300,17 @@ prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 w
 execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;
 deallocate prepare row_scalar_stmt;
 drop table row_scalar_28295;
+
+-- ROW expression spelling shares the ordinary tuple comparison semantics.
+select row('a','b','c') = row('a','b','c') as row_equal,
+       ('a','b','c') = ('a','b','c') as tuple_equal;
+select row(1,2) < row(1,3) as row_less,
+       (1,2) < (1,3) as tuple_less;
+select row(1,null) = row(1,null) as row_unknown,
+       (1,null) = (1,null) as tuple_unknown;
+set @row_expr_arg=2;
+prepare row_expr_stmt from 'select row(1,?) = row(1,2) as row_prepared, (1,?) = (1,2) as tuple_prepared';
+execute row_expr_stmt using @row_expr_arg, @row_expr_arg;
+deallocate prepare row_expr_stmt;
 
 drop database test;

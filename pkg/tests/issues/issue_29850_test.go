@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIssue29850PreparedPrimaryKeyUpsertIdentityGuard(t *testing.T) {
+func TestPrimaryKeyUpsertIdentity(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
@@ -59,6 +59,50 @@ func TestIssue29850PreparedPrimaryKeyUpsertIdentityGuard(t *testing.T) {
 
 		exec("CREATE TABLE pk_only (id INT PRIMARY KEY, payload VARCHAR(40))")
 		exec("INSERT INTO pk_only VALUES (1, 'seed')")
+		result, err := conn.ExecContext(ctx,
+			"INSERT INTO pk_only VALUES (1, 'ignored') ON DUPLICATE KEY UPDATE id=id")
+		require.NoError(t, err)
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.Zero(t, affected)
+		assertPKOnlyRow(t, ctx, conn, 1, "seed")
+		// Even with no mutable columns to compare, a guard must execute before
+		// the no-op decision and a following self assignment cannot erase it.
+		_, err = conn.ExecContext(ctx,
+			"INSERT INTO pk_only VALUES (1,'ignored') ON DUPLICATE KEY UPDATE id=2, id=id")
+		require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+		assertPKOnlyRow(t, ctx, conn, 1, "seed")
+
+		// Both explicit identity spellings suppress implicit ON UPDATE on a PK.
+		exec("CREATE TABLE timestamp_pk (id TIMESTAMP PRIMARY KEY ON UPDATE CURRENT_TIMESTAMP, payload INT)")
+		exec("INSERT INTO timestamp_pk VALUES ('2000-01-01 00:00:00', 1)")
+		for _, assignment := range []string{"id=VALUES(id)", "id=(timestamp_pk.ID)"} {
+			exec("INSERT INTO timestamp_pk VALUES ('2000-01-01 00:00:00', 2) ON DUPLICATE KEY UPDATE " + assignment + ", payload=payload+1")
+		}
+		var keyUnchanged bool
+		var timestampPayload int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT id='2000-01-01 00:00:00', payload FROM timestamp_pk").Scan(&keyUnchanged, &timestampPayload))
+		require.True(t, keyUnchanged)
+		require.Equal(t, 3, timestampPayload)
+
+		// Duplicate rows in the input must see the previous update's row image.
+		exec("CREATE TABLE composite_pk (a INT, b INT, v INT, PRIMARY KEY(a,b))")
+		exec("INSERT INTO composite_pk VALUES (1,10,100), (2,20,200)")
+		exec("INSERT INTO composite_pk VALUES (2,20,1), (3,30,300), (2,20,5) " +
+			"ON DUPLICATE KEY UPDATE a=a, b=b, v=v+VALUES(v)")
+		rows, err := conn.QueryContext(ctx, "SELECT a,b,v FROM composite_pk ORDER BY a,b")
+		require.NoError(t, err)
+		defer rows.Close()
+		var compositeRows [][3]int
+		for rows.Next() {
+			var row [3]int
+			require.NoError(t, rows.Scan(&row[0], &row[1], &row[2]))
+			compositeRows = append(compositeRows, row)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.Equal(t, [][3]int{{1, 10, 100}, {2, 20, 206}, {3, 30, 300}}, compositeRows)
 
 		// MySQL parses a negative numeric literal as a unary expression around
 		// the number. It is still a direct key value and should pass the runtime
@@ -75,7 +119,7 @@ func TestIssue29850PreparedPrimaryKeyUpsertIdentityGuard(t *testing.T) {
 		require.Equal(t, "new", negativePayload)
 
 		pkStmt, err := conn.PrepareContext(ctx,
-			"INSERT INTO pk_only(id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload=VALUES(payload), id=?")
+			"INSERT INTO pk_only(id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload=VALUES(payload), id=?, id=id")
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, pkStmt.Close()) })
 
@@ -96,9 +140,18 @@ func TestIssue29850PreparedPrimaryKeyUpsertIdentityGuard(t *testing.T) {
 
 		exec("CREATE TABLE secondary_unique (id INT PRIMARY KEY, natural_key INT UNIQUE, payload VARCHAR(40))")
 		exec("INSERT INTO secondary_unique VALUES (1, 10, 'seed-one'), (2, 20, 'seed-two')")
+		selfStmt, err := conn.PrepareContext(ctx,
+			"INSERT INTO secondary_unique VALUES (?,?,?) ON DUPLICATE KEY UPDATE id=id, payload=VALUES(payload)")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, selfStmt.Close()) })
+		for _, id := range []int{3, 4} {
+			_, err = selfStmt.ExecContext(ctx, id, 10, "self-target")
+			require.NoError(t, err)
+		}
+		assertSecondaryUniqueRows(t, ctx, conn, "self-target", "seed-two")
 		secondaryStmt, err := conn.PrepareContext(ctx,
 			"INSERT INTO secondary_unique(id, natural_key, payload) VALUES (?, ?, ?) "+
-				"ON DUPLICATE KEY UPDATE payload=VALUES(payload), id=?")
+				"ON DUPLICATE KEY UPDATE id=id, payload=VALUES(payload), id=?")
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, secondaryStmt.Close()) })
 

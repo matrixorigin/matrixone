@@ -355,7 +355,7 @@ func TestAllocatorDetachedColumnPrefetchBorrowsTransaction(t *testing.T) {
 		col, err := newColumnCache(ctx, "", 42, AutoColumn{ColName: "id", Step: 1}, cfg, false, a, op)
 		require.NoError(t, err)
 		detached := defines.AttachAccountId(context.Background(), catalog.System_Account)
-		col.preAllocate(detached, 42, 3, op)
+		col.preAllocate(detached, 42, 3, op, false)
 		waitAllocatorBorrowPhase(t, entered)
 		canceled, cancel := context.WithCancel(context.Background())
 		cancel()

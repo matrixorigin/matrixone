@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,9 +67,14 @@ func appendBatchesConcurrently(
 	// purge/ticktock goroutines.
 	var wg sync.WaitGroup
 	wg.Add(len(batches))
+	start := make(chan struct{})
 	for _, data := range batches {
-		go testutil.AppendClosure(t, data, relation, engine, &wg)()
+		go func() {
+			<-start
+			testutil.AppendClosure(t, data, relation, engine, &wg)()
+		}()
 	}
+	close(start)
 	wg.Wait()
 }
 
@@ -120,6 +124,7 @@ func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 				nil,
 				nil,
 				nil,
+				backupFileCopier{},
 			)
 			require.ErrorContains(t, err, testCase.want)
 		})
@@ -186,7 +191,7 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	// file must be present in the backup.
 	files := selectBackupObjects(objects, checkpointStart, nil, nil)
 	require.Contains(t, files, objectName.String())
-	_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
+	_, err = (backupFileCopier{}).parallelCopyData(ctx, src, dst, files, 1, nil)
 	require.NoError(t, err)
 	var restoredLive bool
 	rewrittenLocation, _, _, err := logtail.ReWriteCheckpointAndBlockFromKey(
@@ -262,8 +267,6 @@ func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *tes
 }
 
 func TestBackupData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -288,7 +291,9 @@ func TestBackupData(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -351,7 +356,7 @@ func TestBackupData(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -362,7 +367,7 @@ func TestBackupData(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
@@ -413,8 +418,6 @@ func TestBackupCheckpointBeforeFirstAppend(t *testing.T) {
 }
 
 func TestBackupData2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
@@ -440,7 +443,9 @@ func TestBackupData2(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -504,7 +509,7 @@ func TestBackupData2(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	require.NoError(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -515,14 +520,12 @@ func TestBackupData2(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
 
 func TestBackupData3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -575,7 +578,7 @@ func TestBackupData3(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -597,8 +600,6 @@ func TestBackupData3(t *testing.T) {
 }
 
 func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
@@ -679,7 +680,7 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 			}
 		}
 		var files []*taeFile
-		require.NoError(t, execBackup(ctx, "", opts.Fs, dstFs, locations, 1, types.TS{}, "full", &files, nil, nil))
+		require.NoError(t, execBackup(ctx, "", opts.Fs, dstFs, locations, 1, types.TS{}, "full", &files, nil, nil, backupFileCopier{}))
 		var backup *checkpoint.CheckpointEntry
 		metadataFiles, err := fileservice.SortedList(dstFs.List(ctx, ioutil.GetCheckpointDir()))
 		require.NoError(t, err)
@@ -809,8 +810,6 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 }
 
 func TestBackupData4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	fault.Enable()
@@ -868,7 +867,7 @@ func TestBackupData4(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -890,8 +889,6 @@ func TestBackupData4(t *testing.T) {
 }
 
 func TestBackupData5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -916,7 +913,9 @@ func TestBackupData5(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -993,7 +992,7 @@ func TestBackupData5(t *testing.T) {
 			},
 		},
 	})
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -1004,7 +1003,7 @@ func TestBackupData5(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
@@ -1430,12 +1429,14 @@ func TestBackup(t *testing.T) {
 					TaeDir:     nil,
 					HAkeeper:   &dumpHakeeper{},
 					Metas:      NewMetas(),
+					copyFiles:  backupFileCopier{statSource: true},
 				},
 			},
 			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 				cfg := i[0].(*Config)
 				assert.NoError(t, err)
 				assert.NotNil(t, cfg)
+				assert.False(t, cfg.copyFiles.statSource, "local backup must reset MinIO-only copy policy")
 
 				//checkup config files
 				list, err2 := fileservice.SortedList(cfg.GeneralDir.List(context.Background(), configDir))

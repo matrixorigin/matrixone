@@ -66,11 +66,12 @@ func linuxSingleIDBatch(mp *mpool.MPool, id string) *batch.Batch {
 func TestFulltext2SearchLoadTailFailureReleasesOwnedMmap(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	// A SqlCtx with no Proc deliberately selects createLocalTempFile's OS-file
-	// fallback, leaving a named path visible in /proc/self/maps for observation.
 	sp := sqlexec.NewSqlProcessWithContext(
 		sqlexec.NewSqlContext(context.Background(), "", nil, 0, nil))
 	cfg := testStorageCfg()
+	// The fake index files back each file with a named temp file, so the base's
+	// mapping is visible in /proc/self/maps.
+	files := swapIndexFiles(t)
 
 	b := NewBuilder("s0", int32(types.T_int64))
 	feed(t, b, int64(7), "mmap release witness")
@@ -80,6 +81,7 @@ func TestFulltext2SearchLoadTailFailureReleasesOwnedMmap(t *testing.T) {
 	require.NoError(t, err)
 	checksum := vectorindex.CheckSumFromBuffer(buf)
 	filesize := int64(len(buf))
+	files.put("s0", 0, 0, buf)
 
 	baseline := linuxProcMaps(t)
 	var mapsAtTailFailure []string
@@ -102,16 +104,12 @@ func TestFulltext2SearchLoadTailFailureReleasesOwnedMmap(t *testing.T) {
 			// LoadAllBases' result is still owned by Fulltext2Search.Load.
 			current := linuxProcMaps(t)
 			for _, line := range current {
-				if strings.Contains(line, "ft2idx") {
+				if strings.Contains(line, "ft2file") {
 					mapsAtTailFailure = append(mapsAtTailFailure, line)
 				}
 			}
 			return executor.Result{}, tailErr
 		}
-	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, stream chan executor.Result, _ chan error) (executor.Result, error) {
-		stream <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
-		return executor.Result{}, nil
 	})
 
 	search := NewFulltext2Search(cfg)

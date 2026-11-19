@@ -31,8 +31,65 @@ type selectedRowsOneShotShortWriter struct {
 
 type selectedRowsFastBuffer struct {
 	bytes.Buffer
-	fastCalls int
-	short     bool
+	fastCalls    int
+	varlenaCalls int
+	short        bool
+}
+
+func (w *selectedRowsFastBuffer) WriteSelectedVarlenaRows(values []types.Varlena, area []byte, rows []int32) (int, error) {
+	w.varlenaCalls++
+	start := w.Len()
+	for _, row := range rows {
+		value := values[row].GetByteSlice(area)
+		if err := types.WriteInt32(&w.Buffer, int32(len(value))); err != nil {
+			return w.Len() - start, err
+		}
+		if _, err := w.Buffer.Write(value); err != nil {
+			return w.Len() - start, err
+		}
+	}
+	written := w.Len() - start
+	if w.short && written > 0 {
+		written--
+	}
+	return written, nil
+}
+
+func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
+	pool := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(pool); require.Zero(t, pool.CurrNB()) })
+	require.NoError(t, AppendStringList(source, []string{"", "short", string(bytes.Repeat([]byte("long"), 20))}, nil, pool))
+	rows := []int32{2, 0, 1, 2}
+	for _, tc := range []struct {
+		name   string
+		modify func()
+		fast   bool
+	}{
+		{name: "plain", fast: true},
+		{name: "uniform provenance", fast: true, modify: func() { require.NoError(t, source.SetStringSource(types.StringSourceLiteral)) }},
+		{name: "null fallback", modify: func() { source.SetNull(1) }},
+		{name: "grouping fallback", modify: func() { source.GetNulls().Del(1); source.GetGrouping().Add(1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				source.GetNulls().Clear()
+				source.GetGrouping().Clear()
+				require.NoError(t, source.SetStringSource(types.StringSourceExpression))
+			})
+			if tc.modify != nil {
+				tc.modify()
+			}
+			var reference bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+			fast := &selectedRowsFastBuffer{}
+			require.NoError(t, source.MarshalSelectedRowsTo(fast, rows))
+			require.Equal(t, reference.Bytes(), fast.Bytes())
+			require.Equal(t, tc.fast, fast.varlenaCalls == 1)
+		})
+	}
+	source.GetGrouping().Clear()
+	require.ErrorIs(t, source.MarshalSelectedRowsTo(&selectedRowsFastBuffer{short: true}, rows), io.ErrShortWrite)
 }
 
 func (w *selectedRowsFastBuffer) WriteSelectedFixedRows(
@@ -179,6 +236,57 @@ func TestSelectedRowsCodecFixedWidthWriterFastPathMatchesWire(t *testing.T) {
 	fast.short = true
 	require.ErrorIs(t, source.MarshalSelectedRowsTo(fast, rows), io.ErrShortWrite)
 	require.Equal(t, 1, fast.fastCalls)
+}
+
+func TestSelectedRowsCodecUniformMetadata(t *testing.T) {
+	for _, kind := range []struct {
+		name  string
+		seen  bool
+		value PrepareParamKind
+	}{
+		{"unobserved", false, PrepareParamNone},
+		{"none", true, PrepareParamNone},
+		{"decimal", true, PrepareParamDecimal},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_int64.ToType())
+			defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			require.NoError(t, AppendFixedList(source, []int64{7, 8, 9, 10}, nil, mp))
+			source.resetPrepareParamKind()
+			if kind.seen {
+				source.SetPrepareParamKind(kind.value)
+			}
+			for _, rows := range [][]int32{{}, {0, 2, 3}, {3, 0, 3, 1}} {
+				func() {
+					selected := NewVec(types.T_int64.ToType())
+					defer selected.Free(mp)
+					require.NoError(t, selected.UnionInt32(source, rows, mp))
+					selected.resetPrepareParamKind()
+					if kind.seen {
+						selected.SetPrepareParamKind(kind.value)
+					}
+					flags := make([]uint8, len(rows))
+					for i := range flags {
+						flags[i] = 1
+					}
+					var got, want bytes.Buffer
+					require.NoError(t, source.MarshalSelectedRowsTo(&got, rows))
+					_, err := selected.MarshalSelectedFlagsTo(&want, flags)
+					require.NoError(t, err)
+					require.Equal(t, want.Bytes(), got.Bytes())
+				}()
+			}
+			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{-1}))
+			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{4}))
+			var encoded bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 0}))
+			for cut := 0; cut < encoded.Len(); cut++ {
+				require.Error(t, source.MarshalSelectedRowsTo(
+					&failSelectedRowsWriter{remaining: cut}, []int32{3, 0}), "cut=%d", cut)
+			}
+		})
+	}
 }
 
 func TestSelectedRowsCodecFixedWidthEmptyAndAllNull(t *testing.T) {
@@ -801,7 +909,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(0))
 				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, writeVectorMarshalBytes(buf, make([]byte, 7)))
+				require.NoError(t, types.WriteFull(buf, make([]byte, 7)))
 			},
 			want: "EOF",
 		},

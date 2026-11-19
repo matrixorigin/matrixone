@@ -17,7 +17,7 @@ package process
 // BorrowViewSchemaResources installs the parent's existing statement budget in
 // a fresh isolated binding process. Only the parent owns closing this generation.
 func (proc *Process) BorrowViewSchemaResources(parent *Process, generation *ExecutionResourceGeneration) error {
-	if proc == nil || proc.Base == nil || parent == nil || parent.Base == nil || proc.Base == parent.Base || generation == nil || generation.Closed() {
+	if proc == nil || proc.Base == nil || parent == nil || parent.Base == nil || proc.Base == parent.Base || generation == nil || generation.Closed() || !generation.spillDiskInitialized.Load() {
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "invalid view schema resource owner"}
 	}
 	parent.Base.executionResourceBudgetMu.Lock()

@@ -493,6 +493,23 @@ func TestWriteArena(t *testing.T) {
 		require.GreaterOrEqual(t, len(a.compressBuf), 200)
 	})
 
+	t.Run("compress capacity respects allocation boundary", func(t *testing.T) {
+		// Exercise the real GiB boundary without allocating a GiB buffer.
+		limit := int(mpool.MaxAllocationSize())
+		require.Equal(t, 1<<30, arenaCompressBufSize(1<<30))
+		require.Equal(t, 1<<30+1, arenaCompressBufSize(1<<30+1))
+		require.Equal(t, limit, arenaCompressBufSize(limit))
+		// An illegal request must still reach Alloc's existing failure path.
+		require.Greater(t, arenaCompressBufSize(limit+1), limit)
+		require.Equal(t, math.MaxInt, arenaCompressBufSize(math.MaxInt))
+
+		a := NewArena(64)
+		defer a.FreeBuffers()
+		_, err := a.compressBufChecked(limit + 1)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.Panics(t, func() { a.CompressBuf(limit + 1) })
+	})
+
 	t.Run("zero-size arena falls back to exact make", func(t *testing.T) {
 		a := NewArena(0)
 		b := a.Alloc(10)

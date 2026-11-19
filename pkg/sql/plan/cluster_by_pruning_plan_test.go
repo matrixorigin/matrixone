@@ -120,7 +120,7 @@ func TestReportedClusterBySQLEmitsPrefixInRangePredicate(t *testing.T) {
 		`and event_ts >= '2026-01-01 00:03:00'`
 	stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	query := p.GetQuery()
 	require.NotNil(t, query)

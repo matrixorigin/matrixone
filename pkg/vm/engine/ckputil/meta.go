@@ -50,14 +50,6 @@ func TableRangesString(r []TableRange) string {
 	return buf.String()
 }
 
-func TableRangesRows(r []TableRange) int {
-	rows := 0
-	for _, rng := range r {
-		rows += rng.Rows()
-	}
-	return rows
-}
-
 type TableRange struct {
 	TableID     uint64
 	ObjectType  int8

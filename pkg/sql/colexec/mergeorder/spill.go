@@ -561,7 +561,7 @@ func (ctr *container) spillBatchToNewRun(
 		return nil, err
 	}
 	defer writer.Free()
-	rows, _, err := writeSpillBatch(proc, bat, keyCols, writer, analyzer)
+	_, _, err = writeSpillBatch(proc, bat, keyCols, writer, analyzer)
 	if err == nil {
 		err = writer.Flush()
 	}
@@ -573,7 +573,6 @@ func (ctr *container) spillBatchToNewRun(
 		return nil, err
 	}
 	run.batchCount = 1
-	run.rowCount = rows
 	return run, nil
 }
 
@@ -620,12 +619,11 @@ func (ctr *container) spillBatchWithAppend(
 	if err := ctr.ensureActiveSpillRun(proc, analyzer); err != nil {
 		return err
 	}
-	rows, written, err := writeSpillBatch(proc, bat, keyCols, ctr.spillActiveWriter, analyzer)
+	_, written, err := writeSpillBatch(proc, bat, keyCols, ctr.spillActiveWriter, analyzer)
 	if err != nil {
 		return err
 	}
 	ctr.spillActiveRun.batchCount++
-	ctr.spillActiveRun.rowCount += rows
 	ctr.spillActiveBytes += written
 	if err := ctr.updateActiveRunTail(
 		proc,
@@ -786,13 +784,10 @@ func (ctr *container) Less(i, j int) bool {
 
 func (ctr *container) Swap(i, j int) {
 	ctr.spillReaders[i], ctr.spillReaders[j] = ctr.spillReaders[j], ctr.spillReaders[i]
-	ctr.spillReaders[i].heapIdx = i
-	ctr.spillReaders[j].heapIdx = j
 }
 
 func (ctr *container) Push(x any) {
 	reader := x.(*spillRunReader)
-	reader.heapIdx = len(ctr.spillReaders)
 	ctr.spillReaders = append(ctr.spillReaders, reader)
 }
 
@@ -800,7 +795,6 @@ func (ctr *container) Pop() any {
 	old := ctr.spillReaders
 	n := len(old)
 	reader := old[n-1]
-	reader.heapIdx = -1
 	ctr.spillReaders = old[:n-1]
 	return reader
 }
@@ -885,9 +879,6 @@ func (ctr *container) openSpillReaders(
 		} else {
 			reader.close(proc)
 		}
-	}
-	for i := range ctr.spillReaders {
-		ctr.spillReaders[i].heapIdx = i
 	}
 	if len(ctr.spillReaders) > 1 {
 		heap.Init(ctr)
@@ -1142,7 +1133,6 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		if _, _, err := writeSpillBatch(proc, out, keyCols, writer, analyzer); err != nil {
 			return nil, err
 		}
-		run.rowCount += int64(rows)
 		run.batchCount++
 	}
 	if err := writer.Flush(); err != nil {

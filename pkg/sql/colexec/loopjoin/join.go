@@ -103,6 +103,11 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			ctr.clearProbeResume()
+			ctr.clearBulkCopy()
+			return vm.CancelResult, err
+		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
@@ -148,7 +153,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					(loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) {
 					continue
 				}
-				ctr.inBat = input.Batch
+				ctr.setProbeBatch(input.Batch)
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
 				ctr.batRowIdx = 0
@@ -172,6 +177,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if err != nil {
+				ctr.clearBulkCopy()
 				return result, err
 			}
 
@@ -229,6 +235,7 @@ func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm
 	ctr.probeIdx += count
 	if ctr.probeIdx >= ctr.inBat.RowCount() {
 		ctr.inBat = nil
+		ctr.clearBulkCopy()
 		ctr.probeIdx = 0
 	}
 	return nil

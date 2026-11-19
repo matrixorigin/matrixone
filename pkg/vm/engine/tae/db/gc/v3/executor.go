@@ -47,6 +47,15 @@ func BuildBloomfilter(
 	mp *mpool.MPool,
 	dataProcess ...func(*bloomfilter.BloomFilter, *vector.Vector, *mpool.MPool) error,
 ) (bf *bloomfilter.BloomFilter, err error) {
+	if ctx.Err() != nil {
+		return nil, context.Cause(ctx)
+	}
+	if rowCount <= 0 {
+		rowCount = Default_Coarse_EstimateRows
+	}
+	if probability <= 0 {
+		probability = Default_Coarse_Probility
+	}
 	nbf := bloomfilter.New(int64(rowCount), probability)
 	bf = &nbf
 	bat := buffer.Fetch()
@@ -157,7 +166,9 @@ func (exec *GCExecutor) doFilter(
 		if err := canGCBat.Union(bat, exec.sels, exec.mp); err != nil {
 			return err
 		}
-		bat.Shrink(exec.sels, true)
+		if err := bat.Shrink(exec.sels, true, exec.mp); err != nil {
+			return err
+		}
 		if err := cannotGCSinker(ctx, bat); err != nil {
 			return err
 		}

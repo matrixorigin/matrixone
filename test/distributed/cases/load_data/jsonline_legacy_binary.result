@@ -1,0 +1,36 @@
+drop database if exists jsonline_legacy_binary;
+create database jsonline_legacy_binary;
+use jsonline_legacy_binary;
+create table restored(id int, bin binary(2), raw varbinary(16), payload blob, txt varchar(16));
+load data infile {'filepath'='$resources/load_data/jsonline_legacy_binary.jl','format'='jsonline','jsondata'='object','json_binary'='legacy_base64'} into table restored;
+select id, coalesce(concat('0x',hex(bin)),'NULL') as b, coalesce(concat('0x',hex(raw)),'NULL') as v, coalesce(concat('0x',hex(payload)),'NULL') as p, coalesce(concat('<',txt,'>'),'NULL') as s from restored order by id;
+id	b	v	p	s
+1	0x00FF	0x00FF	0xAB00	<AP8=>
+2	0xAB00	0xAB00	0x00FF	<test>
+3	NULL	NULL	NULL	NULL
+4	0x5C4E	0x5C4E	0x5C4E	<literal>
+5	0x0000	0x	0x	<>
+create table plain_text(id int, raw varbinary(16));
+load data infile {'filepath'='$resources/load_data/jsonline_legacy_binary.jl','format'='jsonline','jsondata'='object'} into table plain_text;
+select id, coalesce(concat('0x',hex(raw)),'NULL') as v from plain_text order by id;
+id	v
+1	0x4150383D
+2	0x7177413D
+3	NULL
+4	0x5845343D
+5	0x
+create external table legacy_external(id int, raw varbinary(16)) infile {'filepath'='$resources/load_data/jsonline_legacy_binary.jl','format'='jsonline','jsondata'='object','json_binary'='legacy_base64'};
+select id, coalesce(concat('0x',hex(raw)),'NULL') as v from legacy_external order by id;
+id	v
+1	0x00FF
+2	0xAB00
+3	NULL
+4	0x5C4E
+5	0x
+create table rejected(id int, raw varbinary(16));
+load data infile {'filepath'='$resources/load_data/jsonline_legacy_binary_invalid.jl','format'='jsonline','jsondata'='object','json_binary'='legacy_base64'} into table rejected;
+invalid input: invalid base64 payload in legacy JSONLINE binary column
+select count(*) from rejected;
+count(*)
+0
+drop database jsonline_legacy_binary;

@@ -15,6 +15,7 @@
 package v4_0_5
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -30,7 +31,7 @@ func TestHistoricalColumnsUpgradeProtocol(t *testing.T) {
 		}
 		count++
 		require.Equal(t, defines.MORPCVersion46, entry.RequiredProtocolVersion)
-		require.Equal(t, sysview.InformationSchemaColumnsV46UpgradeDDL, entry.UpgSql)
+		require.Equal(t, strings.Replace(sysview.InformationSchemaColumnsV46UpgradeDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
 		require.NotContains(t, entry.UpgSql, "WHEN 3 then")
 	}
 	require.Positive(t, count, "the historical COLUMNS entry must remain in the upgrade list")

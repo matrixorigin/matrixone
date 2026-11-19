@@ -16,12 +16,14 @@ package bytejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -40,9 +42,31 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	return bj.unquote(false)
+}
+
+// UnquoteWithLegacyFloat reconstructs pre-MySQL-format folded catalog values.
+// Ordinary SQL and binary storage must continue using Unquote and Marshal.
+func (bj ByteJson) UnquoteWithLegacyFloat() (string, error) {
+	return bj.unquote(true)
+}
+
+// AppendUnquotedScalar appends a bounded numeric or literal representation
+// using the same formatter as Unquote. Other types are left to Unquote.
+func (bj ByteJson) AppendUnquotedScalar(dst []byte, legacyFloat bool) ([]byte, bool, error) {
+	switch bj.Type {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeLiteral:
+		out, err := bj.toWithFloatFormat(dst, legacyFloat)
+		return out, true, err
+	default:
+		return dst, false, nil
+	}
+}
+
+func (bj ByteJson) unquote(legacyFloat bool) (string, error) {
 	if bj.Type == TpCodeBlob {
-		if _, _, ok := mysqlOpaqueValue(bj.GetString()); ok {
-			return string(bj.GetString()), nil
+		if _, encoded, ok := mysqlOpaqueValue(bj.GetString()); ok {
+			return string(appendMySQLOpaqueVisible(nil, bj.GetString(), encoded, false)), nil
 		}
 		if payload, ok := bj.persistedBitPayload(); ok {
 			return base64.StdEncoding.EncodeToString(payload), nil
@@ -61,7 +85,8 @@ func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
 		bj.Type != TpCodeDatetime {
-		return bj.String(), nil
+		data, _ := bj.marshalJSON(legacyFloat)
+		return string(data), nil
 	}
 	str := bj.GetString()
 	if len(str) < 2 || (str[0] != '"' || str[len(str)-1] != '"') {
@@ -100,8 +125,18 @@ func (bj ByteJson) Unquote() (string, error) {
 
 // MarshalJSON transform bytejson to []byte,for visible
 func (bj ByteJson) MarshalJSON() ([]byte, error) {
+	return bj.marshalJSON(false)
+}
+
+// MarshalJSONWithLegacyFloat is a proof-only rendering of historical catalog
+// constants. It preserves predecessor float spelling at every JSON depth.
+func (bj ByteJson) MarshalJSONWithLegacyFloat() ([]byte, error) {
+	return bj.marshalJSON(true)
+}
+
+func (bj ByteJson) marshalJSON(legacyFloat bool) ([]byte, error) {
 	ret := make([]byte, 0, len(bj.Data)*3/2)
-	return bj.to(ret)
+	return bj.toWithFloatFormat(ret, legacyFloat)
 }
 
 // Marshal transform bytejson to []byte,for storage
@@ -140,7 +175,11 @@ func (bj *ByteJson) Unmarshal(buf []byte) error {
 
 // UnmarshalJSON transform visible []byte to bytejson
 func (bj *ByteJson) UnmarshalJSON(data []byte) error {
-	bs, err := ParseJsonByte(data)
+	return bj.unmarshalJSONWithContext(defaultParseContext, data)
+}
+
+func (bj *ByteJson) unmarshalJSONWithContext(ctx context.Context, data []byte) error {
+	bs, err := parseJsonByteWithContext(ctx, data, 0)
 	if err != nil {
 		return err
 	}
@@ -191,13 +230,13 @@ func (bj ByteJson) GetString() []byte {
 	return bj.Data[length : length+num]
 }
 
-func (bj ByteJson) to(buf []byte) ([]byte, error) {
+func (bj ByteJson) toWithFloatFormat(buf []byte, legacyFloat bool) ([]byte, error) {
 	var err error
 	switch bj.Type {
 	case TpCodeArray:
-		buf, err = bj.toArray(buf)
+		buf, err = bj.toArray(buf, legacyFloat)
 	case TpCodeObject:
-		buf, err = bj.toObject(buf)
+		buf, err = bj.toObject(buf, legacyFloat)
 	case TpCodeInt64:
 		buf = bj.toInt64(buf)
 	case TpCodeUint64:
@@ -205,7 +244,11 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeLiteral:
 		buf = bj.toLiteral(buf)
 	case TpCodeFloat64:
-		buf, err = bj.toFloat64(buf)
+		if legacyFloat {
+			buf, err = bj.toFloat64Token(buf)
+		} else {
+			buf, err = bj.toFloat64(buf)
+		}
 	case TpCodeString:
 		buf, err = bj.toString(buf)
 	case TpCodeDecimal:
@@ -219,8 +262,8 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeBlob:
 		buf = append(buf, '"')
 		data := bj.GetString()
-		if _, _, ok := mysqlOpaqueValue(data); ok {
-			buf = append(buf, data...)
+		if _, encoded, ok := mysqlOpaqueValue(data); ok {
+			buf = appendMySQLOpaqueVisible(buf, data, encoded, true)
 		} else if payload, ok := bj.persistedBitPayload(); ok {
 			start := len(buf)
 			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
@@ -242,7 +285,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	return buf, err
 }
 
-func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
+func (bj ByteJson) toArray(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '[')
 	var err error
@@ -250,7 +293,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 		if i != 0 {
 			buf = append(buf, ", "...)
 		}
-		buf, err = bj.getArrayElem(i).to(buf)
+		buf, err = bj.getArrayElem(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +301,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 	return append(buf, ']'), nil
 }
 
-func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
+func (bj ByteJson) toObject(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '{')
 	for i := 0; i < cnt; i++ {
@@ -271,7 +314,7 @@ func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
 			return nil, err
 		}
 		buf = append(buf, ": "...)
-		buf, err = bj.getObjectVal(i).to(buf)
+		buf, err = bj.getObjectVal(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -308,15 +351,12 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// https://github.com/golang/go/issues/14135
-	var format byte
-	abs := math.Abs(f)
-	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
-		format = 'f'
-	} else {
-		format = 'e'
+	start := len(buf)
+	buf = util.AppendMySQLFloat(buf, f, 64)
+	// Keep DOUBLE distinguishable from integer JSON numbers when reparsed.
+	if !bytes.ContainsAny(buf[start:], ".e") {
+		buf = append(buf, '.', '0')
 	}
-	buf = strconv.AppendFloat(buf, f, format, -1, 64)
 	return buf, nil
 }
 
@@ -959,27 +999,82 @@ func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	return bj.getObjectVal(idx), true
 }
 
-func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
+var queryCollectorElementSize = uint64(reflect.TypeFor[ByteJson]().Size())
+
+type queryCollector struct {
+	values  []ByteJson
+	reserve func(uint64) (func(), error)
+	release func()
+	err     error
+}
+
+func (c *queryCollector) append(value ByteJson) {
+	if c.err != nil {
+		return
+	}
+	if c.reserve == nil {
+		c.values = append(c.values, value)
+		return
+	}
+	if len(c.values) == cap(c.values) {
+		capacity := cap(c.values) * 2
+		if capacity == 0 {
+			capacity = 1
+		}
+		if capacity < cap(c.values) || uint64(capacity) > uint64(math.MaxInt)/queryCollectorElementSize {
+			c.err = moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+			return
+		}
+		release, err := c.reserve(uint64(capacity) * queryCollectorElementSize)
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			c.err = err
+			return
+		}
+		values := make([]ByteJson, len(c.values), capacity)
+		copy(values, c.values)
+		if c.release != nil {
+			c.release()
+		}
+		c.values, c.release = values, release
+	}
+	c.values = append(c.values, value)
+}
+
+func (c *queryCollector) close() {
+	if c.release != nil {
+		c.release()
+		c.release = nil
+	}
+	c.values = nil
+}
+
+func (bj ByteJson) query(cur *queryCollector, path *Path) {
+	if cur.err != nil {
+		return
+	}
 	if path.empty() {
-		cur = append(cur, bj)
-		return cur
+		cur.append(bj)
+		return
 	}
 	sub, nPath := path.step()
 
 	if sub.tp == subPathDoubleStar {
-		cur = bj.query(cur, &nPath)
+		bj.query(cur, &nPath)
 		if bj.Type == TpCodeObject {
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, path) // take care here, the argument is path,not nPath
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getObjectVal(i).query(cur, path) // take care here, the argument is path,not nPath
 			}
 		} else if bj.Type == TpCodeArray {
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
 			}
 		}
-		return cur
+		return
 	}
 
 	if bj.Type == TpCodeObject {
@@ -987,24 +1082,24 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			start, _, _ := sub.idx.genIndex(1)
 			if start == 0 {
-				cur = bj.query(cur, &nPath)
+				bj.query(cur, &nPath)
 			}
 		case subPathRange:
 			if sub.iRange.matchesIndex(0, 1) {
-				cur = bj.query(cur, &nPath)
+				bj.query(cur, &nPath)
 			}
 		case subPathKey:
 			tmp, exists := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
 			if exists {
-				cur = tmp.query(cur, &nPath)
+				tmp.query(cur, &nPath)
 			}
 		case subPathKeyWildcard:
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, &nPath)
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
-		return cur
+		return
 	}
 
 	if bj.Type == TpCodeArray {
@@ -1013,39 +1108,39 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
 			if last && idx < 0 || cnt <= idx {
-				return cur
+				return
 			}
 			if idx == subPathIdxALL {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getArrayElem(i).query(cur, &nPath)
+				for i := 0; i < cnt && cur.err == nil; i++ {
+					bj.getArrayElem(i).query(cur, &nPath)
 				}
 			} else {
-				cur = bj.getArrayElem(idx).query(cur, &nPath)
+				bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
 			if cnt == 0 {
-				return cur
+				return
 			}
 			se := sub.iRange.genRange(cnt)
 			if se[0] < 0 || se[1] < 0 {
-				return cur
+				return
 			}
-			for i := se[0]; i <= se[1]; i++ {
-				cur = bj.getArrayElem(i).query(cur, &nPath)
+			for i := se[0]; i <= se[1] && cur.err == nil; i++ {
+				bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
-		return cur
+		return
 	}
 	if sub.tp == subPathIdx {
 		idx, _, _ := sub.idx.genIndex(1)
 		if idx == 0 {
-			return bj.query(cur, &nPath)
+			bj.query(cur, &nPath)
+			return
 		}
 	}
 	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
-		return bj.query(cur, &nPath)
+		bj.query(cur, &nPath)
 	}
-	return cur
 }
 
 func (bj ByteJson) Query(paths []*Path) ByteJson {
@@ -1058,9 +1153,10 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
-		tmp := bj.query(nil, path)
-		if len(tmp) > 0 {
-			out = append(out, tmp...)
+		var tmp queryCollector
+		bj.query(&tmp, path)
+		if len(tmp.values) > 0 {
+			out = append(out, tmp.values...)
 		}
 	}
 	if len(out) == 0 {
@@ -1070,6 +1166,60 @@ func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 		return out[0], true
 	}
 	return mergeToArray(out), true
+}
+
+// QueryWithMemory uses the ordinary JSON path semantics while reserving each
+// dynamic match buffer and the merged result before allocating it. Like
+// QueryWithExists, it does not validate the input document. The caller owns
+// the returned result reservation and must release it after the result is no
+// longer used; temporary match reservations are released before return.
+func (bj ByteJson) QueryWithMemory(path *Path, reserve func(uint64) (func(), error)) (ByteJson, bool, func(), error) {
+	if path == nil {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("invalid JSON query path")
+	}
+	if path.IsSimple() {
+		value, exists := bj.querySimpleExist(path, true)
+		return value, exists, nil, nil
+	}
+	collector := queryCollector{reserve: reserve}
+	defer collector.close()
+	bj.query(&collector, path)
+	if collector.err != nil {
+		return Null, false, nil, collector.err
+	}
+	if len(collector.values) == 0 {
+		return Null, false, nil, nil
+	}
+	if len(collector.values) == 1 && !path.mayReturnMultiple() {
+		return collector.values[0], true, nil, nil
+	}
+	if uint64(len(collector.values)) > (math.MaxUint32-headerSize)/valEntrySize {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+	}
+	total := uint64(headerSize) + uint64(len(collector.values))*valEntrySize
+	for _, value := range collector.values {
+		if value.Type != TpCodeLiteral {
+			if uint64(len(value.Data)) > math.MaxUint32-total {
+				return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+			}
+			total += uint64(len(value.Data))
+		}
+	}
+	if total > math.MaxUint32 || total > uint64(math.MaxInt) {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+	}
+	var release func()
+	if reserve != nil {
+		var err error
+		release, err = reserve(total)
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			return Null, false, nil, err
+		}
+	}
+	return mergeToArray(collector.values), true, release, nil
 }
 
 // PathExists reports whether path selects at least one JSON value. A selected
@@ -1275,6 +1425,16 @@ func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 }
 
 func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
+	return bj.modify(pathList, valList, modifyType, false)
+}
+
+// ModifyForLegacyBinding reconstructs scalar-index behavior for pre-#30806
+// persisted DDL verification. Ordinary JSON modifiers must use Modify.
+func (bj ByteJson) ModifyForLegacyBinding(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
+	return bj.modify(pathList, valList, modifyType, true)
+}
+
+func (bj ByteJson) modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType, legacyScalarIndex bool) (ByteJson, error) {
 	var (
 		err error
 	)
@@ -1297,7 +1457,7 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 		path := pathList[i]
 		val := valList[i]
 
-		modifier := &bytejsonModifier{bj: bj}
+		modifier := &bytejsonModifier{bj: bj, legacyScalarIndex: legacyScalarIndex}
 
 		switch modifyType {
 		case JsonModifySet:
@@ -1552,18 +1712,22 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	return parseJsonByte(data, 0)
+	return parseJsonByteWithContext(defaultParseContext, data, 0)
 }
 
 func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
-	n, err := parseNode(data, maxDepth)
+	return parseJsonByteWithContext(defaultParseContext, data, maxDepth)
+}
+
+func parseJsonByteWithContext(ctx context.Context, data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNodeWithContext(ctx, data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
 	w := byteJsonWriter{
 		buf: make([]byte, 0, len(data)*2),
 	}
-	_, _, err = w.writeNode(true, n)
+	_, _, err = w.writeNodeWithContext(ctx, true, n)
 	n.Free()
 	if err != nil {
 		return nil, err
@@ -1580,11 +1744,16 @@ func ParseNode(data []byte) (Node, error) {
 }
 
 func parseNode(data []byte, maxDepth int) (Node, error) {
-	p := parser{src: data, maxDepth: maxDepth}
+	return parseNodeWithContext(defaultParseContext, data, maxDepth)
+}
+
+func parseNodeWithContext(ctx context.Context, data []byte, maxDepth int) (Node, error) {
+	p := parser{ctx: ctx, src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
+	ctx      context.Context
 	src      []byte
 	stack    []*Group
 	tz       *json2.Tokenizer
@@ -1621,17 +1790,17 @@ func (p *parser) do() (Node, error) {
 			if p.tz.Remaining() == 0 && errors.As(p.tz.Err, &se) {
 				return z, io.ErrUnexpectedEOF
 			}
-			return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+			return z, moerr.NewInternalErrorf(parseErrorContext(p.ctx), "parse json: %v", p.tz.Err)
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
 				p.top = Node{}
-				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
+				return z, moerr.NewInvalidInputf(parseErrorContext(p.ctx), "invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
 				p.top.Free()
 				p.top = Node{}
-				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+				return z, moerr.NewInternalErrorf(parseErrorContext(p.ctx), "parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
 		}
@@ -1673,7 +1842,7 @@ func (p *parser) stateBeginValue() int {
 	case json2.Null:
 		n = Node{nil}
 	default:
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: looking for beginning of value")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: looking for beginning of value")
 		return scanError
 	}
 	if p.tz.Depth != 0 {
@@ -1697,7 +1866,7 @@ func (p *parser) stateBeginValueOrEmpty() int {
 
 func (p *parser) stateObjectKey() int {
 	if p.tz.Kind().Class() != json2.String || !p.tz.IsKey {
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: object key")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: object key")
 		return scanError
 	}
 
@@ -1717,7 +1886,7 @@ func (p *parser) stateObjectKeyOrEmpty() int {
 
 func (p *parser) stateColon() int {
 	if p.tz.Delim != ':' {
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: after object key")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: after object key")
 		return scanError
 	}
 	p.state = (*parser).stateBeginValue
@@ -1745,7 +1914,7 @@ func (p *parser) stateEndValue() int {
 		return scanContinue
 	}
 
-	p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: end value")
+	p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: end value")
 	return scanError
 }
 
@@ -1856,6 +2025,10 @@ type byteJsonWriter struct {
 }
 
 func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
+	return w.writeNodeWithContext(defaultParseContext, root, node)
+}
+
+func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, node Node) (TpCode, uint32, error) {
 	start := len(w.buf)
 	switch val := node.V.(type) {
 	case *Group:
@@ -1878,7 +2051,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
-					return 0, 0, moerr.NewInvalidInputNoCtxf("json key %s", k)
+					return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
@@ -1887,7 +2060,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 			}
 
 			for i := range keys {
-				tp, length, err := w.writeNode(false, obj.Values[i])
+				tp, length, err := w.writeNodeWithContext(ctx, false, obj.Values[i])
 				if err != nil {
 					return 0, 0, err
 				}
@@ -1918,7 +2091,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 
 		loc := uint32(headerSize + n*valEntrySize)
 		for i := range arr.Values {
-			tp, length, err := w.writeNode(false, arr.Values[i])
+			tp, length, err := w.writeNodeWithContext(ctx, false, arr.Values[i])
 			if err != nil {
 				return 0, 0, err
 			}
@@ -1949,7 +2122,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		}
 		return TpCodeLiteral, uint32(LiteralNull), nil
 	case json.Number:
-		tp, data, err := w.parseNumber(val)
+		tp, data, err := w.parseNumberWithContext(ctx, val)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -1965,19 +2138,19 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		w.buf = addString(w.buf, val)
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
-		return 0, 0, moerr.NewInvalidInputNoCtxf("unknown type %T", node)
+		return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "unknown type %T", node)
 	}
 }
 
-func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
+func (w *byteJsonWriter) parseNumberWithContext(ctx context.Context, in json.Number) (TpCode, []byte, error) {
 	var data [8]byte
 	//check if it is a float
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
+			return TpCodeFloat64, nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "json number %v", in)
 		}
-		if err = checkFloat64(val); err != nil {
+		if err = checkFloat64WithContext(ctx, val); err != nil {
 			return TpCodeFloat64, nil, err
 		}
 		endian.PutUint64(data[:], math.Float64bits(val))
@@ -1992,14 +2165,14 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 		return TpCodeUint64, data[:], nil
 	}
 	if val, err := in.Float64(); err == nil { //check if it is a float
-		if err = checkFloat64(val); err != nil {
+		if err = checkFloat64WithContext(ctx, val); err != nil {
 			return TpCodeFloat64, nil, err
 		}
 		endian.PutUint64(data[:], math.Float64bits(val))
 		return TpCodeFloat64, data[:], nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
+	return tpCode, nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "json number %v", in)
 }
 
 type Node struct {
@@ -2047,4 +2220,22 @@ func (n Node) String() string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+// appendMySQLOpaqueVisible follows MySQL's base64_encode 76-column wrapping
+// at the terminal text boundary. The persisted tag and its compact base64
+// comparison payload remain unchanged. JSON strings escape the inserted LF;
+// JSON_UNQUOTE returns the actual LF. No trailing newline is emitted.
+func appendMySQLOpaqueVisible(dst, tagged, encoded []byte, quoted bool) []byte {
+	dst = append(dst, tagged[:len(tagged)-len(encoded)]...)
+	for len(encoded) > 76 {
+		dst = append(dst, encoded[:76]...)
+		if quoted {
+			dst = append(dst, '\\', 'n')
+		} else {
+			dst = append(dst, '\n')
+		}
+		encoded = encoded[76:]
+	}
+	return append(dst, encoded...)
 }

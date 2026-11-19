@@ -15,11 +15,20 @@
 package types
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
 func ParseStringToByteJson(str string) (bytejson.ByteJson, error) {
-	return bytejson.ParseFromString(str)
+	return ParseStringToByteJsonWithContext(moerr.Context(), str)
+}
+
+// ParseStringToByteJsonWithContext parses with the caller's error reporting context.
+func ParseStringToByteJsonWithContext(ctx context.Context, str string) (bytejson.ByteJson, error) {
+	return bytejson.ParseFromStringWithContext(ctx, str)
 }
 func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
 	return bytejson.ParseFromByteSlice(dt)

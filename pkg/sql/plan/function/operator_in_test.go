@@ -194,7 +194,7 @@ func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 	require.True(t, ok, errInfo)
 }
 
-func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
+func TestOperatorIntegerInConstListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	tc := NewFunctionTestCase(
@@ -204,14 +204,14 @@ func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
 			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{1}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, true}),
-		newOpOperatorFixedIn[int32]().operatorIn,
+		newOpOperatorIntegerIn[int32]().operatorIn,
 	)
 
 	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
-func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
+func TestOperatorIntegerInConstNullListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	tc := NewFunctionTestCase(
@@ -221,7 +221,7 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{0}, []bool{true}),
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
-		newOpOperatorFixedIn[int32]().operatorIn,
+		newOpOperatorIntegerIn[int32]().operatorIn,
 	)
 
 	ok, errInfo := tc.RunAndFree()

@@ -1,0 +1,37 @@
+drop database if exists partition_topone_latest;
+create database partition_topone_latest;
+use partition_topone_latest;
+create table tags(id int primary key, hostname varchar(20));
+create table readings(tags_id int, created_at datetime, seq int, metric int);
+insert into tags values(1,'host-a'),(2,'host-b');
+insert into readings values
+(1,'2026-01-01 00:00:00',1,10),
+(1,'2026-01-01 00:00:10',2,null),
+(2,'2026-01-01 00:00:00',1,20),
+(2,'2026-01-01 00:00:10',2,30),
+(2,'2026-01-01 00:00:10',3,30),
+(99,'2026-01-01 00:00:20',1,99);
+select hostname, created_at, metric
+from (
+select t.hostname, r.created_at, r.metric,
+row_number() over (partition by r.tags_id order by r.created_at desc) as rn
+from readings r join tags t on r.tags_id=t.id
+) ranked
+where rn=1
+order by hostname;
+➤ hostname[12,20,0]  ¦  created_at[93,19,0]  ¦  metric[4,32,0]  𝄀
+host-a  ¦  2026-01-01 00:00:10  ¦  null  𝄀
+host-b  ¦  2026-01-01 00:00:10  ¦  30
+select tags_id, created_at, seq, metric
+from (
+select r.*,
+row_number() over (partition by tags_id order by created_at desc, seq desc) as rn
+from readings r
+) ranked
+where rn=1
+order by tags_id;
+➤ tags_id[4,32,0]  ¦  created_at[93,19,0]  ¦  seq[4,32,0]  ¦  metric[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:10  ¦  2  ¦  null  𝄀
+2  ¦  2026-01-01 00:00:10  ¦  3  ¦  30  𝄀
+99  ¦  2026-01-01 00:00:20  ¦  1  ¦  99
+drop database partition_topone_latest;

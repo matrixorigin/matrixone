@@ -104,3 +104,10 @@ func TestCatalogGCIntervalConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestLogServiceMaxWALRecordSizeConfig(t *testing.T) {
+	cfg := Config{}
+	_, err := btoml.Decode("[LogService]\nmax-wal-record-size = '64MiB'", &cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, toml.ByteSize(64*1024*1024), cfg.LogService.MaxWALRecordSize)
+}

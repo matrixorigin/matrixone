@@ -175,6 +175,8 @@ class MatrixOneConfig:
 
         # Apply environment variable overrides
         for param, env_var in cls.ENV_MAPPING.items():
+            if param in overrides:
+                continue
             env_value = os.getenv(env_var)
             if env_value is not None:
                 # Convert types based on parameter

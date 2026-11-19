@@ -195,12 +195,30 @@ func ExecuteIterationWithRuntime(
 							preLSN[0],
 						)
 					},
+					iterCtx.tableID,
 				)
 			},
 		)
 		if err != nil {
 			if errors.Is(err, errInitSQLJobFenced) {
 				return nil
+			}
+			if isPermanentError(err) {
+				return FlushPermanentErrorMessage(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					types.MaxTs(),
+					err.Error(),
+					preLSN,
+				)
 			}
 			return
 		}
@@ -220,6 +238,11 @@ func ExecuteIterationWithRuntime(
 	tableDef := rel.CopyTableDef(ctxWithAccount)
 	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
+	}
+	if tableDef.TableType == catalog.SystemTemporaryTable {
+		// The source identity was validated against the scheduled job above.
+		// Tail/snapshot index consumers need the same internal access as InitSQL.
+		ctxWithoutTimeout = defines.AttachTemporaryTableAccess(ctxWithoutTimeout)
 	}
 
 	if iterCtx.fromTS.IsEmpty() {
@@ -898,13 +921,25 @@ var GetJobSpecs = func(
 	return
 }
 
-type permanentError struct{}
+// permanentError stops its job instead of having it retried.
+type permanentError struct{ cause error }
 
-func (permanentError) Error() string {
-	return "permanent error"
+func (e permanentError) Error() string {
+	if e.cause == nil {
+		return "permanent error"
+	}
+	return e.cause.Error()
 }
 
+func (e permanentError) Unwrap() error { return e.cause }
+
 var errPermanent error = permanentError{}
+
+// NewPermanentError returns err as an error that stops its job: the job is not retried until
+// the index is rebuilt.
+func NewPermanentError(err error) error {
+	return permanentError{cause: err}
+}
 
 type iscpStatusCASLostError struct {
 	operation    string
@@ -986,9 +1021,16 @@ func FlushPermanentErrorMessage(
 	)
 }
 
+// isPermanentError reports whether err stops its job: a permanentError, or an index that cannot
+// store more of the source rows than it may, which fails the same way until it is rebuilt.
 func isPermanentError(err error) bool {
 	var target permanentError
-	return errors.As(err, &target)
+	if errors.As(err, &target) {
+		return true
+	}
+	var me *moerr.Error
+	return errors.As(err, &me) &&
+		(me.ErrorCode() == moerr.ErrIndexTooManyBadRecords || me.ErrorCode() == moerr.ErrIndexAllRowsBad)
 }
 
 func (status *JobStatus) SetError(err error) {
@@ -1025,21 +1067,21 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 // parse error are returned so the caller can fail the InitSQL rather than
 // silently rebuild with defaults; an absent blob (no index match, or no
 // session_vars key) is (nil, nil) — legitimate, skip the overlay.
-func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) (context.Context, []byte, error) {
 	if dbName == "" || tableName == "" || indexName == "" {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	db, err := cnEngine.Database(ctx, dbName, txnOp)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	rel, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	tableDef := rel.CopyTableDef(ctx)
 	if tableDef == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx.IndexName != indexName {
@@ -1047,11 +1089,18 @@ func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp clien
 		}
 		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
 		if serr != nil {
-			return nil, serr
+			return ctx, nil, serr
 		}
-		return sv, nil
+		// InitSQL is trusted index-maintenance SQL generated for this source.
+		// Its background executor has no frontend session. Scope the existing
+		// internal capability to this initialization transaction only, after
+		// resolving both the source and the named index in its tenant.
+		if tableDef.TableType == catalog.SystemTemporaryTable {
+			ctx = defines.AttachTemporaryTableAccess(ctx)
+		}
+		return ctx, sv, nil
 	}
-	return nil, nil
+	return ctx, nil, nil
 }
 
 // initSQLResolver builds the system-variable resolver for an InitSQL build.
@@ -1208,6 +1257,7 @@ func processInitSQL(
 	tableName string,
 	indexName string,
 	complete initSQLStep,
+	expectedSourceID ...uint64,
 ) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
@@ -1235,6 +1285,11 @@ func processInitSQL(
 			if err := cnEngine.New(runCtx, txn); err != nil {
 				return err
 			}
+			if len(expectedSourceID) > 0 {
+				if err := checkInitSQLSourceID(runCtx, cnEngine, txn, dbName, tableName, expectedSourceID[0]); err != nil {
+					return err
+				}
+			}
 
 			// Fetch the target index's captured build-time session vars from
 			// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
@@ -1242,7 +1297,7 @@ func processInitSQL(
 			// through this process's resolver; overlaying the captured values lets the
 			// background rebuild reproduce the create-time config instead of process
 			// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-			sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
+			runCtx, sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
 			if err != nil {
 				return err
 			}
@@ -1265,12 +1320,22 @@ func processInitSQL(
 			}
 			sqlctx := sqlexec.NewSqlContext(runCtx, cnUUID, txn, accountId, resolver)
 			sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+			stmts := splitInitSQL(sql)
+			maintenance, err := resolveInitSQLMaintenance(runCtx, cnEngine, txn, dbName, tableName, indexName, expectedSourceID, stmts)
+			if err != nil {
+				return err
+			}
 			// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
 			// string / raw single statement (backward-compat). ISCP has no multi-statement
 			// executor, so run each in sequence within this txn.
-			for _, stmt := range splitInitSQL(sql) {
+			for i, stmt := range stmts {
 				if stmt == "" {
 					continue
+				}
+				if maintenance != nil && maintenance.statement == i {
+					sqlproc.IndexMaintenanceSpec, sqlproc.IndexMaintenanceValidator = maintenance.spec, maintenance.validator
+				} else {
+					sqlproc.IndexMaintenanceSpec, sqlproc.IndexMaintenanceValidator = nil, nil
 				}
 				res, err := sqlexec.RunSql(sqlproc, stmt)
 				if err != nil {

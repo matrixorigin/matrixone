@@ -156,6 +156,95 @@ drop table if exists t_odku_auto;
 -- Unique-key conflicts on auto_increment tables update the conflicting row
 -- (aligns with MySQL: any unique-key conflict triggers the update).
 drop table if exists ai_duplicate_test;
+
+-- No-key ODKU retains the legacy generated statement/session ID.
+drop table if exists t_odku_no_key_id;
+drop table if exists t_odku_compat_marker;
+create table t_odku_compat_marker (id int auto_increment primary key) auto_increment = 700;
+insert into t_odku_compat_marker values ();
+create table t_odku_no_key_id (id bigint auto_increment, v int);
+insert into t_odku_no_key_id(v) values(1) on duplicate key update v = values(v);
+select last_insert_id();
+prepare odku_no_key_id from 'insert into t_odku_no_key_id(v) values(?) on duplicate key update v = ?';
+set @odku_v = 2;
+execute odku_no_key_id using @odku_v, @odku_v;
+select last_insert_id();
+deallocate prepare odku_no_key_id;
+set @odku_v = null;
+insert into t_odku_no_key_id(id, v) values(50, 3) on duplicate key update v = values(v);
+select last_insert_id();
+select id, v from t_odku_no_key_id order by id;
+drop table t_odku_no_key_id;
+drop table t_odku_compat_marker;
+
+-- Multiple visible allocators remain supported. ODKU selects the
+-- first visible AUTO_INCREMENT in table order for generated and fallback IDs.
+drop table if exists t_odku_multi_auto;
+create table t_odku_compat_marker (id int auto_increment primary key) auto_increment = 700;
+insert into t_odku_compat_marker values ();
+create table t_odku_multi_auto (pk int primary key, a int auto_increment, b int auto_increment, v int);
+insert into t_odku_multi_auto values(1, 10, 20, 1) on duplicate key update v = values(v);
+select last_insert_id();
+insert into t_odku_multi_auto(pk, v) values(2, 2) on duplicate key update v = values(v);
+select last_insert_id();
+insert into t_odku_multi_auto values(1, 10, 20, 3) on duplicate key update v = values(v);
+select last_insert_id();
+insert into t_odku_multi_auto values(1, 10, 20, 3) on duplicate key update v = values(v);
+select last_insert_id();
+-- Only b generates: a is explicit, so this insert does not replace session 11.
+insert into t_odku_multi_auto(pk, a, v) values(3, 50, 4) on duplicate key update v = values(v);
+select last_insert_id();
+select pk, a, b, v from t_odku_multi_auto order by pk;
+drop table t_odku_multi_auto;
+drop table t_odku_compat_marker;
+
+-- ============================================================
+-- Part 7: ODKU session LAST_INSERT_ID versus generated candidate
+-- ============================================================
+drop table if exists t_odku_return_id;
+create table t_odku_return_id (
+    id int auto_increment primary key,
+    code varchar(20) unique,
+    payload int
+);
+insert into t_odku_return_id (code, payload) values ('A', 1);
+drop table if exists t_odku_marker;
+create table t_odku_marker (id int auto_increment primary key) auto_increment = 500;
+insert into t_odku_marker values ();
+select last_insert_id();
+-- The duplicate reserves a candidate but only updates the existing row.
+insert into t_odku_return_id (code, payload) values ('A', 2)
+    on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+select last_insert_id();
+-- A real generated insert publishes its generated value to the session.
+insert into t_odku_return_id (code, payload) values ('B', 3)
+    on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+select last_insert_id();
+drop table if exists t_odku_return_id;
+drop table if exists t_odku_marker;
+
+-- A user AUTO_INCREMENT UNIQUE column is distinct from the explicit primary
+-- key. ODKU provenance must select the user column.
+drop table if exists t_odku_user_auto_uk;
+create table t_odku_user_auto_uk (
+    pk int primary key,
+    id int auto_increment unique,
+    payload int
+);
+insert into t_odku_user_auto_uk (pk, payload) values (1, 10);
+select last_insert_id();
+insert into t_odku_user_auto_uk (pk, payload) values (1, 20)
+    on duplicate key update payload = values(payload);
+select pk, id, payload from t_odku_user_auto_uk order by pk;
+select last_insert_id();
+insert into t_odku_user_auto_uk (pk, payload) values (2, 30)
+    on duplicate key update payload = values(payload);
+select pk, id, payload from t_odku_user_auto_uk order by pk;
+select last_insert_id();
+drop table if exists t_odku_user_auto_uk;
+
 create table ai_duplicate_test (
     id int auto_increment primary key,
     code varchar(20) unique,

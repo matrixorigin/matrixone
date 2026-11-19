@@ -63,10 +63,10 @@ func init() {
 	planplugin.RegisterCoordinatorTableFunc(HNSWCreateFuncName, buildHnswCreate)
 }
 
-// arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
+// arg list [param, hnsw.IndexTableConfig (JSON)]
 func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32, _ *plan.Node) (int32, error) {
-	if len(exprs) < 4 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
+	if len(exprs) != 2 {
+		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 2).")
 	}
 
 	colDefs := planplugin.DeepCopyColDefList(hnswBuildIndexColDefs)

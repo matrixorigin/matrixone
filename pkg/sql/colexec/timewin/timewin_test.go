@@ -1249,34 +1249,13 @@ func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *tes
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-// singleAggInfo is the basic information of single column agg.
-type singleAggInfo struct {
-	aggID    int64
-	distinct bool
-	argType  types.Type
-	retType  types.Type
-
-	// emptyNull indicates that whether we should return null for a group without any input value.
-	emptyNull bool
-}
-
 func TestAvgTwCache(t *testing.T) {
 	mg := mpool.MustNewZeroNoFixed()
 
-	info := singleAggInfo{
-		aggID:     function.AggAvgTwCacheOverloadID,
-		distinct:  false,
-		argType:   types.T_int32.ToType(),
-		retType:   types.T_char.ToType(),
-		emptyNull: false,
-	}
-	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor, err := aggexec.MakeAgg(
-		mg,
-		info.aggID, info.distinct, info.argType)
+	inputType := types.T_int32.ToType()
+	executor, err := aggexec.MakeAgg(mg, function.AggAvgTwCacheOverloadID, false, inputType)
 	require.Nil(t, err)
 
-	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)
 	{
 		// prepare the input data.
@@ -1323,17 +1302,8 @@ func TestAvgTwCache(t *testing.T) {
 func TestAvgTwCacheDecimal64(t *testing.T) {
 	mg := mpool.MustNewZeroNoFixed()
 
-	info := singleAggInfo{
-		aggID:     function.AggAvgTwCacheOverloadID,
-		distinct:  false,
-		argType:   types.T_decimal64.ToType(),
-		retType:   types.T_varchar.ToType(),
-		emptyNull: false,
-	}
-	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor, err := aggexec.MakeAgg(
-		mg,
-		info.aggID, info.distinct, info.argType)
+	inputType := types.T_decimal64.ToType()
+	executor, err := aggexec.MakeAgg(mg, function.AggAvgTwCacheOverloadID, false, inputType)
 	require.Nil(t, err)
 
 	inputs := make([]*vector.Vector, 3)
@@ -1374,17 +1344,8 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 func TestAvgTwCacheDecimal128(t *testing.T) {
 	mg := mpool.MustNewZeroNoFixed()
 
-	info := singleAggInfo{
-		aggID:     function.AggAvgTwCacheOverloadID,
-		distinct:  false,
-		argType:   types.T_decimal128.ToType(),
-		retType:   types.T_varchar.ToType(),
-		emptyNull: false,
-	}
-	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor, err := aggexec.MakeAgg(
-		mg,
-		info.aggID, info.distinct, info.argType)
+	inputType := types.T_decimal128.ToType()
+	executor, err := aggexec.MakeAgg(mg, function.AggAvgTwCacheOverloadID, false, inputType)
 	require.Nil(t, err)
 
 	inputs := make([]*vector.Vector, 3)
@@ -1425,20 +1386,10 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 func TestAvgTwResult(t *testing.T) {
 	mg := mpool.MustNewZeroNoFixed()
 
-	info := singleAggInfo{
-		aggID:     function.AggAvgTwResultOverloadID,
-		distinct:  false,
-		argType:   types.T_char.ToType(),
-		retType:   types.T_float64.ToType(),
-		emptyNull: false,
-	}
-	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor, err := aggexec.MakeAgg(
-		mg,
-		info.aggID, info.distinct, info.argType)
+	inputType := types.T_char.ToType()
+	executor, err := aggexec.MakeAgg(mg, function.AggAvgTwResultOverloadID, false, inputType)
 	require.Nil(t, err)
 
-	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)
 	{
 		// prepare the input data.

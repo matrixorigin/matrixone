@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -95,11 +96,67 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIsWinIndicatorFunByName reports whether name is one of the
+// technical-indicator window kernels (issue #29949): WIN_VALUE-class
+// registrations that the window operator evaluates through the indicator
+// state machine instead of the value/aggregate paths. They are never
+// aggregates and never carry aggexec kernels.
+func GetFunctionIsWinIndicatorFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && GetFunctionIsWinIndicatorFunById(fid)
+}
+
+// GetFunctionIsWinIndicatorFunById is the ID-set membership of the indicator
+// kernel family, shared by the executor dispatch, the frame-ignoring window
+// binding and the binder's section-4 surface validation.
+func GetFunctionIsWinIndicatorFunById(fid int32) bool {
+	switch fid {
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN, CUMPOSITIVESTREAK:
+		return true
+	}
+	return false
+}
+
+// GetFunctionIsWinEwmFunByName reports whether the name is one of the
+// ewmMean/ewmVar/ewmStd/ewmCov/ewmCorr window statistics: the window
+// operator's EWM dispatch, the binder validations, the cache-exclusion
+// detection and explain printing all key on this single registry fact.
+func GetFunctionIsWinEwmFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	return fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR
+}
+
+// EwmFunctionIdByName resolves an ewm name to its function id.
+func EwmFunctionIdByName(name string) (int32, bool) {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return 0, false
+	}
+	if fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR {
+		return fid, true
+	}
+	return 0, false
+}
+
 // GetFunctionIgnoresWindowFrameByName reports whether a window function
 // operates on partition-relative row positions instead of the current frame.
 func GetFunctionIgnoresWindowFrameByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
-	return exists && (fid == LAG || fid == LEAD)
+	if !exists {
+		return false
+	}
+	if fid == LAG || fid == LEAD {
+		return true
+	}
+	// The indicator kernels define extent through the period parameter;
+	// a frame-less OVER clause binds with the default synthetic frame and
+	// explicit frames are rejected by the window binder.
+	return GetFunctionIsWinIndicatorFunById(fid)
 }
 
 func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
@@ -113,6 +170,17 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		}
 	}
 	return false
+}
+
+// GetFunctionValueUnstableByID reports the resolved function's own instability
+// within one execution. Callers must inspect its arguments separately.
+// Execution stability does not relax folding or diagnostic-count restrictions.
+func GetFunctionValueUnstableByID(overloadID int64) (unstable, known bool) {
+	ov, known := GetFunctionByIdWithoutError(overloadID)
+	if !known {
+		return false, false
+	}
+	return ov.IsVolatile() && !ov.executionStable, true
 }
 
 // provenPureValueFunctions lists every SQL builtin registration that is
@@ -347,6 +415,44 @@ func IsRuntimeConstant(expr *plan.Expr) bool {
 	return isConstant(expr, true, true, constantForRuntime)
 }
 
+// RequiresRuntimeEvaluation identifies a function-owned evaluation boundary.
+// Neither the call nor its arguments may be folded into a reusable plan.
+// This family property also protects malformed overloads until their normal
+// binding/execution owner can validate them.
+func RequiresRuntimeEvaluation(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	fid, _ := DecodeOverloadID(fn.Func.GetObj())
+	return fid >= 0 && int(fid) < len(allSupportedFunctions) && allSupportedFunctions[fid].runtimeOnly
+}
+
+// ContainsRuntimeBound observes registered execution boundaries in a tree.
+func ContainsRuntimeBound(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if RequiresRuntimeEvaluation(expr) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if ContainsRuntimeBound(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsRuntimeBound(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type constantPurpose uint8
 
 const (
@@ -381,6 +487,9 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		if purpose != constantForRuntime && RequiresRuntimeEvaluation(expr) {
+			return false
+		}
 		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
@@ -566,7 +675,18 @@ func getFunctionByName(
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkArgumentTypes(args, stringDomainModes)
+	check := f.checkArgumentTypesWidening(args, stringDomainModes)
+	if legacyIntegerDecimalCoercions(ctx) {
+		check = legacyIntegerDecimalCheck(r.fid, args, check)
+	} else if LegacyDecimalIntermediatePrecision(ctx) {
+		check = legacyDecimalPrecisionCheck(r.fid, args, check)
+	}
+	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
+		check = fixedTypeMatch(f.Overloads[:4], args)
+	}
+	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
+		check = legacy
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}
@@ -578,6 +698,28 @@ func getFunctionByName(
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}
+	if (r.fid == IFF || r.fid == CASE) && !MySQLConditionalBooleanContracts(ctx) {
+		// D11 gate: a native-mode statement keeps the pre-contract IF/CASE
+		// condition admission - JSON conditions reject, and ENUM/SET display
+		// operands keep their ordinary string-typed handling without the
+		// storage-truth admission.
+		if legacy, ok := legacyConditionalBooleanCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
+	if !MySQLConditionalBooleanContracts(ctx) && len(args) == 2 &&
+		args[0].Oid == types.T_enum && args[1].Oid == types.T_bool &&
+		isEnumToBoolCastFunctionId(r.fid) {
+		// D11 gate for the shared cast boundary: the ENUM -> BOOL cast pair
+		// exists only for the conditional storage-truth contracts (CASE
+		// conditions, explicit BOOL targets), and the cast resolution table is
+		// context-free, so the compatibility decision is enforced here where
+		// the statement scalar is in scope. A native-mode statement keeps the
+		// pre-contract bind result byte-identically: base had no such cast
+		// pair, and the failure below produces the same bind error base gave.
+		check = newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	check = legacyFloatStringCheck(ctx, check, args)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -613,6 +755,9 @@ func getFunctionByName(
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
 	if err == nil {
+		if LegacyDecimalIntermediatePrecision(ctx) {
+			r.applyLegacyDecimalArithmeticReturnType(args)
+		}
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
 		if !LegacyDecimalIntegerDiv(ctx) {
@@ -638,7 +783,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		return FuncGetResult{}, false
 	}
 
-	check := f.checkArgumentTypes(args, nil)
+	check := f.checkArgumentTypesWidening(args, nil)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -801,6 +946,17 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case DATABASE:
+		// DATABASE and its SCHEMA alias can observe an unset default database.
+		return false
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN:
+		// Indicator kernels emit leading warmup NULLs (issue #29949,
+		// design section 4); never proven not-nullable regardless of
+		// argument nullability.
+		return false
+	case CUMPOSITIVESTREAK:
+		// Dense output: NULL observations emit 0, never NULL.
+		return true
 	case EXTRACT:
 		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
 		// calendar weeks. Released overloads 0..4 retain their physical ABI.
@@ -817,10 +973,32 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false
+	case TO_DAYS, TO_SECONDS:
+		// String calendar totals reject incomplete dates even when the input
+		// column is NOT NULL. Preserve the legacy typed overload's contract.
+		if oid == 1 {
+			return false
+		}
+	case DATEDIFF:
+		// Either string operand can be rejected and synthesize NULL.
+		if oid >= 1 && oid <= 3 {
+			return false
+		}
 	case DATE:
 		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
 		// conversions synthesize NULL for malformed input.
 		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
+			return false
+		}
+	case TIME:
+		// String conversions synthesize NULL with a truncation warning for
+		// invalid input even when the argument is NOT NULL. The typed and
+		// numeric overloads fail the statement instead of producing NULL
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
 			return false
 		}
 	case CAST:
@@ -833,6 +1011,15 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		if oid == 1 && len(args) == 2 &&
 			types.T(args[1].Typ.Id) == types.T_date &&
 			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
+			return false
+		}
+		// Explicit binary->text casts (overload 1, castModeExplicit) synthesize
+		// NULL with Warning 1300 when the source bytes are not valid UTF-8
+		// (func_cast.go binarySourceToText guard). A NOT NULL binary-domain
+		// source can therefore still produce NULL. Implicit, assignment,
+		// comparison and set-operation casts, binary-charset text targets and
+		// non-text targets keep their existing inference.
+		if oid == 1 && len(args) == 2 && !LegacyExplicitCastNullability(ctx) && explicitBinaryToTextCastMaySynthesizeNull(args) {
 			return false
 		}
 	case OCT:
@@ -928,6 +1115,13 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			}
 		}
 		return true
+	// The exponentially weighted statistics synthesize NULL from non-NULL
+	// arguments: the §5 C-gate (minPeriods publication gate), the
+	// zero-variance correlation rule and the unseen-account rule publish
+	// NULL regardless of the argument nullabilities, so their window
+	// outputs declare nullability independently of their inputs.
+	case EWM_MEAN, EWM_VAR, EWM_STD, EWM_COV, EWM_CORR:
+		return false
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
@@ -975,6 +1169,46 @@ func isTemporalPromotion(arg *plan.Expr) bool {
 	source := types.T(fn.Args[0].Typ.Id)
 	target := types.T(arg.Typ.Id)
 	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// explicitBinaryToTextCastMaySynthesizeNull mirrors the executor's
+// binarySourceToText guard (func_cast.go, castModeExplicit) at the inference
+// level: an explicit CAST into a non-binary-charset char/varchar/text target
+// synthesizes NULL with Warning 1300 on invalid UTF-8 whenever the source
+// carries binary domain evidence. That evidence is NOT only static:
+// stringDomainMode/binaryStringAt read legitimate runtime binary state
+// (types.StringSemanticState) that producers can set on text-shaped results
+// (binary_string_semantics.go setContributingStringResultDomain), and the
+// planner has no authoritative provenance to exclude it. Any MySQL string
+// source is therefore treated conservatively; non-string sources cannot
+// carry string domain state and keep their existing inference.
+func explicitBinaryToTextCastMaySynthesizeNull(args []*plan.Expr) bool {
+	dst := types.T(args[1].Typ.Id)
+	if dst != types.T_char && dst != types.T_varchar && dst != types.T_text {
+		return false
+	}
+	if args[1].Typ.Charset == uint32(types.CharsetBinary) {
+		return false
+	}
+	if !types.T(args[0].Typ.Id).IsMySQLString() {
+		return false
+	}
+	// A non-NULL literal with exactly known, valid UTF-8 bytes can never reach
+	// the executor's NULL synthesis: the func_cast.go binarySourceToText guard
+	// converts a row to NULL only when that row's bytes carry binary-domain
+	// evidence AND fail utf8.Valid. Immutable literal bytes are known at plan
+	// time, so utf8.Valid decides deterministically; a binary-domain marker on
+	// the literal (binary literal, folded hex/bit bytes kept raw under an
+	// explicit text cast) does not change that. Bound literals and
+	// constant-folded values share the same exact bytes, so both are covered.
+	// NULL literals, invalid-UTF8 literals, arbitrary text columns and any
+	// runtime string semantic state source remain conservative.
+	if lit := args[0].GetLit(); lit != nil && !lit.Isnull {
+		if sval, ok := lit.Value.(*plan.Literal_Sval); ok && utf8.ValidString(sval.Sval) {
+			return false
+		}
+	}
+	return true
 }
 
 // ProducesNoNull reports whether a function's contract guarantees a non-NULL
@@ -1078,6 +1312,11 @@ type FuncNew struct {
 	// materializes this function's result as a table column.
 	hasExecutableCTASTypeDefault bool
 
+	// This family and its arguments must remain executable until the current
+	// execution context exists. Stability and prepared-time flags do not grant
+	// permission to fold across this boundary.
+	runtimeOnly bool
+
 	// All execution overloads, including identities retained for old plans.
 	Overloads []overload
 
@@ -1125,7 +1364,10 @@ type executeRetainedBytesOfOverload func() uint64
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
-	overloadId int
+	// dictionaryInput is opt-in: every execution path must use logical reads,
+	// including specialized/native branches and parameter wrapper raw access.
+	dictionaryInput func([]*vector.Vector) bool
+	overloadId      int
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
@@ -1167,8 +1409,13 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// Volatile overloads can return different values for the same inputs.
+	// Legacy volatile policy also protects execution-time diagnostics and session
+	// settings from folding. It need not imply different values on replay.
 	volatile bool
+	// A positive proof of repeatable values for fixed arguments and execution
+	// context. Folding and diagnostic-count restrictions remain in force.
+	// Unannotated volatile overloads retain conservative identity requirements.
+	executionStable bool
 	// Deterministic values may still emit diagnostics once per evaluated row.
 	// Folding or changing their evaluation count would lose those effects.
 	rowScopedDiagnostics bool
@@ -1176,8 +1423,14 @@ type overload struct {
 	realTimeRelated bool
 }
 
-// IsVolatile reports value instability, independently of diagnostic effects.
-// Use this for deterministic-expression admission, such as generated columns.
+// DictionaryInputCapability admits only proven runtime argument shapes.
+// A nil capability requires explicit executor-owned normalization.
+func (ov *overload) DictionaryInputCapability() func([]*vector.Vector) bool {
+	return ov.dictionaryInput
+}
+
+// IsVolatile retains the legacy conservative evaluation policy. For value
+// repeatability within one execution, use GetFunctionValueUnstableByID.
 func (ov *overload) IsVolatile() bool {
 	return ov.volatile
 }
@@ -1216,6 +1469,15 @@ func (ov *overload) GetExecuteMethod() (
 
 	fn := ov.newOp()
 	return fn, nil, nil, nil
+}
+
+// GetArgumentType returns one element of the registered signature, whose meaning
+// is defined by the function's type checker, without exposing its mutable slice.
+func (ov *overload) GetArgumentType(index int) (types.T, bool) {
+	if index < 0 || index >= len(ov.args) {
+		return types.T_any, false
+	}
+	return ov.args[index], true
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
@@ -1260,6 +1522,54 @@ const (
 	failedTooManyFunctionMatched       overloadCheckSituation = -4
 	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
+
+// blockScaledWideningFunctions are the functions that take vecf8/vecf4 arguments
+// dequantized to vecf32: NULL handling and conditionals, element-wise math, subvector and
+// JSON. subvector returns vecf32, as a slice of a block-scaled cell has no scales of its
+// own. Comparisons have kernels of their own; hex and to_base64 are vecf32-only, as for
+// the other narrow vector types.
+var blockScaledWideningFunctions = map[int]bool{
+	COALESCE: true, CASE: true, GREATEST: true, LEAST: true,
+	ABS: true, SQRT: true, SUMMATION: true, L1_NORM: true, L2_NORM: true, SUB_VECTOR: true,
+	JSON_ARRAY: true, JSON_OBJECT: true,
+}
+
+// checkArgumentTypesWidening retries a failed resolution with bf16, float16, float8 and
+// float4 arguments widened to float32, which holds them exactly, so a function without
+// an overload for them runs on float32 as their arithmetic does; for the functions in
+// blockScaledWideningFunctions, vecf8/vecf4 arguments are dequantized to vecf32.
+func (fn FuncNew) checkArgumentTypesWidening(inputs []types.Type, modes []StringDomainCheckMode) checkResult {
+	check := fn.checkArgumentTypes(inputs, modes)
+	if check.status == succeedMatched || check.status == succeedWithCast {
+		return check
+	}
+	var widened []types.Type
+	for i, t := range inputs {
+		var to types.Type
+		switch {
+		case t.Oid.IsLowPrecisionFloat():
+			to = types.T_float32.ToType()
+		case t.Oid.IsBlockScaledArray() && blockScaledWideningFunctions[fn.functionId]:
+			to = types.New(types.T_array_float32, t.Width, 0)
+		default:
+			continue
+		}
+		if widened == nil {
+			widened = append([]types.Type(nil), inputs...)
+		}
+		widened[i] = to
+	}
+	if widened == nil {
+		return check
+	}
+	switch retry := fn.checkArgumentTypes(widened, modes); retry.status {
+	case succeedMatched:
+		return newCheckResultWithCast(retry.idx, widened)
+	case succeedWithCast:
+		return retry
+	}
+	return check
+}
 
 type checkResult struct {
 	status overloadCheckSituation

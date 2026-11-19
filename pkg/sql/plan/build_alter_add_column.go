@@ -170,13 +170,6 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
-		//case *tree.AttributeDefault, *tree.AttributeNull:
-		//	defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//	newCol.Default = defaultValue
-		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
 			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
@@ -285,8 +278,11 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
-	if types.T(colType.GetId()).IsArrayRelate() {
+	if types.T(colType.GetId()).IsArray() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
+	}
+	if err := lowPrecisionKeyError(ctx, colType.GetId(), columnName, "primary"); err != nil {
+		return err
 	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
@@ -319,7 +315,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if isGeometryPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", columnName))
 	}
-	return nil
+	return lowPrecisionKeyError(ctx, colType.GetId(), columnName, "unique")
 }
 
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
@@ -408,6 +404,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// A replacement keeps index bindings, but never the dropped column's source
 	// mapping. Genuine removals retain the existing index cleanup authority.
 	if preserveIndexes {
@@ -435,6 +433,13 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	// The COPY CREATE could not resolve CHECK expressions naming the dropped
+	// column otherwise; MySQL drops or rejects them at this clause
+	// (prepare_check_constraints_for_alter).
+	if err := handleDropColumnWithCheck(ctx, colName, tableDef); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
@@ -445,7 +450,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
@@ -834,110 +839,3 @@ func checkCycleHelper(ctx context.Context, tableDef *TableDef, targetColName str
 	}
 	return nil
 }
-
-//----------------------------------------------------------------------------------------------------------------------
-/*
-// SetDefaultValue sets the default value of the column.
-func SetDefaultValue(ctx context.Context, col *table.Column, option *ast.ColumnOption) (bool, error) {
-	hasDefaultValue := false
-	value, isSeqExpr, err := getDefaultValue(ctx, col, option)
-	if err != nil {
-		return false, errors.Trace(err)
-	}
-	if isSeqExpr {
-		if err := checkSequenceDefaultValue(col); err != nil {
-			return false, errors.Trace(err)
-		}
-		col.DefaultIsExpr = isSeqExpr
-	}
-
-	if hasDefaultValue, value, err = checkColumnDefaultValue(ctx, col, value); err != nil {
-		return hasDefaultValue, errors.Trace(err)
-	}
-	value, err = convertTimestampDefaultValToUTC(ctx, value, col)
-	if err != nil {
-		return hasDefaultValue, errors.Trace(err)
-	}
-	err = setDefaultValueWithBinaryPadding(col, value)
-	if err != nil {
-		return hasDefaultValue, errors.Trace(err)
-	}
-	return hasDefaultValue, nil
-}
-
-func setDefaultValueWithBinaryPadding(col *table.Column, value interface{}) error {
-	err := col.SetDefaultValue(value)
-	if err != nil {
-		return err
-	}
-	// https://dev.mysql.com/doc/refman/8.0/en/binary-varbinary.html
-	// Set the default value for binary type should append the paddings.
-	if value != nil {
-		if col.GetType() == mysql.TypeString && types.IsBinaryStr(&col.FieldType) && len(value.(string)) < col.GetFlen() {
-			padding := make([]byte, col.GetFlen()-len(value.(string)))
-			col.DefaultValue = string(append([]byte(col.DefaultValue.(string)), padding...))
-		}
-	}
-	return nil
-}
-
-// checkColumnDefaultValue checks the default value of the column.
-// In non-strict SQL mode, if the default value of the column is an empty string, the default value can be ignored.
-// In strict SQL mode, TEXT/BLOB/JSON can't have not null default values.
-// In NO_ZERO_DATE SQL mode, TIMESTAMP/DATE/DATETIME type can't have zero date like '0000-00-00' or '0000-00-00 00:00:00'.
-func checkColumnDefaultValue(ctx CompilerContext, col *table.Column, colType plan.Type, value interface{}) (bool, interface{}, error) {
-	hasDefaultValue := true
-
-	hasStrictMode := false
-	hasNoZeroDateMode := false
-
-	mode, err := ctx.ResolveVariable("sql_mode", true, false)
-	if err == nil {
-		if modeStr, ok := mode.(string); ok {
-			if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
-				hasStrictMode = true
-			}
-
-			if strings.Contains(modeStr, "NO_ZERO_DATE") {
-				hasNoZeroDateMode = true
-			}
-		}
-	}
-
-	if value != nil && (colType.Id == int32(types.T_json) || colType.Id == int32(types.T_blob)) {
-		// In non-strict SQL mode.
-		if !hasStrictMode && value == "" {
-			if colType.Id == int32(types.T_blob) {
-				// The TEXT/BLOB default value can be ignored.
-				hasDefaultValue = false
-			}
-			// In non-strict SQL mode, if the column type is json and the default value is null, it is initialized to an empty array.
-			if colType.Id == int32(types.T_json) {
-				value = `null`
-			}
-			return hasDefaultValue, value, nil
-		}
-		// In strict SQL mode or default value is not an empty string.
-		return hasDefaultValue, value, moerr.NewErrBlobCantHaveDefault(ctx.GetContext(), col.Name)
-	}
-
-	if value != nil && hasNoZeroDateMode && hasStrictMode && IsTypeTime(types.T(colType.Id)) {
-		if vv, ok := value.(string); ok {
-			timeValue, err := expression.GetTimeValue(ctx, vv, col.GetType(), col.GetDecimal(), nil)
-			if err != nil {
-				return hasDefaultValue, value, errors.Trace(err)
-			}
-			if timeValue.GetMysqlTime().CoreTime() == types.ZeroCoreTime {
-				return hasDefaultValue, value, moerr.NewErrInvalidDefault(ctx.GetContext(), col.Name)
-			}
-		}
-	}
-	return hasDefaultValue, value, nil
-}
-
-// IsTypeTime return a boolean value
-// whether the typ is time type like datetime, date or timestamp.
-func IsTypeTime(typ types.T) bool {
-	return typ == types.T_datetime || typ == types.T_date || typ == types.T_timestamp
-}
-*/

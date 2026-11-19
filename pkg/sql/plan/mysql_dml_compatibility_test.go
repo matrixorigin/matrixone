@@ -35,7 +35,7 @@ func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepa
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, isPrepareStmt)
+	return BuildPlan(ctx, stmt, isPrepareStmt, nil)
 }
 
 func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
@@ -45,7 +45,7 @@ func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, false, nil)
 }
 
 func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, message string) {
@@ -287,14 +287,16 @@ func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
 	defer stmt.Free()
 	updateStmt, ok := stmt.(*tree.Update)
 	require.True(t, ok)
-	tblInfo, err := getUpdateTableInfo(ctx, updateStmt)
-	require.NoError(t, err)
-	targetAliases := make([]string, len(tblInfo.tableDefs))
-	for alias, idx := range tblInfo.alias {
-		targetAliases[idx] = alias
+	dmlCtx := NewDMLContext()
+	require.NoError(t, dmlCtx.ResolveUpdateTables(ctx, updateStmt))
+	targetAliases := make([]string, len(dmlCtx.tableDefs))
+	for idx, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[idx]) > 0 {
+			targetAliases[idx] = alias
+		}
 	}
 	require.NoError(t, validateUpdateTargetSubqueries(
-		ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs, targetAliases,
+		ctx, updateStmt, dmlCtx.objRefs, dmlCtx.tableDefs, targetAliases,
 	))
 }
 
@@ -453,7 +455,7 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	_, ok = findMySQLDMLTargetInDirectTableExpr(ctx, cteName, targets, visibleCTEs)
 	require.False(t, ok)
 
-	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil)
+	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	resolvedTargets := makeMySQLDMLTargets([]*ObjectRef{objRef}, []*TableDef{tableDef})
 	nationName := tree.NewTableName(tree.Identifier("nation"), tree.ObjectNamePrefix{}, nil)

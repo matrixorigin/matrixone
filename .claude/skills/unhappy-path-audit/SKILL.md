@@ -5,6 +5,13 @@ description: Full-codebase MatrixOne unhappy-path audit for leak, double cleanup
 
 # Unhappy Path Audit Skill
 
+## Scope
+
+This skill covers resources/waits/accumulation (Q1–Q3). For a behavioral probe
+(accepted but no-op, partial effect, compatibility drift), use
+[`defect-hunt`](../defect-hunt/SKILL.md) as needed. Either skill can be used alone;
+bring a behavioral finding here only when it requires ownership or wait analysis.
+
 ## Core Logic (First Principles)
 
 **Unhappy path auditing = answering three propositions:**

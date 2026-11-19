@@ -487,6 +487,22 @@ func TestReadExtentReleasesPartialReadOnError(t *testing.T) {
 	require.Equal(t, int32(1), releases.Load())
 }
 
+var constructorAllocationSink CacheConstructor
+var constructorAllocationSize int64 = 4096
+var constructorAllocationAlgo uint8 = compress.Lz4
+
+func TestColumnCacheConstructorSingleAllocation(t *testing.T) {
+	t.Cleanup(func() { constructorAllocationSink = nil })
+	ordinary := testing.AllocsPerRun(100, func() {
+		constructorAllocationSink = constructorFactory(constructorAllocationSize, constructorAllocationAlgo)
+	})
+	column := testing.AllocsPerRun(100, func() {
+		constructorAllocationSink = columnCacheConstructorFactory(constructorAllocationSize, constructorAllocationAlgo)
+	})
+	require.Equal(t, float64(1), ordinary)
+	require.Equal(t, ordinary, column, "validation must not capture a second constructor callback")
+}
+
 func TestConstructorFactoryReleasesDecompressionDataOnError(t *testing.T) {
 	var releases atomic.Int32
 	allocator := &trackingCacheDataAllocator{

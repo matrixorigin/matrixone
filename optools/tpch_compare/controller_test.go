@@ -805,7 +805,7 @@ func TestConcurrentStreamsShareOneDuckDBInstance(t *testing.T) {
 	}
 	d := Dataset{Queries: []Query{{Number: 1, Columns: []Column{{Kind: "int"}}, Statements: []string{"SELECT i FROM shared_fixture"}}}}
 	r := WorkerRequest{Engine: e, Queries: []int{1}, Repetitions: 2, Clients: 4, OutputRoot: t.TempDir(), QueryDeadlineNS: int64(5 * time.Second)}
-	queries, wave, err := runQueryStreams(ctx, db, first, r, d, nil)
+	queries, wave, err := runQueryStreams(ctx, db, first, r, d, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

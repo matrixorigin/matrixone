@@ -44,13 +44,11 @@ var (
 func acquireWaiter() *waiter {
 	w := waiterPool.Get().(*waiter)
 	w.ref()
-	w.reuse++
 	return w
 }
 
 type waiter struct {
-	c     chan txn.TxnStatus
-	reuse uint64
+	c chan txn.TxnStatus
 
 	mu struct {
 		sync.RWMutex

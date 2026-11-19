@@ -33,6 +33,8 @@ func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 	return L1DistanceUnrolled(p, q)
 }
 
+// InnerProduct returns the inner-product distance, -Σ pᵢqᵢ: smaller is nearer, so the sign is
+// negative by design. See docs/sql/vector-distance-functions.md.
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	return InnerProductUnrolled(p, q)
 }

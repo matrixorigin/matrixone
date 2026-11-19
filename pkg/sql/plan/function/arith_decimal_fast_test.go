@@ -4042,7 +4042,7 @@ func TestD256Mul(t *testing.T) {
 				nul.Add(i)
 			}
 			got := make([]decimal, len(tc.want))
-			err := d256Mul(tc.x, tc.y, got, tc.s1, tc.s2, nul)
+			err := d256Mul(tc.x, tc.y, got, tc.s1, tc.s2, nul, decimalRangeUnknown, decimalRangeUnknown)
 			require.NoError(t, err)
 			expectedNull := make(map[uint64]bool, len(tc.masked))
 			for _, i := range tc.masked {
@@ -4065,7 +4065,7 @@ func TestD256Mul_Int32ScaleDown(t *testing.T) {
 	want := []types.Decimal256{{}, {B0_63: 1}, {B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}}
 	got := make([]types.Decimal256, len(want))
 	nul := nulls.NewWithSize(len(want))
-	require.NoError(t, d256Mul(x, y, got, 10, 10, nul))
+	require.NoError(t, d256Mul(x, y, got, 10, 10, nul, decimalRangeUnknown, decimalRangeUnknown))
 	require.Equal(t, 0, nul.Count())
 	require.Equal(t, want, got)
 }
@@ -5131,7 +5131,7 @@ func BenchmarkD256Mul_Fast(b *testing.B) {
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mul(xs, ys, rs, 2, 3, nul)
+		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
 	}
 }
 
@@ -5153,7 +5153,7 @@ func BenchmarkD256Mul_FastMixed(b *testing.B) {
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mul(xs, ys, rs, 2, 3, nul)
+		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
 	}
 }
 
@@ -5169,7 +5169,7 @@ func BenchmarkD256MulScaled_Fast(b *testing.B) {
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mul(xs, ys, rs, 10, 10, nul)
+		_ = d256Mul(xs, ys, rs, 10, 10, nul, decimalRangeUnknown, decimalRangeUnknown)
 	}
 }
 
@@ -5186,7 +5186,7 @@ func BenchmarkD256Mul_FastLarge(b *testing.B) {
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mul(xs, ys, rs, 2, 3, nul)
+		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
 	}
 }
 
@@ -5816,7 +5816,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		want := []decimal{{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 1, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615, B128_191: 18446744073709551615, B192_255: 18446744073709551615}}
 		got := make([]decimal, len(want))
 		nul := nulls.NewWithSize(len(want))
-		require.NoError(t, d256Mul(x, y, got, 30, 30, nul))
+		require.NoError(t, d256Mul(x, y, got, 30, 30, nul, decimalRangeUnknown, decimalRangeUnknown))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
 	})
@@ -5828,7 +5828,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		want := []decimal{{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615, B128_191: 18446744073709551615, B192_255: 18446744073709551615}}
 		got := make([]decimal, len(want))
 		nul := nulls.NewWithSize(len(want))
-		require.NoError(t, d256Mul(x, y, got, 30, 30, nul))
+		require.NoError(t, d256Mul(x, y, got, 30, 30, nul, decimalRangeUnknown, decimalRangeUnknown))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
 	})

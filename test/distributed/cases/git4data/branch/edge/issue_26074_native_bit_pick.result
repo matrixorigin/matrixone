@@ -27,7 +27,7 @@ select k, payload from bool_conf_dst order by k;
 update bool_conf_dst set payload = 'dst-true' where payload = 'base-true';
 data branch pick bool_conf_src into bool_conf_dst keys(1) when conflict fail;
 -- @regex("conflict: bool_conf_src INSERT and bool_conf_dst INSERT on pk\(true\) with different values", true)
-internal error: conflict: bool_conf_src INSERT and bool_conf_dst INSERT on pk(true) with different values
+conflict: bool_conf_src INSERT and bool_conf_dst INSERT on pk(true) with different values
 select k, payload from bool_conf_dst order by k;
 ➤ k[-7,1,0]  ¦  payload[12,-1,0]  𝄀
 1  ¦  dst-true

@@ -6,7 +6,7 @@ JSON support. Path values use SQLAlchemy's string binding and literal rendering
 instead of being interpolated as raw SQL.
 """
 
-from sqlalchemy import literal
+from sqlalchemy import String, literal
 from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql import functions
 
@@ -18,6 +18,16 @@ class json_extract(functions.GenericFunction):
     This function wraps MatrixOne's JSON_EXTRACT function and ensures
     that path arguments remain data for dialect/driver escaping.
 
+    Note:
+        ``json_extract`` returns JSON-typed values, not plain strings. For
+        example, extracting ``'$.brand'`` from ``{"brand": "Dell"}`` yields
+        the JSON string ``"Dell"`` (quotes included), so comparing the result
+        against a plain SQL string such as ``'"Dell"'`` does not match.
+        Use ``json_unquote`` (or ``json_extract_string`` / ``column['key'].astext``)
+        for plain-string comparisons::
+
+            json_unquote(json_extract(Product.specs, '$.brand')) == 'Dell'
+
     Args:
         json_column: The JSON column or expression
         *paths: One or more JSON path expressions (e.g., '$.name', '$.age')
@@ -26,7 +36,7 @@ class json_extract(functions.GenericFunction):
         SQLAlchemy function expression
 
     Examples:
-        >>> from matrixone.sqlalchemy_ext.json_functions import json_extract
+        >>> from matrixone.sqlalchemy_ext.json_functions import json_extract, json_unquote
         >>> from sqlalchemy import select
         >>>
         >>> # Extract single path
@@ -35,9 +45,9 @@ class json_extract(functions.GenericFunction):
         >>> # Extract multiple paths
         >>> stmt = select(json_extract(Product.specs, '$.brand', '$.model'))
         >>>
-        >>> # Use in WHERE clause
+        >>> # Use in WHERE clause with a plain-string comparison
         >>> stmt = select(Product).where(
-        ...     json_extract(Product.specs, '$.category') == 'Electronics'
+        ...     json_unquote(json_extract(Product.specs, '$.category')) == 'Electronics'
         ... )
     """
 
@@ -66,7 +76,7 @@ class json_extract_string(functions.GenericFunction):
         >>> stmt = select(json_extract_string(Product.specs, '$.name'))
     """
 
-    type = None
+    type = String()
     name = 'json_extract_string'
     inherit_cache = True
 
@@ -238,7 +248,7 @@ class json_unquote(functions.GenericFunction):
         >>> stmt = select(json_unquote('"Hello"'))
     """
 
-    type = None
+    type = String()
     name = 'json_unquote'
     inherit_cache = True
 

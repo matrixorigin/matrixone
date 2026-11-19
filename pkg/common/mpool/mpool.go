@@ -371,6 +371,7 @@ const (
 	memKindOnHeap uint8 = iota
 	memKindOffHeap
 	memKindAccountedOffHeap
+	memKindAdmittedOffHeap
 )
 
 func init() {
@@ -385,6 +386,10 @@ func (pHdr memHdr) isOffHeap() bool {
 
 func (pHdr memHdr) isAccounted() bool {
 	return pHdr.kind == memKindAccountedOffHeap
+}
+
+func (pHdr memHdr) isAdmitted() bool {
+	return pHdr.kind == memKindAdmittedOffHeap
 }
 
 func (pHdr *memHdr) SetGuard() {
@@ -512,7 +517,7 @@ type MPool struct {
 	stats    MPoolStats // stats
 	resource resourceMemoryStats
 	epoch    atomic.Pointer[ResourcePeakEpoch]
-	details  *mpoolDetails
+	details  atomic.Pointer[mpoolDetails]
 	onHeap   *onHeapOwnership
 
 	noLock bool
@@ -533,6 +538,26 @@ type MPool struct {
 type accountedPtrMetadata struct {
 	hdr   memHdr
 	lease allocationLease
+}
+
+type allocationLease struct {
+	// source points to AllocationAccount or physicalAdmissionLease, as tagged
+	// by the associated memHdr. The unsafe pointer is GC-tracked; callers must
+	// select the matching accessor before dereferencing it.
+	source        unsafe.Pointer
+	owner         AllocationOwner
+	site          AllocationSite
+	profiled      bool
+	capacityClass AllocationCapacityClass
+}
+
+func newAccountAllocationLease(account *AllocationAccount, owner AllocationOwner, site AllocationSite, profiled bool, class AllocationCapacityClass) allocationLease {
+	return allocationLease{source: unsafe.Pointer(account), owner: owner, site: site, profiled: profiled, capacityClass: class}
+}
+
+func (l allocationLease) account() *AllocationAccount { return (*AllocationAccount)(l.source) }
+func (l allocationLease) admitted() *physicalAdmissionLease {
+	return (*physicalAdmissionLease)(l.source)
 }
 
 // BindAllocationAccount binds a noLock pool to one allocation account for its
@@ -666,26 +691,37 @@ func (mp *MPool) deallocateAllPtrs() {
 	}
 	for ptr, metadata := range mp.accountedPtrs {
 		sz := int(metadata.hdr.allocSz)
-		profileRecordAccountedFree(metadata.lease, int64(sz))
+		if metadata.hdr.isAdmitted() {
+			profileRecordFree(uintptr(ptr), int64(sz))
+		} else {
+			profileRecordAccountedFree(metadata.lease, int64(sz))
+		}
 		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
-		metadata.lease.release(uint64(sz))
+		if metadata.hdr.isAdmitted() {
+			metadata.lease.admitted().release()
+		} else {
+			metadata.lease.release(uint64(sz))
+		}
 	}
 	mp.ptrs = nil
 	mp.accountedPtrs = nil
 }
 
 func (mp *MPool) EnableDetailRecording() {
-	if mp.details == nil {
-		mp.details = newMpoolDetails()
+	if mp.details.Load() != nil {
+		return
 	}
+	// Keep existing history if another enabler publishes first.
+	mp.details.CompareAndSwap(nil, newMpoolDetails())
 }
 
 func (mp *MPool) DisableDetailRecording() {
-	mp.details = nil
+	// Readers may finish recording or reporting through their own snapshot.
+	mp.details.Store(nil)
 }
 
 func (mp *MPool) getDetailK() string {
-	if mp == nil || mp.details == nil {
+	if mp == nil || mp.details.Load() == nil {
 		return ""
 	}
 	f := stack.Caller(2)
@@ -806,9 +842,9 @@ func (mp *MPool) ReportJson() string {
 	if bytes, objects := mp.OnHeapOutstanding(); objects != 0 {
 		ret += fmt.Sprintf(",\n \"on_heap\": {\"currBytes\": %d,\"currObjects\": %d}", bytes, objects)
 	}
-	if mp.details != nil {
+	if details := mp.details.Load(); details != nil {
 		ret += ",\n \"detailed_alloc\": "
-		ret += mp.details.reportJson()
+		ret += details.reportJson()
 	}
 
 	return ret + "}"
@@ -1194,13 +1230,13 @@ func (mp *MPool) alloc(
 	}
 	if !offHeap {
 		globalOnHeapStats.recordAlloc(sz)
-		if mp.details != nil {
-			mp.details.recordOnHeapAlloc(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordOnHeapAlloc(detailk, sz)
 		}
 	} else {
 		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
-		if mp.details != nil {
-			mp.details.recordAlloc(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordAlloc(detailk, sz)
 		}
 		profileRecordAlloc(3, uintptr(ptr), sz)
 	}
@@ -1277,13 +1313,7 @@ func (mp *MPool) allocAccounted(
 		kind:    memKindAccountedOffHeap,
 	}
 	hdr.SetGuard()
-	lease := allocationLease{
-		account:       request.account,
-		owner:         request.owner,
-		site:          request.site,
-		profiled:      ProfilingEnabled(),
-		capacityClass: request.capacityClass,
-	}
+	lease := newAccountAllocationLease(request.account, request.owner, request.site, ProfilingEnabled(), request.capacityClass)
 
 	gcurr := globalStats.RecordAlloc("global", sz)
 	globalHeld = true
@@ -1316,11 +1346,30 @@ func (mp *MPool) allocAccounted(
 	}
 	published = true
 	mp.recordResourcePeak(mp.resource.recordAlloc(sz))
-	if mp.details != nil {
-		mp.details.recordAlloc(detailk, sz)
+	if details := mp.details.Load(); details != nil {
+		details.recordAlloc(detailk, sz)
 	}
 	profileRecordAccountedAlloc(lease, sz)
 	return bs, nil
+}
+
+// CanRetainAllocations reports whether mp can release the supplied owned
+// buffers from a retained callback. NoLock allocations are scoped to their
+// pool's lifetime; foreign NoLock buffers are absent from the global ledger.
+// Already leased buffers should be omitted because their lease owns release.
+func (mp *MPool) CanRetainAllocations(buffers ...[]byte) bool {
+	if mp == nil || mp.noLock {
+		return false
+	}
+	for _, data := range buffers {
+		if cap(data) == 0 {
+			continue
+		}
+		if _, ok := mp.getPtrHdr(unsafe.Pointer(unsafe.SliceData(data))); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -1365,7 +1414,9 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 				}
 				globalStats.RecordFree("global", sz)
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
-				if hdr.isAccounted() {
+				if hdr.isAdmitted() {
+					lease.admitted().release()
+				} else if hdr.isAccounted() {
 					lease.release(uint64(sz))
 				}
 			} else {
@@ -1396,8 +1447,8 @@ func (mp *MPool) freePtrInternal(
 		}
 		sz := int64(hdr.allocSz)
 		globalOnHeapStats.recordFree(sz, 1)
-		if mp.details != nil {
-			mp.details.recordOnHeapFree(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordOnHeapFree(detailk, sz)
 		}
 		return
 	}
@@ -1416,12 +1467,14 @@ func (mp *MPool) freePtrInternal(
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
 	mp.resource.recordFree(sz)
-	if mp.details != nil {
-		mp.details.recordFree(detailk, sz)
+	if details := mp.details.Load(); details != nil {
+		details.recordFree(detailk, sz)
 	}
 
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
-	if hdr.isAccounted() {
+	if hdr.isAdmitted() {
+		lease.admitted().release()
+	} else if hdr.isAccounted() {
 		lease.release(uint64(sz))
 	}
 }
@@ -1441,6 +1494,7 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 	}
 
 	var request *allocationAccountRequest
+	var admission PhysicalMemoryAdmission
 	if ptr := unsafe.Pointer(unsafe.SliceData(old)); ptr != nil {
 		var lease allocationLease
 		hdr, ok := mp.getPtrMetadata(ptr, &lease)
@@ -1449,12 +1503,17 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 				"invalid grow pointer: allocation metadata not found",
 			)
 		}
-		if hdr.isAccounted() {
+		if hdr.isAdmitted() {
+			if !offHeap || lease.source == nil {
+				return nil, ErrAllocationAccountMismatch
+			}
+			admission = lease.admitted().admit
+		} else if hdr.isAccounted() {
 			if !offHeap {
 				return nil, ErrAllocationAccountMismatch
 			}
 			accounted := allocationAccountRequest{
-				account:       lease.account,
+				account:       lease.account(),
 				owner:         lease.owner,
 				site:          lease.site,
 				capacityClass: lease.capacityClass,
@@ -1465,7 +1524,9 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 
 	var ret []byte
 	var err error
-	if request != nil {
+	if admission != nil {
+		ret, err = mp.allocAdmittedWithDetailK(detailk, newSz, admission)
+	} else if request != nil {
 		ret, err = mp.allocAccountedWithDetailK(detailk, newSz, *request)
 	} else {
 		ret, err = mp.allocWithDetailK(detailk, newSz, offHeap)
@@ -1569,12 +1630,25 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		return resized, nil
 	}
 
+	if hdr.isAdmitted() {
+		if !offHeap || lease.source == nil {
+			return nil, ErrAllocationAccountMismatch
+		}
+		replacement, err := mp.allocAdmittedWithDetailK(detailk, int64(sz), lease.admitted().admit)
+		if err != nil {
+			return nil, err
+		}
+		copy(replacement, fullAllocation[:oldLength])
+		clear(replacement[oldLength:])
+		mp.freeWithDetailK(detailk, fullAllocation)
+		return replacement, nil
+	}
 	if hdr.isAccounted() {
 		if !offHeap {
 			return nil, ErrAllocationAccountMismatch
 		}
 		request := allocationAccountRequest{
-			account:       lease.account,
+			account:       lease.account(),
 			owner:         lease.owner,
 			site:          lease.site,
 			capacityClass: lease.capacityClass,
@@ -1625,7 +1699,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	// another allocator thread. Failure leaves old live and restores its state.
 	var removedLease allocationLease
 	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
-	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.account != nil {
+	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.source != nil {
 		panic(moerr.NewInternalErrorNoCtx("allocation metadata changed during realloc"))
 	}
 	oldProfile := profileDetach(uintptr(oldptr))
@@ -1665,7 +1739,21 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.allocWithDetailK(detailk, int64(tsz)*int64(cap), offHeap)
+	if n < 0 || cap < n {
+		return nil, moerr.NewInternalErrorNoCtxf("mpool make slice with invalid length %d and capacity %d", n, cap)
+	}
+	if cap == 0 {
+		return nil, nil
+	}
+	// Validate the element count before multiplying so the byte size cannot
+	// wrap around to a small or zero allocation.
+	maxSize := maxAllocationSize()
+	if tsz == 0 || maxSize <= 0 || uint64(cap) > uint64(maxSize)/uint64(tsz) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool memory allocation exceed limit with %d elements of size %d", cap, tsz,
+		)
+	}
+	bs, err := mp.allocWithDetailK(detailk, int64(uint64(tsz)*uint64(cap)), offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -1742,16 +1830,6 @@ func MakeSliceAccountedWithCapacityClass[T any](
 	}
 	values := unsafe.Slice((*T)(unsafe.Pointer(&bs[0])), n)
 	return values[:n:n], nil
-}
-
-func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
-	detailk := mp.getDetailK()
-	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
-	if err != nil {
-		return ret, err
-	}
-	copy(ret, args)
-	return ret, nil
 }
 
 func FreeSlice[T any](mp *MPool, bs []T) {
@@ -2008,4 +2086,105 @@ func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
 		newcap = maxCapacity
 	}
 	return newcap, true
+}
+
+// PhysicalMemoryAdmission reserves a physical allocation before it is made.
+// The release must remain valid until the allocation is freed, including if
+// the allocation outlives its original owner. Concurrent callers require a
+// concurrency-safe admission implementation.
+type PhysicalMemoryAdmission func(uint64) (func(), error)
+
+type physicalAdmissionLease struct {
+	admit   PhysicalMemoryAdmission
+	release func()
+}
+
+// AllocAdmitted creates off-heap backing with a release owned by its physical
+// allocation. Grow and ReallocZero admit replacements before releasing old
+// storage, so the caller's budget also covers the temporary peak.
+func (mp *MPool) AllocAdmitted(size int, admit PhysicalMemoryAdmission) ([]byte, error) {
+	if mp == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	return mp.allocAdmittedWithDetailK(mp.getDetailK(), int64(size), admit)
+}
+
+func (mp *MPool) allocAdmittedWithDetailK(detailk string, size int64, admit PhysicalMemoryAdmission) ([]byte, error) {
+	if admit == nil || size < 0 {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if size > maxAllocationSize() {
+		return nil, ErrAllocationAllocatorLimit
+	}
+	if size == 0 {
+		return nil, nil
+	}
+	release, err := admit(uint64(size))
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return nil, err
+	}
+	if release == nil {
+		return nil, moerr.NewInternalErrorNoCtx("physical allocation admission returned no release")
+	}
+	published := false
+	defer func() {
+		if !published {
+			release()
+		}
+	}()
+	if globalStats.RecordAlloc("global", size) > GlobalCap() {
+		globalStats.RecordFree("global", size)
+		return nil, moerr.NewMPoolCapacityNoCtxf("global cap exceeded while allocating %d bytes", size)
+	}
+	if mp.stats.RecordAlloc(mp.tag, size) > mp.Cap() {
+		mp.stats.RecordFree(mp.tag, size)
+		globalStats.RecordFree("global", size)
+		return nil, moerr.NewMPoolCapacityNoCtxf("mpool out of space, alloc %d bytes, cap %d", size, mp.cap)
+	}
+	backing, err := simpleCAllocator().Allocate(uint64(size))
+	if err != nil {
+		mp.stats.RecordFree(mp.tag, size)
+		globalStats.RecordFree("global", size)
+		return nil, moerr.NewMPoolCapacityNoCtxf("physical allocator rejected %d bytes: %v", size, err)
+	}
+	hdr := memHdr{poolId: mp.id, allocSz: int32(size), kind: memKindAdmittedOffHeap}
+	hdr.SetGuard()
+	ptr := unsafe.Pointer(&backing[0])
+	lease := &physicalAdmissionLease{admit: admit, release: release}
+	if err = mp.recordAccountedPtrMetadata(ptr, hdr, allocationLease{source: unsafe.Pointer(lease)}); err != nil {
+		simpleCAllocator().Deallocate(backing, uint64(size))
+		mp.stats.RecordFree(mp.tag, size)
+		globalStats.RecordFree("global", size)
+		return nil, err
+	}
+	published = true
+	mp.recordResourcePeak(mp.resource.recordAlloc(size))
+	if details := mp.details.Load(); details != nil {
+		details.recordAlloc(detailk, size)
+	}
+	profileRecordAlloc(3, uintptr(ptr), size)
+	return backing, nil
+}
+
+// MakeSliceAdmitted is the typed form of AllocAdmitted.
+func MakeSliceAdmitted[T any](n int, mp *MPool, admit PhysicalMemoryAdmission) ([]T, error) {
+	if n < 0 {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	var value T
+	size := unsafe.Sizeof(value)
+	if size == 0 || uint64(n) > uint64(maxAllocationSize())/uint64(size) {
+		return nil, ErrAllocationAllocatorLimit
+	}
+	backing, err := mp.AllocAdmitted(int(uint64(n)*uint64(size)), admit)
+	if err != nil {
+		return nil, err
+	}
+	return unsafe.Slice((*T)(unsafe.Pointer(&backing[0])), n), nil
 }

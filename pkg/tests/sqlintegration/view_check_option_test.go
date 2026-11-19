@@ -29,8 +29,8 @@ import (
 
 func TestViewCheckOptionCanonicalization(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
-		defer cancel()
+		setupCtx, cancelSetup := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancelSetup()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -39,9 +39,14 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 
 		const schema = "view_check_option_canonicalization"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
-		execSQLRequire(t, ctx, db, "drop database if exists "+schema)
+		execSQLRequire(t, setupCtx, db, "drop database if exists "+schema)
+		cancelSetup()
 		for round := 0; round < 2; round++ {
 			t.Run(fmt.Sprintf("round_%d", round+1), func(t *testing.T) {
+				// Each replay/recreation round owns its complete execution and
+				// teardown budget; the preceding round must not consume it.
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
 				execSQLRequire(t, ctx, db, "create database "+schema)
 				execSQLRequire(t, ctx, db, "create view "+schema+".current_v as select 1 with cAsCaDeD check option")
 				var current string
@@ -84,50 +89,77 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 				}
 				// A metadata round trip retains NAME_CONST's public column name,
 				// bytes, column type, character set and collation for new and Stmt-only rows.
-				replayCases := make([]struct{ selectSQL, want string }, 0, 25)
-				replayCases = append(replayCases, []struct{ selectSQL, want string }{
-					{`select 'ab' as c`, "ab"},
-					{`select 'a\\b' as c`, "a\\b"},
-					{`select 'é\\界' as c`, "é\\界"},
-					{`select src.ab as c from (select _binary 'ab') src`, "ab"},
-					{`select src.ab as c from (select _binary 'ab' as ab) src`, "ab"},
-					{`select src.` + "`n + 1`" + ` as c from (select n + 1 from (select 1 as n) t) src`, "2"},
-					{`select src.` + "`a\\b`" + ` as c from (select name_const('a\\b', 1)) src`, "1"},
-					{`select src.ab as c from (select _binary 'ab') src(ab)`, "ab"},
-					{`with src as (select _binary 'ab') select ab as c from src`, "ab"},
-					{`select src.ab as c from ((select _binary 'ab') union all (select _binary 'cd' where false)) src`, "ab"},
-					{`select (select src.ab from (select _binary 'ab') src) as c`, "ab"},
-					{`select name_const('c', 1)`, "1"},
-					{`select name_const('c', 'plain') as c`, "plain"},
-					{`select name_const('c', _binary 'a\\b') as c`, "a\\b"},
-					{`select length(name_const('c', 'a\\b')) as c`, "3"},
-					{`select name_const('c', 'a\\b') as c`, "a\\b"},
-					{`select name_const('c', ('a\\b'))`, "a\\b"},
-					{`select name_const('c', 'a\\b' collate utf8mb4_bin)`, "a\\b"},
-					{`select c from (select name_const('c', 'a\\b')) src`, "a\\b"},
-					{`select name_const('c', 'a\\b$''é') as c`, "a\\b$'é"},
+				type replayCase struct {
+					selectSQL, want string
+					recreate        bool
+				}
+				replayCases := make([]replayCase, 0, 25)
+				replayCases = append(replayCases, []replayCase{
+					{selectSQL: `select 'ab' as c`, want: "ab", recreate: true},
+					{selectSQL: `select 'a\\b' as c`, want: "a\\b"},
+					{selectSQL: `select 'é\\界' as c`, want: "é\\界"},
+					{selectSQL: `select src.ab as c from (select _binary 'ab') src`, want: "ab"},
+					{selectSQL: `select src.ab as c from (select _binary 'ab' as ab) src`, want: "ab", recreate: true},
+					{selectSQL: `select src.` + "`n + 1`" + ` as c from (select n + 1 from (select 1 as n) t) src`, want: "2"},
+					{selectSQL: `select src.` + "`a\\b`" + ` as c from (select name_const('a\\b', 1)) src`, want: "1"},
+					{selectSQL: `select src.ab as c from (select _binary 'ab') src(ab)`, want: "ab"},
+					{selectSQL: `with src as (select _binary 'ab') select ab as c from src`, want: "ab"},
+					{selectSQL: `select src.ab as c from ((select _binary 'ab') union all (select _binary 'cd' where false)) src`, want: "ab"},
+					{selectSQL: `select (select src.ab from (select _binary 'ab') src) as c`, want: "ab"},
+					{selectSQL: `select name_const('c', 1)`, want: "1", recreate: true},
+					{selectSQL: `select name_const('c', 'plain') as c`, want: "plain"},
+					{selectSQL: `select name_const('c', _binary 'a\\b') as c`, want: "a\\b"},
+					{selectSQL: `select length(name_const('c', 'a\\b')) as c`, want: "3"},
+					{selectSQL: `select name_const('c', 'a\\b') as c`, want: "a\\b"},
+					{selectSQL: `select name_const('c', ('a\\b'))`, want: "a\\b"},
+					{selectSQL: `select name_const('c', 'a\\b' collate utf8mb4_bin)`, want: "a\\b"},
+					{selectSQL: `select c from (select name_const('c', 'a\\b')) src`, want: "a\\b"},
+					{selectSQL: `select name_const('c', 'a\\b$''é') as c`, want: "a\\b$'é"},
 				}...)
 				// The accepted literal domain crosses the declared VARCHAR limit.
 				// Include both sides of that boundary and a multi-byte value whose
 				// byte count crosses it while its character count does not.
 				for _, width := range []int{65534, 65535, 65536} {
 					value := strings.Repeat("a", width-1) + `\`
-					replayCases = append(replayCases, struct{ selectSQL, want string }{
-						"select '" + strings.ReplaceAll(value, `\`, `\\`) + "' as c", value})
+					replayCases = append(replayCases, replayCase{
+						selectSQL: "select '" + strings.ReplaceAll(value, `\`, `\\`) + "' as c",
+						want:      value,
+						recreate:  width == 65535,
+					})
 				}
-				for _, value := range []string{strings.Repeat("界", 32768) + `\`, strings.Repeat("界", 65535) + `\`} {
-					replayCases = append(replayCases, struct{ selectSQL, want string }{
-						"select name_const('c', '" + strings.ReplaceAll(value, `\`, `\\`) + "') as c", value})
+				for index, value := range []string{strings.Repeat("界", 32768) + `\`, strings.Repeat("界", 65535) + `\`} {
+					replayCases = append(replayCases, replayCase{
+						selectSQL: "select name_const('c', '" + strings.ReplaceAll(value, `\`, `\\`) + "') as c",
+						want:      value,
+						recreate:  index == 1,
+					})
 				}
 				metadataNames := make([][3]string, 0, len(replayCases))
 				for index, tc := range replayCases {
+					// Keep the original index so recreation uses the same source
+					// and replay names with the same expression after teardown.
+					if round == 1 && !tc.recreate {
+						continue
+					}
 					names := [3]string{fmt.Sprintf("name_const_source_%d", index)}
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
 					read := func(view string) [3]string {
+						t.Helper()
+						valueRows, err := db.QueryContext(ctx, "select *, charset(c), collation(c) from "+view)
+						require.NoError(t, err)
+						defer valueRows.Close()
+						valueNames, err := valueRows.Columns()
+						require.NoError(t, err)
+						require.Len(t, valueNames, 3)
+						require.Equal(t, "c", valueNames[0])
+						require.True(t, valueRows.Next(), "view %s: %v", view, valueRows.Err())
 						var values [3]string
-						require.NoError(t, db.QueryRowContext(ctx,
-							"select c, charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
+						require.NoError(t, valueRows.Scan(&values[0], &values[1], &values[2]))
+						require.False(t, valueRows.Next(), "view must return exactly one row: %s", view)
+						require.NoError(t, valueRows.Err())
+						// Keep the independent empty-result metadata path. The data
+						// result above also checks its actual wire column shape.
 						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
 						require.NoError(t, err)
 						defer rows.Close()
@@ -159,6 +191,9 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					}
 					metadataNames = append(metadataNames, names)
 				}
+				if round == 1 {
+					require.Len(t, metadataNames, 5)
+				}
 				// The column catalog is stable after CREATE. Read it once for
 				// the round instead of repeating an information_schema scan for
 				// every source and replay; retain the same per-view type oracle.
@@ -186,14 +221,14 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					}
 				}
 				execSQLRequire(t, ctx, db, "drop database "+schema)
+				var remaining int
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
+				require.Zero(t, remaining, "verify teardown before reusing the same CN")
 			})
 			if t.Failed() {
 				return
 			}
-			var remaining int
-			require.NoError(t, db.QueryRowContext(ctx,
-				"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
-			require.Zero(t, remaining, "verify teardown before reusing the same CN")
 		}
 	})
 }

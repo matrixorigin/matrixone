@@ -134,7 +134,7 @@ func TestStreamLoadedSegmentAllPkTypes(t *testing.T) {
 				e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)
 				PutColumnBuffer(o.Keys) // recycle, as the real consumer does
 				return e
-			})
+			}, 0)
 		require.NoError(t, err)
 		require.Equal(t, len(pks), out.Length())
 		return out
@@ -162,12 +162,12 @@ func TestStreamBagOfWordsEdges(t *testing.T) {
 		return nil
 	}
 	// empty index → globalN == 0 → nil, no emit.
-	require.NoError(t, NewIndex(nil, nil).StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil, false, noEmit))
+	require.NoError(t, NewIndex(nil, nil).StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil, false, noEmit, 0))
 
 	// non-empty index but a pattern that tokenizes to nothing → no resolvable tokens → nil.
 	b := NewBuilder("e", int32(types.T_int64))
 	feed(t, b, int64(1), "alpha")
 	seg, err := b.Finish()
 	require.NoError(t, err)
-	require.NoError(t, NewIndex([]*Segment{seg}, nil).StreamBagOfWords([]byte("   "), ParserDefault, BM25, nil, false, noEmit))
+	require.NoError(t, NewIndex([]*Segment{seg}, nil).StreamBagOfWords([]byte("   "), ParserDefault, BM25, nil, false, noEmit, 0))
 }

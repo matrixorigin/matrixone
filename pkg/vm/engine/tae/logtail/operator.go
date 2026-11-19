@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/tidwall/btree"
 )
 
 type BoundTableOperator struct {
@@ -53,13 +52,12 @@ func (c *BoundTableOperator) recordReport(isTombstone bool, appendable bool) {
 
 // iterObject is allowed to yield false positive results, because ForeachMVCCNodeInRange will check the accuracy of the result.
 func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) error {
-	var it btree.IterG[*catalog.ObjectEntry]
+	var snapshot catalog.ObjectListSnapshot
 	if isTombstone {
-		it = c.tbl.MakeTombstoneObjectIt()
+		snapshot = c.tbl.MakeTombstoneObjectSnapshot()
 	} else {
-		it = c.tbl.MakeDataObjectIt()
+		snapshot = c.tbl.MakeDataObjectSnapshot()
 	}
-	defer it.Release()
 	visit := func(obj *catalog.ObjectEntry) error {
 		c.recordReport(isTombstone, obj.GetAppendable())
 		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
@@ -67,24 +65,86 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 		}
 		return c.visitor.VisitObj(obj)
 	}
+	return visitLogtailObjects(snapshot, from, to, visit)
+}
 
+func visitLogtailObjects(
+	snapshot catalog.ObjectListSnapshot, from, to types.TS,
+	visit func(*catalog.ObjectEntry) error,
+) error {
 	for group := catalog.ObjectListGroupAppendableCreate; group <= catalog.ObjectListGroupNonAppendableDrop; group++ {
-		if group == catalog.ObjectListGroupAppendableCreate ||
-			group == catalog.ObjectListGroupAppendableCreateWithDrop {
-			if catalog.SeekObjectListGroupBefore(&it, group, from) {
-				if err := visit(it.Item()); err != nil {
+		appendableCreate := group == catalog.ObjectListGroupAppendableCreate ||
+			group == catalog.ObjectListGroupAppendableCreateWithDrop
+		var bookmarkStart *catalog.ObjectEntry
+		var bookmarkValid bool
+		if appendableCreate {
+			// An append on an older object can commit after a newer object is
+			// created. Only a finalized max-commit prefix may be omitted.
+			bookmarkStart, bookmarkValid = snapshot.CommitBookmarkStart(group, from)
+		}
+		bookmarkBeforeFrom := false
+		if bookmarkStart != nil {
+			commitTS := bookmarkStart.ObjectListCommitTS()
+			bookmarkBeforeFrom = commitTS.LT(&from)
+		}
+		var last *catalog.ObjectEntry
+		for {
+			groupIt := snapshot.Group(group)
+			var ok bool
+			switch {
+			case last != nil:
+				// The pinned group tree is immutable. Resume after the last
+				// fetched key, even if its visitor waited for a transaction.
+				ok = groupIt.Seek(last)
+				if ok {
+					ok = groupIt.Next()
+				}
+			case appendableCreate && !bookmarkValid:
+				ok = groupIt.First()
+			case appendableCreate && bookmarkBeforeFrom:
+				ok = groupIt.Seek(bookmarkStart)
+			default:
+				// A finalized append-max below from says nothing about
+				// catalog creation in [from,to]. Never seek past from.
+				ok = catalog.SeekObjectListGroup(&groupIt, group, from)
+			}
+
+			// The visitor can wait for append transactions whose completion
+			// updates ObjectList. Release the B-tree read lock before visiting.
+			var batch [64]*catalog.ObjectEntry
+			count := 0
+			for ok && count < len(batch) {
+				obj := groupIt.Item()
+				commitTS := obj.ObjectListCommitTS()
+				if commitTS.GT(&to) {
+					break
+				}
+				batch[count] = obj
+				count++
+				last = obj
+				ok = groupIt.Next()
+			}
+			finished := !ok || count < len(batch)
+			groupIt.Release()
+			for _, obj := range batch[:count] {
+				commitTS := obj.ObjectListCommitTS()
+				if appendableCreate && commitTS.LT(&from) {
+					if data := obj.GetObjectData(); data != nil {
+						if maxCommitter, ok := data.(interface{ GetAppendMaxCommitTS() (types.TS, bool) }); ok {
+							if maxCommit, finalized := maxCommitter.GetAppendMaxCommitTS(); finalized && maxCommit.LT(&from) {
+								continue
+							}
+						}
+					}
+				}
+				// Catalog creations in [from, to] are visited even when their
+				// append max is below from or no rows were appended.
+				if err := visit(obj); err != nil {
 					return err
 				}
 			}
-		}
-		for ok := catalog.SeekObjectListGroup(&it, group, from); ok; ok = it.Next() {
-			obj := it.Item()
-			commitTS := obj.ObjectListCommitTS()
-			if obj.ObjectListGroup() != group || commitTS.GT(&to) {
+			if finished {
 				break
-			}
-			if err := visit(obj); err != nil {
-				return err
 			}
 		}
 	}

@@ -1,0 +1,164 @@
+-- exact weighted percentiles (quantileExactWeighted, issue 29944)
+-- Self-contained fixture: every expected value is the exact weighted-CDF
+-- selection min { v : F(v) >= ceil(level * W) } computed by hand.
+
+drop table if exists t_qew_bvt;
+create table t_qew_bvt(id int, gid int, v double, w double);
+insert into t_qew_bvt values
+    (1, 1, cast(null as double), 1.0),
+    (2, 1, 2.0, 2.0),
+    (3, 1, 4.0, 1.0),
+    (4, 1, 4.0, 3.0),
+    (5, 1, cast(null as double), 1.0),
+    (6, 1, -1.0, 2.0);
+
+-- The issue's entry probe: the exact weighted P50 is 2 on this fixture, where
+-- the supported unweighted PERCENTILE_CONT control interpolates to 3.
+select quantileExactWeighted(v, w, 0.5) as weighted_p50
+from t_qew_bvt;
+
+select percentile_cont(0.5) within group (order by v) as unweighted_control
+from t_qew_bvt;
+
+-- A second partition and a group whose rows all fail the paired-NULL rule.
+insert into t_qew_bvt values
+    (7, 2, 10.0, 1.0),
+    (8, 2, 20.0, 3.0),
+    (9, 2, 30.0, 1.0),
+    (10, 2, cast(null as double), 5.0),
+    (11, 3, 5.0, cast(null as double));
+
+-- GROUP BY partitions: group 1 keeps W=8,k=4 -> 2; group 2 has W=5,k=3 -> 20;
+-- group 3 never survives the paired-NULL rule -> NULL.
+select gid, quantileExactWeighted(v, w, 0.5) as wp50
+from t_qew_bvt
+group by gid order by gid;
+
+-- Window full-partition aggregation broadcasts the same per-partition result.
+select id, gid, quantileExactWeighted(v, w, 0.5) over (partition by gid) as wpart
+from t_qew_bvt order by id;
+
+-- Ties collapse to summed weight; a level beyond the tie boundary moves on.
+drop table if exists t_qew_ties_bvt;
+create table t_qew_ties_bvt(v double, w double);
+insert into t_qew_ties_bvt values (5.0, 2.0), (5.0, 3.0), (9.0, 1.0);
+select quantileExactWeighted(v, w, 0.5) as tie_p50 from t_qew_ties_bvt;
+select quantileExactWeighted(v, w, 0.9) as tie_p90 from t_qew_ties_bvt;
+
+-- Zero-weight endpoints: trailing massless values are never selected at
+-- level 1, and a leading massless value is the minimum at level 0.
+drop table if exists t_qew_zero_bvt;
+create table t_qew_zero_bvt(v double, w double);
+insert into t_qew_zero_bvt values (1.0, 1.0), (9.0, 0.0);
+select quantileExactWeighted(v, w, 1) as p100 from t_qew_zero_bvt;
+
+drop table if exists t_qew_massless_bvt;
+create table t_qew_massless_bvt(v double, w double);
+insert into t_qew_massless_bvt values (0.0, 0.0), (5.0, 1.0);
+select quantileExactWeighted(v, w, 0) as p0,
+       quantileExactWeighted(v, w, 0.5) as p50,
+       quantileExactWeighted(v, w, 1) as p100
+from t_qew_massless_bvt;
+
+drop table if exists t_qew_allzero_bvt;
+create table t_qew_allzero_bvt(v double, w double);
+insert into t_qew_allzero_bvt values (3.0, 0.0), (7.0, 0.0);
+select quantileExactWeighted(v, w, 1) as all_zero_p100 from t_qew_allzero_bvt;
+
+-- Empty table and an all-skipped group return NULL.
+drop table if exists t_qew_empty_bvt;
+create table t_qew_empty_bvt(v double, w double);
+select quantileExactWeighted(v, w, 0.5) as empty_p50 from t_qew_empty_bvt;
+insert into t_qew_empty_bvt values (cast(null as double), 1.0), (2.0, cast(null as double));
+select quantileExactWeighted(v, w, 0.5) as skipped_p50 from t_qew_empty_bvt;
+
+-- DISTINCT deduplicates exact (value, weight) pairs.
+drop table if exists t_qew_distinct_bvt;
+create table t_qew_distinct_bvt(v double, w double);
+insert into t_qew_distinct_bvt values (5.0, 1.0), (5.0, 1.0), (9.0, 1.0);
+select quantileExactWeighted(distinct v, w, 0.5) as distinct_p50
+from t_qew_distinct_bvt;
+
+-- Typed weight columns keep full exactness: UINT64 above 2^53 and an
+-- integral DECIMAL column both finalize exactly, matching the plain DOUBLE
+-- literal weight control.
+drop table if exists t_qew_typed_bvt;
+create table t_qew_typed_bvt(
+    v bigint,
+    wu bigint unsigned,
+    wd decimal(20, 0) unsigned);
+insert into t_qew_typed_bvt values
+    (1, 9007199254740993, 1),
+    (2, 9007199254740992, 2);
+select quantileExactWeighted(v, wu, 0.5) as uint64_p50 from t_qew_typed_bvt;
+select quantileExactWeighted(v, wd, 0.5) as decimal_p50 from t_qew_typed_bvt;
+select quantileExactWeighted(v, 2, 0.5) as literal_uint_p50 from t_qew_typed_bvt;
+select quantileExactWeighted(id, w, 0.5) as value_is_int from t_qew_bvt;
+
+-- A cumulative ROWS frame with frame entry and exit: the row leaving the
+-- frame contributes to the prior rows' answer only.
+drop table if exists t_qew_frame_bvt;
+create table t_qew_frame_bvt(id int, v double, w double);
+insert into t_qew_frame_bvt values
+    (1, 1.0, 1.0), (2, 3.0, 1.0), (3, 5.0, 1.0), (4, 2.0, 1.0), (5, 9.0, 1.0);
+select id,
+       quantileExactWeighted(v, w, 0.5) over (
+           order by id rows between 1 preceding and current row) as roll2
+from t_qew_frame_bvt order by id;
+
+-- Documented rejections, with error-bearing statements.
+select quantileExactWeighted(v, w, 1.5) as level_out_of_range from t_qew_bvt;
+select quantileExactWeighted(v, w, -0.5) as level_negative from t_qew_bvt;
+select quantileExactWeighted(v, 2.5, 0.5) as weight_fractional from t_qew_bvt;
+select quantileExactWeighted(v, -1.0, 0.5) as weight_negative from t_qew_bvt;
+drop table if exists t_qew_dec256_bvt;
+create table t_qew_dec256_bvt(v bigint, w decimal(65, 0));
+select quantileExactWeighted(v, w, 0.5) as decimal256_weight from t_qew_dec256_bvt;
+drop table if exists t_qew_dec256_bvt;
+
+-- Prepared statements evaluate the level marker per EXECUTE: 0.25 -> -1 and
+-- 0.75 -> 4 on the issue fixture.
+prepare qew_level_p from
+    'select quantileExactWeighted(v, w, ?) as prepared_p from t_qew_bvt where gid = 1';
+set @qew_level = 0.25;
+execute qew_level_p using @qew_level;
+set @qew_level = 0.75;
+execute qew_level_p using @qew_level;
+deallocate prepare qew_level_p;
+
+-- DISTINCT inside windows: equal (value, weight) pairs dedupe per partition
+-- and per sliding frame. Partition 1 keeps distinct pairs (2,1),(6,1):
+-- W=2, k=1 selects 2, while the plain pairs (2,2),(6,3) give W=5, k=3
+-- selecting 6 - the answers must differ. Partition 2 has (1,0),(3,1):
+-- W=1, k=1 selects 3 either way.
+drop table if exists t_qew_dupwin_bvt;
+create table t_qew_dupwin_bvt(id int, gid int, v double, w double);
+insert into t_qew_dupwin_bvt values
+    (1, 1, 2.0, 1.0), (2, 1, 2.0, 1.0),
+    (3, 1, 6.0, 1.0), (4, 1, 6.0, 1.0), (5, 1, 6.0, 1.0),
+    (6, 2, 1.0, 0.0), (7, 2, 3.0, 1.0);
+select id, gid, quantileExactWeighted(distinct v, w, 0.5) over (partition by gid) as dwin_part
+from t_qew_dupwin_bvt order by id;
+select id, gid, quantileExactWeighted(v, w, 0.5) over (partition by gid) as plain_win_part
+from t_qew_dupwin_bvt order by id;
+
+-- A bounded ROWS frame makes the dedup slide with the frame: the frame of
+-- row 4 holds {2,6,6}, so DISTINCT keeps W=2, k=1 -> 2 while the plain
+-- frame reaches W=3, k=2 -> 6.
+select id, quantileExactWeighted(distinct v, w, 0.5) over (
+    order by id rows between 2 preceding and current row) as dwin_frame
+from t_qew_dupwin_bvt where gid = 1 order by id;
+select id, quantileExactWeighted(v, w, 0.5) over (
+    order by id rows between 2 preceding and current row) as plain_win_frame
+from t_qew_dupwin_bvt where gid = 1 order by id;
+drop table if exists t_qew_dupwin_bvt;
+
+drop table if exists t_qew_ties_bvt;
+drop table if exists t_qew_zero_bvt;
+drop table if exists t_qew_massless_bvt;
+drop table if exists t_qew_allzero_bvt;
+drop table if exists t_qew_empty_bvt;
+drop table if exists t_qew_distinct_bvt;
+drop table if exists t_qew_typed_bvt;
+drop table if exists t_qew_frame_bvt;
+drop table if exists t_qew_bvt;

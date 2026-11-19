@@ -21,6 +21,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +31,82 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
+
+func candidateColumnDefinition(expr *plan.Expr, table *plan.TableDef) *plan.ColDef {
+	if expr == nil || expr.GetCol() == nil || table == nil {
+		return nil
+	}
+	name := expr.GetCol().Name
+	name = name[strings.LastIndexByte(name, '.')+1:]
+	position, ok := table.Name2ColIndex[name]
+	if !ok || position < 0 || int(position) >= len(table.Cols) {
+		return nil
+	}
+	return table.Cols[position]
+}
+
+// candidateScalarFilterSafe checks the physical domain of an independently
+// proved pruning hint. The reader and the raw sort-key filter have different
+// comparison contracts; neither follows from the candidate bit alone.
+func candidateScalarFilterSafe(expr *plan.Expr, table *plan.TableDef, rawKey bool) bool {
+	if expr == nil || table == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	name := fn.Func.ObjName
+	var arity int
+	switch name {
+	case "=", "<", "<=", ">", ">=", "prefix_eq":
+		arity = 2
+	case "between", "prefix_between":
+		arity = 3
+	default:
+		return false
+	}
+	if len(fn.Args) != arity || fn.Args[0] == nil || fn.Args[0].GetCol() == nil {
+		return false
+	}
+	colDef := candidateColumnDefinition(fn.Args[0], table)
+	if colDef == nil {
+		return false
+	}
+	column := colDef.Typ
+	kind := types.T(column.Id)
+	bytesDomain := kind == types.T_varchar || kind == types.T_varbinary
+	switch kind {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_datetime, types.T_timestamp, types.T_decimal64, types.T_decimal128,
+		types.T_varchar, types.T_varbinary:
+	default:
+		return false
+	}
+	if types.IsUnicodeCollation(uint8(column.Charset)) || column.PadSpace ||
+		!bytesDomain && (name == "prefix_eq" || name == "prefix_between") {
+		return false
+	}
+	columnType := types.New(kind, column.Width, column.Scale)
+	columnType.Charset = uint8(column.Charset)
+	for _, bound := range fn.Args[1:] {
+		if bound == nil || bound.GetFold() == nil || bound.GetFold().Data == nil ||
+			(len(bound.GetFold().Data) != 0 && !bound.GetFold().IsConst) || bound.Typ.PadSpace ||
+			types.IsUnicodeCollation(uint8(bound.Typ.Charset)) || types.T(bound.Typ.Id) != kind {
+			return false
+		}
+		value := bound.GetFold().Data
+		if size := kind.FixedLength(); size > 0 && len(value) != size {
+			return false
+		}
+		if rawKey {
+			valueType := types.New(types.T(bound.Typ.Id), bound.Typ.Width, bound.Typ.Scale)
+			valueType.Charset = uint8(bound.Typ.Charset)
+			if !keycodec.SupportsExactRawRuntimeFilterPair(columnType, valueType) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
@@ -92,24 +169,26 @@ func ConstructInExpr(
 // vectors they use positionally elsewhere, and reordering one in place would
 // mis-associate rows against its parallel arrays.
 //
-// A payload carrying NULLs is returned unchanged. InplaceSortAndCompact permutes
-// only the value column, so the null bitmap would be left indexing the wrong rows,
-// and compaction rebuilds the vector with a nil bitmap, dropping the NULLs
-// outright; planner constant folding and normalizePKInVector both sidestep it the
-// same way. Publishing that payload unsorted and unflagged costs nothing beyond
-// pruning, because zone-map filtering refuses to binary-search an unflagged
-// payload and keeps the block. Today's callers all pass PK-derived vectors, which
-// cannot be NULL -- the guard is here so a future one cannot silently publish a
-// corrupted filter.
+// A payload carrying NULLs is returned unchanged so optional zone-map pruning
+// remains conservative and the original SQL NULL semantics are retained.
 func normalizeInPayload(data []byte) ([]byte, int, error) {
-	owned := vector.NewVec(types.T_any.ToType())
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return normalizeInPayloadWithPool(data, mp)
+}
+
+func normalizeInPayloadWithPool(data []byte, mp *mpool.MPool) ([]byte, int, error) {
+	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	defer owned.Free(mp)
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, 0, err
 	}
 	if owned.GetNulls().Any() {
 		return data, owned.Length(), nil
 	}
-	owned.InplaceSortAndCompact() // also sets the sorted flag
+	if err := owned.InplaceSortAndCompact(mp); err != nil {
+		return nil, 0, err
+	}
 	// Returned directly rather than branched on: there is nothing to unwind here,
 	// and the caller discards the length whenever the error is non-nil.
 	sorted, err := owned.MarshalBinary()

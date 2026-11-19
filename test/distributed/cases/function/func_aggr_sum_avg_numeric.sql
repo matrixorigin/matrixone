@@ -87,6 +87,13 @@ DEALLOCATE PREPARE string_marker;
 -- View and CTAS must preserve DOUBLE results and nullable groups.
 CREATE VIEW string_totals AS SELECT g, SUM(s) AS total, AVG(s) AS mean FROM numeric_strings GROUP BY g;
 SELECT * FROM string_totals ORDER BY g;
+SET @@sql_mode = 'STRICT_TRANS_TABLES';
+-- Strict materialization rejects truncation and rolls back the new table.
+-- @regex("Truncated incorrect DOUBLE value",true)
+CREATE TABLE rejected_totals AS SELECT * FROM string_totals;
+SELECT COUNT(*) AS rejected_tables FROM information_schema.tables
+WHERE table_schema = 'sum_avg_numeric' AND table_name = 'rejected_totals';
+SET @@sql_mode = '';
 CREATE TABLE materialized_totals AS SELECT * FROM string_totals;
 SELECT * FROM materialized_totals ORDER BY g;
 SELECT column_name, data_type FROM information_schema.columns
@@ -94,6 +101,7 @@ WHERE table_schema = 'sum_avg_numeric' AND table_name = 'materialized_totals'
 ORDER BY ordinal_position;
 
 -- Force AP estimates so both one-worker and two-worker aggregation are exercised with few rows.
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @@optimizer_hints = 'execType=2';
 SET @@max_dop = 1;
 SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;

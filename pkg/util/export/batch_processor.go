@@ -489,27 +489,8 @@ func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	}
 }
 
-func WithCollectorCntP(p int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.collectorCntP = p })
-}
-func WithGeneratorCntP(p int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.generatorCntP = p })
-}
-func WithExporterCntP(p int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
-}
-
-// WithCollectorCnt sets the collector worker count directly, bypassing the
-// percent-based calculation. Mainly useful for tests that need deterministic
-// worker counts independent of runtime.NumCPU().
-func WithCollectorCnt(n int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = n })
-}
 func WithGeneratorCnt(n int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = n })
-}
-func WithExporterCnt(n int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = n })
 }
 
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {

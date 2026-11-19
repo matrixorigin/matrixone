@@ -450,7 +450,9 @@ select @maxint;
 SELECT @maxint + 0e0;
 SELECT 18446744073709551615 + 0e0;
 
+-- @metacmp(true)
 SELECT @maxint + 0.0;
+-- @metacmp(true)
 SELECT 18446744073709551615 + 0.0;
 
 
@@ -461,6 +463,7 @@ DEALLOCATE PREPARE s;
 
 PREPARE s FROM 'SELECT 0.0 + ?';
 
+-- @metacmp(true)
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 
@@ -484,10 +487,12 @@ execute s using @maxint;
 deallocate prepare s;
 
 prepare s from 'select (? + 0.5) + b from prepare_bit_numeric where b = 0';
+-- @metacmp(true)
 execute s using @maxint;
 deallocate prepare s;
 
 prepare s from 'select b + (0.5 + ?) from prepare_bit_numeric where b = 0';
+-- @metacmp(true)
 execute s using @maxint;
 deallocate prepare s;
 
@@ -672,8 +677,10 @@ prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
 set @issue25408_runtime_value = '2';
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
 set @issue25408_runtime_value = 2.5;
+-- @metacmp(true)
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
 set @issue25408_runtime_value = 3.5;
+-- @metacmp(true)
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
 set @issue25408_runtime_value = -2;
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
@@ -691,6 +698,7 @@ deallocate prepare issue25408_runtime_divide;
 set @issue25408_runtime_value = 9007199254740993.5;
 select (@issue25408_runtime_value / 2) + 1 as result;
 prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
+-- @metacmp(true)
 execute issue25408_nested_add using @issue25408_runtime_value;
 deallocate prepare issue25408_nested_add;
 select (@issue25408_runtime_value / 2) + 1e0 as result;
@@ -709,10 +717,12 @@ prepare issue25408_nested_abs from 'select abs(? / 2) as result';
 execute issue25408_nested_abs using @issue25408_runtime_value;
 deallocate prepare issue25408_nested_abs;
 prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
+-- @metacmp(true)
 execute issue25408_nested_multiply using @issue25408_runtime_value;
 deallocate prepare issue25408_nested_multiply;
 select abs(@issue25408_runtime_value + 1) as result;
 prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+-- @metacmp(true)
 execute issue25408_abs_exact using @issue25408_runtime_value;
 deallocate prepare issue25408_abs_exact;
 select abs(@issue25408_runtime_value + 1e0) as result;

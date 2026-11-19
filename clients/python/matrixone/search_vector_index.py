@@ -66,8 +66,15 @@ Usage Example:
 """
 
 import re
+import json
+import math
+import numbers
+import asyncio
 from dataclasses import dataclass
+from ._sql_literals import sql_identifier, sql_literal, substitute_parameters
+
 from typing import Any, Dict, List, Optional
+from .exceptions import QueryError
 
 
 @dataclass
@@ -168,9 +175,6 @@ class PineconeCompatibleIndex:
         self.client = client
         self.table_name = table_name
         self.vector_column = vector_column
-        self._index_info = None
-        self._metadata_columns = None  # Will be auto-detected
-        self._id_column = None  # Will be auto-detected as primary key
 
     @property
     def metadata_columns(self):
@@ -183,313 +187,256 @@ class PineconeCompatibleIndex:
                 raise RuntimeError("Use _get_metadata_columns_async() for async clients")
         return self._get_metadata_columns()
 
+    @staticmethod
+    def _schema_columns(rows):
+        primary = [row[0] for row in rows if len(row) > 3 and 'PRI' in str(row[3]).upper()]
+        if len(primary) != 1:
+            raise ValueError('Pinecone handles require a single primary key column')
+        return primary[0], [row[0] for row in rows]
+
     def _get_id_column(self):
-        """Get the primary key column name"""
-        if self._id_column is not None:
-            return self._id_column
-
-        # Check if this is an async client
-        if hasattr(self.client, "execute") and hasattr(self.client.execute, "__call__"):
-            # Check if execute returns a coroutine (async client)
-            import asyncio
-
-            if asyncio.iscoroutinefunction(self.client.execute):
-                raise RuntimeError("Use _get_id_column_async() for async clients")
-
-        # Get table schema to find primary key
-        schema_result = self.client.execute(f"DESCRIBE {self.table_name}")
-        if not schema_result.rows:
-            # Fallback to 'id' if table not found
-            self._id_column = "id"
-            return self._id_column
-
-        # Find primary key column
-        for row in schema_result.rows:
-            column_name = row[0]
-            key_info = row[3] if len(row) > 3 else ""  # Key column
-            if "PRI" in key_info.upper():
-                self._id_column = column_name
-                return self._id_column
-
-        # Fallback to 'id' if no primary key found
-        self._id_column = "id"
-        return self._id_column
+        return self._schema_columns(
+            self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True)).rows
+        )[0]
 
     async def _get_id_column_async(self):
-        """Get the primary key column name - async version"""
-        if self._id_column is not None:
-            return self._id_column
-
-        # Get table schema to find primary key
-        schema_result = await self.client.execute(f"DESCRIBE {self.table_name}")
-        if not schema_result.rows:
-            # Fallback to 'id' if table not found
-            self._id_column = "id"
-            return self._id_column
-
-        # Find primary key column
-        for row in schema_result.rows:
-            column_name = row[0]
-            key_info = row[3] if len(row) > 3 else ""  # Key column
-            if "PRI" in key_info.upper():
-                self._id_column = column_name
-                return self._id_column
-
-        # Fallback to 'id' if no primary key found
-        self._id_column = "id"
-        return self._id_column
+        result = await self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        return self._schema_columns(result.rows)[0]
 
     def _get_metadata_columns(self):
-        """Get metadata columns (all columns except id and vector columns)"""
-        if self._metadata_columns is not None:
-            return self._metadata_columns
-
-        # Get table schema
-        schema_result = self.client.execute(f"DESCRIBE {self.table_name}")
-        if not schema_result.rows:
-            self._metadata_columns = []
-            return self._metadata_columns
-
-        # Extract column names, excluding id and vector columns
-        all_columns = [row[0] for row in schema_result.rows]
-        id_column = self._get_id_column()
-        self._metadata_columns = [
-            col for col in all_columns if col.lower() not in [id_column.lower(), self.vector_column.lower()]
-        ]
-        return self._metadata_columns
+        result = self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        primary, columns = self._schema_columns(result.rows)
+        return [c for c in columns if c.lower() not in (primary.lower(), self.vector_column.lower())]
 
     async def _get_metadata_columns_async(self):
-        """Get metadata columns (all columns except id and vector columns) - async version"""
-        if self._metadata_columns is not None:
-            return self._metadata_columns
-
-        # Get table schema
-        schema_result = await self.client.execute(f"DESCRIBE {self.table_name}")
-        if not schema_result.rows:
-            self._metadata_columns = []
-            return self._metadata_columns
-
-        # Extract column names, excluding id and vector columns
-        all_columns = [row[0] for row in schema_result.rows]
-        id_column = await self._get_id_column_async()
-        self._metadata_columns = [
-            col for col in all_columns if col.lower() not in [id_column.lower(), self.vector_column.lower()]
-        ]
-        return self._metadata_columns
-
-    async def _get_index_info_async(self):
-        """Get index information for async client"""
-        if self._index_info is not None:
-            return self._index_info
-
-        # Get table schema
-        schema_result = await self.client.execute(f"SHOW CREATE TABLE {self.table_name}")
-        if not schema_result.rows:
-            raise ValueError(f"Table {self.table_name} not found")
-
-        create_sql = schema_result.rows[0][1]  # Second column contains CREATE statement
-
-        # Parse vector index information from CREATE statement
-        self._index_info = self._parse_index_info(create_sql)
-        return self._index_info
+        result = await self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        primary, columns = self._schema_columns(result.rows)
+        return [c for c in columns if c.lower() not in (primary.lower(), self.vector_column.lower())]
 
     def _get_index_info(self):
-        """Get index information for sync client"""
-        if self._index_info is not None:
-            return self._index_info
+        result = self.client.execute('SHOW CREATE TABLE ' + sql_identifier(self.table_name, qualified=True))
+        if not result.rows:
+            raise ValueError('Table not found: ' + self.table_name)
+        return self._parse_index_info(result.rows[0][1])
 
-        # Get table schema
-        schema_result = self.client.execute(f"SHOW CREATE TABLE {self.table_name}")
-        if not schema_result.rows:
-            raise ValueError(f"Table {self.table_name} not found")
+    async def _get_index_info_async(self):
+        result = await self.client.execute('SHOW CREATE TABLE ' + sql_identifier(self.table_name, qualified=True))
+        if not result.rows:
+            raise ValueError('Table not found: ' + self.table_name)
+        return self._parse_index_info(result.rows[0][1])
 
-        create_sql = schema_result.rows[0][1]  # Second column contains CREATE statement
+    @staticmethod
+    def _table_definitions(sql):
+        """Split SHOW CREATE's outer definition list, respecting quoted tokens."""
+        depth = 0
+        quote = None
+        start = None
+        definitions = []
+        i = 0
+        while i < len(sql):
+            ch = sql[i]
+            if quote:
+                if ch == quote:
+                    if i + 1 < len(sql) and sql[i + 1] == quote:
+                        i += 2
+                        continue
+                    quote = None
+                elif ch == '\\' and quote != '`':
+                    i += 2
+                    continue
+            elif ch in ("'", '"', '`'):
+                quote = ch
+            elif ch == '(':
+                depth += 1
+                if depth == 1:
+                    start = i + 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0 and start is not None:
+                    definitions.append(sql[start:i].strip())
+                    return definitions
+            elif ch == ',' and depth == 1:
+                definitions.append(sql[start:i].strip())
+                start = i + 1
+            i += 1
+        raise ValueError('Malformed SHOW CREATE TABLE definition')
 
-        # Parse vector index information from CREATE statement
-        self._index_info = self._parse_index_info(create_sql)
-        return self._index_info
-
-    def _parse_index_info(self, create_sql: str) -> Dict[str, Any]:
-        """
-        Parse vector index information from CREATE TABLE statement.
-
-        Args:
-
-            create_sql: CREATE TABLE SQL statement
-
-        Returns:
-
-            Dictionary containing index information
-        """
-        index_info = {
-            "algorithm": "ivf",
-            "metric": "l2",
-            "dimensions": None,
-            "parameters": {},
-        }  # default  # default
-
-        # Extract vector column definition
-        vector_pattern = rf"`?{self.vector_column}`?\s+vec(?:f32|f64)\s*\(\s*(\d+)\s*\)"
-        vector_match = re.search(vector_pattern, create_sql, re.IGNORECASE)
-        if vector_match:
-            index_info["dimensions"] = int(vector_match.group(1))
-
-        # Extract index creation statements - match both CREATE INDEX and KEY definitions
-        index_pattern = (
-            r"(?:CREATE\s+(?:INDEX|VECTOR\s+INDEX)\s+(\w+)\s+ON\s+\w+\s*\([^)]+\)\s+USING\s+(\w+)"
-            r"(?:\s+WITH\s+\(([^)]+)\))?|KEY\s+`?(\w+)`?\s+USING\s+(\w+)\s+\([^)]+\)\s+([^,\n]+))"
+    def _parse_index_info(self, create_sql):
+        info = dict(algorithm=None, metric='l2', dimensions=None, parameters={})
+        identifier = r'(?:`(?:``|[^`])+`|[A-Za-z_][\w$]*)'
+        column_name = self.vector_column
+        vector_pattern = (
+            r'(?:`'
+            + re.escape(column_name.replace('`', '``'))
+            + r'`|\b'
+            + re.escape(column_name)
+            + r'\b)\s+vec(?:f32|f64)\s*\(\s*(\d+)\s*\)'
         )
-        index_matches = re.findall(index_pattern, create_sql, re.IGNORECASE | re.MULTILINE)
+        definitions = self._table_definitions(create_sql)
+        for definition in definitions:
+            match = re.match(vector_pattern, definition, re.IGNORECASE)
+            if match:
+                info['dimensions'] = int(match.group(1))
+        patterns = [
+            r'(?:KEY|INDEX)\s+' + identifier + r'\s+USING\s+(\w+)\s*\(([^)]+)\)\s*([^,\n]*)',
+            r'CREATE\s+(?:VECTOR\s+)?INDEX\s+'
+            + identifier
+            + r'\s+ON\s+'
+            + identifier
+            + r'\s*\(([^)]+)\)\s+USING\s+(\w+)\s*(?:WITH\s*\(([^)]+)\))?',
+        ]
+        candidates = []
+        for number, pattern in enumerate(patterns):
+            for definition in definitions:
+                match = re.match(pattern, definition, re.IGNORECASE)
+                if match is None:
+                    continue
+                algorithm, columns, params = match.groups()
+                if number == 1:
+                    columns, algorithm = algorithm, columns
+                if algorithm.lower() not in ('ivf', 'ivfflat', 'hnsw'):
+                    continue
+                indexed = [value.strip().strip('`').replace('``', '`') for value in columns.split(',')]
+                if len(indexed) != 1 or indexed[0].lower() != column_name.lower():
+                    continue
+                params = params or ''
+                op = re.search(r"op_type\s*(?:=\s*)?['\"]([^'\"]+)['\"]", params, re.IGNORECASE)
+                operators = {'vector_l2_ops': 'l2', 'vector_cosine_ops': 'cosine', 'vector_ip_ops': 'ip'}
+                if op and op.group(1).lower() not in operators:
+                    raise ValueError('Unsupported vector index operator: ' + op.group(1))
+                metric = operators[op.group(1).lower()] if op else 'l2'
+                parsed = {}
+                for key, value in re.findall(r'(\w+)\s*=\s*([^,\s]+)', params):
+                    value = value.strip("'\"")
+                    parsed[key] = int(value) if value.isdigit() else value
+                candidates.append(
+                    dict(algorithm=algorithm.lower(), metric=metric, dimensions=info['dimensions'], parameters=parsed)
+                )
+        if len({item['metric'] for item in candidates}) > 1:
+            raise ValueError('Multiple vector indexes with different metrics; select an unambiguous vector column')
+        return candidates[0] if candidates else info
 
-        for match in index_matches:
-            # Handle both CREATE INDEX and KEY formats
-            if len(match) == 3:  # CREATE INDEX format
-                algorithm, params = match[1], match[2]
-            else:  # KEY format
-                algorithm, params = match[4], match[5]
+    @staticmethod
+    def _distance_type(info):
+        try:
+            return {'l2': 'l2', 'cosine': 'cosine', 'ip': 'inner_product'}[info['metric']]
+        except KeyError as error:
+            raise ValueError('Unknown vector index metric') from error
 
-            if self.vector_column in create_sql:
-                index_info["algorithm"] = algorithm.lower()
-
-                # Parse parameters
-                if params:
-                    # Parse parameters like "m = 16  ef_construction = 200  ef_search = 50  op_type 'vector_l2_ops'"
-                    param_pairs = re.findall(r"(\w+)\s*=\s*([^,\s]+)", params)
-                    for key, value in param_pairs:
-                        # Convert string values to appropriate types
-                        value = value.strip().strip("'\"")
-                        if value.isdigit():
-                            index_info["parameters"][key] = int(value)
-                        elif value.replace(".", "").isdigit():
-                            index_info["parameters"][key] = float(value)
-                        else:
-                            index_info["parameters"][key] = value
-
-                    # Parse op_type parameter
-                    op_type_match = re.search(r"op_type\s+'([^']+)'", params)
-                    if op_type_match:
-                        op_type = op_type_match.group(1)
-                        if "cosine" in op_type.lower():
-                            index_info["metric"] = "cosine"
-                        elif "ip" in op_type.lower():
-                            index_info["metric"] = "ip"
-                        else:
-                            index_info["metric"] = "l2"
-                break
-
-        return index_info
-
-    def _parse_pinecone_filter(self, filter_dict: Dict[str, Any]) -> tuple:
-        """
-        Parse Pinecone-compatible filter into SQL WHERE conditions and parameters.
-
-        Args:
-
-            filter_dict: Pinecone filter dictionary
-
-        Returns:
-
-            Tuple of (where_conditions, where_params)
-        """
-        if not filter_dict:
+    def _parse_pinecone_filter(self, filter_dict):
+        if filter_dict is None:
             return [], []
+        parameters = []
+        comparisons = {'$eq': '=', '$ne': '!=', '$gt': '>', '$gte': '>=', '$lt': '<', '$lte': '<='}
 
-        where_conditions = []
-        where_params = []
+        def parse(mapping, depth=0):
+            if not isinstance(mapping, dict) or depth > 64:
+                raise ValueError('Filter must be a mapping with at most 64 nested levels')
+            conditions = []
+            for key, value in mapping.items():
+                if key in ('$and', '$or'):
+                    if not isinstance(value, (list, tuple)) or not value or any(not item for item in value):
+                        raise ValueError('Logical filter requires nonempty mapping operands')
+                    children = []
+                    for item in value:
+                        parts = parse(item, depth + 1)
+                        children.append('(' + ' AND '.join(parts) + ')' if len(parts) > 1 else parts[0])
+                    conditions.append('(' + (' AND ' if key == '$and' else ' OR ').join(children) + ')')
+                    continue
+                if not isinstance(key, str) or key.startswith('$'):
+                    raise ValueError('Unsupported operator in filter: ' + str(key))
+                field = sql_identifier(key)
+                operators = value if isinstance(value, dict) else {'$eq': value}
+                if not operators:
+                    raise ValueError('A field filter requires at least one operator')
+                for op, operand in operators.items():
+                    if op in comparisons:
+                        if operand is None and op in ('$eq', '$ne'):
+                            conditions.append(field + (' IS NULL' if op == '$eq' else ' IS NOT NULL'))
+                        else:
+                            conditions.append(field + ' ' + comparisons[op] + ' ?')
+                            parameters.append(operand)
+                    elif op in ('$in', '$nin'):
+                        if not isinstance(operand, (list, tuple)):
+                            raise ValueError(op + ' requires a list')
+                        if not operand:
+                            conditions.append('1=0' if op == '$in' else '1=1')
+                        else:
+                            conditions.append(
+                                field + (' IN (' if op == '$in' else ' NOT IN (') + ','.join('?' for _ in operand) + ')'
+                            )
+                            parameters.extend(operand)
+                    else:
+                        raise ValueError('Unsupported operator in filter: ' + str(op))
+            return conditions
 
-        def parse_condition(key: str, value: Any) -> str:
-            """Parse a single filter condition"""
-            if isinstance(value, dict):
-                # Handle operators like $eq, $in, $gte, etc.
-                if "$eq" in value:
-                    where_params.append(value["$eq"])
-                    return f"{key} = ?"
-                elif "$ne" in value:
-                    where_params.append(value["$ne"])
-                    return f"{key} != ?"
-                elif "$in" in value:
-                    if not value["$in"]:  # Empty list
-                        return "1=0"  # Always false condition
-                    placeholders = ",".join(["?" for _ in value["$in"]])
-                    where_params.extend(value["$in"])
-                    return f"{key} IN ({placeholders})"
-                elif "$nin" in value:
-                    if not value["$nin"]:  # Empty list
-                        return "1=1"  # Always true condition
-                    placeholders = ",".join(["?" for _ in value["$nin"]])
-                    where_params.extend(value["$nin"])
-                    return f"{key} NOT IN ({placeholders})"
-                elif "$gt" in value:
-                    where_params.append(value["$gt"])
-                    return f"{key} > ?"
-                elif "$gte" in value:
-                    where_params.append(value["$gte"])
-                    return f"{key} >= ?"
-                elif "$lt" in value:
-                    where_params.append(value["$lt"])
-                    return f"{key} < ?"
-                elif "$lte" in value:
-                    where_params.append(value["$lte"])
-                    return f"{key} <= ?"
-                elif "$and" in value:
-                    # Handle nested $and conditions
-                    and_conditions = []
-                    for condition in value["$and"]:
-                        for sub_key, sub_value in condition.items():
-                            and_conditions.append(parse_condition(sub_key, sub_value))
-                    return f"({' AND '.join(and_conditions)})"
-                elif "$or" in value:
-                    # Handle nested $or conditions
-                    or_conditions = []
-                    for condition in value["$or"]:
-                        for sub_key, sub_value in condition.items():
-                            or_conditions.append(parse_condition(sub_key, sub_value))
-                    return f"({' OR '.join(or_conditions)})"
-                else:
-                    raise ValueError(f"Unsupported operator in filter: {list(value.keys())}")
-            else:
-                # Direct value comparison (equivalent to $eq)
-                where_params.append(value)
-                return f"{key} = ?"
+        conditions = parse(filter_dict)
+        return conditions, parameters
 
-        def parse_nested_condition(condition_dict: dict) -> str:
-            """Parse a nested condition that might contain $and or $or"""
-            if "$and" in condition_dict:
-                and_conditions = []
-                for condition in condition_dict["$and"]:
-                    and_conditions.append(parse_nested_condition(condition))
-                return f"({' AND '.join(and_conditions)})"
-            elif "$or" in condition_dict:
-                or_conditions = []
-                for condition in condition_dict["$or"]:
-                    or_conditions.append(parse_nested_condition(condition))
-                return f"({' OR '.join(or_conditions)})"
-            else:
-                # This is a simple condition, parse it normally
-                conditions = []
-                for key, value in condition_dict.items():
-                    conditions.append(parse_condition(key, value))
-                return " AND ".join(conditions)
+    @staticmethod
+    def _numeric_vector(value, dimensions=None):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError) as error:
+                raise ValueError('Malformed vector text') from error
+        if not isinstance(value, (list, tuple)) or not value:
+            raise ValueError('Vector values must be a nonempty numeric list')
+        if any(isinstance(v, bool) or not isinstance(v, numbers.Real) or not math.isfinite(v) for v in value):
+            raise ValueError('Vector values must contain only finite numbers')
+        if dimensions is not None and len(value) != dimensions:
+            raise ValueError('Vector dimensions do not match the column')
+        return [float(v) for v in value]
 
-        # Parse top-level conditions
-        for key, value in filter_dict.items():
-            if key == "$and":
-                # Handle top-level $and
-                and_conditions = []
-                for condition in value:
-                    and_conditions.append(parse_nested_condition(condition))
-                where_conditions.append(f"({' AND '.join(and_conditions)})")
-            elif key == "$or":
-                # Handle top-level $or
-                or_conditions = []
-                for condition in value:
-                    or_conditions.append(parse_nested_condition(condition))
-                where_conditions.append(f"({' OR '.join(or_conditions)})")
-            else:
-                condition = parse_condition(key, value)
-                where_conditions.append(condition)
+    def _materialize_matches(self, results, id_column, columns, info, include_values, include_metadata, namespace):
+        metadata_columns = [c for c in columns if c.lower() not in (id_column.lower(), self.vector_column.lower())]
+        matches = []
+        for row in results:
+            try:
+                values = self._numeric_vector(row[self.vector_column], info['dimensions']) if include_values else None
+                if row[id_column] is None:
+                    raise ValueError('Vector response has no primary key')
+                score = float(row['distance'])
+                if not math.isfinite(score):
+                    raise ValueError('Vector response score must be finite')
+                metadata = {column: row[column] for column in metadata_columns} if include_metadata else {}
+                matches.append(VectorMatch(id=str(row[id_column]), score=score, metadata=metadata, values=values))
+            except (ValueError, TypeError, KeyError, OverflowError) as error:
+                raise QueryError('Invalid vector response: ' + str(error)) from error
+        return QueryResponse(matches=matches, namespace=namespace, usage={"read_units": len(matches)})
 
-        return where_conditions, where_params
+    def _prepare_upserts(self, vectors, schema_rows, info):
+        id_column, known_columns = self._schema_columns(schema_rows)
+        if info['algorithm'] == 'hnsw':
+            raise ValueError('HNSW index does not support upsert operations')
+        statements = []
+        for vector in vectors:
+            if not isinstance(vector, dict):
+                raise ValueError('Each vector must be a mapping')
+            if id_column not in vector or vector[id_column] is None:
+                raise ValueError("Each vector must have '%s' field (primary key)" % id_column)
+            if self.vector_column not in vector:
+                raise ValueError("Each vector must have '%s' field (vector values)" % self.vector_column)
+            if any(column not in known_columns for column in vector):
+                raise ValueError('Unknown upsert column')
+            data = dict(vector)
+            data[self.vector_column] = self._numeric_vector(data[self.vector_column], info['dimensions'])
+            columns = list(data)
+            names = [sql_identifier(column) for column in columns]
+            updates = ', '.join(
+                '%s=VALUES(%s)' % (name, name) for column, name in zip(columns, names) if column != id_column
+            )
+            sql = 'INSERT INTO ' + sql_identifier(self.table_name, qualified=True)
+            sql += (
+                ' ('
+                + ', '.join(names)
+                + ') VALUES ('
+                + ', '.join(sql_literal(data[column]) for column in columns)
+                + ')'
+            )
+            sql += ' ON DUPLICATE KEY UPDATE ' + updates
+            statements.append(sql)
+        return statements
 
     def query(
         self,
@@ -588,25 +535,17 @@ class PineconeCompatibleIndex:
         # Parse filter if provided
         where_conditions, where_params = self._parse_pinecone_filter(filter)
 
-        # Build where_clause from conditions and params
-        where_clause = None
-        if where_conditions:
-            # Convert ? placeholders to actual values (safely escaped)
-            where_clause = " AND ".join(where_conditions)
-            # Replace ? with escaped values
-            for param in where_params:
-                if isinstance(param, str):
-                    escaped_value = param.replace("'", "''")
-                    where_clause = where_clause.replace("?", f"'{escaped_value}'", 1)
-                else:
-                    where_clause = where_clause.replace("?", str(param), 1)
+        where_clause = substitute_parameters(' AND '.join(where_conditions), where_params) if where_conditions else None
 
         # Build similarity search query
-        id_column = self._get_id_column()
+        schema = self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        id_column, columns = self._schema_columns(schema.rows)
+        index_info = self._get_index_info()
         select_columns = [id_column]
         if include_metadata:
-            metadata_columns = self._get_metadata_columns()
-            select_columns.extend(metadata_columns)
+            select_columns.extend(
+                c for c in columns if c.lower() not in (id_column.lower(), self.vector_column.lower())
+            )
         if include_values:
             select_columns.append(self.vector_column)
 
@@ -615,39 +554,16 @@ class PineconeCompatibleIndex:
             self.table_name,
             vector_column=self.vector_column,
             query_vector=vector,
+            distance_type=self._distance_type(index_info),
             limit=top_k,
             select_columns=select_columns,
             where_clause=where_clause,
         )
 
         # Convert results to Pinecone format
-        # Results are now dictionaries from VectorManager.similarity_search()
-        matches = []
-        id_column = self._get_id_column()
-
-        for row in results:
-            # Extract ID from the dictionary
-            pk_value = row.get(id_column)
-
-            # Extract score (distance)
-            score = float(row.get('distance', 0.0))
-
-            # Extract metadata (all columns except vector and distance)
-            metadata = {}
-            if include_metadata:
-                for key, value in row.items():
-                    if key != self.vector_column and key != 'distance':
-                        metadata[key] = value
-
-            # Extract vector values if requested
-            values = None
-            if include_values:
-                values = row.get(self.vector_column)
-
-            # Use primary key value as the match ID (convert to string for compatibility)
-            matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))
-
-        return QueryResponse(matches=matches, namespace=namespace, usage={"read_units": len(matches)})
+        return self._materialize_matches(
+            results, id_column, columns, index_info, include_values, include_metadata, namespace
+        )
 
     async def query_async(
         self,
@@ -677,25 +593,17 @@ class PineconeCompatibleIndex:
         # Parse filter if provided
         where_conditions, where_params = self._parse_pinecone_filter(filter)
 
-        # Build where_clause from conditions and params
-        where_clause = None
-        if where_conditions:
-            # Convert ? placeholders to actual values (safely escaped)
-            where_clause = " AND ".join(where_conditions)
-            # Replace ? with escaped values
-            for param in where_params:
-                if isinstance(param, str):
-                    escaped_value = param.replace("'", "''")
-                    where_clause = where_clause.replace("?", f"'{escaped_value}'", 1)
-                else:
-                    where_clause = where_clause.replace("?", str(param), 1)
+        where_clause = substitute_parameters(' AND '.join(where_conditions), where_params) if where_conditions else None
 
         # Build similarity search query
-        id_column = await self._get_id_column_async()
+        schema = await self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        id_column, columns = self._schema_columns(schema.rows)
+        index_info = await self._get_index_info_async()
         select_columns = [id_column]
         if include_metadata:
-            metadata_columns = await self._get_metadata_columns_async()
-            select_columns.extend(metadata_columns)
+            select_columns.extend(
+                c for c in columns if c.lower() not in (id_column.lower(), self.vector_column.lower())
+            )
         if include_values:
             select_columns.append(self.vector_column)
 
@@ -704,39 +612,16 @@ class PineconeCompatibleIndex:
             self.table_name,
             vector_column=self.vector_column,
             query_vector=vector,
+            distance_type=self._distance_type(index_info),
             limit=top_k,
             select_columns=select_columns,
             where_clause=where_clause,
         )
 
         # Convert results to Pinecone format
-        # Results are now dictionaries from AsyncVectorManager.similarity_search()
-        matches = []
-        id_column = await self._get_id_column_async()
-
-        for row in results:
-            # Extract ID from the dictionary
-            pk_value = row.get(id_column)
-
-            # Extract score (distance)
-            score = float(row.get('distance', 0.0))
-
-            # Extract metadata (all columns except vector and distance)
-            metadata = {}
-            if include_metadata:
-                for key, value in row.items():
-                    if key != self.vector_column and key != 'distance':
-                        metadata[key] = value
-
-            # Extract vector values if requested
-            values = None
-            if include_values:
-                values = row.get(self.vector_column)
-
-            # Use primary key value as the match ID (convert to string for compatibility)
-            matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))
-
-        return QueryResponse(matches=matches, namespace=namespace, usage={"read_units": len(matches)})
+        return self._materialize_matches(
+            results, id_column, columns, index_info, include_values, include_metadata, namespace
+        )
 
     def delete(self, ids: List[Any], namespace: str = ""):
         """
@@ -783,7 +668,8 @@ class PineconeCompatibleIndex:
         # Check if index type supports delete operations
         if index_info["algorithm"] == "hnsw":
             raise ValueError(
-                "HNSW index does not support delete operations. " "Only IVF index supports INSERT/UPDATE/DELETE operations."
+                "HNSW index does not support delete operations. "
+                "Only IVF index supports INSERT/UPDATE/DELETE operations."
             )
 
         if ids:
@@ -817,7 +703,8 @@ class PineconeCompatibleIndex:
         # Check if index type supports delete operations
         if index_info["algorithm"] == "hnsw":
             raise ValueError(
-                "HNSW index does not support delete operations. " "Only IVF index supports INSERT/UPDATE/DELETE operations."
+                "HNSW index does not support delete operations. "
+                "Only IVF index supports INSERT/UPDATE/DELETE operations."
             )
 
         if ids:
@@ -958,54 +845,17 @@ class PineconeCompatibleIndex:
             - Primary key values must be unique within the table
         """
         if not vectors:
-            return {"upserted_count": 0}
+            return {'upserted_count': 0}
+        from .client import Client
 
-        # Get the actual primary key column name
-        id_column = self._get_id_column()
-
-        # Process each vector individually for proper upsert behavior
-        for vector in vectors:
-            # Check if primary key field exists
-            if id_column not in vector:
-                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
-
-            # Check if vector field exists
-            if self.vector_column not in vector:
-                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
-
-            # Prepare data - use all fields from the vector dict
-            data = dict(vector)
-
-            # Build upsert SQL using INSERT ... ON DUPLICATE KEY UPDATE
-            columns = list(data.keys())
-            columns_str = ", ".join(columns)
-
-            # Format values - use proper vector format
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    # Format vector as string with proper escaping
-                    vector_str = "[" + ",".join(map(str, value)) + "]"
-                    formatted_values.append(f"'{vector_str}'")
-                else:
-                    formatted_values.append(f"'{value}'")
-            values_str = "(" + ", ".join(formatted_values) + ")"
-
-            # Build ON DUPLICATE KEY UPDATE clause
-            update_clauses = []
-            for col in columns:
-                if col != id_column:  # Don't update the primary key
-                    update_clauses.append(f"{col} = VALUES({col})")
-            update_str = ", ".join(update_clauses)
-
-            # Execute upsert SQL
-            sql = (
-                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} " f"ON DUPLICATE KEY UPDATE {update_str}"
-            )
-            self.client.execute(sql)
-
-        return {"upserted_count": len(vectors)}
+        if not isinstance(self.client, Client):
+            raise ValueError('upsert requires a Client that owns its transaction')
+        schema = self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+        statements = self._prepare_upserts(vectors, schema.rows, self._get_index_info())
+        with self.client.session() as session:
+            for sql in statements:
+                session.execute(sql)
+        return {'upserted_count': len(statements)}
 
     async def upsert_async(self, vectors: List[Dict[str, Any]], namespace: str = ""):
         """
@@ -1024,54 +874,22 @@ class PineconeCompatibleIndex:
             Dict with upsert statistics
         """
         if not vectors:
-            return {"upserted_count": 0}
+            return {'upserted_count': 0}
+        from .async_client import AsyncClient
 
-        # Get the actual primary key column name
-        id_column = await self._get_id_column_async()
+        if not isinstance(self.client, AsyncClient):
+            raise ValueError('upsert_async requires an AsyncClient that owns its transaction')
 
-        # Process each vector individually for proper upsert behavior
-        for vector in vectors:
-            # Check if primary key field exists
-            if id_column not in vector:
-                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
+        async def run():
+            schema = await self.client.execute('DESCRIBE ' + sql_identifier(self.table_name, qualified=True))
+            info = await self._get_index_info_async()
+            statements = self._prepare_upserts(vectors, schema.rows, info)
+            async with self.client.session() as session:
+                for sql in statements:
+                    await session.execute(sql)
+            return {'upserted_count': len(statements)}
 
-            # Check if vector field exists
-            if self.vector_column not in vector:
-                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
-
-            # Prepare data - use all fields from the vector dict
-            data = dict(vector)
-
-            # Build upsert SQL using INSERT ... ON DUPLICATE KEY UPDATE
-            columns = list(data.keys())
-            columns_str = ", ".join(columns)
-
-            # Format values - use proper vector format
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    # Format vector as string with proper escaping
-                    vector_str = "[" + ",".join(map(str, value)) + "]"
-                    formatted_values.append(f"'{vector_str}'")
-                else:
-                    formatted_values.append(f"'{value}'")
-            values_str = "(" + ", ".join(formatted_values) + ")"
-
-            # Build ON DUPLICATE KEY UPDATE clause
-            update_clauses = []
-            for col in columns:
-                if col != id_column:  # Don't update the primary key
-                    update_clauses.append(f"{col} = VALUES({col})")
-            update_str = ", ".join(update_clauses)
-
-            # Execute upsert SQL
-            sql = (
-                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} " f"ON DUPLICATE KEY UPDATE {update_str}"
-            )
-            await self.client.execute(sql)
-
-        return {"upserted_count": len(vectors)}
+        return await asyncio.wait_for(run(), timeout=self.client.query_timeout)
 
     def batch_insert(self, vectors: List[Dict[str, Any]], namespace: str = ""):
         """

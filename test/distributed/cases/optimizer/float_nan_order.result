@@ -10,8 +10,8 @@ key idx_tenant(tenant)
 insert into t_double_order values
 (bit_cast(unhex('000000000000f87f') as double), 1, 70),
 (bit_cast(unhex('010000000000f87f') as double), 1, 71),
-(cast('Inf' as double), 1, 60),
-(cast('-Inf' as double), 1, 10),
+(bit_cast(unhex('000000000000f07f') as double), 1, 60),
+(bit_cast(unhex('000000000000f0ff') as double), 1, 10),
 (-1.0, 1, 20),
 (bit_cast(unhex('0000000000000080') as double), 1, 30),
 (0.0, 1, 31),
@@ -97,8 +97,8 @@ create table t_float_order(id int primary key, k float);
 insert into t_float_order values
 (70, bit_cast(unhex('0000c07f') as float)),
 (71, bit_cast(unhex('0100c07f') as float)),
-(60, cast('Inf' as float)),
-(10, cast('-Inf' as float)),
+(60, bit_cast(unhex('0000807f') as float)),
+(10, bit_cast(unhex('000080ff') as float)),
 (20, -1.0),
 (30, bit_cast(unhex('00000080') as float)),
 (31, 0.0),

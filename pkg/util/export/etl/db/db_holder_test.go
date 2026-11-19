@@ -698,7 +698,7 @@ func Test_WriteRowRecords2(t *testing.T) {
 ' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
 		SetDBConn(db)
 
-		// set up your DefaultSqlWriter and records
+		// Build the table and records passed to WriteRowRecords.
 		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 		tbl := &table.Table{
@@ -728,7 +728,7 @@ func TestWriteRowRecords_WithBackoff(t *testing.T) {
 			DBConnErrCount = old
 		}()
 
-		// set up your DefaultSqlWriter and records
+		// Build the table and records passed to WriteRowRecords.
 		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 		tbl := &table.Table{

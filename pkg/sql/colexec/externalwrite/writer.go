@@ -90,10 +90,9 @@ type externalWriter struct {
 	proc *process.Process
 	cfg  WriterConfig
 
-	fw           *fileservice.FileServiceWriter
-	rowsWritten  uint64
-	opened       bool
-	expandedPath string
+	fw          *fileservice.FileServiceWriter
+	rowsWritten uint64
+	opened      bool
 
 	// Encoding scratch space, reused across batches: buf holds one encoded
 	// batch (fw.Write fully consumes it before returning), scratch holds one
@@ -152,7 +151,6 @@ func (w *externalWriter) open(ctx context.Context, analyzer process.Analyzer) er
 	if err != nil {
 		return err
 	}
-	w.expandedPath = stageURL
 
 	moPath, _, err := stageutil.UrlToPath(stageURL, w.proc)
 	if err != nil {

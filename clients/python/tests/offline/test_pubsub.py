@@ -81,8 +81,8 @@ class TestPubSubManagerSQLGeneration(unittest.TestCase):
 
         pub = self.pubsub_manager.get_publication("db_pub1")
 
-        # get_publication uses SHOW PUBLICATIONS (no WHERE support) and filters
-        expected_sql = "SHOW PUBLICATIONS"
+        # Native SHOW uses a literal LIKE pattern, with underscore escaped
+        expected_sql = r"SHOW PUBLICATIONS ILIKE $sdk$db\_pub1$sdk$"
         self.client.execute.assert_called_with(expected_sql)
         self.assertEqual(pub.name, "db_pub1")
 
@@ -202,8 +202,8 @@ class TestAsyncPubSubManagerSQLGeneration(unittest.IsolatedAsyncioTestCase):
 
         pub = await self.pubsub_manager.get_publication("db_pub1")
 
-        # Both sync and async use SHOW PUBLICATIONS and filter
-        expected_sql = "SHOW PUBLICATIONS"
+        # Sync and async use the same literal LIKE pattern
+        expected_sql = r"SHOW PUBLICATIONS ILIKE $sdk$db\_pub1$sdk$"
         self.client.execute.assert_called_with(expected_sql)
         self.assertEqual(pub.name, "db_pub1")
 
@@ -345,7 +345,7 @@ class TestSyncVsAsyncPubSubSQLConsistency(unittest.IsolatedAsyncioTestCase):
 
         query_cases = [
             # (method, args, mock_result, expected_sql)
-            ('get_publication', ['test_pub'], mock_pub_result, "SHOW PUBLICATIONS"),
+            ('get_publication', ['test_pub'], mock_pub_result, r"SHOW PUBLICATIONS ILIKE $sdk$test\_pub$sdk$"),
             ('list_publications', [], mock_pub_result, "SHOW PUBLICATIONS"),
             ('drop_publication', ['test_pub'], mock_pub_result, "DROP PUBLICATION `test_pub`"),
             ('get_subscription', ['sub_db1'], mock_sub_result, "SHOW SUBSCRIPTIONS"),
@@ -364,9 +364,8 @@ class TestSyncVsAsyncPubSubSQLConsistency(unittest.IsolatedAsyncioTestCase):
             await getattr(self.async_manager, method_name)(*args)
 
             # Verify SQL is identical
-            if method_name in ['drop_publication']:
-                # Single execute call
-                self.assertEqual(self.sync_client.execute.call_args[0][0], self.async_client.execute.call_args[0][0])
+            self.sync_client.execute.assert_called_with(expected_sql)
+            self.async_client.execute.assert_called_with(expected_sql)
 
 
 class TestPubSubManagerErrorHandling(unittest.TestCase):

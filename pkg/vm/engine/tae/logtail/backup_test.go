@@ -182,7 +182,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 			visibleRows, err := visibleAppendableRows(
 				context.Background(), input, test.layout, &test.cutoff)
 			require.NoError(t, err)
-			input.Shrink(visibleRows, false)
+			require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
 			result, err := canonicalizeBackupTombstone(context.Background(), input, test.layout)
 			require.NoError(t, err)
 			defer result.Clean(common.DebugAllocator)
@@ -219,7 +219,7 @@ func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 1, 2}, visibleRows)
 
-	input.Shrink(visibleRows, false)
+	require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
 	result, err := canonicalizeBackupTombstone(
 		context.Background(),
 		input,
@@ -302,7 +302,7 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 	visibleRows, err := visibleAppendableRows(ctx, input, layout, ptrTo(types.BuildTS(15, 0)))
 	require.NoError(t, err)
 	require.Equal(t, []int64{0}, visibleRows)
-	input.Shrink(visibleRows, false)
+	require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
 
 	output, err := canonicalizeBackupTombstone(ctx, input, layout)
 	require.NoError(t, err)

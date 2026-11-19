@@ -15,29 +15,12 @@
 package versions
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 // InformationSchemaColumnsUpgradeEntry refreshes the current COLUMNS definition.
 // Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaColumnsUpgradeEntry() UpgradeEntry {
-	return UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "COLUMNS",
-		UpgType:                 MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion109,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
-			if err == nil && !exists {
-				exists, definition, err = CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "columns")
-			}
-			return exists && definition == sysview.InformationSchemaColumnsDDL, err
-		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
-	}
+	return InformationSchemaViewUpgradeEntry("COLUMNS", sysview.InformationSchemaColumnsDDL, defines.MORPCVersion109)
 }

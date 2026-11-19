@@ -20,25 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
-	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
-
-func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
-	op := &Op{
-		Impl:       impl,
-		Worker:     w,
-		CreateTime: time.Now(),
-	}
-	return op
-}
-
-func (op *Op) Push() error {
-	r := op.Worker.SendOp(op)
-	if !r {
-		return moerr.NewInternalErrorNoCtx("send op error")
-	}
-	return nil
-}
 
 func (op *Op) GetError() error {
 	return op.Err
@@ -87,10 +69,6 @@ func (op *Op) PreExecute() error {
 }
 
 func (op *Op) PostExecute() error {
-	return nil
-}
-
-func (op *Op) Execute() error {
 	return nil
 }
 

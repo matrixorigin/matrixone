@@ -209,6 +209,10 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			if preInsert := node.GetPreInsertCtx(); preInsert != nil {
 				require.False(t, preInsert.TrackAutoIncrementGenerated,
 					"ODKU must not carry INSERT IGNORE-only auto-increment provenance")
+				require.True(t, preInsert.TrackOdkuResult, "ODKU owns its own provenance contract")
+				require.GreaterOrEqual(t, preInsert.AutoIncrementGeneratedColumn, int32(0))
+				require.Greater(t, preInsert.OdkuOrdinalColumn, preInsert.AutoIncrementGeneratedColumn)
+				require.GreaterOrEqual(t, preInsert.OdkuAutoIncrementColumn, int32(0))
 			}
 		}
 	})
@@ -422,16 +426,16 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU primary-key-only no-op filters conflicting rows", func(t *testing.T) {
-		// Flink emits id = VALUES(id) even when id is the only assignment. The
-		// planner removes that semantic no-op from the physical update set, so the
-		// resulting guard must keep only rows without an existing-row match. This
-		// also prevents implicit ON UPDATE expressions from firing on conflicts.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.t_on_update(id, val) values (1, 10) on duplicate key update id = values(id)")
-		require.NoError(t, err)
-		require.Empty(t, odkuDedupCtx(t, p).UpdateCheckColIdxList,
-			"removed PK self-assignment is always a no-op on a conflict")
-		require.NotNil(t, mainUpdateCtx(t, p).PhysicalChangedRowsCol)
+		for _, assignment := range []string{"id=values(id)", "id=id", "id=1"} {
+			t.Run(assignment, func(t *testing.T) {
+				p, err := runOneStmt(mock, t,
+					"insert into constraint_test.t_on_update(id,val) values (1,10) on duplicate key update "+assignment)
+				require.NoError(t, err)
+				require.Empty(t, odkuDedupCtx(t, p).UpdateCheckColIdxList,
+					"proven PK identities need no redundant change comparison")
+				require.NotNil(t, mainUpdateCtx(t, p).PhysicalChangedRowsCol)
+			})
+		}
 	})
 
 	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {

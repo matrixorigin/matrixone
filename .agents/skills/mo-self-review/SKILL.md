@@ -9,10 +9,9 @@ growth analysis.
 
 ## Review contract
 
-The quality bar is complete coverage of every changed contract, not equal depth
-for every file. Read every changed hunk once, build one change/risk map, and
-route deep analysis only to applicable closures. This is not spot checking:
-every lens must map to a closure or have a concrete not-applicable reason.
+Cover every changed contract. Use one change/risk map to route deep analysis
+to applicable closures. Group mechanical changes and document exclusions that
+could affect the decision.
 
 Keep two execution modes distinct:
 
@@ -29,10 +28,39 @@ reviewer cannot self-waive such a gate; only its policy owner can explicitly
 change an allowed exception, with owner/scope/rationale recorded. User/system
 permission boundaries cannot be waived.
 
-A blocker requires either a concrete failure path (`input/state -> consequence`)
-or an objectively missing mandatory artifact/validation. Preferences, plausible
-concerns, maintainability suggestions, and micro-nits are non-blocking or
-omitted. Assign severity only after the finding is verified.
+A blocker needs a reachable failure, a material design cost without a
+supporting requirement, or missing mandatory validation. For a design blocker,
+name the added or duplicated responsibility, its concrete cost or failure mode,
+and the simpler viable ownership or mechanism. Preferences and micro-nits are
+non-blocking or omitted. Assign severity only after verification.
+
+MatrixOne upgrades by full-cluster shutdown only; old and new binaries never
+serve one cluster together. Apply the shared upgrade contract to affected
+boundaries, including changes in how unchanged persisted bytes are interpreted.
+For each finding, identify the supported source release or external contract,
+the reachable artifact/input, and the consequence or missing required proof.
+
+## Design quality and delivery scope
+
+- Trace user entry points to the current owner. Compare new state, validation,
+  storage and execution paths with a direct change there. Check old assumptions
+  and remove superseded branches across wiring, state, and documentation.
+- Check authority during failure and recovery when two paths coexist. Count
+  steady-state and failure costs, including background work, compatibility
+  branches and operator burden. Tie each material cost to a concrete benefit.
+- Check implementation, tests and docs independently. Count maintained
+  responsibilities and distinct oracles. A line-count change helps locate work
+  for review. It cannot establish improvement or bloat by itself.
+- Before delivery, exclude temporary files, raw logs/profiles/benchmark results,
+  per-run manifests, agent transcripts, review attestations and one-off proof
+  narratives. Retain maintained design docs, regression fixtures and reproduction
+  tools only where they have continuing value to the repository.
+
+Keep raw evidence outside tracked source. When reviewers need it, use CI
+artifacts, PR attachments or durable external links; do not require a raw-evidence
+commit to satisfy review. Keep the PR body concise: problem, resulting behavior,
+key validation/results and material limits. Link bulky details instead of pasting
+logs, repeated summaries or the experiment/review chronology.
 
 ## Resolve target and scope
 
@@ -58,20 +86,20 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Every non-trivial review: change map, R0-R3 routing, evidence reuse, efficient validation | [../mo-dev/references/validation-evidence.md](../mo-dev/references/validation-evidence.md) |
 | PR description review, PR/issue creation or body update; Mergify description/commit-message failure | [../mo-dev/references/github-delivery.md](../mo-dev/references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [../mo-dev/references/race-validation.md](../mo-dev/references/race-validation.md) |
-| Large/complex feature or major refactor; design document (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
+| Large/complex feature or major refactor; design review (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 | Production behavior or changed/added/removed/merged/optimized UT/BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
+| Planner/explain/rewrite correctness or a credible overfit in product behavior | [../mo-dev/references/counterexample-testing.md](../mo-dev/references/counterexample-testing.md) |
+| Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [../mo-dev/references/upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md) |
 | Index algorithm dispatch/plugin/registry/ISCP paths | [../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change](../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change) |
 
 ## Single-pass execution
 
-1. **Resolve and inventory.** Establish the exact scope above. Inspect status,
-   diff stat/name-status, generated/delivery artifacts, then read every changed
-   hunk once.
-2. **Build the change map.** Group files into behavioral closures; record
-   invariant/purpose, owner/consumers, reverse arcs, R0-R3 triggers, applicable
-   lenses, and required evidence. Reuse this map instead of rereading the whole
-   diff once per lens.
+1. **Resolve and inventory.** Establish the exact scope and inspect the complete
+   changed range and delivery artifacts. In self-review, carry forward the map
+   and valid evidence. Reinspect changed and affected closures.
+2. **Route by risk.** Use the shared map for owners, consumers, affected risks
+   and required proof. Check an author's supplied map against the diff.
 3. **Run the design gate first.** Classify the complete feature/refactor or PR
    series. Ordinary fixes/maintenance are exempt. When triggered, review the
    exact approved design revision before implementation. Missing/unapproved or
@@ -82,13 +110,17 @@ deep tracing, not awareness of in-scope changes that can interact with it.
    nodes. Apply the lenses below. R0/R1 does not pay R3 modeling cost; any small
    R3 closure does.
 5. **Audit evidence.** Check selection, mode, revision, terminal status, and
-   semantic freshness. Reuse valid exact-head author/CI evidence. In self mode,
-   produce missing proof; in external mode, run only gaps or checks needed to
-   resolve a concrete uncertainty.
+   relevant inputs. Reuse author/CI evidence that meets the shared rules.
+   In self mode, produce missing proof. In external mode, run checks needed
+   to fill a gap or resolve a concrete uncertainty.
 6. **Converge once.** Verify every candidate against source and full closure,
    discard speculation, respect recorded decisions, then return one ranked
    finding/fix-or-decision list and final decision. Do not request another broad
    review pass.
+
+On follow-up, check open findings against the current head and re-review their
+affected closures. Record which issues are fixed, accepted, or still open.
+A reply or a green unrelated check does not establish closure.
 
 If an optional code-review workflow is available, it may help discover
 candidates from the same resolved range. Its output does not replace the change
@@ -96,10 +128,8 @@ map, closure verification, evidence audit, or final severity calibration.
 
 ## Review lenses
 
-Classify every lens for every mapped closure. Group rows that share the same
-applicability and reason instead of emitting a prose Cartesian product. `N/A`
-needs a fact such as “no executable behavior or generated consumer changed,”
-not “diff is small.”
+Use the lenses as prompts for applicable closures. Record the risks and
+exclusions that affect the verdict in the shared map.
 
 | Lens | Question |
 |---|---|
@@ -109,7 +139,7 @@ not “diff is small.”
 | Control/liveness | Can cancel/close/reject/timeout terminate independently of the work it controls? |
 | Resource lifecycle | Does each resource have one effective cleanup owner on success, partial failure, cancel, panic, reset, and reuse? |
 | Boundedness/scale | Are queues, retries, caches, retained state, logs/metrics, memory/disk/FDs, and work admission bounded? |
-| Compatibility/security | Are API/wire/disk/catalog/config, mixed-version/migration/rollback, auth, tenant, and trust boundaries preserved? |
+| Compatibility/security | Does the target interpret released state consistently on reads and later writes, including any deliberate migration? Are restore, external contracts, and auth, tenant, and trust boundaries preserved where applicable? Route affected compatibility boundaries through the shared upgrade contract. |
 | Performance/operations | Did hot-path work, allocations, I/O, synchronization, startup, capacity, rollout, observability, or blast radius change materially? |
 | Platform/delivery | Are build tags, OS/arch, CGo/native loading, generated files, packaging, and final committed artifacts correct? |
 | Test architecture | Do tests prove distinct contracts with minimum deterministic data/setup, correct UT/BVT layer, isolation, cleanup, and real selection? |
@@ -120,8 +150,8 @@ Do not report “might.” For each candidate:
 
 1. State the invariant and concrete reachable input/state.
 2. Follow all guards, ownership transfers, defer/cancel/timer/retry/release paths.
-3. Identify the wrong result, crash, hang, data/security/compatibility impact, or
-   exactly missing required proof.
+3. Identify the user or operational impact, avoidable design cost, or missing
+   required proof.
 4. Re-read the cited source after forming the hypothesis.
 5. Keep it only if no existing path closes the failure; calibrate severity last.
 
@@ -137,7 +167,7 @@ Trace only applicable arcs, but trace them to terminal nodes:
 | persistence/format | create/write -> read -> backup/restore -> upgrade/restart |
 | operator/pipeline | prepare -> call/send -> receive -> reset/cleanup -> error/cancel |
 | resource/state machine | create/admit -> transfer/transitions -> fail/retry -> close/reuse generation |
-| config/API/protocol | parse/default -> producer -> every consumer -> compatibility/fallback |
+| config/API/protocol | parse/default -> producer -> every consumer -> compatibility with persisted/external data (no in-cluster old-peer fallback) |
 | shared test fixture | create -> scenario admission -> cleanup after `FailNow` -> reset -> next scenario -> destroy |
 | BVT | clean/readiness -> public action -> positive/negative oracle -> restore/teardown -> same-instance rerun |
 
@@ -153,29 +183,10 @@ no resource, wait, asynchronous generation, or growth dimension.
 
 ## Test and evidence gate
 
-Use the testing contract for purpose, orthogonality, fixture cost, BVT, and
-cleanup. Use the validation/evidence reference for R0-R3 depth and semantic
-evidence reuse; load the race reference only when its trigger applies.
-
-Non-negotiable outcomes:
-
-- changed behavior maps to the cheapest focused oracle and to BVT when a public
-  SQL/protocol contract requires it;
-- new/heavy fixtures demonstrate existing-case search, a distinct isolation or
-  topology need, minimum data, deterministic control, and measured cost when
-  unavoidable;
-- merged/deleted cases map every prior positive/negative/boundary/metadata/
-  privilege/session/error oracle to a retained named scenario;
-- sleeps, retries, probabilistic scheduling, huge data, repeated processes, and
-  generated-result acceptance never substitute for injection, barriers, scoped
-  configuration, cleanup, or normal comparison;
-- race/package/topology/repetition evidence is required only by its mapped risk
-  trigger, but cannot be skipped when that trigger applies.
-
-Evidence remains valid across unrelated edits. Invalidate and rerun only when a
-relevant semantic input, oracle, fixture, build mode/tag, dependency, topology,
-or base-side contract changed; ambiguity means stale. Pending, skipped, zero-test,
-partial-output, or surviving-process runs are not green.
+Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
+and teardown. Apply the shared evidence checks to suspected overfit, lost test
+coverage and performance claims. For a proposed optimization, check work and
+results at the real entry point as well as the claimed faster phase.
 
 ## Convergence and decision
 
@@ -190,22 +201,9 @@ partial-output, or surviving-process runs are not green.
   otherwise `APPROVE`/no-blocker recommendation. Perform the GitHub mutation only
   when authorized.
 
-## Exit gate
-
-```text
-□ exact range plus committed/staged/unstaged/untracked scope recorded
-□ every changed hunk read and represented in one R0-R3 change map
-□ every lens mapped to a closure or a concrete N/A reason
-□ design gate classified; triggered design approved and implementation aligned
-□ applicable owners/consumers/reverse arcs and terminal unhappy paths closed
-□ Q1-Q3 and concurrency/generation models completed only where triggered
-□ UT/BVT/fixture/oracle decisions complete where behavior/tests changed
-□ required evidence validly reused or passed; stale/missing/pending proof explicit
-□ each finding has a concrete path or objective gate failure and source re-read
-□ decisions logged, severity calibrated last, zero unresolved blockers for PASS
-□ final delivery diff/generated artifacts checked in self mode
-□ PR description/template checked where applicable; delivery body preflight passed before publication, remote readback afterward
-```
+Use the shared delivery record for the final decision and its evidence.
+In self mode, verify the final diff and generated artifacts. For PR
+publication, use the GitHub delivery reference for the template and readback.
 
 For index-plugin changes, additionally run the linked section-9 candidate
 searches and prove hook interfaces, registration/build tags, ISCP/CDC where

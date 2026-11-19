@@ -53,7 +53,7 @@ func buildSharedGroupingSetPlanWithContext(t *testing.T, sql string, ctx Compile
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	return built.GetQuery()
 }
@@ -86,7 +86,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetQuery()
 	}
@@ -277,7 +277,7 @@ func TestSplitGroupingSetCoarseDisablesShuffle(t *testing.T) {
 		qry:                        &planpb.Query{Nodes: []*planpb.Node{child, agg}},
 		splitGroupingSetCoarseAggs: map[*planpb.Node]struct{}{agg: {}},
 	}
-	determineShuffleForGroupBy(agg, builder)
+	determineShuffleForGroupBy(agg, builder, false)
 	require.False(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(-1), agg.Stats.HashmapStats.ShuffleColIdx)
 }
@@ -550,7 +550,7 @@ func TestGroupingSetDeclaredRowSize(t *testing.T) {
 		{name: "empty schema", ok: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, ok := materializedDeclaredRowSize(test.typs)
+			got, ok := MaterializedDeclaredRowSize(test.typs)
 			require.Equal(t, test.ok, ok)
 			require.Equal(t, test.want, got)
 		})

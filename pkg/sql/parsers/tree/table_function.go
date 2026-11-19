@@ -68,6 +68,8 @@ type JSONTableColumn struct {
 	OnEmpty  *JSONTableResponse
 	OnError  *JSONTableResponse
 	Children []*JSONTableColumn
+	// Charset is nil when omitted; an explicitly empty name still needs validation.
+	Charset *string
 	// ReversePolicies requires a parse/prepare-phase diagnostic, not a runtime
 	// warning. Retain it so a core-only binder can fail closed until that owner
 	// is implemented rather than silently canonicalizing deprecated syntax.
@@ -96,6 +98,10 @@ func formatJSONTableColumns(ctx *FmtCtx, columns []*JSONTableColumn) {
 		}
 		ctx.WriteByte(' ')
 		column.Type.InternalType.Format(ctx)
+		if column.Charset != nil {
+			ctx.WriteString(" character set ")
+			formatJSONTableString(ctx, *column.Charset)
+		}
 		if column.Kind == "exists" {
 			ctx.WriteString(" exists")
 		}

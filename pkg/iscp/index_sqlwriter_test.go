@@ -21,11 +21,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,7 +188,7 @@ func TestNewFulltextSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 23, `id`, `body`) as f", string(bytes))
 }
 
 func TestNewFulltextSqlWriterInsert(t *testing.T) {
@@ -209,7 +211,7 @@ func TestNewFulltextSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 23, `id`, `body`) as f", string(bytes))
 }
 
 func TestNewFulltextSqlWriterDelete(t *testing.T) {
@@ -255,7 +257,7 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title')) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 65, __mo_cpkey, body, title) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title')) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 65, `__mo_cpkey`, `body`, `title`) as f", string(bytes))
 }
 
 func TestNewHnswSqlWriter(t *testing.T) {
@@ -307,7 +309,7 @@ func TestNewIvfflatSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
@@ -333,7 +335,7 @@ func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
@@ -371,7 +373,7 @@ func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "`__mo_index_include_title`, `__mo_index_include_rank`")
 	require.Contains(t, sql, "CAST(column_2 as VARCHAR")
 	require.Contains(t, sql, "CAST(column_3 as INT")
-	require.Contains(t, sql, "src0, src1, src2, src3")
+	require.Contains(t, sql, "__mo_index_pri_col, src1, src2, src3")
 	require.Contains(t, sql, "'news'")
 	require.Contains(t, sql, "CAST(NULL as")
 }
@@ -468,7 +470,7 @@ func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing
 					sqlBytes, err := writer.ToSql()
 					require.NoError(t, err)
 					sql := string(sqlBytes)
-					require.Contains(t, sql, "SERIAL_EXTRACT(src0, 0 as ENUM('first','second')), ")
+					require.Contains(t, sql, "SERIAL_EXTRACT(__mo_index_pri_col, 0 as ENUM('first','second')), ")
 					require.Contains(t, sql, "), src2, SERIAL_EXTRACT(src3, 0 as ENUM('cold','hot')) FROM src")
 					require.Contains(t, sql, "cast(cast(src1")
 					require.NotContains(t, sql, "src2 *")
@@ -548,7 +550,7 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 				for _, col := range []struct {
 					pattern, members string
 				}{
-					{`(SERIAL_EXTRACT\(src0, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
+					{`(SERIAL_EXTRACT\(__mo_index_pri_col, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
 					{`(SERIAL_EXTRACT\(src2, 0 as ENUM\(.*?\)\))`, tc.includeMembers},
 				} {
 					match := regexp.MustCompile(col.pattern).FindStringSubmatch(sql)
@@ -568,4 +570,37 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 			require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1,0)", string(deleted))
 		})
 	}
+}
+
+// The hnsw writer of a vecf16/vecbf16/vecint8/vecuint8 column keeps its vectors in the column's
+// element type through the CDC payload the sync decodes, and accepts the dict table of an
+// int8/uint8 index.
+func TestHnswSqlWriterNarrowColumns(t *testing.T) {
+	testHnswSqlWriterNarrow(t, types.T_array_int8, []int8{-1, 2})
+	testHnswSqlWriterNarrow(t, types.T_array_uint8, []uint8{3, 255})
+	testHnswSqlWriterNarrow(t, types.T_array_float16, types.Float32ToFloat16Slice([]float32{1.5, -2}))
+	testHnswSqlWriterNarrow(t, types.T_array_bf16, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2)})
+
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	_, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes[:1])
+	require.Error(t, err, "an hnsw index has its metadata and storage tables")
+}
+
+func testHnswSqlWriterNarrow[T types.ArrayElement](t *testing.T, typ types.T, vec []T) {
+	ctx := t.Context()
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", typ, int32(len(vec)))
+	dict := *tabledef.Indexes[0]
+	dict.IndexAlgoTableType = catalog.Hnsw_TblType_Dict
+	dict.IndexTableName = "dict_tbl"
+	writer, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, append(tabledef.Indexes, &dict))
+	require.NoError(t, err, typ.String())
+	require.IsType(t, &HnswSqlWriter[T]{}, writer)
+	require.NoError(t, writer.Insert(ctx, []any{int64(1), vec, nil}))
+	require.Error(t, writer.Insert(ctx, []any{int64(2), []float64{1, 2}, nil}), "a vector of another element type")
+	payload, err := writer.ToSql()
+	require.NoError(t, err)
+	var cdc vectorindex.VectorIndexCdc[T]
+	require.NoError(t, sonic.Unmarshal(payload, &cdc))
+	require.Len(t, cdc.Data, 1)
+	require.Equal(t, vec, cdc.Data[0].Vec)
 }

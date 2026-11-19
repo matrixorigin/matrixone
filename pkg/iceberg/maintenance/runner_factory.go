@@ -146,7 +146,7 @@ func (r CatalogExpireSnapshotsRunner) RunMaintenance(ctx context.Context, req Re
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -189,7 +189,7 @@ func (r CatalogRewriteDataFilesRunner) RunMaintenance(ctx context.Context, req R
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -231,7 +231,7 @@ func (r CatalogRewriteManifestsRunner) RunMaintenance(ctx context.Context, req R
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -248,21 +248,4 @@ func (r CatalogRewriteManifestsRunner) RunMaintenance(ctx context.Context, req R
 			OrphanTTL:      r.OrphanTTL,
 		},
 	).RunMaintenance(ctx, req)
-}
-
-func resolveMaintenanceCatalogRequestPrefix(ctx context.Context, client api.CatalogClient, req api.CatalogRequest) (api.CatalogRequest, error) {
-	if client == nil || strings.TrimSpace(req.Prefix) != "" {
-		return req, nil
-	}
-	resp, err := client.GetConfig(ctx, api.GetConfigRequest{
-		CatalogRequest: req,
-		Warehouse:      req.Catalog.Warehouse,
-	})
-	if err != nil {
-		return req, err
-	}
-	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
-		req.Prefix = strings.TrimSpace(resp.Prefix)
-	}
-	return req, nil
 }

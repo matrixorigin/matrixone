@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func scanAllObjectEntries(*ObjectEntry) bool { return true }
+func stopObjectEntryScan(*ObjectEntry) bool  { return false }
+
 func TestObjectListUncommittedSeekAllocations(t *testing.T) {
 	list := NewObjectList(false)
 	list.Set(makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1))
@@ -75,6 +78,23 @@ func BenchmarkObjectListVisibleCommitted(b *testing.B) {
 	}
 }
 
+func TestObjectListGroupSnapshotAllocations(t *testing.T) {
+	list := NewObjectList(false)
+	list.Set(makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1))
+	snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+	allocs := testing.AllocsPerRun(100, func() {
+		for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+			snapshot.ScanGroup(group, scanAllObjectEntries)
+		}
+	})
+	require.LessOrEqual(t, allocs, float64(6))
+	tree := list.loadTrees().group(ObjectListGroupAppendableCreate)
+	treeAllocs := testing.AllocsPerRun(100, func() {
+		tree.Scan(scanAllObjectEntries)
+	})
+	require.LessOrEqual(t, treeAllocs, float64(1))
+}
+
 func makeObjectListDynamicSeekBenchmark() (*ObjectList, types.TS, types.TS) {
 	list := NewObjectList(false)
 	marker := byte(1)
@@ -97,12 +117,24 @@ func runObjectListDynamicGroupSeeks(list *ObjectList, from, to types.TS) {
 	it.Release()
 }
 
+func runObjectListDirectGroupScans(list *ObjectList, from, to types.TS) {
+	snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+	snapshot.AscendGroup(ObjectListGroupAppendableCreate, from, stopObjectEntryScan)
+	snapshot.AscendGroup(ObjectListGroupAppendableDrop, to, stopObjectEntryScan)
+	snapshot.AscendGroup(ObjectListGroupNonAppendableCreate, from, stopObjectEntryScan)
+	snapshot.AscendGroup(ObjectListGroupNonAppendableDrop, to, stopObjectEntryScan)
+}
+
 func TestObjectListDynamicGroupSeekAllocations(t *testing.T) {
 	list, from, to := makeObjectListDynamicSeekBenchmark()
 	allocs := testing.AllocsPerRun(100, func() {
 		runObjectListDynamicGroupSeeks(list, from, to)
 	})
 	require.LessOrEqual(t, allocs, float64(1))
+	directAllocs := testing.AllocsPerRun(100, func() {
+		runObjectListDirectGroupScans(list, from, to)
+	})
+	require.LessOrEqual(t, directAllocs, float64(4))
 }
 
 func BenchmarkObjectListDynamicGroupSeeks(b *testing.B) {
@@ -111,5 +143,50 @@ func BenchmarkObjectListDynamicGroupSeeks(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		runObjectListDynamicGroupSeeks(list, from, to)
+	}
+}
+
+func BenchmarkObjectListDirectGroupScans(b *testing.B) {
+	list, from, to := makeObjectListDynamicSeekBenchmark()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		runObjectListDirectGroupScans(list, from, to)
+	}
+}
+
+func makeObjectListAppendableScanBenchmark(entries int) *ObjectList {
+	list := NewObjectList(false)
+	trees := list.loadTrees()
+	for i := range entries {
+		entry := makeObjectListOrderTestEntry(byte(i), ObjectListGroupAppendableCreate, int64(i+1))
+		trees.all.Set(entry)
+		trees.group(ObjectListGroupAppendableCreate).Set(entry)
+	}
+	return list
+}
+
+func BenchmarkObjectListUnifiedAppendableScan(b *testing.B) {
+	list := makeObjectListAppendableScanBenchmark(1024)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		it := list.loadTree().Iter()
+		for ok := SeekObjectListGroup(&it, ObjectListGroupAppendableCreate, types.TS{}); ok; ok = it.Next() {
+			if it.Item().ObjectListGroup() != ObjectListGroupAppendableCreate {
+				break
+			}
+		}
+		it.Release()
+	}
+}
+
+func BenchmarkObjectListDirectAppendableScan(b *testing.B) {
+	list := makeObjectListAppendableScanBenchmark(1024)
+	snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		snapshot.ScanGroup(ObjectListGroupAppendableCreate, scanAllObjectEntries)
 	}
 }

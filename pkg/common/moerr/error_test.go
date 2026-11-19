@@ -190,6 +190,15 @@ func TestCollationErrorCodeContracts(t *testing.T) {
 	}
 }
 
+// TestFKRowIsReferencedMySQLError pins the client-visible wire pairing for
+// parent-side FK rejections (issue #31453): MySQL 8.0 reports errno 1451
+// (ER_ROW_IS_REFERENCED_2) with SQLSTATE 23000 for parent DELETE/UPDATE blocks.
+func TestFKRowIsReferencedMySQLError(t *testing.T) {
+	err := NewErrFKRowIsReferenced(context.Background())
+	require.Equal(t, ErrFKRowIsReferenced, err.ErrorCode())
+	require.Equal(t, ER_ROW_IS_REFERENCED_2, err.MySQLCode())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())
@@ -246,6 +255,31 @@ func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
+}
+
+func TestDeadLockDetectedMySQLError(t *testing.T) {
+	for name, err := range map[string]*Error{
+		"context":    NewDeadLockDetected(context.Background()),
+		"no context": NewDeadLockDetectedNoCtx(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			check := func(err *Error) {
+				t.Helper()
+				require.Equal(t, ErrDeadLockDetected, err.ErrorCode())
+				require.Equal(t, uint16(1213), err.MySQLCode())
+				require.Equal(t, "40001", err.SqlState())
+				require.Equal(t, "deadlock detected", err.Error())
+				require.True(t, IsMoErrCode(err, ErrDeadLockDetected))
+				require.True(t, MustRollbackTxn(err))
+			}
+			check(err)
+			data, encodeErr := err.MarshalBinary()
+			require.NoError(t, encodeErr)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			check(&decoded)
+		})
+	}
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {

@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"iter"
+	"math"
 	"strconv"
 )
 
@@ -98,7 +99,7 @@ func tokenizeOne(bj ByteJson, pos int32, includeKey bool, yield func(Token) bool
 		t.TokenPos = pos
 	case TpCodeFloat64:
 		sbuf := t.TokenBytes[1:1]
-		sbuf, _ = bj.toFloat64(sbuf)
+		sbuf, _ = bj.toFloat64Token(sbuf)
 		t.TokenBytes[0] = byte(len(sbuf))
 		t.TokenPos = pos
 	case TpCodeString:
@@ -115,4 +116,19 @@ func tokenizeOne(bj ByteJson, pos int32, includeKey bool, yield func(Token) bool
 		return 0
 	}
 	return pos + 1
+}
+
+// toFloat64Token preserves the spelling of persisted fulltext numeric terms.
+// SQL/JSON display formatting may evolve independently of this index contract.
+func (bj ByteJson) toFloat64Token(buf []byte) ([]byte, error) {
+	f := bj.GetFloat64()
+	if err := checkFloat64(f); err != nil {
+		return nil, err
+	}
+	format := byte('e')
+	abs := math.Abs(f)
+	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
+		format = 'f'
+	}
+	return strconv.AppendFloat(buf, f, format, -1, 64), nil
 }

@@ -1848,9 +1848,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 			return moerr.NewInternalErrorNoCtx("CDC pause timed out waiting for table detector callbacks")
 		}
 
-		// Synchronously wait for all readers to stop before proceeding
-		// This ensures no goroutine leaks and clean pause state
-		exec.stopAllReaders()
+		// Do not publish Paused while a reader can still produce work. The
+		// completion owner survives a timeout and the next pause can retry.
+		if stopped, _ := exec.stopAllReaders(); !stopped {
+			if wasRunning {
+				v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+			}
+			return moerr.NewInternalErrorNoCtx("pause timed out waiting for readers to stop")
+		}
 
 		// Note: task was marked as paused earlier (before ClosePause) to maximize blocking window
 		// This may cause some watermark updates during stopAllReaders to be blocked,
@@ -3832,6 +3837,15 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 		ie.SessionOverrideOptions{}).Error(); capabilityErr != nil {
 		return moerr.NewNotSupportedf(ctx,
 			"CDC target identity catalog columns are not available: %v", capabilityErr)
+	}
+	if exec.sinkUri.SinkTyp == cdc.CDCSinkType_MySQL {
+		sendSQLTimeout, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string)
+		if sendSQLTimeout == "" {
+			sendSQLTimeout = cdc.CDCDefaultSendSqlTimeout
+		}
+		if exec.sinkUri.SinkTyp, err = cdc.ResolveTargetSinkType(ctx, exec.sinkUri, sendSQLTimeout); err != nil {
+			return err
+		}
 	}
 	exec.explicitStart = !exec.startTs.IsEmpty() &&
 		(!exec.noFull || protocol != cdc.CDCInitialSnapshotProtocolNoFullHLC)

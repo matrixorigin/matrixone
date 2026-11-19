@@ -237,11 +237,6 @@ func runSqlWithMode(
 		if forceBackExec && realBackExec {
 			bh.ClearExecResultBatches()
 		}
-		// export as CSV need this
-		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
-		//for range tblStuff.def.visibleIdxes {
-		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
-		//}
 		if err = bh.Exec(ctx, sql); err != nil {
 			if forceBackExec && realBackExec {
 				bh.ClearExecResultBatches()
@@ -376,7 +371,13 @@ func scanSnapshotRelationByID(
 // fall back to a relation that was already opened at snapshotTS. ALTER drops
 // replaced physical generations from the current catalog, while bounded data
 // branch operations may still need to hydrate rows from such a generation.
-func scanSnapshotRelationByIDWithFallback(
+//
+// It is a var so unit tests can substitute a deterministic blocked reader
+// (the reopenDataBranchRelationByID precedent) and prove cancellation and
+// owner routing through the LCA scan without a storage engine.
+var scanSnapshotRelationByIDWithFallback = scanSnapshotRelationByIDWithFallbackImpl
+
+func scanSnapshotRelationByIDWithFallbackImpl(
 	ctx context.Context,
 	caller string,
 	ses *Session,
@@ -548,7 +549,7 @@ func formatValIntoStringWithFloatCast(
 	}
 
 	writeFloat := func(v float64, bits uint64, bitSize int, sqlType string) {
-		if math.IsNaN(v) || (v == 0 && math.Signbit(v)) {
+		if math.IsNaN(v) || math.IsInf(v, 0) || (v == 0 && math.Signbit(v)) {
 			var raw [8]byte
 			if bitSize == 32 {
 				binary.LittleEndian.PutUint32(raw[:4], uint32(bits))
@@ -559,14 +560,6 @@ func formatValIntoStringWithFloatCast(
 			buf.WriteString(hex.EncodeToString(raw[:bitSize/8]))
 			buf.WriteString("')")
 			buf.WriteString(" as ")
-			buf.WriteString(sqlType)
-			buf.WriteByte(')')
-			return
-		}
-		if math.IsInf(v, 0) {
-			buf.WriteString("cast('")
-			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
-			buf.WriteString("' as ")
 			buf.WriteString(sqlType)
 			buf.WriteByte(')')
 			return
@@ -723,7 +716,7 @@ func formatValIntoStringWithFloatCast(
 		writeInt(int64(val.(int32)))
 	case types.T_int64:
 		writeInt(val.(int64))
-	case types.T_float32:
+	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		v := val.(float32)
 		writeFloat(float64(v), uint64(math.Float32bits(v)), 32, "float")
 	case types.T_float64:
@@ -736,6 +729,23 @@ func formatValIntoStringWithFloatCast(
 	case types.T_array_float64:
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
+		buf.WriteString("'")
+	case types.T_array_float8, types.T_array_float4:
+		var text string
+		switch cell := val.(type) {
+		case []float32:
+			text = types.ArrayToString[float32](cell)
+		case []byte:
+			// the exact text of the cell, which casts back to the same cell
+			var err error
+			if text, err = types.BlockScaledToJSON(cell); err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected %s type %T", t.Oid, val)
+		}
+		buf.WriteString("'")
+		buf.WriteString(text)
 		buf.WriteString("'")
 	case types.T_array_bf16:
 		buf.WriteString("'")
@@ -793,6 +803,10 @@ func extractDataBranchSQLRowValue(
 		return nil
 	case types.T_array_uint8:
 		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
+		return nil
+	case types.T_array_float8, types.T_array_float4:
+		// the cell as stored: the SQL carries its exact text
+		row[colIdx] = append([]byte(nil), vec.GetBytesAt(rowIdx)...)
 		return nil
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
@@ -946,6 +960,9 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, rowIdx)
+		return v, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
@@ -954,6 +971,9 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_array_float8, types.T_array_float4:
+		// The block-scaled cell is the value; branch comparisons are byte-exact.
+		return vec.GetBytesAt(rowIdx), nil
 	case types.T_array_bf16:
 		return vector.GetArrayAt[types.BF16](vec, rowIdx), nil
 	case types.T_array_float16:
@@ -994,6 +1014,12 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 }
 
 func normalizeCompareValue(typ types.Type, val any) (any, error) {
+	if typ.Oid.IsLowPrecisionFloat() {
+		// compareValueFromVector widens these to float32
+		if v, ok := val.(interface{ ToFloat32() float32 }); ok {
+			return v.ToFloat32(), nil
+		}
+	}
 	switch typ.Oid {
 	case types.T_json:
 		switch v := val.(type) {
@@ -1022,6 +1048,10 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 			return v, nil
 		case []byte:
 			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_array_float8, types.T_array_float4:
+		if v, ok := val.([]byte); ok {
+			return v, nil
 		}
 	case types.T_array_bf16:
 		switch v := val.(type) {

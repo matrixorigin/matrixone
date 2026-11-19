@@ -88,8 +88,8 @@ test('empty, capped, incomplete, duplicate and malformed lists fail closed', () 
   assert.deepEqual(classify([file], 1, true), { scope: 'full', sdk_required: true });
 });
 
-function client({ files = [modified('pkg/a_test.go')], revisions, error = false } = {}) {
-  const pr = { number: 1, head: { sha: 'head' }, base: { sha: 'base' }, changed_files: 1 };
+function client({ files = [modified('pkg/a_test.go')], revisions, error = false, baseRef = 'main' } = {}) {
+  const pr = { number: 1, head: { sha: 'head' }, base: { sha: 'base', ref: baseRef }, changed_files: 1 };
   let calls = 0;
   return {
     context: { repo: { owner: 'owner', repo: 'repo' }, payload: { pull_request: pr } },
@@ -111,9 +111,16 @@ test('API failure falls back to full and both sides of pagination check the revi
   assert.deepEqual(await resolveScope(client({ error: true })), { scope: 'full', sdk_required: true });
   const { pr } = client();
   const movedHead = { ...pr, head: { sha: 'new' } };
-  const movedBase = { ...pr, base: { sha: 'new' } };
-  for (const revisions of [[movedHead], [pr, movedHead], [pr, movedBase]]) {
+  const movedBase = { ...pr, base: { ...pr.base, sha: 'new' } };
+  const retargeted = { ...pr, base: { ...pr.base, ref: '4.2-dev' } };
+  for (const revisions of [[movedHead], [pr, movedHead], [pr, movedBase],
+    [retargeted, retargeted], [pr, retargeted]]) {
     await assert.rejects(resolveScope(client({ revisions })), /revision changed/);
+  }
+  for (const baseRef of [undefined, null, '']) {
+    const fixture = client();
+    fixture.pr.base.ref = baseRef;
+    await assert.rejects(resolveScope(fixture), /Missing pull request base branch/);
   }
 });
 
@@ -134,11 +141,12 @@ function entrypointJobs() {
     .map(match => [match[1], match[2]]));
 }
 
-test('actual preflight script publishes the authoritative plan as strict string outputs', async () => {
+test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
   const block = entrypointJobs().preflight;
   const script = block.match(/          script: \|\n([\s\S]*?)(?=      - id: plan)/)[1]
     .split('\n').map(line => line.slice(12)).join('\n');
-  for (const [paths, expected] of [
+  const sdkCondition = entrypointJobs()['python-sdk'].match(/^    if: \$\{\{ (.*) \}\}$/m)[1];
+  for (const [paths, expected, options = {}] of [
     [['BUILD.md', 'pkg/sql/README.md', 'docs/cn/source/index.rst'], { scope: 'docs', sdk_required: 'false' }],
     [['clients/python/pyproject.toml'], { scope: 'sdk', sdk_required: 'true' }],
     [['clients/python/client.py', '.agents/skills/mo-dev/SKILL.md'], { scope: 'sdk', sdk_required: 'true' }],
@@ -147,9 +155,22 @@ test('actual preflight script publishes the authoritative plan as strict string 
     [['test/distributed/cases/a.sql', 'pkg/sql/README.md'], { scope: 'bvt', sdk_required: 'false' }],
     [['pkg/testdata/input.md'], { scope: 'full', sdk_required: 'false' }],
     [['pkg/a.go'], { scope: 'full', sdk_required: 'false' }],
+    [['clients/python/client.py'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['.github/workflows/python-sdk.yml'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['clients/python/client.py', 'pkg/a.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.1-dev' }],
+    [['.github/ci/change-scope.cjs'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['.github/workflows/entrypoint.yaml'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'true' }, { forceFull: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev', forceFull: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'true' }, { error: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix', error: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev', count: 2 }],
+    [['README.md'], { scope: 'docs', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['pkg/a_test.go'], { scope: 'ut', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['test/distributed/cases/a.sql'], { scope: 'bvt', sdk_required: 'false' }, { baseRef: '4.1-dev' }],
   ]) {
-    const fixture = client({ files: paths.map(modified) });
-    fixture.pr.changed_files = paths.length;
+    const fixture = client({ ...options, files: paths.map(modified) });
+    fixture.pr.changed_files = options.count ?? paths.length;
     const outputs = {};
     const summary = { addHeading() { return this; }, addRaw() { return this; }, async write() {} };
     await runInNewContext(`(async () => { ${script} })()`, {
@@ -158,10 +179,18 @@ test('actual preflight script publishes the authoritative plan as strict string 
         assert.equal(path, './.github/ci/change-scope.cjs');
         return { resolveScope };
       },
-      process: { env: {} },
+      process: { env: { FORCE_FULL: String(options.forceFull === true) } },
       core: { setOutput: (name, value) => { outputs[name] = value; }, summary },
     });
-    assert.deepEqual(outputs, expected);
+    assert.deepEqual(outputs, expected, fixture.pr.base.ref + ': ' + paths.join(','));
+    const needs = results();
+    Object.assign(needs.preflight.outputs, outputs);
+    const sdkSelected = runInNewContext(sdkCondition, {
+      needs, github: { base_ref: fixture.pr.base.ref }, cancelled: () => false,
+    });
+    assert.equal(sdkSelected, expected.sdk_required === 'true');
+    needs['python-sdk'].result = sdkSelected ? 'success' : 'skipped';
+    assert.match(verifyResults(outputs.scope, needs), /all required jobs passed/);
   }
   assert.match(block, /sdk_required: \$\{\{ steps\.scope\.outputs\.sdk_required \}\}/);
 });
@@ -474,7 +503,7 @@ test('SDK impact is retained across mixed changes, control files and both rename
     [[modified('clients/python/pyproject.toml'), modified('README.md')], { scope: 'sdk', sdk_required: true }],
     [[modified('pkg/a.go'), modified('clients/python/a.py')], { scope: 'full', sdk_required: true }],
     [[modified('pkg/a.go')], { scope: 'full', sdk_required: false }],
-    [[modified('.github/workflows/python-sdk.yml')], { scope: 'full', sdk_required: true }],
+    [[modified('.github/workflows/python-sdk.yml')], { scope: 'sdk', sdk_required: true }],
     [[modified('.github/ci/change-scope.cjs')], { scope: 'full', sdk_required: true }],
     [[modified('.github/workflows/entrypoint.yaml')], { scope: 'full', sdk_required: true }],
     [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
@@ -541,7 +570,7 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     .map(match => [match[1], match[2]]));
   assert.match(sdk, /^  workflow_call:$/m);
   assert.doesNotMatch(sdk, /^  pull_request(?:_target)?:$/m);
-  assert.match(sdk, /branches: \[main, develop\]/);
+  assert.match(sdk, /branches: \[develop\]/);
   const offline = sections.offline;
   assert.match(offline, /timeout-minutes: 30/);
   assert.match(offline, /runs-on: ubuntu-latest/);
@@ -558,24 +587,100 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   assert.match(offline, /flake8 matrixone --select=E9,F63,F7,F82/);
   assert.match(offline, /if: \$\{\{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' \}\}/);
   assert.match(offline, /fail-fast: false/);
-  const pythons = ['3.10', '3.12'];
-  const sqlalchemy = ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3'];
-  for (const python of pythons) assert.ok(offline.includes(`'${python}'`));
-  for (const range of sqlalchemy) assert.ok(offline.includes(`'${range}'`));
+  assert.match(offline, /^        python: \['3\.10', '3\.12'\]$/m);
+  assert.match(offline, /^        sqlalchemy: \['>=1\.4\.54,<1\.5', '>=2\.0,<2\.1', '>=2\.1,<3'\]$/m);
   assert.match(offline, /exclude:\n          - python: '3.10'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /include:\n          - python: '3\.10'\n            sqlalchemy: '==1\.4\.54'/);
   assert.match(offline, /include:[\s\S]*?- python: '3.11'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /SQLALCHEMY_RANGE: \$\{\{ matrix\.sqlalchemy \}\}/);
+  assert.match(offline, /"SQLAlchemy\[asyncio\]\$\{SQLALCHEMY_RANGE\}"/);
+  assert.match(offline, /- name: Assert exact supported SQLAlchemy floor\n        if: \$\{\{ matrix\.sqlalchemy == '==1\.4\.54' \}\}\n        run: python -c "import sqlalchemy; assert sqlalchemy\.__version__ == '1\.4\.54', sqlalchemy\.__version__"/);
+  assert.ok(offline.indexOf('Assert exact supported SQLAlchemy floor') < offline.indexOf('Run required offline contracts without skips'));
   assert.match(offline, /name: python-sdk-\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ strategy.job-index \}\}/);
   assert.match(offline, /if: \$\{\{ !cancelled\(\) \}\}/);
+  const core = checkoutSpec(sections['core-import']);
+  assert.match(sections['core-import'], /include:\n          - python: '3\.8'\n            sqlalchemy: '==1\.4\.54'/);
+  assert.equal(core.repository, checkout.repository);
+  assert.equal(core.ref, checkout.ref);
+  assert.equal(core['persist-credentials'], 'false');
+  assert.equal(core['allow-unsafe-pr-checkout'], checkout['allow-unsafe-pr-checkout']);
+  assert.doesNotMatch(sections['core-import'], /secrets\.|environment:/);
   const onlineExpression = sections.online.match(/^    if: (.*)$/m)[1];
   for (const [event, enabled, expected] of [
     ['pull_request_target', true, false], ['workflow_call', true, false],
     ['push', true, false], ['workflow_dispatch', false, false], ['workflow_dispatch', true, true],
   ]) assert.equal(runInNewContext(onlineExpression, { github: { event_name: event }, inputs: { online: enabled } }), expected);
-  assert.match(sections.online, /environment: matrixone-sdk-integration/);
+  assert.match(sections.online, /^    environment: matrixone-sdk-\$\{\{ matrix\.server \}\}$/m);
+  assert.match(sections.online, /^        server: \['4\.2\.5', 'current-source'\]$/m);
+  const databaseGuard = sections.online.match(/      - name: Validate extended-suite database configuration\n        run: \|\n([\s\S]*?)(?=^      -)/m)[1];
+  for (const database of ['', 'sdk_contracts']) {
+    const result = spawnSync('bash', ['-eu', '-c', databaseGuard], {
+      env: { ...process.env, MATRIXONE_DATABASE: database }, encoding: 'utf8',
+    });
+    assert.equal(result.status === 0, database !== '', result.stderr);
+    if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
+  }
+  assert.match(offline, /- name: Run required offline contracts without skips\n        run: python scripts\/run_contracts\.py --output offline-contracts/);
+  assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
+  assert.ok(readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8').length > 0);
   const group = sdk.match(/^  group: (.*)$/m)[1];
   assert.ok(group.startsWith('python-sdk/'));
   assert.ok(group.includes('github.event.pull_request.head.repo.full_name || github.repository'));
   assert.ok(group.includes('github.event.pull_request.head.ref || github.ref'));
   assert.notEqual(group, readFileSync(join(__dirname, '../workflows/entrypoint.yaml'), 'utf8').match(/^  group: (.*)$/m)[1]);
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/python-sdk.yml'/);
+});
+
+test('SDK workflow-only changes select SDK while trust and mixed kernel edits retain full scope', () => {
+  for (const path of ['.github/workflows/python-sdk.yml', 'clients/python/matrixone/client.py']) {
+    assert.deepEqual(classify([modified(path)], 1), { scope: 'sdk', sdk_required: true });
+  }
+  assert.deepEqual(classify([modified('clients/python/a.py'), modified('.github/workflows/python-sdk.yml')], 2), { scope: 'sdk', sdk_required: true });
+  for (const other of ['pkg/a.go', 'pkg/a_test.go', '.github/workflows/entrypoint.yaml', '.github/ci/change-scope.cjs']) {
+    assert.deepEqual(classify([modified('.github/workflows/python-sdk.yml'), modified(other)], 2), { scope: 'full', sdk_required: true });
+  }
+  assert.deepEqual(classify([{ filename: '.github/workflows/python-sdk.yml', previous_filename: 'pkg/a.go', status: 'renamed' }], 1), { scope: 'full', sdk_required: true });
+});
+
+test('Iceberg module checks retain the dependency path configuration', () => {
+  const workflow = readFileSync(join(__dirname, '../workflows/iceberg-connector.yml'), 'utf8');
+  const trigger = workflow.split('\npermissions:')[0];
+  const paths = [...trigger.matchAll(/^      - '([^']+)'$/gm)].map(match => match[1]);
+  // GitHub owns glob matching. Check the declared dependency boundary, not a local reimplementation.
+  assert.deepEqual(paths, [
+    '**/*.go', '**/go.mod', '**/go.sum', 'go.work', 'go.work.sum',
+    '**/*.s', '**/*.S', '**/*.c', '**/*.cc', '**/*.cpp', '**/*.h', '**/*.syso',
+    'pkg/iceberg/**', 'cgo/**', 'thirdparties/**', 'Makefile',
+    '.github/workflows/iceberg-connector.yml', '.github/ci/**',
+  ]);
+  assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/iceberg-connector.yml'/);
+});
+
+test('main is validated before merge without post-merge test or cache producers', () => {
+  const workflow = name => readFileSync(join(__dirname, '../workflows', name), 'utf8');
+  const trigger = name => workflow(name).split('\npermissions:')[0].split('\njobs:')[0];
+  for (const name of ['merge-trigger-standalone.yaml', 'merge-trigger-tke.yaml']) {
+    assert.match(trigger(name), /branches: \[ '\[0-9\]\+\.\[0-9\]\+\*' \]/);
+    assert.doesNotMatch(trigger(name), /branches:.*\bmain\b/);
+  }
+  const sdk = trigger('python-sdk.yml');
+  assert.match(sdk, /workflow_call:/);
+  assert.match(sdk, /push:\n    branches: \[develop\]/);
+  assert.match(sdk, /workflow_dispatch:/);
+  assert.match(trigger('native-dependency-check.yml'), /pull_request:/);
+  assert.match(trigger('native-dependency-check.yml'), /workflow_dispatch:/);
+  for (const name of ['native-dependency-check.yml', 'sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.doesNotMatch(trigger(name), /^  push:/m);
+  }
+  for (const name of ['sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.match(trigger(name), /^  schedule:/m);
+    assert.match(trigger(name), /^  workflow_dispatch:/m);
+  }
+  const sca = workflow('sca-go-module-cache.yaml');
+  const saveTools = sca.indexOf('name: Save static-check tools');
+  assert.ok(saveTools >= 0);
+  assert.ok(saveTools < sca.indexOf('name: Restore golangci-lint analysis cache'));
+  assert.ok(saveTools < sca.indexOf('name: Build native SCA prerequisites'));
+  assert.match(trigger('entrypoint.yaml'), /branches: \[ main,/);
+  assert.match(trigger('ci-cancellation.yml'), /pull_request_target:\n    types: \[closed\]/);
 });

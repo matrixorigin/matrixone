@@ -37,8 +37,12 @@ func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
 	return
 }
 
-func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.ApproxSize()) > d.config.ClientBufSize {
+func (d *LogServiceDriver) getCommitter(entrySize int) *groupCommitter {
+	if len(d.committer.writer.entries) > 0 &&
+		int64(EmptyLogEntrySize)+d.committer.writer.PendingEncodedSize()+int64(entrySize) > int64(d.config.MaxWALRecordSize) {
+		d.flushCurrentCommitter()
+	}
+	if d.committer.writer.PendingEncodedSize() > int64(d.config.ClientBufSize) {
 		d.flushCurrentCommitter()
 	}
 
@@ -59,10 +63,22 @@ func (d *LogServiceDriver) flushCurrentCommitter() {
 }
 
 func (d *LogServiceDriver) onCommitIntents(items ...any) {
-	for _, item := range items {
+	for i, item := range items {
 		e := item.(*entry.Entry)
+		if err := e.Prepare(); err != nil {
+			// The current committer and every accepted entry in this callback
+			// must be completed before fail-stop, even though no backend append
+			// was attempted for this entry.
+			d.committer.NotifyError(err)
+			for _, pending := range items[i:] {
+				pending.(*entry.Entry).DoneWithErr(err)
+			}
+			d.onAppendFailure(err)
+			return
+		}
+		entrySize := e.GetSize() + OneEntryFooterSize
 		e.DSN = d.allocateDSN()
-		committer := d.getCommitter()
+		committer := d.getCommitter(entrySize)
 		committer.AddIntent(e)
 	}
 	d.flushCurrentCommitter()

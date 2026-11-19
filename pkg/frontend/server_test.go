@@ -16,8 +16,13 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
 
@@ -37,7 +43,8 @@ type closeErrorListener struct {
 
 type testMOServerBaseService struct {
 	MockBaseService
-	id string
+	id              string
+	sessionMgrPanic error
 }
 
 func (s *testMOServerBaseService) ID() string {
@@ -45,6 +52,9 @@ func (s *testMOServerBaseService) ID() string {
 }
 
 func (s *testMOServerBaseService) SessionMgr() *queryservice.SessionManager {
+	if s.sessionMgrPanic != nil {
+		panic(s.sessionMgrPanic)
+	}
 	return nil
 }
 
@@ -126,6 +136,69 @@ func TestMOServerEmptyUnixAddressUsesTCPOnly(t *testing.T) {
 	rebound, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	require.NoError(t, rebound.Close())
+}
+
+func TestMOServerConstructorFailureReleasesResources(t *testing.T) {
+	for _, network := range []string{"session-manager", "tcp", "unix"} {
+		t.Run(network, func(t *testing.T) {
+			address := "127.0.0.1:0"
+			var occupied net.Listener
+			if network != "session-manager" {
+				var err error
+				occupied, err = net.Listen("tcp", address)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = occupied.Close() })
+				address = occupied.Addr().String()
+			}
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 1
+			pu.SV.UnixSocketAddress = ""
+			if network == "unix" {
+				require.NoError(t, occupied.Close())
+				// Filesystem preflight succeeds; only the Unix bind must fail.
+				pu.SV.UnixSocketAddress = filepath.Join(t.TempDir(), strings.Repeat("s", 160))
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel() // Also retires old-code workers in the negative control.
+			service := &testMOServerBaseService{id: t.Name()}
+			if network == "session-manager" {
+				service.sessionMgrPanic = errors.New("injected session manager panic")
+			}
+			var failure any
+			func() {
+				defer func() { failure = recover() }()
+				NewMOServer(ctx, address, pu, nil, service)
+			}()
+			require.NotNil(t, failure)
+			if network == "session-manager" {
+				require.Same(t, service.sessionMgrPanic, failure, "cleanup must preserve the original panic")
+			} else {
+				require.Contains(t, fmt.Sprint(failure), "listen "+network)
+			}
+			if network == "unix" {
+				require.Contains(t, fmt.Sprint(failure), pu.SV.UnixSocketAddress)
+			}
+			require.NoError(t, ctx.Err(), "constructor cleanup must not cancel its caller")
+			manager := getRtMgr(service.id)
+			require.NotNil(t, manager)
+			if !assert.ErrorIs(t, manager.ctx.Err(), context.Canceled) {
+				cancel() // Release old-code workers before checking the listener.
+			}
+			joined := make(chan struct{})
+			go func() { manager.workerWG.Wait(); close(joined) }()
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Fatal("frontend constructor left its routine manager worker running")
+			}
+			if network == "unix" {
+				rebound, err := net.Listen("tcp", address)
+				require.NoError(t, err, "Unix bind failure must release the earlier TCP listener")
+				require.NoError(t, rebound.Close())
+			}
+		})
+	}
 }
 
 func TestMOServerStopJoinsConnectionCleanup(t *testing.T) {
@@ -292,4 +365,121 @@ func Test_handshake(t *testing.T) {
 	tConn.rbuf = makePacket(data, 1)
 	err = sv.handshake(ioses)
 	assert.NoError(t, err)
+}
+
+func TestMOServerHandleRequestReturnsPeerEOF(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	allocator := NewLeakCheckAllocator()
+	setSessionAlloc(service, allocator)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	serverConn, peer := net.Pipe()
+	t.Cleanup(func() { _ = serverConn.Close(); _ = peer.Close() })
+	conn, err := NewIOSession(serverConn, pu, service)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	// net.Pipe rejects setting a new deadline after its peer closes. Arm the
+	// bounded read now and prevent ReadFromConn from resetting that deadline.
+	conn.timeout = 0
+	require.NoError(t, serverConn.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, peer.Close())
+	server := &MOServer{running: true}
+	require.Equal(t, io.EOF, server.handleRequest(conn))
+	require.NoError(t, conn.Close())
+	require.True(t, allocator.CheckBalance())
+}
+
+// TestMOServerTerminatesConnectionOnClientQuit proves the COM_QUIT contract
+// at the connection owner: the MySQL wire protocol makes the client send
+// COM_QUIT and wait for the server (not the client) to close the connection.
+// The server read loop must terminate on the quit sentinel so that the
+// physical connection closes and routine/session cleanup runs, instead of
+// parking on the socket for a next command from a finished client (#30978).
+func TestMOServerTerminatesConnectionOnClientQuit(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	t.Cleanup(func() { _ = serverConn.Close() })
+	registerConn(clientConn)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	setAicm("", &defines.AutoIncrCacheManager{})
+	rm, err := NewRoutineManager(ctx, "")
+	require.NoError(t, err)
+	rm.setSessionMgr(queryservice.NewSessionManager())
+	setRtMgr("", rm)
+
+	serverFinished := make(chan struct{})
+	mo := createInnerServer()
+	go func() {
+		defer close(serverFinished)
+		mo.handleConn(ctx, serverConn)
+	}()
+
+	// One deterministic client over this in-memory pipe: the generic harness
+	// connector retries a failed dial over the same pipe, and a dial retry
+	// would interleave two protocol traces through the single connection the
+	// test observes. The ping is the full command roundtrip control.
+	dsn := "dump:111@custom(127.0.0.1:6001)/?readTimeout=30s&timeout=30s&writeTimeout=30s"
+	db, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.Ping(), "single dial, handshake and ping must succeed")
+
+	waitForClientCount := func(expected int) {
+		require.Eventually(t, func() bool {
+			return rm.clientCount() == expected
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+	waitForSessionCount := func(expected int) {
+		require.Eventually(t, func() bool {
+			return len(rm.sessionManager.GetAllSessions()) == expected
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+
+	// The client exists, its logical session is registered, and the server
+	// read loop is parked waiting for the next command. The authenticated
+	// ping that got db open above already proved a full command roundtrip
+	// through this loop, so the terminal observation below cannot be blamed
+	// on a broken connection.
+	waitForClientCount(1)
+	waitForSessionCount(1)
+
+	// A real client has its reader parked long before it can observe the
+	// server's close, and net.Pipe reports io.ErrClosedPipe from
+	// SetReadDeadline once the peer's close has been propagated, so the read
+	// deadline must be armed before COM_QUIT is sent to keep the observation
+	// independent of read-loop completion timing.
+	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(10*time.Second)))
+
+	// COM_QUIT exactly as a client sends it: 1-byte payload [0x01] with
+	// sequence id 0 and nothing else. The client keeps its side open, as
+	// mysql2 does while waiting for the server's close.
+	_, err = clientConn.Write([]byte{0x01, 0x00, 0x00, 0x00, 0x01})
+	require.NoError(t, err)
+
+	// The server must terminate the connection itself, within a bound.
+	_, readErr := clientConn.Read(make([]byte, 16))
+	require.Error(t, readErr)
+	require.ErrorIs(t, readErr, io.EOF,
+		"the server must close the physical connection after COM_QUIT")
+
+	// Terminal connection ownership: the routine and the logical session are
+	// released only through the close path, and the read loop has exited.
+	waitForClientCount(0)
+	waitForSessionCount(0)
+	select {
+	case <-serverFinished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handleConn did not return after the client quit")
+	}
 }

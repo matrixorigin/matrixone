@@ -503,3 +503,45 @@ func TestNonStrictBoundaryLegacyTerminators(t *testing.T) {
 		}
 	}
 }
+
+func TestCsvReaderUnterminatedEnclosureScope(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		externType int32
+		format     string
+		parallel   bool
+		accept     bool
+	}{
+		{"serial load", int32(plan.ExternType_LOAD), tree.CSV, false, true},
+		{"parallel load", int32(plan.ExternType_LOAD), tree.CSV, true, false},
+		{"external table", int32(plan.ExternType_EXTERNAL_TB), tree.CSV, false, false},
+		{"jsonline", int32(plan.ExternType_LOAD), tree.JSONLINE, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extern := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tc.format, ScanType: tree.INLINE, Data: "1,\"abc", CompressType: tree.NOCOMPRESS, Tail: &tree.TailParameter{}}, ExParam: tree.ExParam{ExternType: tc.externType, Parallel: tc.parallel}}
+			param := &ExternalParam{ExParamConst: ExParamConst{Extern: extern}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+			proc := testutil.NewProcess(t)
+			r := &CsvReader{}
+			empty, err := r.Open(param, proc)
+			require.NoError(t, err)
+			require.False(t, empty)
+			defer r.Close()
+			row, err := r.plh.csvReader.Read(nil)
+			if tc.accept {
+				require.NoError(t, err)
+				require.Equal(t, "\"abc", row[1].Val)
+			} else if tc.format == tree.JSONLINE {
+				require.NoError(t, err)
+				require.Equal(t, []csvparser.Field{{Val: extern.Data}}, row)
+			} else {
+				require.Error(t, err)
+			}
+			if tc.format == tree.CSV {
+				p, err := newCSVParserFromReader(extern, strings.NewReader(extern.Data))
+				require.NoError(t, err)
+				_, err = p.Read(nil)
+				require.True(t, csvparser.IsSyntaxError(err))
+			}
+		})
+	}
+}

@@ -1,0 +1,109 @@
+drop database if exists i30615_1;
+create database i30615_1;
+create table i30615_1.p (id int primary key);
+create table i30615_1.c (id int primary key, pid int, constraint fk_p foreign key (pid) references i30615_1.p(id));
+insert into i30615_1.p values (1),(2);
+insert into i30615_1.c values (1,1);
+drop snapshot if exists i30615_snap1;
+create snapshot i30615_snap1 for database i30615_1;
+update i30615_1.c set pid=2 where id=1;
+delete from i30615_1.p where id=1;
+select * from i30615_1.c order by id;
+id	pid
+1	2
+select * from i30615_1.p order by id;
+id
+2
+restore table i30615_1.c {snapshot='i30615_snap1'};
+internal error: cannot restore table i30615_1.c: foreign key constraint `fk_p` would leave orphan row(s) (key value 1) because the referenced key is missing in i30615_1.p; restore the referenced table together with this one or remove the constraint first
+select * from i30615_1.c order by id;
+id	pid
+1	2
+select count(*) from i30615_1.c c left join i30615_1.p p on c.pid=p.id where c.pid is not null and p.id is null;
+count(*)
+0
+create table i30615_1.c_copy clone i30615_1.c {snapshot='i30615_snap1'};
+internal error: cannot restore table i30615_1.c_copy: foreign key constraint `fk_p` would leave orphan row(s) (key value 1) because the referenced key is missing in i30615_1.p; restore the referenced table together with this one or remove the constraint first
+show tables from i30615_1;
+Tables_in_i30615_1
+c
+p
+insert into i30615_1.p values (1);
+restore table i30615_1.c {snapshot='i30615_snap1'};
+select * from i30615_1.c order by id;
+id	pid
+1	1
+insert into i30615_1.c values (5,999);
+Cannot add or update a child row: a foreign key constraint fails
+drop snapshot i30615_snap1;
+drop database i30615_1;
+drop database if exists i30615_2;
+create database i30615_2;
+create table i30615_2.p (id int primary key);
+create table i30615_2.c (id int primary key, pid int, constraint fk_p foreign key (pid) references i30615_2.p(id));
+insert into i30615_2.p values (1),(2);
+insert into i30615_2.c values (1,1);
+drop snapshot if exists i30615_snap2;
+create snapshot i30615_snap2 for database i30615_2;
+insert into i30615_2.c values (2,2);
+select * from i30615_2.c order by id;
+id	pid
+1	1
+2	2
+restore table i30615_2.c {snapshot='i30615_snap2'};
+select * from i30615_2.c order by id;
+id	pid
+1	1
+insert into i30615_2.c values (9,999);
+Cannot add or update a child row: a foreign key constraint fails
+select count(*) from i30615_2.c c left join i30615_2.p p on c.pid=p.id where c.pid is not null and p.id is null;
+count(*)
+0
+drop snapshot i30615_snap2;
+drop database i30615_2;
+drop database if exists i30615_3;
+create database i30615_3;
+create table i30615_3.p (id int primary key);
+create table i30615_3.c (id int primary key, pid int, constraint fk_p foreign key (pid) references i30615_3.p(id));
+insert into i30615_3.p values (1),(2);
+insert into i30615_3.c values (1,null),(2,null);
+drop snapshot if exists i30615_snap3;
+create snapshot i30615_snap3 for database i30615_3;
+update i30615_3.c set pid=2 where id=1;
+delete from i30615_3.p where id=1;
+restore table i30615_3.c {snapshot='i30615_snap3'};
+select * from i30615_3.c order by id;
+id	pid
+1	NULL
+2	NULL
+select count(*) from i30615_3.c c left join i30615_3.p p on c.pid=p.id where c.pid is not null and p.id is null;
+count(*)
+0
+drop snapshot i30615_snap3;
+drop database i30615_3;
+drop database if exists i30615_4;
+create database i30615_4;
+create table i30615_4.t (id int primary key, mid int, constraint fk_m foreign key (mid) references i30615_4.t(id));
+insert into i30615_4.t values (1,null),(2,1);
+drop snapshot if exists i30615_snap4;
+create snapshot i30615_snap4 for database i30615_4;
+insert into i30615_4.t values (3,2);
+select count(*) from i30615_4.t;
+count(*)
+3
+restore table i30615_4.t {snapshot='i30615_snap4'};
+not supported: can not restore table 'i30615_4.t' referenced by some foreign key constraint
+select * from i30615_4.t order by id;
+id	mid
+1	NULL
+2	1
+3	2
+insert into i30615_4.t values (4,999);
+Cannot add or update a child row: a foreign key constraint fails
+select * from i30615_4.t order by id;
+id	mid
+1	NULL
+2	1
+3	2
+drop snapshot i30615_snap4;
+drop database i30615_4;

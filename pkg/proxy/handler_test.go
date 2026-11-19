@@ -420,9 +420,15 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 			return nil
 		},
 	}
-	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
-	tun.mu.sc = expectedSC
-	markTunnelInFlight(tun)
+	newTunnel := func(sc ServerConn, inFlight bool) *tunnel {
+		tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
+		tun.mu.sc = sc
+		if inFlight {
+			markTunnelInFlight(tun)
+		}
+		return tun
+	}
+	tun := newTunnel(expectedSC, true)
 	cc := &mockClientConn{
 		killFn: func(sc ServerConn) error {
 			require.Same(t, expectedSC, sc)
@@ -435,14 +441,37 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	require.Equal(t, 1, killCalled)
 	require.Equal(t, 1, closeCalled)
 
-	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
-	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
+	serverTun := newTunnel(expectedSC, true)
+	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, serverTun)
+	idleSC := &killCurrentServerConn{
+		cn: &CNServer{connID: 12, uuid: "cn-idle"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	idleTun := newTunnel(idleSC, false)
+	h.cleanupBackendOnClientDisconnect(io.EOF, cc, idleTun)
 	require.Equal(t, 1, killCalled)
-	require.Equal(t, 1, closeCalled)
-
-	h.cleanupBackendOnClientDisconnect(withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect), cc, tun)
-	require.Equal(t, 2, killCalled)
 	require.Equal(t, 2, closeCalled)
+
+	wrappedSC := &killCurrentServerConn{
+		cn: &CNServer{connID: 13, uuid: "cn-wrapped"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	wrappedTun := newTunnel(wrappedSC, true)
+	wrappedCC := &mockClientConn{
+		killFn: func(ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+	h.cleanupBackendOnClientDisconnect(withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect), wrappedCC, wrappedTun)
+	require.Equal(t, 2, killCalled)
+	require.Equal(t, 3, closeCalled)
 }
 
 func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
@@ -1193,4 +1222,62 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	require.True(t, <-done)
 	require.Same(t, current, <-killed)
 	require.Same(t, current, tun.getServerConn())
+}
+
+func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
+
+	notificationStarted := make(chan ServerConn, 1)
+	releaseNotification := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseNotification) })
+	t.Cleanup(release)
+	backendClosed := make(chan struct{})
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
+	markTunnelInFlight(tun)
+	current := &killCurrentServerConn{
+		cn: &CNServer{connID: 10},
+		closeFn: func() error {
+			close(backendClosed)
+			return nil
+		},
+	}
+	tun.mu.sc = current
+	cc := &mockClientConn{killFn: func(sc ServerConn) error {
+		notificationStarted <- sc
+		<-releaseNotification
+		return nil
+	}}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+	}()
+
+	require.Same(t, current, <-notificationStarted)
+	select {
+	case <-backendClosed:
+	case <-time.After(time.Second):
+		t.Fatal("backend close waited for control-plane notification")
+	}
+	release()
+	require.True(t, <-done)
+}
+
+func TestHandler_handleTunnelErrCleansPlainInFlightEOF(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
+	markTunnelInFlight(tun)
+	closed := 0
+	tun.mu.sc = &killCurrentServerConn{
+		cn:      &CNServer{connID: 11},
+		closeFn: func() error { closed++; return nil },
+	}
+	killed := 0
+	cc := &mockClientConn{killFn: func(ServerConn) error { killed++; return nil }}
+
+	require.NoError(t, h.handleTunnelErr(io.EOF, cc, tun, 1, 1))
+	require.Equal(t, 1, closed)
+	require.Equal(t, 1, killed)
 }

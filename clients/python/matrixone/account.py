@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from matrixone.exceptions import AccountError
+from ._utils import rows_from_result
 
 if TYPE_CHECKING:
     from matrixone.client import Client
@@ -102,6 +103,36 @@ class Grant:
         return self.__str__()
 
 
+# SHOW ACCOUNTS columns (pkg/frontend/show_account.go): account_name,
+# admin_name, created_time, status, suspended_time, db_count, tbl_count,
+# size, snapshot_size, comments. It reports no suspension reason.
+_SHOW_ACCOUNTS_SUSPENDED_TIME = 4
+_SHOW_ACCOUNTS_COMMENTS = 9
+
+
+def _show_accounts_row_to_account(row: tuple, columns=None) -> Account:
+    positions = None
+    if columns is not None:
+        names = [name.casefold() for name in columns]
+        if len(names) != len(set(names)) or not {'account_name', 'admin_name'} <= set(names):
+            raise ValueError('SHOW ACCOUNTS metadata needs unique account_name and admin_name columns')
+        positions = dict(zip(names, range(len(names))))
+
+    def column(name, legacy_index):
+        index = legacy_index if positions is None else positions.get(name)
+        return row[index] if index is not None and len(row) > index else None
+
+    return Account(
+        name=column('account_name', 0),
+        admin_name=column('admin_name', 1),
+        created_time=column('created_time', 2),
+        status=column('status', 3),
+        comment=column('comments', _SHOW_ACCOUNTS_COMMENTS),
+        suspended_time=column('suspended_time', _SHOW_ACCOUNTS_SUSPENDED_TIME),
+        suspended_reason=None,
+    )
+
+
 class BaseAccountManager:
     """
     Base class for Account management containing shared SQL building logic.
@@ -167,7 +198,9 @@ class BaseAccountManager:
         sql += self._client._escape_identifier(user_name)
         return sql
 
-    def _build_alter_user_sql(self, user_name: str, password: Optional[str] = None, comment: Optional[str] = None) -> str:
+    def _build_alter_user_sql(
+        self, user_name: str, password: Optional[str] = None, comment: Optional[str] = None
+    ) -> str:
         """Build ALTER USER SQL statement"""
         sql_parts = [f"ALTER USER {self._client._escape_identifier(user_name)}"]
         if password:
@@ -187,7 +220,7 @@ class BaseAccountManager:
         """Build SQL to show accounts"""
         return "SHOW ACCOUNTS"
 
-    def _get_current_account_from_results(self, accounts: List[tuple]) -> str:
+    def _get_current_account_from_results(self, accounts: List[tuple], columns=None) -> str:
         """
         Determine current account from SHOW ACCOUNTS results.
 
@@ -206,23 +239,26 @@ class BaseAccountManager:
 
         # If only one account is returned, that's the current account
         if len(accounts) == 1:
-            return accounts[0][0]  # First column is account name
+            return self._row_to_account(accounts[0], columns).name
 
         # If multiple accounts are returned, we're in sys account
         # (sys can see all accounts)
         return "sys"
 
-    def _row_to_account(self, row: tuple) -> Account:
+    @staticmethod
+    def _account_result_columns(result):
+        columns = getattr(result, 'columns', None)
+        if callable(columns):
+            columns = list(result.keys())
+        return columns
+
+    def _accounts_from_result(self, result):
+        columns = self._account_result_columns(result)
+        return [self._row_to_account(row, columns) for row in rows_from_result(result)]
+
+    def _row_to_account(self, row: tuple, columns=None) -> Account:
         """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
+        return _show_accounts_row_to_account(row, columns)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""
@@ -325,7 +361,9 @@ class AccountManager(BaseAccountManager):
         return self.executor if self.executor else self._client
 
     # Account Management
-    def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
+    def create_account(
+        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
+    ) -> Account:
         """
         Create a new account in MatrixOne
 
@@ -350,7 +388,7 @@ class AccountManager(BaseAccountManager):
             return self.get_account(account_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to create account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to create account '{account_name}': {e}") from e
 
     def drop_account(self, account_name: str, if_exists: bool = False) -> None:
         """
@@ -365,7 +403,7 @@ class AccountManager(BaseAccountManager):
             sql = self._build_drop_account_sql(account_name, if_exists)
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to drop account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to drop account '{account_name}': {e}") from e
 
     def alter_account(
         self,
@@ -396,7 +434,7 @@ class AccountManager(BaseAccountManager):
             return self.get_account(account_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to alter account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to alter account '{account_name}': {e}") from e
 
     def get_account(self, account_name: str) -> Account:
         """Get account by name"""
@@ -404,17 +442,14 @@ class AccountManager(BaseAccountManager):
             sql = self._build_get_account_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found") from None
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
+            for account in self._accounts_from_result(result):
+                if account.name == account_name:
+                    return account
 
             raise AccountError(f"Account '{account_name}' not found") from None
 
         except Exception as e:
-            raise AccountError(f"Failed to get account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to get account '{account_name}': {e}") from e
 
     def list_accounts(self) -> List[Account]:
         """List all accounts"""
@@ -422,13 +457,10 @@ class AccountManager(BaseAccountManager):
             sql = self._build_list_accounts_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_account(row) for row in result.rows]
+            return self._accounts_from_result(result)
 
         except Exception as e:
-            raise AccountError(f"Failed to list accounts: {e}") from None
+            raise AccountError(f"Failed to list accounts: {e}") from e
 
     # User Management
     def create_user(self, user_name: str, password: str, comment: Optional[str] = None) -> User:
@@ -459,8 +491,8 @@ class AccountManager(BaseAccountManager):
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             result = self._get_executor().execute(show_sql)
-            accounts = result.rows if result and hasattr(result, 'rows') else []
-            current_account = self._get_current_account_from_results(accounts)
+            accounts = rows_from_result(result)
+            current_account = self._get_current_account_from_results(accounts, self._account_result_columns(result))
 
             return User(
                 name=user_name,
@@ -472,7 +504,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to create user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to create user '{user_name}': {e}") from e
 
     def drop_user(self, user_name: str, if_exists: bool = False) -> None:
         """
@@ -489,7 +521,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to drop user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to drop user '{user_name}': {e}") from e
 
     def alter_user(
         self,
@@ -551,7 +583,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to alter user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to alter user '{user_name}': {e}") from e
 
     def get_current_user(self) -> User:
         """Get current user information"""
@@ -559,11 +591,12 @@ class AccountManager(BaseAccountManager):
             sql = "SELECT USER()"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise AccountError("Failed to get current user") from None
 
             # Parse current user from USER() function result
-            current_user_str = result.rows[0][0]  # e.g., 'root@localhost'
+            current_user_str = rows[0][0]  # e.g., 'root@localhost'
             if "@" in current_user_str:
                 username, host = current_user_str.split("@", 1)
             else:
@@ -584,7 +617,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to get current user: {e}") from None
+            raise AccountError(f"Failed to get current user: {e}") from e
 
     def list_users(self) -> List[User]:
         """
@@ -597,21 +630,24 @@ class AccountManager(BaseAccountManager):
             sql = self._build_list_users_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            current_user_name = result.rows[0][0]
+            current_user_name = rows[0][0]
 
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             show_result = self._get_executor().execute(show_sql)
-            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
-            current_account = self._get_current_account_from_results(accounts)
+            accounts = rows_from_result(show_result)
+            current_account = self._get_current_account_from_results(
+                accounts, self._account_result_columns(show_result)
+            )
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
         except Exception as e:
-            raise AccountError(f"Failed to list users: {e}") from None
+            raise AccountError(f"Failed to list users: {e}") from e
 
     # Role Management
     def create_role(self, role_name: str, comment: Optional[str] = None) -> Role:
@@ -624,7 +660,7 @@ class AccountManager(BaseAccountManager):
             return self.get_role(role_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to create role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to create role '{role_name}': {e}") from e
 
     def drop_role(self, role_name: str, if_exists: bool = False) -> None:
         """
@@ -644,7 +680,7 @@ class AccountManager(BaseAccountManager):
             sql = " ".join(sql_parts)
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to drop role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to drop role '{role_name}': {e}") from e
 
     def get_role(self, role_name: str) -> Role:
         """Get role by name"""
@@ -652,17 +688,18 @@ class AccountManager(BaseAccountManager):
             sql = "SHOW ROLES"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise AccountError(f"Role '{role_name}' not found") from None
 
-            for row in result.rows:
+            for row in rows:
                 if row[0] == role_name:
                     return self._row_to_role(row)
 
             raise AccountError(f"Role '{role_name}' not found") from None
 
         except Exception as e:
-            raise AccountError(f"Failed to get role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to get role '{role_name}': {e}") from e
 
     def list_roles(self) -> List[Role]:
         """List all roles"""
@@ -670,13 +707,14 @@ class AccountManager(BaseAccountManager):
             sql = "SHOW ROLES"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_role(row) for row in result.rows]
+            return [self._row_to_role(row) for row in rows]
 
         except Exception as e:
-            raise AccountError(f"Failed to list roles: {e}") from None
+            raise AccountError(f"Failed to list roles: {e}") from e
 
     # Permission Management
     def grant_privilege(
@@ -714,7 +752,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to grant privilege: {e}") from None
+            raise AccountError(f"Failed to grant privilege: {e}") from e
 
     def revoke_privilege(
         self,
@@ -739,7 +777,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to revoke privilege: {e}") from None
+            raise AccountError(f"Failed to revoke privilege: {e}") from e
 
     def grant_role(self, role_name: str, to_user: str) -> None:
         """Grant role to user"""
@@ -748,16 +786,18 @@ class AccountManager(BaseAccountManager):
             sql = f"GRANT {self._client._escape_identifier(role_name)} TO {self._client._escape_identifier(to_user)}"
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to grant role '{role_name}' to user '{to_user}': {e}") from None
+            raise AccountError(f"Failed to grant role '{role_name}' to user '{to_user}': {e}") from e
 
     def revoke_role(self, role_name: str, from_user: str) -> None:
         """Revoke role from user"""
         try:
             # MatrixOne syntax: REVOKE role_name FROM user_name
-            sql = f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
+            sql = (
+                f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
+            )
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}") from None
+            raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}") from e
 
     def list_grants(self, user: Optional[str] = None) -> List[Grant]:
         """List grants for current user or specified user"""
@@ -769,18 +809,19 @@ class AccountManager(BaseAccountManager):
 
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
             grants = []
-            for row in result.rows:
+            for row in rows:
                 grant = self._parse_grant_statement(row[0])
                 grants.append(grant)
 
             return grants
 
         except Exception as e:
-            raise AccountError(f"Failed to list grants: {e}") from None
+            raise AccountError(f"Failed to list grants: {e}") from e
 
     # Helper methods
     def _get_current_account(self) -> str:
@@ -793,17 +834,9 @@ class AccountManager(BaseAccountManager):
         except Exception:
             return "sys"
 
-    def _row_to_account(self, row: tuple) -> Account:
+    def _row_to_account(self, row: tuple, columns=None) -> Account:
         """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
+        return _show_accounts_row_to_account(row, columns)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""
@@ -889,12 +922,9 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_get_account_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found")
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
+            for account in self._accounts_from_result(result):
+                if account.name == account_name:
+                    return account
 
             raise AccountError(f"Account '{account_name}' not found")
 
@@ -907,14 +937,7 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_list_accounts_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                return []
-
-            accounts = []
-            for row in result.rows:
-                accounts.append(self._row_to_account(row))
-
-            return accounts
+            return self._accounts_from_result(result)
 
         except Exception as e:
             raise AccountError(f"Failed to list accounts: {e}")
@@ -928,8 +951,8 @@ class AsyncAccountManager(BaseAccountManager):
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             result = await self._get_executor().execute(show_sql)
-            accounts = result.rows if result and hasattr(result, 'rows') else []
-            current_account = self._get_current_account_from_results(accounts)
+            accounts = rows_from_result(result)
+            current_account = self._get_current_account_from_results(accounts, self._account_result_columns(result))
 
             return User(
                 name=user_name,
@@ -943,22 +966,33 @@ class AsyncAccountManager(BaseAccountManager):
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
 
+    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
+        """Drop a user through the owning asynchronous client or session."""
+        try:
+            sql = self._build_drop_user_sql(user_name, if_exists)
+            await self._get_executor().execute(sql)
+        except Exception as error:
+            raise AccountError(f"Failed to drop user '{user_name}': {error}") from error
+
     async def list_users(self) -> List[User]:
         """List users in current account asynchronously"""
         try:
             sql = self._build_list_users_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            current_user_name = result.rows[0][0]
+            current_user_name = rows[0][0]
 
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             show_result = await self._get_executor().execute(show_sql)
-            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
-            current_account = self._get_current_account_from_results(accounts)
+            accounts = rows_from_result(show_result)
+            current_account = self._get_current_account_from_results(
+                accounts, self._account_result_columns(show_result)
+            )
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 

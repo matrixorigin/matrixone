@@ -1,0 +1,101 @@
+set @saved_ft = @@experimental_fulltext_index;
+set @saved_ft2 = @@experimental_fulltext2_index;
+set experimental_fulltext_index = 1;
+set experimental_fulltext2_index = 1;
+drop database if exists ft_direct_score_compare;
+create database ft_direct_score_compare;
+use ft_direct_score_compare;
+create table docs (id int primary key, body text);
+insert into docs values (1, 'anchor rare'), (2, 'anchor common'), (3, 'anchor common');
+create fulltext index ft on docs(body);
+select id from docs where match(body) against('anchor') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('anchor') = 0 or id = -1 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('rare') = 0 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from docs where 0 = match(body) against('rare') order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('rare') < 0.01 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('rare') >= 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('rare') != 0 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(body) against('zzz') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('rare') = 0 and id > 2 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id, match(body) against('rare') > 0 as hit from docs where match(body) against('rare') <= 0 order by id;
+➤ id[4,32,0]  ¦  hit[-6,8,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select count(*) from docs where match(body) against('rare') = 0;
+➤ count(*)[-5,64,0]  𝄀
+2
+select id from docs where match(body) against('rare') > 0 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(body) against('rare') order by id;
+➤ id[4,32,0]  𝄀
+1
+create table docs2 (id int primary key, body text);
+insert into docs2 values (1, 'anchor rare'), (2, 'anchor common'), (3, 'anchor common');
+create fulltext2 index ft2 on docs2(body) with parser gojieba;
+alter table docs2 alter reindex ft2 fulltext2 force_sync;
+select id from docs2 where match(body) against('anchor') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs2 where match(body) against('anchor') = 0 or id = -1 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs2 where match(body) against('rare') = 0 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from docs2 where match(body) against('rare') < 0.01 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from docs2 where match(body) against('rare') != 0 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs2 where match(body) against('zzz') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id, match(body) against('rare') > 0 as hit from docs2 where match(body) against('rare') <= 0 order by id;
+➤ id[4,32,0]  ¦  hit[-6,8,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select id from docs2 where match(body) against('rare') > 0 order by id;
+➤ id[4,32,0]  𝄀
+1
+drop database ft_direct_score_compare;
+set experimental_fulltext_index = @saved_ft;
+set experimental_fulltext2_index = @saved_ft2;

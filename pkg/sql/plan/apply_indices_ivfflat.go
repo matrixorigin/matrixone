@@ -49,8 +49,7 @@ type ivfIndexContext struct {
 	pushdownEnabled bool
 
 	// Auto mode support.
-	isAutoMode      bool   // Whether in auto mode
-	initialStrategy string // Initial strategy selected in auto mode ("pre" or "post")
+	isAutoMode bool // Whether in auto mode
 }
 
 // shouldUseForceMode determines if force mode (full table scan) should be used
@@ -513,7 +512,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 			vecCtx.scanNode.BindingTags[0],
 		)
 	} else {
-		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos, nodeBindingTag(vecCtx.scanNode))
 	}
 	if !found {
 		return nil, nil
@@ -580,8 +579,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		pushdownEnabled: (mode == "pre"),
 
 		// Auto mode fields.
-		isAutoMode:      isAutoMode,
-		initialStrategy: mode,
+		isAutoMode: isAutoMode,
 	}, nil
 }
 
@@ -949,6 +947,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		if err != nil || !ok {
 			return nodeID, err
 		}
+		// The join reads only the candidate rows of the base table; the filter scan
+		// copied from it reads the whole table.
+		scanNode.NarrowScan = true
 		joinRootID = preJoinID
 	} else {
 		outerScanNodeID := scanNode.NodeId
@@ -956,6 +957,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		if outerPkExpr == nil || outerPkExpr.GetCol() == nil {
 			return nodeID, nil
 		}
+		// The join reads only the candidate rows of the base table.
+		scanNode.NarrowScan = true
 
 		// JOIN( table, ivf )
 		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -1006,10 +1009,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	{
 		scanTag := scanNode.BindingTags[0]
 		scoreColType := tableFuncNode.TableDef.Cols[1].Typ // table function's score column
-		if projNode != nil {
-			replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
-		}
+		replaceProjectDistFnsWithScoreCol(projNode, childNode, scanTag,
+			ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
 		if childNode != nil {
 			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
 				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)

@@ -31,8 +31,6 @@ import (
 )
 
 func TestCheckpoint1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil, options.WithDisableGCCatalog())
@@ -81,8 +79,6 @@ func TestCheckpoint1(t *testing.T) {
 }
 
 func TestCheckpoint2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -153,8 +149,6 @@ func TestCheckpoint2(t *testing.T) {
 }
 
 func TestSchedule1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)

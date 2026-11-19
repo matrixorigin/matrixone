@@ -292,24 +292,25 @@ func waitMO(ctx context.Context, p *managedProcess, d deployment) error {
 }
 
 type ArmRecord struct {
-	Version            int       `json:"version"`
-	Trial              Trial     `json:"trial"`
-	Engine             string    `json:"engine"`
-	Request            FileID    `json:"request"`
-	Worker             FileID    `json:"worker_receipt"`
-	Started            time.Time `json:"started"`
-	StartupNS          int64     `json:"startup_ns"`
-	StartupToResultNS  int64     `json:"startup_to_result_ns"`
-	WaveNS             int64     `json:"wave_ns"`
-	Before             Usage     `json:"before"`
-	After              Usage     `json:"after"`
-	Trailing           Usage     `json:"after_cleanup"`
-	DiskBytes          int64     `json:"allocated_disk_bytes"`
-	CacheResidentBytes uint64    `json:"cache_resident_bytes,omitempty"`
-	CacheTotalBytes    uint64    `json:"cache_total_bytes,omitempty"`
-	Status             string    `json:"status"`
-	Error              string    `json:"error,omitempty"`
-	Cleanup            string    `json:"cleanup"`
+	Version            int            `json:"version"`
+	Trial              Trial          `json:"trial"`
+	Engine             string         `json:"engine"`
+	Request            FileID         `json:"request"`
+	Worker             FileID         `json:"worker_receipt"`
+	Started            time.Time      `json:"started"`
+	StartupNS          int64          `json:"startup_ns"`
+	StartupToResultNS  int64          `json:"startup_to_result_ns"`
+	WaveNS             int64          `json:"wave_ns"`
+	Before             Usage          `json:"before"`
+	After              Usage          `json:"after"`
+	Trailing           Usage          `json:"after_cleanup"`
+	DiskBytes          int64          `json:"allocated_disk_bytes"`
+	CacheResidentBytes uint64         `json:"cache_resident_bytes,omitempty"`
+	CacheTotalBytes    uint64         `json:"cache_total_bytes,omitempty"`
+	Status             string         `json:"status"`
+	Error              string         `json:"error,omitempty"`
+	Cleanup            string         `json:"cleanup"`
+	Profile            *ProfileRecord `json:"profile,omitempty"`
 }
 
 func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager, d deployment, t Trial, root string, request WorkerRequest) (record ArmRecord, retErr error) {
@@ -342,7 +343,11 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 	defer func() {
 		record.Trailing, err = group.snapshot(false)
 		retErr = errors.Join(retErr, err)
-		if cleanupErr := group.quiescent(server, worker); cleanupErr == nil {
+		cleanupErr := group.quiescent(server, worker)
+		if record.Profile != nil && record.Profile.Cleanup != "complete" {
+			cleanupErr = errors.Join(cleanupErr, errors.New("profiling collector cleanup is incomplete"))
+		}
+		if cleanupErr == nil {
 			record.Cleanup = "complete"
 		} else {
 			record.Cleanup = "failed"
@@ -403,7 +408,14 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 	}
 	armStart := time.Now()
 	if d.Engine.Name == "mo" {
-		server, err = startManaged(ctx, []string{c.MOBinary, "-launch", d.Launch, "-debug-http", fmt.Sprintf("127.0.0.1:%d", d.DebugPort)}, d.Root, d.environment(t.Cores), group, filepath.Join(root, "service.log"), nil)
+		if err := requireFreePorts(c); err != nil {
+			return record, err
+		}
+		args := []string{c.MOBinary, "-launch", d.Launch, "-debug-http", fmt.Sprintf("127.0.0.1:%d", d.DebugPort)}
+		if request.Profile != nil && request.Profile.Kind == "wait" {
+			args = append(args, "-block-profile-rate", "1", "-mutex-profile-fraction", "1")
+		}
+		server, err = startManaged(ctx, args, d.Root, d.environment(t.Cores), group, filepath.Join(root, "service.log"), nil)
 		if err != nil {
 			return record, err
 		}
@@ -461,6 +473,23 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		if err := gate.wait(ctx, "ready"); err != nil {
 			return record, err
 		}
+		var profiler *parentProfile
+		if request.Profile != nil {
+			pids := []int{worker.cmd.Process.Pid}
+			if server != nil {
+				pids = append(pids, server.cmd.Process.Pid)
+			}
+			profiler, err = startParentProfile(ctx, *request.Profile, root, pids, d)
+			if err != nil {
+				return record, err
+			}
+			defer func() {
+				if profiler != nil {
+					profile := profiler.stop()
+					record.Profile = &profile
+				}
+			}()
+		}
 		record.StartupNS = time.Since(armStart).Nanoseconds()
 		record.Before, err = group.snapshot(true)
 		if err != nil {
@@ -469,13 +498,30 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		if err := gate.release(); err != nil {
 			return record, err
 		}
-		if err := gate.wait(ctx, "done"); err != nil {
+		windowCtx := ctx
+		windowCancel := func() {}
+		if request.MaxWindowNS > 0 {
+			windowCtx, windowCancel = context.WithTimeoutCause(ctx, time.Duration(request.MaxWindowNS), errors.New("profile window cap exceeded"))
+		}
+		defer windowCancel()
+		if err := gate.wait(windowCtx, "done"); err != nil {
 			return record, err
 		}
 		record.StartupToResultNS = time.Since(armStart).Nanoseconds()
 		record.After, err = group.snapshot(false)
 		if err != nil {
 			return record, err
+		}
+		if profiler != nil {
+			_ = profiler.stop()
+			if profiler.record.Cleanup != "complete" {
+				record.Profile = &profiler.record
+				profiler = nil
+				return record, errors.New("profiling collector cleanup is incomplete")
+			}
+			profiler.afterSnapshots()
+			record.Profile = &profiler.record
+			profiler = nil
 		}
 		if err := gate.release(); err != nil {
 			return record, err

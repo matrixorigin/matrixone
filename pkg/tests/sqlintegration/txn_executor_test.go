@@ -17,12 +17,13 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -42,7 +43,8 @@ func TestInformationSchemaViewsUpgradeIsIdempotent(t *testing.T) {
 		upgrade := func() {
 			t.Helper()
 			require.NoError(t, exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-				return v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0)
+				entry := versions.InformationSchemaViewsUpgradeEntry()
+				return entry.UpgradeAfterProtocolCheck(txn, 0)
 			}, executor.Options{}.WithWaitCommittedLogApplied()))
 		}
 		viewID := func() uint64 {
@@ -139,6 +141,62 @@ func Test_TxnExecutorExec(t *testing.T) {
 			return nil
 		}, executor.Options{}.WithWaitCommittedLogApplied())
 		require.NoError(t, err)
+
+		t.Run("result_limit", func(t *testing.T) {
+			// Cross the executor's real batch boundary. The exact limit is
+			// measured from the produced vectors, not from a guessed row size.
+			const query = "select result from generate_series(1, 8193) g"
+			result, err := exec.Exec(ctx, query, executor.Options{})
+			require.NoError(t, err)
+			require.Greater(t, len(result.Batches), 1)
+			var size uint64
+			for _, bat := range result.Batches {
+				size += uint64(bat.Size())
+			}
+			result.Close()
+			require.Greater(t, size, uint64(1))
+			database := strings.ToLower(strings.ReplaceAll(testutils.GetDatabaseName(t), "/", "_"))
+			defer cleanupSQLIntegration(t, svc, "drop database if exists "+database)
+			testutils.CreateTestDatabase(t, database, svc)
+			result, err = exec.Exec(ctx, "create table "+database+".marker (v int)", executor.Options{})
+			require.NoError(t, err)
+			result.Close()
+
+			err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				result, err := txn.Exec(query, executor.StatementOption{}.WithMaxResultBytes(size))
+				if err != nil {
+					return err
+				}
+				defer result.Close()
+				require.Greater(t, len(result.Batches), 1)
+				return nil
+			}, executor.Options{})
+			require.NoError(t, err)
+
+			err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				result, err := txn.Exec("insert into "+database+".marker values (1)", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				result.Close()
+				result, err = txn.Exec(query, executor.StatementOption{}.WithMaxResultBytes(size-1))
+				result.Close()
+				return err
+			}, executor.Options{})
+			var limitErr *executor.ResultLimitError
+			require.True(t, errors.As(err, &limitErr), "%v", err)
+			require.Equal(t, size-1, limitErr.Limit)
+
+			result, err = exec.Exec(ctx, "select count(*) from "+database+".marker", executor.Options{})
+			require.NoError(t, err, "the failed statement must not strand the executor")
+			var count int64
+			result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				count = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+				return false
+			})
+			result.Close()
+			require.Zero(t, count, "a result-limit failure must roll back prior writes")
+		})
 	})
 }
 

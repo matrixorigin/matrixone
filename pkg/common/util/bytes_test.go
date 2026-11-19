@@ -42,7 +42,7 @@ func TestCloneBytes(t *testing.T) {
 	}
 }
 
-func TestCopyBytes(t *testing.T) {
+func TestCloneBytesIf(t *testing.T) {
 	tests := []struct {
 		name     string
 		src      []byte
@@ -50,6 +50,18 @@ func TestCopyBytes(t *testing.T) {
 		want     []byte
 		wantSame bool // whether the returned slice is the same as src (when needCopy=false)
 	}{
+		{
+			name:     "nil slice, needCopy=true",
+			src:      nil,
+			needCopy: true,
+			want:     []byte{},
+		},
+		{
+			name:     "nil slice, needCopy=false",
+			src:      nil,
+			needCopy: false,
+			want:     nil,
+		},
 		{
 			name:     "empty slice, needCopy=true",
 			src:      []byte{},
@@ -83,18 +95,13 @@ func TestCopyBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CloneBytesIf(tt.src, tt.needCopy)
-			assert.Equal(t, tt.want, got, "CopyBytes(%v, %v)", tt.src, tt.needCopy)
+			assert.Equal(t, tt.want, got, "CloneBytesIf(%v, %v)", tt.src, tt.needCopy)
 
-			// Check if the returned slice is the same as src when needCopy=false
-			if tt.needCopy {
-				// When needCopy=true, the slice should be a copy
-				if len(tt.src) > 0 {
-					assert.NotSame(t, &tt.src[0], &got[0], "CopyBytes should return a new slice when needCopy=true")
-				}
-			} else {
-				// When needCopy=false, the slice should be the same
-				if len(tt.src) > 0 {
-					assert.Same(t, &tt.src[0], &got[0], "CopyBytes should return the same slice when needCopy=false")
+			if len(tt.src) > 0 {
+				if tt.wantSame {
+					assert.Same(t, &tt.src[0], &got[0])
+				} else {
+					assert.NotSame(t, &tt.src[0], &got[0])
 				}
 			}
 
@@ -103,7 +110,7 @@ func TestCopyBytes(t *testing.T) {
 				original := make([]byte, len(tt.src))
 				copy(original, tt.src)
 				tt.src[0] = 'x'
-				assert.Equal(t, original, got, "CopyBytes should return an independent copy when needCopy=true")
+				assert.Equal(t, original, got, "CloneBytesIf should return an independent copy when needCopy=true")
 			}
 		})
 	}

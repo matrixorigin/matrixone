@@ -879,7 +879,12 @@ func TestAffineSumFamilyPlanShape(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, 2, physicalAggregateCount(t, test.sql))
+			want := 2
+			if test.name == "signed and unshifted" {
+				// MINUS keeps its narrow domain; widened PLUS cannot share that family.
+				want = 3
+			}
+			require.Equal(t, want, physicalAggregateCount(t, test.sql))
 		})
 	}
 

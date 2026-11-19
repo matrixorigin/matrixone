@@ -121,7 +121,6 @@ type TableChangeStream struct {
 	// Watermark stall detection
 	watermarkStallThreshold   time.Duration
 	noProgressWarningInterval time.Duration
-	lastWatermarkAdvance      time.Time
 	noProgressSince           time.Time
 	lastNoProgressWarning     time.Time
 
@@ -454,7 +453,6 @@ var NewTableChangeStream = func(
 		progressTracker:           progressTracker,
 		watermarkStallThreshold:   opts.watermarkStallThreshold,
 		noProgressWarningInterval: opts.noProgressWarningInterval,
-		lastWatermarkAdvance:      time.Now(),
 		// Retry configuration (stored for access in retry logic)
 		maxRetryCount:      opts.maxRetryCount,
 		retryBackoffBase:   opts.retryBackoffBase,
@@ -1738,7 +1736,6 @@ func (s *TableChangeStream) resetWatermarkStallState() {
 
 func (s *TableChangeStream) onWatermarkAdvanced() {
 	now := time.Now()
-	s.lastWatermarkAdvance = now
 	s.resetWatermarkStallState()
 	v2.CdcTableLastActivityTimestamp.WithLabelValues(
 		s.progressTracker.tableKey(),

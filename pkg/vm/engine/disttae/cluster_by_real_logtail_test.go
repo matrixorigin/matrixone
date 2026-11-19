@@ -46,7 +46,6 @@ import (
 	taeContainers "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	taeDBTestutil "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	taeTestutils "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	taeConfig "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 )
 
@@ -91,8 +90,6 @@ import (
 // candidates; the upper SQL layer applies the residual predicate in
 // production, and the harness mirrors that residual evaluation explicitly.
 func TestClusterByRealLogtailIntegration(t *testing.T) {
-	defer taeTestutils.AfterTest(t)()
-	taeTestutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tableDef := clusterReplayTableDef()

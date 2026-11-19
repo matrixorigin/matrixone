@@ -50,4 +50,17 @@ from t_win_split
 ) w;
 row_count    min_rn    max_rn    rn_checksum    value_checksum    row_alignment_checksum    value_alignment_checksum
 9000    1    9000    40504500    40504500.00    0    0.00
+select id, total, peer_count
+from (
+select id, sum(v) over () as total,
+count(*) over (order by (id - 1) div 3) as peer_count
+from t_win_split
+) w
+where peer_count in (3, 8193, 9000) and id in (1, 8192, 8193, 9000)
+order by id;
+id    total    peer_count
+1    40504500.00    3
+8192    40504500.00    8193
+8193    40504500.00    8193
+9000    40504500.00    9000
 drop database window_split_result;

@@ -1,0 +1,127 @@
+drop database if exists group_by_derived_keys;
+create database group_by_derived_keys;
+use group_by_derived_keys;
+create table t(x integer, y smallint, b bigint);
+insert into t values
+(null,1,0),(null,1,0),(-2147483648,2,-9223372036854775808),
+(2147483647,2,9223372036854775807),(0,null,1),(0,null,1),(3,4,3),(3,5,3);
+select x,x-1,x-2,x-3,count(*) c from t
+group by x,x-1,x-2,x-3 order by x;
+➤ x[4,32,0]  ¦  x - 1[-5,64,0]  ¦  x - 2[-5,64,0]  ¦  x - 3[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  2  𝄀
+-2147483648  ¦  -2147483649  ¦  -2147483650  ¦  -2147483651  ¦  1  𝄀
+0  ¦  -1  ¦  -2  ¦  -3  ¦  2  𝄀
+3  ¦  2  ¦  1  ¦  0  ¦  2  𝄀
+2147483647  ¦  2147483646  ¦  2147483645  ¦  2147483644  ¦  1
+select x-1 d,x,count(*) c from t group by 1,2
+having d<3 and count(*)>1 order by d desc limit 3;
+➤ d[-5,64,0]  ¦  x[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  3  ¦  2  𝄀
+-1  ¦  0  ¦  2
+select x,y,cast(x as signed)+cast(y as signed) d,count(*) c from t
+group by d,x,y order by x,y;
+➤ x[4,32,0]  ¦  y[5,16,0]  ¦  d[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  ¦  null  ¦  2  𝄀
+-2147483648  ¦  2  ¦  -2147483646  ¦  1  𝄀
+0  ¦  null  ¦  null  ¦  2  𝄀
+3  ¦  4  ¦  7  ¦  1  𝄀
+3  ¦  5  ¦  8  ¦  1  𝄀
+2147483647  ¦  2  ¦  2147483649  ¦  1
+select d,sum(c) n from
+(select x,x-1 d,count(*) c from t group by x,x-1) z group by d order by d;
+➤ d[-5,64,0]  ¦  n[3,38,0]  𝄀
+null  ¦  2  𝄀
+-2147483649  ¦  1  𝄀
+-1  ¦  2  𝄀
+2  ¦  2  𝄀
+2147483646  ¦  1
+select x,x-1,row_number() over(partition by x-1 order by x),count(*) c
+from t group by x-1,x order by x;
+➤ x[4,32,0]  ¦  x - 1[-5,64,0]  ¦  row_number() over (partition by x - 1 order by x)[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  1  ¦  2  𝄀
+-2147483648  ¦  -2147483649  ¦  1  ¦  1  𝄀
+0  ¦  -1  ¦  1  ¦  2  𝄀
+3  ¦  2  ¦  1  ¦  2  𝄀
+2147483647  ¦  2147483646  ¦  1  ¦  1
+select x,x-1,count(distinct y),sum(y) from t group by x,x-1 order by x;
+➤ x[4,32,0]  ¦  x - 1[-5,64,0]  ¦  count(distinct y)[-5,64,0]  ¦  sum(y)[-5,64,0]  𝄀
+null  ¦  null  ¦  1  ¦  2  𝄀
+-2147483648  ¦  -2147483649  ¦  1  ¦  2  𝄀
+0  ¦  -1  ¦  0  ¦  null  𝄀
+3  ¦  2  ¦  2  ¦  9  𝄀
+2147483647  ¦  2147483646  ¦  1  ¦  2
+select x,x-1,count(*) from t where false group by x,x-1;
+➤ x[4,32,0]  ¦  x - 1[-5,64,0]  ¦  count(*)[-5,64,0]
+select x,y-1 d,count(*) c from t group by x,y-1 order by x,d;
+➤ x[4,32,0]  ¦  d[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  0  ¦  2  𝄀
+-2147483648  ¦  1  ¦  1  𝄀
+0  ¦  null  ¦  2  𝄀
+3  ¦  3  ¦  1  𝄀
+3  ¦  4  ¦  1  𝄀
+2147483647  ¦  1  ¦  1
+prepare derived_group_param from 'select x,x-?,count(*) c from t group by x,x-? order by x';
+set @shift=1;
+execute derived_group_param using @shift,@shift;
+➤ x[4,32,0]  ¦  t.x - ?[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+-2147483648  ¦  -2147483649  ¦  1  𝄀
+0  ¦  -1  ¦  2  𝄀
+3  ¦  2  ¦  2  𝄀
+2147483647  ¦  2147483646  ¦  1
+set @shift=2;
+execute derived_group_param using @shift,@shift;
+➤ x[4,32,0]  ¦  t.x - ?[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+-2147483648  ¦  -2147483650  ¦  1  𝄀
+0  ¦  -2  ¦  2  𝄀
+3  ¦  1  ¦  2  𝄀
+2147483647  ¦  2147483645  ¦  1
+deallocate prepare derived_group_param;
+select b,b+1,count(*) from t group by b,b+1 having count(*)>100;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select x,1/x,count(*) from t group by x,1/x order by x;
+➤ x[4,32,0]  ¦  1 / x[8,53,31]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+-2147483648  ¦  -4.6566128730773926E-10  ¦  1  𝄀
+0  ¦  null  ¦  2  𝄀
+3  ¦  0.3333333333333333  ¦  2  𝄀
+2147483647  ¦  4.656612875245797E-10  ¦  1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1365  ¦  Division by 0  𝄀
+Warning  ¦  1365  ¦  Division by 0
+create table mixed_keys(k int, a varchar(8), z varchar(8));
+insert into mixed_keys values (1,'a','same'),(1,'a ','same'),(1,null,'same'),(2,'b','other'),(2,'b','other');
+select k,count(*) n from
+(select k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z from mixed_keys group by k,v,z) g
+group by k order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select count(*) n from
+(select distinct k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z from mixed_keys) g;
+➤ n[-5,64,0]  𝄀
+3
+select k,sum(n) n,sum(d) d from
+(select k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z,count(*) n,count(distinct a) d from mixed_keys group by k,v,z) g
+group by k order by k;
+➤ k[4,32,0]  ¦  n[3,38,0]  ¦  d[3,38,0]  𝄀
+1  ¦  3  ¦  2  𝄀
+2  ¦  2  ¦  1
+select k,count(*) n from mixed_keys group by rollup(k) order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  5  𝄀
+1  ¦  3  𝄀
+2  ¦  2
+prepare mixed_key_param from 'select count(*) n from (select distinct k,coalesce(cast(a as char(8)),cast(? as varchar(8))) v,z from mixed_keys) g';
+set @fallback=null;
+execute mixed_key_param using @fallback;
+➤ n[-5,64,0]  𝄀
+3
+set @fallback='a';
+execute mixed_key_param using @fallback;
+➤ n[-5,64,0]  𝄀
+2
+deallocate prepare mixed_key_param;
+drop database group_by_derived_keys;

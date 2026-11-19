@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.uber.org/zap"
@@ -42,7 +43,7 @@ func (s *service) waitForClusterSelfReady(requireQueryReady bool) error {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	parent := context.Background()
+	parent := s.startContext()
 	if requireQueryReady && s.bootstrapUpgradeContext != nil {
 		parent = s.bootstrapUpgradeContext
 	}
@@ -172,6 +173,9 @@ func (s *service) clusterSnapshotContainsSelf(ctx context.Context, requireQueryR
 }
 
 func (s *service) clusterSelfReadinessError(ctx context.Context, refreshErr error, requireQueryReady bool) error {
+	if ctx.Err() == context.Canceled {
+		return errors.Join(ctx.Err(), refreshErr)
+	}
 	if refreshErr != nil {
 		return moerr.NewInternalErrorf(
 			context.Background(),

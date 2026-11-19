@@ -208,7 +208,9 @@ select id from two where id = 4 or match(body) against('hello') > 0.5;
 ➤ id[4,32,0]  𝄀
 4
 select id from two where match(body) against('hello') < 0.015 order by id;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 order by id;
 ➤ id[4,32,0]  𝄀
 1
@@ -220,7 +222,12 @@ select id from two where match(body) against('hello') and not (match(body) again
 ➤ id[4,32,0]  𝄀
 1
 select id from two where match(body) against('hello') >= 0 order by id;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
 create table jb(id int primary key, note varchar(20));
 insert into jb values (1,'x'),(2,'y'),(3,'z');
 select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
@@ -243,7 +250,8 @@ select id from two where match(body) against('hello') > 0.015 and id in (select 
 3
 select t.id from two t join jb on t.id=jb.id
 where match(t.body) against('hello') < 0.015 order by t.id;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+1
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 limit 1;
 ➤ id[4,32,0]  𝄀
 1

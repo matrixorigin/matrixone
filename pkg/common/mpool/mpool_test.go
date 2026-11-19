@@ -1019,3 +1019,34 @@ func BenchmarkMPoolAtomicMax(b *testing.B) {
 		mp.Free(buf)
 	}
 }
+
+// Regression for #31430: MakeSlice must return an error, never panic, for
+// zero, negative, overflowing, or zero-size element requests.
+func TestMakeSliceRejectsEdgeLengthsWithoutPanic(t *testing.T) {
+	for _, offHeap := range []bool{false, true} {
+		m, err := NewMPool("test-mpool-makeslice-edges", 0, NoFixed)
+		require.NoError(t, err)
+
+		var empty []int64
+		require.NotPanics(t, func() { empty, err = MakeSlice[int64](0, m, offHeap) })
+		require.NoError(t, err)
+		require.Len(t, empty, 0)
+		require.NotPanics(t, func() { FreeSlice(m, empty) })
+
+		for _, n := range []int{-1, 1 << 61, 1<<61 + 1, math.MaxInt} {
+			var values []int64
+			require.NotPanics(t, func() { values, err = MakeSlice[int64](n, m, offHeap) }, "n=%d", n)
+			require.Error(t, err, "n=%d", n)
+			require.Nil(t, values, "n=%d", n)
+		}
+
+		require.NotPanics(t, func() { _, err = MakeSlice[struct{}](1, m, offHeap) })
+		require.Error(t, err)
+
+		values, err := MakeSlice[int64](4, m, offHeap)
+		require.NoError(t, err)
+		require.Len(t, values, 4)
+		FreeSlice(m, values)
+		require.Equal(t, int64(0), m.CurrNB())
+	}
+}

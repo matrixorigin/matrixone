@@ -158,8 +158,14 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	if !timeWin.hasGapFillBounds() {
 		return nil
 	}
+	// These copies describe the output grid; the original WHERE expressions
+	// own statement diagnostics. Probing the grid must not publish warnings
+	// again, or publish them when no input row evaluates the predicate.
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = &process.WarningProbe{}
 	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, bool, error) {
-		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		vec, err := exe.Eval(child, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
 			return 0, false, err
 		}
@@ -477,7 +483,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.partIdx = -1
 				ctr.group = -1
 				ctr.withoutFill = true
-				ctr.partEnd = false
 				ctr.partitionBreak = false
 				ctr.partitionWindows = 0
 				ctr.status = firstWindow
@@ -907,7 +912,6 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 		// where to resume and fall through to the same slide-to-exhaustion
 		// logic that end-of-stream uses.
 		if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
-			ctr.partEnd = true
 			ctr.breakVecIdx = ctr.curVecIdx
 			ctr.breakRowIdx = ctr.curRowIdx
 			partBreak = true
@@ -1693,8 +1697,27 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			sels = append(sels, int64(i))
 		}
 	}
-	ts.Shrink(sels, false)
-	bat.Shrink(sels, false)
+	if err := ts.Shrink(sels, false, proc.Mp()); err != nil {
+		return false, err
+	}
+	for i, vec := range bat.Vecs {
+		if vec == ts {
+			continue
+		}
+		duplicate := false
+		for _, prior := range bat.Vecs[:i] {
+			if vec == prior {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			if err := vec.Shrink(sels, false, proc.Mp()); err != nil {
+				return false, err
+			}
+		}
+	}
+	bat.SetRowCount(len(sels))
 	return len(sels) > 0, nil
 }
 

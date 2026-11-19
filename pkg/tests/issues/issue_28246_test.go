@@ -24,13 +24,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,7 +93,9 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				var persisted int
 				require.NoError(t, db.QueryRowContext(ctx, "select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&persisted))
 				require.Equal(t, workers, persisted)
-				// Rollback must release the sequence lock without consuming a value.
+				// Allocation is autonomous and issue-once: a value issued inside a
+				// transaction that later rolls back stays consumed (gaps, never reuse),
+				// so the next session allocates past it.
 				tx, err := connections[0].BeginTx(ctx, nil)
 				require.NoError(t, err)
 				defer tx.Rollback()
@@ -106,7 +103,9 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				require.Equal(t, workers+1, persisted)
 				require.NoError(t, tx.Rollback())
 				require.NoError(t, connections[1].QueryRowContext(ctx, "select nextval('"+sequence+"')").Scan(&persisted))
-				require.Equal(t, workers+1, persisted)
+				require.Equal(t, workers+2, persisted)
+				require.NoError(t, db.QueryRowContext(ctx, "select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&persisted))
+				require.Equal(t, workers+2, persisted)
 			})
 		}
 
@@ -192,34 +191,14 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 			require.Equal(t, 4, persisted)
 		})
 
-		lockService := lockservice.GetLockServiceByServiceID(cn.ServiceID())
-		require.NotNil(t, lockService)
-		cnImpl, ok := cn.RawService().(cnservice.Service)
-		require.True(t, ok)
-		sqlExecutor := cnImpl.GetSQLExecutor()
-		engine := cnImpl.GetEngine()
+		// Allocation runs in autonomous short transactions on the persisted counter,
+		// so an open caller transaction holds no sequence row lock for another
+		// session's NEXTVAL to wait on.
 		runContention := func(t *testing.T, timeoutWaiter bool) {
 			t.Helper()
 			sequence := fmt.Sprintf("wait_%t", timeoutWaiter)
 			_, err := db.ExecContext(ctx, "create sequence `"+name+"`.`"+sequence+"` increment 1 start with 1 no cycle")
 			require.NoError(t, err)
-			var sequenceTableID uint64
-			require.Eventually(t, func() bool {
-				lookupCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-				err := sqlExecutor.ExecTxn(lookupCtx, func(txn executor.TxnExecutor) error {
-					database, err := engine.Database(lookupCtx, strings.ToLower(name), txn.Txn())
-					if err != nil {
-						return err
-					}
-					relation, err := database.Relation(lookupCtx, sequence, nil)
-					if err != nil {
-						return err
-					}
-					sequenceTableID = relation.GetTableID(lookupCtx)
-					return nil
-				}, executor.Options{}.WithAccountID(0))
-				return err == nil && sequenceTableID != 0
-			}, 15*time.Second, 10*time.Millisecond, "sequence metadata did not become visible")
 
 			holder, err := db.Conn(ctx)
 			require.NoError(t, err)
@@ -232,9 +211,8 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if timeoutWaiter {
-				// A server-side lock timeout is deterministic here.  Unlike a
-				// client context cancellation, it waits for the frontend to
-				// finish the statement and rollback before the holder is released.
+				// NEXTVAL holds no caller-transaction lock, so the session lock
+				// timeout has nothing to gate on and must not error the statement.
 				_, err = waiter.ExecContext(ctx, "set session lock_wait_timeout = 1")
 				require.NoError(t, err)
 			}
@@ -246,8 +224,6 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 			require.NoError(t, holderTx.QueryRowContext(ctx, "select nextval('"+sequence+"')").Scan(&held))
 			require.Equal(t, 1, held)
 
-			waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
 			type allocation struct {
 				value int
 				err   error
@@ -255,44 +231,31 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 			waitDone := make(chan allocation, 1)
 			go func() {
 				var result allocation
-				result.err = waiter.QueryRowContext(waitCtx, "select nextval('"+sequence+"')").Scan(&result.value)
+				result.err = waiter.QueryRowContext(ctx, "select nextval('"+sequence+"')").Scan(&result.value)
 				waitDone <- result
 			}()
 
-			// The lock service is the synchronization point: committing after the
-			// waiter is visible proves this is an actual row-lock wait, not merely
-			// two queries released by a scheduling barrier.
-			require.Eventually(t, func() bool {
-				// A waiter observed in the lock service is the synchronization
-				// point.  The contention test owns all application connections in
-				// this embedded cluster, so no scheduling-only sleep can satisfy
-				// this predicate: NEXTVAL must have reached the row-lock queue.
-				var foundWaiter bool
-				lockService.IterLocks(func(lockedTableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-					if lockedTableID != sequenceTableID {
-						return true
-					}
-					lock.IterWaiters(func(_ pblock.WaitTxn) bool {
-						foundWaiter = true
-						return false
-					})
-					return !foundWaiter
-				})
-				return foundWaiter
-			}, 15*time.Second, 10*time.Millisecond, "NEXTVAL did not enter the sequence row-lock wait queue")
+			// The waiter must return the next value while the holder's transaction
+			// is still open; caller-transaction allocation blocked here on the
+			// holder's sequence row lock.
+			var result allocation
+			select {
+			case result = <-waitDone:
+			case <-time.After(15 * time.Second):
+				t.Fatal("NEXTVAL blocked behind another session's open transaction")
+			}
+			require.NoError(t, result.err)
+			require.Equal(t, 2, result.value)
+			var published int
+			require.NoError(t, db.QueryRowContext(ctx, "select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&published))
+			require.Equal(t, 2, published, "autonomous allocations publish while another transaction is open")
 
 			if timeoutWaiter {
-				select {
-				case result := <-waitDone:
-					require.Error(t, result.err)
-					require.ErrorContains(t, result.err, "Lock wait timeout exceeded")
-				case <-time.After(15 * time.Second):
-					t.Fatal("timed-out NEXTVAL did not return")
-				}
 				require.NoError(t, holderTx.Rollback())
+				// issue-once: the holder's rolled-back allocation stays consumed.
 				var usable int
 				require.NoError(t, waiter.QueryRowContext(ctx, "select 1").Scan(&usable))
-				require.Equal(t, 1, usable, "waiter connection must remain usable after lock timeout")
+				require.Equal(t, 1, usable, "waiter connection must remain usable after the holder's rollback")
 				fresh, err := db.Conn(ctx)
 				require.NoError(t, err)
 				defer fresh.Close()
@@ -300,21 +263,18 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				require.NoError(t, err)
 				var next int
 				require.NoError(t, fresh.QueryRowContext(ctx, "select nextval('"+sequence+"')").Scan(&next))
-				require.Equal(t, 1, next, "a timed-out waiter must not consume the value")
+				require.Equal(t, 3, next, "a rolled-back allocation must not be re-issued")
 				return
 			}
 
 			require.NoError(t, holderTx.Commit())
-			result := <-waitDone
-			require.NoError(t, result.err)
-			require.Equal(t, 2, result.value)
 			var next int
 			require.NoError(t, waiter.QueryRowContext(ctx, "select nextval('"+sequence+"')").Scan(&next))
-			require.Equal(t, 3, next, "the waiter connection must remain usable after lock handoff")
+			require.Equal(t, 3, next, "the waiter connection must remain usable after the holder's commit")
 		}
 
-		t.Run("controlled lock handoff", func(t *testing.T) { runContention(t, false) })
-		t.Run("lock wait timeout", func(t *testing.T) { runContention(t, true) })
+		t.Run("uncommitted holder does not block nextval", func(t *testing.T) { runContention(t, false) })
+		t.Run("lock wait timeout does not gate nextval", func(t *testing.T) { runContention(t, true) })
 	})
 }
 

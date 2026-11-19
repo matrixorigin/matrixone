@@ -1,14 +1,11 @@
 -- Prepared MATCH() score threshold: MATCH(col) AGAINST(? IN <mode>) <op> ?
 --
--- A MATCH can only be answered from the index, so the planner refuses the rewrite --
--- error 20105 -- whenever a document the index never returns (relevance 0) could
--- satisfy the predicate. With a literal threshold it tests that at plan time. A '?'
--- has no value yet, so the same test is carried to the table function as `0 <op> ?`
--- and raised there instead.
---
--- The contract this pins: a prepared threshold behaves EXACTLY like the same literal
--- at every value. Both halves matter -- `> ?` and `>= ?` must work where the literal
--- works (#27400), and must still raise 20105 where the literal does.
+-- `> c` / `>= c` that a document the index never returns (relevance 0) cannot satisfy
+-- drive an INNER index stream. Any other literal comparison (`>= 0`, `> -1`, `< c`)
+-- LEFT-attaches the score stream and gives those documents relevance 0 (#31604).
+-- A '?' has no value yet, so `> ?` / `>= ?` always drive the index (#27400) and the
+-- membership test is carried to the table function as `0 <op> ?`: it raises 20105
+-- when relevance 0 would satisfy the bound.
 --
 -- Binary-protocol COM_STMT_PREPARE is not reachable from mo-tester; it shares this
 -- plan path, and the issue reports the same failure for both.
@@ -27,11 +24,11 @@ create fulltext index ft on docs(body);
 -- ============ literal controls: what a prepared threshold must reproduce ============
 select id from docs where match(body) against('fox' in natural language mode) > 0 order by id;
 select id from docs where match(body) against('fox' in natural language mode) >= 0.001 order by id;
--- relevance 0 satisfies `>= 0`, so the index cannot answer it
+-- relevance 0 satisfies `>= 0`: every document qualifies (#31604)
 select id from docs where match(body) against('fox' in natural language mode) >= 0 order by id;
--- ...nor `> -1`
+-- ...as it does `> -1`
 select id from docs where match(body) against('fox' in natural language mode) > -1 order by id;
--- ...nor a MATCH on the lesser side
+-- a MATCH on the lesser side: nothing has a negative relevance
 select id from docs where 0 > match(body) against('fox' in natural language mode) order by id;
 
 -- ============ both operands parameterized ============
@@ -44,7 +41,7 @@ execute both_stmt using @term,@score;
 -- a positive threshold selects the higher-scoring subset
 set @hi=0.04;
 execute both_stmt using @term,@hi;
--- a negative threshold is the literal `> -1` case: 20105, not a silently smaller answer
+-- a negative threshold: the index-driven prepared form raises 20105, not a silently smaller answer
 set @neg=-1;
 execute both_stmt using @term,@neg;
 -- reuse after the refusal still works
@@ -69,7 +66,7 @@ set @term='fox';
 -- strictly positive: relevance 0 fails it, so the index can drive
 set @pos=0.001;
 execute ge_stmt using @term,@pos;
--- zero: relevance 0 satisfies `>= 0`, so 20105 -- the same answer as the literal
+-- zero: relevance 0 satisfies `>= 0`, so the index-driven prepared form raises 20105
 set @zero=0;
 execute ge_stmt using @term,@zero;
 deallocate prepare ge_stmt;
@@ -88,7 +85,7 @@ set @score=0;
 set @term='fox';
 execute rev_stmt using @score,@term;
 deallocate prepare rev_stmt;
--- `? > MATCH(...)` is `MATCH(...) < ?`, which relevance 0 can satisfy: 20105
+-- `? > MATCH(...)` is `MATCH(...) < ?`, which relevance 0 can satisfy: LEFT-attached score (#31604)
 prepare revbad_stmt from 'select id from docs where ? > match(body) against(? in natural language mode) order by id';
 set @score=0;
 set @term='fox';
@@ -102,11 +99,10 @@ set @score=0;
 execute and_stmt using @term,@score;
 deallocate prepare and_stmt;
 
--- ============ operators the literal form cannot use, the parameter form cannot either ============
+-- ============ operators that cannot drive the index ============
 -- `MATCH(...) < c` is not membership-implying for ANY c: a relevance-0 document
--- satisfies it whenever c > 0, and nothing satisfies it when c <= 0. The literal form
--- therefore raises 20105 at every value, and the parameter form must do the same --
--- otherwise binding 0 would quietly gain an evaluation path the literal never has.
+-- satisfies it whenever c > 0, and nothing satisfies it when c <= 0. Literal and
+-- parameter forms are both answered from the LEFT-attached score (#31604).
 select id from docs where match(body) against('fox' in natural language mode) < 5 order by id;
 select id from docs where match(body) against('fox' in natural language mode) < 0 order by id;
 
@@ -139,7 +135,7 @@ prepare band_stmt from 'select id from docs where match(body) against(''fox'' in
 set @lo=0;
 set @hi=5;
 execute band_stmt using @lo,@hi;
--- relevance 0 satisfies BOTH halves here (0 > -1 and 0 < 5), so the index cannot answer it
+-- relevance 0 satisfies BOTH halves here (0 > -1 and 0 < 5): the index-driven `> ?` raises 20105
 set @neg=-1;
 execute band_stmt using @neg,@hi;
 deallocate prepare band_stmt;
@@ -152,7 +148,7 @@ execute mixed_stmt using @hi;
 deallocate prepare mixed_stmt;
 
 -- Two DIFFERENT MATCHes, one of which has only a non-membership-implying predicate:
--- unserved, so 20105 -- the behaviour a literal pair has too.
+-- both are answered from LEFT-attached scores (#31604), as a literal pair is.
 prepare twomatch_stmt from 'select id from docs where match(body) against(? in natural language mode) > ? and match(body) against(? in natural language mode) < ? order by id';
 set @term='fox';
 set @lo=0;

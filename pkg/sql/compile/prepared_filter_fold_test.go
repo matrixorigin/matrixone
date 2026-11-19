@@ -422,3 +422,70 @@ func findFoldValueForTest(t *testing.T, expr *planpb.Expr) *planpb.FoldVal {
 	}
 	return nil
 }
+
+func TestTemporalTextFilterStorageOwnership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sink := &filterFoldWarningCounter{}
+	proc.WarningSink = sink
+	textType := planpb.Type{Id: int32(types.T_varchar)}
+	for _, column := range []bool{false, true} {
+		source := &planpb.Expr{Typ: textType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "bad"}}}}
+		if column {
+			source.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{Name: "v"}}
+		}
+		target := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
+		cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*planpb.Expr{source, target})
+		require.NoError(t, err)
+		filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "isnull", []*planpb.Expr{cast})
+		require.NoError(t, err)
+		require.Empty(t, filterScanStorageExprs(proc, []*planpb.Expr{filter}, false))
+		require.Equal(t, !column, (&Compile{proc: proc}).needsCoordinatorConstantFilterDiagnostic(&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+		require.Zero(t, sink.count)
+	}
+}
+
+func TestPreparedDateFormatDiagnosticCandidates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sink := &filterFoldWarningCounter{}
+	proc.WarningSink = sink
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("bad"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	defer proc.SetPrepareParams(nil)
+	textType := planpb.Type{Id: int32(types.T_varchar)}
+	marker := &planpb.Expr{Typ: textType, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	literal := func(s string) *planpb.Expr {
+		return &planpb.Expr{Typ: textType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: s}}}}
+	}
+	for _, args := range [][]*planpb.Expr{{marker, literal("%Y")}, {literal(""), marker}, {literal(""), literal("%Y")}} {
+		call, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "date_format", args)
+		require.NoError(t, err)
+		filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "isnull", []*planpb.Expr{call})
+		require.NoError(t, err)
+		p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}}}}}}
+		require.NotEmpty(t, plan2.PreparedPlanRuntimeDiagnosticCandidates(p))
+		if args[0] == marker || args[1] == marker {
+			require.NotEmpty(t, plan2.PreparedPlanDiagnosticCandidates(p))
+		}
+	}
+	call, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "date_format", []*planpb.Expr{marker, literal("%Y")})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		value string
+		safe  bool
+		null  bool
+	}{{"bad", false, false}, {"2024-02-29", true, false}, {"", true, true}, {"bad", false, false}} {
+		params.GetNulls().Del(0)
+		require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
+		if tc.null {
+			params.SetNull(0)
+		}
+		safe, err := plan2.ProbePreparedDiagnosticCandidates(proc, []*planpb.Expr{call})
+		require.NoError(t, err)
+		require.Equal(t, tc.safe, safe)
+		require.Zero(t, sink.count)
+	}
+}

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type internalExecutorSessionKey struct{}
 type internalExecutorCompilerContextKey struct{}
 type internalExecutorRewriteOptionKey struct{}
 
@@ -34,7 +33,7 @@ func attachInternalExecutorSession(ctx context.Context, ses process.Session) con
 	if ses == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, internalExecutorSessionKey{}, ses)
+	return process.ContextWithInternalExecutorSession(ctx, ses)
 }
 
 // AttachInternalExecutorSession attaches the original frontend session to
@@ -45,15 +44,7 @@ func AttachInternalExecutorSession(ctx context.Context, ses process.Session) con
 }
 
 func getInternalExecutorSession(ctx context.Context) process.Session {
-	if ctx == nil {
-		return nil
-	}
-	if v := ctx.Value(internalExecutorSessionKey{}); v != nil {
-		if ses, ok := v.(process.Session); ok {
-			return ses
-		}
-	}
-	return nil
+	return process.InternalExecutorSessionFromContext(ctx)
 }
 
 func attachInternalExecutorCompilerContext(ctx context.Context, compilerContext plan.CompilerContext) context.Context {

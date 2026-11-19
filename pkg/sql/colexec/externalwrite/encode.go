@@ -230,6 +230,9 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), 10)), false, nil
 	case types.T_uint64:
 		return []byte(strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)), false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false, nil
 	case types.T_float32:
 		v := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -253,7 +256,14 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 	case types.T_array_float64:
 		return []byte(types.BytesToArrayToString[float64](vec.GetBytesAt(i))), true, nil
 	// Narrow vector element types — BytesToArrayToString is generic over
-	// types.ArrayElement and already formats BF16/Float16/int8/uint8.
+	// types.ArrayElement and already formats BF16/Float16/int8/uint8. vecf8/vecf4
+	// write their exact text, which the reader builds back into the same cell.
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, false, err
+		}
+		return []byte(text), true, nil
 	case types.T_array_bf16:
 		return []byte(types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))), true, nil
 	case types.T_array_float16:
@@ -388,19 +398,15 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		w.scratch = strconv.AppendUint(w.scratch[:0], vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)
 	case types.T_float32:
 		return w.appendJSONFloat(buf, float64(vector.GetFixedAtNoTypeCheck[float32](vec, i)), 32)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return w.appendJSONFloat(buf, float64(v), 32)
 	case types.T_float64:
 		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		b := vec.GetBytesAt(i)
-		// The jsonline reader compares every decoded string against the \N null
-		// token (reader_csv.go JsonNull), so that exact content cannot
-		// round-trip under any encoding; and its JSON tokenizer rewrites
-		// invalid UTF-8 bytes to U+FFFD, mutating the value. Reject both
-		// rather than corrupt silently.
-		if bytes.Equal(b, csvNull) {
-			return moerr.NewNotSupported(context.Background(),
-				"external write (jsonline): a string value of exactly \\N reads back as NULL and cannot round-trip")
-		}
+		// JSON strings can preserve valid UTF-8 text, including the literal \\N.
+		// Reject invalid UTF-8 rather than let the JSON reader rewrite it.
 		if !utf8.Valid(b) {
 			return moerr.NewNotSupported(context.Background(),
 				"external write (jsonline): string value contains invalid UTF-8, which the jsonline reader rewrites; use csv format for raw bytes")
@@ -421,6 +427,14 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 	// Narrow vector element types. appendJSONFloatArray is constrained to
 	// float32|float64, so widen first: BF16/Float16 via ToFloat32 (exact), and
 	// int8/uint8 are small integers that float32 represents exactly.
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text, a compact JSON object the reader builds back into the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+		if err != nil {
+			return err
+		}
+		buf.WriteString(text)
+		return nil
 	case types.T_array_bf16:
 		return appendJSONFloatArray(w, buf,
 			types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), 32)

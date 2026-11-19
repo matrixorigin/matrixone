@@ -301,7 +301,7 @@ func TestSeedWindowAcrossAbandonedRunningRow(t *testing.T) {
 			require.Equal(t, int64(0), mp.CurrNB())
 			mpool.DeleteMPool(mp)
 		}()
-		ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 			return result, nil
 		}
 

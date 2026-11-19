@@ -426,7 +426,6 @@ func TestTableChangeStream_HandleSnapshotNoProgress_WarningThrottle(t *testing.T
 
 // ============================================================================
 // Integration Tests with gostub
-// Note: Uses testChangesHandle from reader_test.go
 // ============================================================================
 
 // Test Run() with duplicate reader (should exit immediately)

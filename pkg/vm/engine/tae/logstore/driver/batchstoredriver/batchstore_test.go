@@ -146,7 +146,6 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 }
 
 func TestDriver(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	s := initEnv(t)
 	concurrentAppendReadCheckpoint(s, t)
 	s = restartStore(s, t)

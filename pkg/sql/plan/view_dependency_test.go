@@ -76,7 +76,7 @@ func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// A CN that can execute the current mainline v83 contract but has not
@@ -179,7 +179,7 @@ func TestAuthoritativeViewGenerationCapturesDirectDependency(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	var data ViewData
 	require.NoError(t, json.Unmarshal(
@@ -213,7 +213,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	persisted := p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 
@@ -255,7 +255,7 @@ func TestAuthoritativeViewGenerationCapturesViewNotItsSources(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -281,7 +281,7 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -365,7 +365,7 @@ func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.
 		"create view v as select inet_ntoa(1)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "protocol version 72")
 }
 
@@ -408,7 +408,7 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
 		stmt := parse(sql)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// CREATE and ALTER both pass through the authoring gate. A CN that has
@@ -519,7 +519,7 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -590,7 +590,7 @@ func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
@@ -661,7 +661,7 @@ where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// The filter is constant-foldable, but its INET_NTOA overload is a v86
@@ -774,7 +774,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 	build := func() (*Plan, error) { return buildSQL(createSQL) }
 
@@ -934,7 +934,7 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				return BuildPlan(root, stmt, false)
+				return BuildPlan(root, stmt, false, nil)
 			}
 
 			for _, floor := range []int64{defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion88, defines.MORPCVersion89} {
@@ -1071,7 +1071,7 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 					rootSQL:             replaySQL,
 				}
-				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				replayed, err := BuildPlan(replayCtx, replayStmt, false, nil)
 				require.NoError(t, err)
 				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
 				require.Len(t, replayCols, 1)
@@ -1132,7 +1132,7 @@ func TestAuthoritativeViewGenerationCapturesLimitZeroStarDependency(t *testing.T
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -1196,7 +1196,7 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 	capture := newViewDependencyCaptureContext(ctx)
 
 	require.NoError(t, capture.enterNestedView())
-	_, _, err := capture.Resolve("tpch", "nation", nil)
+	_, _, err := capture.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, capture.dependencies())
 	capture.leaveNestedView()

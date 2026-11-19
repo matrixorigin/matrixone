@@ -41,14 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
 		t.Run(mode.String(), func(t *testing.T) {
 			ctx := context.Background()
@@ -98,7 +96,6 @@ func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
 }
 
 func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
 	defer h.HandleClose(ctx)
@@ -176,7 +173,6 @@ func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
 }
 
 func TestHandleSoftDeleteObjectMarksCNProvenance(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
 	defer h.HandleClose(ctx)
@@ -238,7 +234,6 @@ func TestHandleSoftDeleteObjectMarksCNProvenance(t *testing.T) {
 }
 
 func TestHandleCommitImportsMultipleObjects(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
@@ -410,7 +405,6 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 }
 
 func TestApplyDeltaloc(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
@@ -624,7 +618,6 @@ func TestApplyDeltaloc(t *testing.T) {
 
 // Exercise the TN commit consumer, including rollback of an earlier request.
 func TestColumnSequenceExhaustionRollsBackEarlierDDL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
 	defer h.HandleClose(ctx)

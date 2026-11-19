@@ -93,6 +93,8 @@ func NewTopProcess(
 		// 2. fields from make.
 		LastInsertID:          new(uint64),
 		StatementLastInsertID: new(uint64),
+		ODKUResult:            &ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
 		AffectedRows:          new(int64),
 
 		// 3. other fields.
@@ -220,6 +222,25 @@ func (proc *Process) GetTopContext() context.Context {
 // ReplaceTopCtx sets the new top context.
 func (proc *Process) ReplaceTopCtx(topCtx context.Context) {
 	proc.Base.sqlContext.outerContext = topCtx
+}
+
+// SetReadOnlyTxnAccessMode stamps the effective client-facing READ ONLY
+// transaction access mode for the executing statement on the shared
+// BaseProcess.
+func (proc *Process) SetReadOnlyTxnAccessMode(readOnly bool) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.readOnlyTxnAccessMode.Store(readOnly)
+}
+
+// ReadOnlyTxnAccessMode reports the stamped client-facing READ ONLY
+// transaction access mode of the executing statement.
+func (proc *Process) ReadOnlyTxnAccessMode() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	return proc.Base.readOnlyTxnAccessMode.Load()
 }
 
 // SaveToTopContext for easy access to change the top context.

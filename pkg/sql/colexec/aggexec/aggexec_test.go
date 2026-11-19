@@ -282,6 +282,52 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	results[0].Free(mp)
 	destination.Free()
 	target.Free()
+
+	t.Run("fixed-max-plain", func(t *testing.T) {
+		f := newFixedMetadataPreflightFixture(t, AggIdOfMax, types.T_float64.ToType())
+		input := vector.NewVec(types.T_float64.ToType())
+		t.Cleanup(func() { input.Free(f.mp) })
+		require.NoError(t, vector.AppendFixedList(input, []float64{7, 4, 0, 9}, []bool{false, false, true, false}, f.mp))
+		require.NoError(t, f.exec.GroupGrow(3))
+		groups := []uint64{1, 1, 2, 3}
+		require.NoError(t, f.exec.PreflightBatchFill(0, groups, []*vector.Vector{input}))
+		require.NoError(t, f.exec.BatchFill(0, groups, []*vector.Vector{input}))
+		var encoded bytes.Buffer
+		require.NoError(t, f.exec.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &encoded))
+		decoded := makeMinMaxExec(f.mp, AggIdOfMax, false, types.T_float64.ToType())
+		t.Cleanup(func() {
+			if decoded != nil {
+				decoded.Free()
+			}
+		})
+		require.NoError(t, decoded.(SpillStateCodec).UnmarshalSpillFromReader(bytes.NewReader(encoded.Bytes()), f.mp))
+		decodedState := decoded.(aggregateBaseCarrier).aggregateBase().state[0].vecs[0]
+		require.Equal(t, 3, decodedState.Capacity())
+		require.Equal(t, float64(7), vector.GetFixedAtNoTypeCheck[float64](decodedState, 0))
+		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](decodedState, 2))
+		require.True(t, decodedState.IsNull(1))
+		var before, after bytes.Buffer
+		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &before))
+		merged := makeMinMaxExec(f.mp, AggIdOfMax, false, types.T_float64.ToType())
+		t.Cleanup(func() { merged.Free() })
+		require.NoError(t, merged.GroupGrow(3))
+		require.NoError(t, merged.BatchMerge(decoded, 0, []uint64{1, 2, 3}))
+		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &after))
+		require.Equal(t, before.Bytes(), after.Bytes(), "merge source must remain immutable")
+		decoded.Free()
+		decoded = nil // consumer owns its result after the compact source is freed
+		results, err := merged.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		t.Cleanup(func() { results[0].Free(f.mp) })
+		require.Equal(t, float64(7), vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](results[0], 2))
+		for row := range 3 {
+			require.Equal(t, row == 1, results[0].IsNull(uint64(row)))
+			require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(row))
+			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(row))
+		}
+	})
 }
 
 func TestAggExecSpillDecodeReusesLargeSmallLargeCapacity(t *testing.T) {

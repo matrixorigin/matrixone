@@ -18,7 +18,7 @@ select json_length('true');
 1
 select json_length('null');
 ➤ json_length(null)[-5,64,0]  𝄀
-null
+1
 select json_length('[]');
 ➤ json_length([])[-5,64,0]  𝄀
 0
@@ -80,7 +80,7 @@ select a, json_length(a) from t2;
 [1, 2, 3]  ¦  3  𝄀
 {"a": 1, "b": 2}  ¦  2  𝄀
 "hello"  ¦  1  𝄀
-null  ¦  null
+null  ¦  1
 drop table t1;
 select json_length(json_array(1, 2, 3));
 ➤ json_length(json_array(1, 2, 3))[-5,64,0]  𝄀

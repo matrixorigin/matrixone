@@ -43,7 +43,6 @@ type container struct {
 	done          bool
 	rows          int64
 	rawBytes      int64
-	generation    uint64
 	pendingRaw    []byte
 	pendingBudget *process.ExecutionResourceGeneration
 	pendingCharge uint64

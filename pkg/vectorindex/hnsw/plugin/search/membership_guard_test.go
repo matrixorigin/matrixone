@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,14 +41,14 @@ func membershipSpec() *plan.IndexSearchScan {
 	return spec
 }
 
-func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) []byte {
+func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) *keycodec.KeyPayload {
 	proc := testutil.NewProc(t)
 	v := vector.NewVec(typ)
 	appendKeys(v)
 	defer v.Free(proc.Mp())
 	payload, err := v.MarshalBinary()
 	require.NoError(t, err)
-	return payload
+	return testutil.RuntimeKeyPayload(t, payload)
 }
 
 func TestNewReaderMembership(t *testing.T) {
@@ -134,4 +136,13 @@ func TestNewReaderMembership(t *testing.T) {
 	s, err = newSearcher(proc, spec, r)
 	require.NoError(t, err)
 	require.True(t, s.iterative)
+	require.Zero(t, s.exactThreshold)
+
+	// the exact threshold scan option reaches the search
+	spec = membershipSpec()
+	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{PrefilterExactThreshold: 100000})
+	require.NoError(t, err)
+	s, err = newSearcher(proc, spec, r)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100000), s.exactThreshold)
 }

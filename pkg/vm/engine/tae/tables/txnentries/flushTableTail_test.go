@@ -147,7 +147,6 @@ func (cmd *errorFlushTableTailCmd) MarshalBinary() (buf []byte, err error) {
 // TestFlushTableTailCmd_MarshalBinary_SmallBuffer tests MarshalBinary with small buffer
 // that will be returned to pool (requires copy)
 func TestFlushTableTailCmd_MarshalBinary_SmallBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := &flushTableTailCmd{}
 
@@ -171,7 +170,6 @@ func TestFlushTableTailCmd_MarshalBinary_SmallBuffer(t *testing.T) {
 // TestFlushTableTailCmd_MarshalBinary_LargeBuffer tests MarshalBinary with large buffer
 // that exceeds MaxPooledBufSize (no copy needed)
 func TestFlushTableTailCmd_MarshalBinary_LargeBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := &flushTableTailCmd{}
 
@@ -204,7 +202,6 @@ func TestFlushTableTailCmd_MarshalBinary_LargeBuffer(t *testing.T) {
 
 // TestFlushTableTailCmd_MarshalBinary_Error tests MarshalBinary when MarshalBinaryWithBuffer returns an error
 func TestFlushTableTailCmd_MarshalBinary_Error(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	// Create a command that will return error on WriteTo
 	cmd := &errorFlushTableTailCmd{}
@@ -223,7 +220,6 @@ func TestFlushTableTailCmd_MarshalBinary_Error(t *testing.T) {
 
 // TestFlushTableTailCmd_MarshalBinary_MultipleCalls tests that multiple calls work correctly
 func TestFlushTableTailCmd_MarshalBinary_MultipleCalls(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := &flushTableTailCmd{}
 
@@ -245,7 +241,6 @@ func TestFlushTableTailCmd_MarshalBinary_MultipleCalls(t *testing.T) {
 
 // TestFlushTableTailCmd_MarshalBinary_VerifyCopy tests that small buffers are properly copied
 func TestFlushTableTailCmd_MarshalBinary_VerifyCopy(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := &flushTableTailCmd{}
 

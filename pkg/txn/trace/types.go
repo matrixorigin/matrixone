@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package trace retains only catalog definitions for stopped-version rollback.
-// No transaction trace runtime or collection API remains. Historical rows and
-// files are not consumed or cleaned up by this package.
-// TODO(retire-txn-trace, #29249): after the release rollback window no longer
-// includes a collector-bearing version, remove these declarations together with
-// bootstrap/upgrade registrations, the planner's mo_debug protection and their
-// retirement tests. Removing declarations must not implicitly delete user data.
+// Package trace retains the released catalog definitions for historical upgrades.
+// The collector is retired; existing tables and files remain untouched.
 package trace
 
 import "fmt"
@@ -115,54 +110,4 @@ var (
 		name    varchar(50) not null primary key,
 		state   varchar(20) not null
 	)`, DebugDB, FeaturesTables)
-
-	InitFeatureTraceTxnSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-		DebugDB,
-		FeaturesTables,
-		FeatureTraceTxn,
-		StateDisable)
-
-	InitFeatureTraceTxnActionSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-		DebugDB,
-		FeaturesTables,
-		FeatureTraceTxnAction,
-		StateDisable)
-
-	InitFeatureTraceDataSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-		DebugDB,
-		FeaturesTables,
-		FeatureTraceData,
-		StateDisable)
-
-	InitFeatureTraceStatementSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-		DebugDB,
-		FeaturesTables,
-		FeatureTraceStatement,
-		StateDisable)
-
-	InitFeatureTraceTxnWorkspaceSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-		DebugDB,
-		FeaturesTables,
-		FeatureTraceTxnWorkspace,
-		StateDisable)
-)
-
-var (
-	InitSQLs = []string{
-		fmt.Sprintf("create database %s", DebugDB),
-		EventTxnTableSQL,
-		EventDataTableSQL,
-		TraceTableFilterTableSQL,
-		TraceTxnFilterTableSQL,
-		TraceStatementFilterTableSQL,
-		EventErrorTableSQL,
-		TraceStatementTableSQL,
-		EventTxnActionTableSQL,
-		FeaturesTablesSQL,
-		InitFeatureTraceTxnSQL,
-		InitFeatureTraceTxnActionSQL,
-		InitFeatureTraceDataSQL,
-		InitFeatureTraceStatementSQL,
-		InitFeatureTraceTxnWorkspaceSQL,
-	}
 )

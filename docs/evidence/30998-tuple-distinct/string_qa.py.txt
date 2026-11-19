@@ -1,0 +1,15 @@
+from harness import *
+out=root/'string-qa';out.mkdir(exist_ok=True)
+with Service('candidate','string-qa') as svc:
+ s=svc.s;s.execute('SET SESSION max_dop=8');s.execute('SHOW TABLES FROM qa30995 LIKE "unicode_pairs"')
+ if not s.fetchall():
+  s.execute('CREATE TABLE qa30995.unicode_pairs(s VARCHAR(64) COLLATE utf8mb4_unicode_ci NOT NULL,b BIGINT NOT NULL)')
+  s.execute("INSERT INTO qa30995.unicode_pairs SELECT concat(cast(k%333337 as varchar),case when k%2=0 then 'É' else 'e' end),k%333337%7 FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000")
+  s.execute("SELECT mo_ctl('dn','flush','qa30995.unicode_pairs')");s.fetchall()
+ s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats('qa30995.unicode_pairs','refresh','full') t");(out/'stats.json').write_text(json.dumps(s.fetchall(),indent=2,default=str))
+ sql='SELECT COUNT(DISTINCT s,b) FROM qa30995.unicode_pairs'
+ run(s,sql,((333337,),));s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);raw='\n'.join(str(x[0]) for x in s.fetchall());(out/'unicode-physical.txt').write_text(raw);assert 'shuffle(' in raw
+ # Mixed aggregate deliberately selects the existing exact-state fallback.
+ run(s,'SELECT COUNT(DISTINCT s,b),COUNT(*) FROM qa30995.unicode_pairs',((333337,1000000),))
+ s.execute('EXPLAIN ANALYZE SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=4');raw='\n'.join(str(x[0]) for x in s.fetchall());(out/'invalid-analyze.txt').write_text(raw)
+print('STRING_QA_PASS',flush=True)

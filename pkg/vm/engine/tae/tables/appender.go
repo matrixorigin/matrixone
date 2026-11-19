@@ -15,6 +15,9 @@
 package tables
 
 import (
+	"context"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -22,16 +25,12 @@ import (
 )
 
 type objectAppender struct {
-	obj         *aobject
-	placeholder uint32
-	rows        uint32
+	obj *aobject
 }
 
 func newAppender(aobj *aobject) *objectAppender {
 	appender := new(objectAppender)
 	appender.obj = aobj
-	rows, _ := aobj.Rows()
-	appender.rows = uint32(rows)
 	return appender
 }
 
@@ -54,7 +53,7 @@ func (appender *objectAppender) GetID() *common.ID {
 }
 
 func (appender *objectAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
+	return appender.obj.reserved.Load() < appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (appender *objectAppender) Close() {
@@ -72,12 +71,34 @@ func (appender *objectAppender) IsSameColumns(other any) bool {
 }
 
 func (appender *objectAppender) PrepareAppend(
+	ctx context.Context,
 	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - appender.rows - appender.placeholder
+	// GetSchema takes the table read lock. Do not acquire it while holding
+	// appendMVCC's write lock: catalog publication can hold the table lock
+	// while waiting for an ObjectList scan that reads appendMVCC.
+	blockMaxRows := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
+	appender.obj.appendMVCC.LockForAppend()
+	sealed := false
+	defer func() {
+		appender.obj.appendMVCC.UnlockForAppend()
+		if sealed {
+			appender.obj.appendMVCC.NotifyFinalizedMax()
+		}
+	}()
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	start := appender.obj.reserved.Load()
+	if appender.obj.frozen.Load() {
+		return
+	}
+	left := blockMaxRows - start
 	if left == 0 {
-		// n = rows
+		appender.obj.frozen.Store(true)
+		appender.obj.appendMVCC.SealLocked()
+		sealed = true
 		return
 	}
 	if rows > left {
@@ -85,17 +106,32 @@ func (appender *objectAppender) PrepareAppend(
 	} else {
 		n = rows
 	}
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
 	node, created = appender.obj.appendMVCC.AddAppendNodeLocked(
 		txn,
-		appender.rows+appender.placeholder,
-		appender.placeholder+appender.rows+n)
+		start,
+		start+n)
 	if isMergeCompact {
 		node.SetIsMergeCompact()
 	}
-	appender.placeholder += n
+	reserved := start + n
+	appender.obj.reserved.Store(reserved)
+	if reserved == blockMaxRows {
+		// Seal under the same MVCC write lock as the final AppendNode
+		// insertion. This transaction is still active, so max-commit
+		// publication waits for its commit or rollback.
+		appender.obj.frozen.Store(true)
+		appender.obj.appendMVCC.MarkSealedLocked()
+		sealed = true
+	}
 	return
+}
+
+func (appender *objectAppender) ReserveAppend(offset, rows uint32) {
+	n := appender.obj.PinNode()
+	defer n.Unref()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
+	n.MustMNode().ReserveRowsLocked(offset + rows)
 }
 func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
@@ -113,8 +149,8 @@ func (appender *objectAppender) ApplyAppend(
 	n := appender.obj.PinNode()
 	defer n.Unref()
 	node := n.MustMNode()
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
 	from, err = node.ApplyAppendLocked(bat)
 
 	schema := node.writeSchema
@@ -130,4 +166,63 @@ func (appender *objectAppender) ApplyAppend(
 		}
 	}
 	return
+}
+
+func (appender *objectAppender) ApplyAppendAt(
+	bat *containers.Batch,
+	offset uint32,
+	txn txnif.AsyncTxn,
+) (err error) {
+	n := appender.obj.PinNode()
+	defer n.Unref()
+	node := n.MustMNode()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
+	schema := node.writeSchema
+	oldRows, _ := node.Rows()
+	for _, colDef := range schema.ColDefs {
+		if !colDef.IsRealPrimary() || schema.IsSecondaryIndexTable() {
+			continue
+		}
+		srcPos := slices.Index(bat.Attrs, colDef.Name)
+		if srcPos < 0 {
+			continue
+		}
+		// A replayed append may be the first payload for an object.  In that
+		// case the memory node has no data vectors yet, or this column has not
+		// been materialized.  There are no old rows to remove from the PK index
+		// in either case.
+		if oldRows == 0 || node.data == nil || colDef.Idx >= len(node.data.Vecs) || node.data.Vecs[colDef.Idx] == nil {
+			continue
+		}
+		oldVec := node.data.Vecs[colDef.Idx]
+		for row := 0; row < bat.Length() && int(offset)+row < int(oldRows); row++ {
+			physicalRow := int(offset) + row
+			if oldVec.IsNull(physicalRow) {
+				continue
+			}
+			if err = node.pkIndex.DeleteAt(oldVec.Get(physicalRow), uint32(physicalRow)); err != nil {
+				return err
+			}
+		}
+	}
+	if err = node.ApplyAppendAtLocked(bat, offset); err != nil {
+		return err
+	}
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
+		}
+		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
+			srcPos := slices.Index(bat.Attrs, colDef.Name)
+			if srcPos < 0 {
+				continue
+			}
+			if err = node.pkIndex.BatchUpsert(
+				bat.Vecs[srcPos].GetDownstreamVector(), int(offset)); err != nil {
+				panic(err)
+			}
+		}
+	}
+	return nil
 }

@@ -15,9 +15,11 @@
 package function
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -137,6 +139,65 @@ func Test_BuiltInToLower(t *testing.T) {
 		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
+
+	t.Run("bytes oracle and result ownership", func(t *testing.T) {
+		values := [][]byte{
+			{}, []byte("already lower"), []byte("MiXeD"),
+			bytes.Repeat([]byte("a"), types.VarlenaInlineSize+1),
+			bytes.Repeat([]byte("A"), types.VarlenaInlineSize),
+			bytes.Repeat([]byte("A"), types.VarlenaInlineSize+1),
+			bytes.Repeat([]byte("AbC"), 16), []byte("ASCII prefix ȺİKÄ中😀"),
+			{0xff, 'A', 0xc3, 0xa9, 0xc0},
+			bytes.Repeat([]byte("A"), (64<<10)-1), []byte("SmAlL"),
+			bytes.Repeat([]byte("A"), 64<<10), bytes.Repeat([]byte("a"), 64<<10),
+			bytes.Repeat([]byte("中"), (64<<10)/3),
+			bytes.Repeat([]byte("A"), (64<<10)+1), []byte("AgAiN"),
+		}
+		source := testutil.MakeVarlenaVector(values, nil, types.T_text.ToType(), proc.Mp())
+		defer source.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(len(values)))
+		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, len(values), nil))
+		for row, value := range values {
+			require.True(t, bytes.Equal(value, source.GetBytesAt(row)), "input row %d changed", row)
+			require.True(t, bytes.Equal(bytes.ToLower(value), result.GetResultVector().GetBytesAt(row)), "result row %d differs", row)
+		}
+		for row := range values {
+			stored := source.GetBytesAt(row)
+			for i := range stored {
+				stored[i] = '?'
+			}
+		}
+		for row, value := range values {
+			require.True(t, bytes.Equal(bytes.ToLower(value), result.GetResultVector().GetBytesAt(row)), "result row %d aliases reused input", row)
+		}
+	})
+
+	t.Run("reset after fallback", func(t *testing.T) {
+		source := testutil.MakeVarlenaVector([][]byte{[]byte("ABC"), []byte("DEF")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer source.Free(proc.Mp())
+		source.GetNulls().Add(1)
+		require.NoError(t, source.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringInherit}, proc.Mp()))
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, 2,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+		require.Equal(t, []byte("ABC"), result.GetResultVector().GetBytesAt(0))
+		require.True(t, result.GetResultVector().IsNull(1))
+		require.Equal(t, types.RuntimeStringBinary, result.GetResultVector().GetRuntimeStringDomainAt(0))
+
+		next := testutil.MakeVarlenaVector([][]byte{[]byte("ALPHA"), []byte("beta")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer next.Free(proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, builtInToLower([]*vector.Vector{next}, result, proc, 2, nil))
+		for row, want := range []string{"alpha", "beta"} {
+			require.False(t, result.GetResultVector().IsNull(uint64(row)))
+			require.Equal(t, want, string(result.GetResultVector().GetBytesAt(row)))
+			require.Equal(t, types.RuntimeStringInherit, result.GetResultVector().GetRuntimeStringDomainAt(row))
+		}
+	})
 }
 
 // Test_AbsUInt64 tests ABS function for uint64 (identity function)

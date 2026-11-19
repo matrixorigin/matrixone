@@ -328,7 +328,7 @@ func TestConsumer(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{AffectedRows: 1}, nil
 	})
@@ -361,7 +361,7 @@ func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 	defer cancel()
 
 	injectedErr := errors.New("injected index SQL failure")
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, injectedErr
 	})
 	defer stub1.Reset()
@@ -374,7 +374,6 @@ func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    cnUUID,
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),
@@ -579,7 +578,7 @@ func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	defer cancel()
 
 	execErr := errors.New("worker failed after first chunk")
-	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, execErr
 	})
 	defer stubExec.Reset()
@@ -603,7 +602,6 @@ func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		algo:      testDeadlockAlgo,
@@ -690,7 +688,7 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		cancel()
 		select {
 		case <-execCtx.Done():
@@ -707,7 +705,6 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		algo:      testDeadlockAlgo,
@@ -744,7 +741,6 @@ func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),
@@ -843,7 +839,7 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 	retriever := NewDataRetriever(ctx, 7, 8, "job", 9, status, 11, ISCPDataType_Tail)
 
 	var execSQL string
-	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql string, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql string, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		execSQL = sql
 		require.Equal(t, "cn", cnUUID)
 		require.Equal(t, catalog.System_Account, execCtx.Value(defines.TenantIDKey{}))
@@ -868,7 +864,7 @@ func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
 		11,
 		ISCPDataType_Tail,
 	)
-	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 0}, nil
 	})
 	defer stubExec.Reset()
@@ -883,7 +879,7 @@ func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
 func TestDataRetrieverUpdateWatermarkTailExecError(t *testing.T) {
 	expected := errors.New("watermark update failed")
 	retriever := NewDataRetriever(context.Background(), 7, 8, "job", 9, &JobStatus{}, 11, ISCPDataType_Tail)
-	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, expected
 	})
 	defer stubExec.Reset()
@@ -997,7 +993,7 @@ func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
 	watermarkAdvanced := false
 	var callbackErr error
 
-	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1024,7 +1020,6 @@ func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{toSqlErr: nil, failAtSeq: 2},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),
@@ -1077,7 +1072,7 @@ func TestIvfSnapshot(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1127,7 +1122,7 @@ func TestIvfSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, len(sqls), 1)
 		sql := sqls[0]
-		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,CAST('[0.1, 0.2]' as VECF32(2))),ROW(2,CAST('[0.3, 0.4]' as VECF32(2)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
+		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,CAST('[0.1, 0.2]' as VECF32(2))),ROW(2,CAST('[0.3, 0.4]' as VECF32(2)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
 
 		require.Equal(t, string(sql), expected)
 
@@ -1160,7 +1155,7 @@ func TestIvfTail(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1249,7 +1244,7 @@ func TestHnswConsumer(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})

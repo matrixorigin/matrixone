@@ -87,7 +87,7 @@ func TestDecimalArithmeticSmallIntegerLiteralKeepsDecimal128(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_decimal128), result.Typ.Id)
-	require.Equal(t, int32(38), result.Typ.Width)
+	require.Equal(t, int32(21), result.Typ.Width)
 }
 
 func TestDecimalMultiplyIntegerLiteralUsesRefinedCast(t *testing.T) {

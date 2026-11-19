@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -40,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -123,16 +123,12 @@ func init() {
 	sql = predefine.GenInitPublicationTaskSQL()
 	initSQLs = append(initSQLs, sql)
 
-	// Retired collector catalog only; removal follows pkg/txn/trace's rollback gate.
-	initSQLs = append(initSQLs, trace.InitSQLs...)
-
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)
 
 	initSQLs = append(initSQLs, partitionservice.InitSQLs...)
 }
 
 type service struct {
-	sid     string
 	logger  *log.MOLogger
 	lock    Locker
 	clock   clock.Clock
@@ -147,18 +143,15 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch                       int
-		checkUpgradeDuration                     time.Duration
-		checkUpgradeTenantDuration               time.Duration
-		upgradeTenantTasks                       int
-		finalVersionCompleted                    atomic.Bool
-		orphanPrivilegeMaintenanceWorkerRunning  atomic.Bool
-		orphanPrivilegeMaintenanceRunning        atomic.Bool
-		orphanPrivilegeMaintenanceState          orphanPrivilegeMaintenanceState
-		orphanPrivilegeMaintenanceStart          func() string
-		informationSchemaViewsMaintenanceRunning atomic.Bool
-		informationSchemaViewsMaintenanceState   informationSchemaViewsMaintenanceState
-		kek                                      string
+		upgradeTenantBatch         int
+		catalogObjectLimit         uint64
+		decisionFileService        fileservice.FileService
+		checkUpgradeDuration       time.Duration
+		checkUpgradeTenantDuration time.Duration
+		upgradeTenantTasks         int
+		finalVersionCompleted      atomic.Bool
+		failure                    atomic.Pointer[upgradeFailure]
+		kek                        string
 	}
 }
 
@@ -172,7 +165,6 @@ func NewService(
 	opts ...Option,
 ) Service {
 	s := &service{
-		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,
@@ -181,7 +173,6 @@ func NewService(
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
-	s.upgrade.orphanPrivilegeMaintenanceState.restartSeed = newOrphanPrivilegeMaintenanceRestartSeed()
 	s.initUpgrade()
 
 	for _, opt := range opts {
@@ -191,6 +182,7 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
+	ctx = executor.WithLocalExecution(ctx)
 	s.logger.Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {
@@ -488,16 +480,25 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 			// Publish the v118 TABLES consumer only after admission, atomically
 			// with the derived-schema completion views. A retry after an uncertain
 			// commit can safely reconcile both definitions again.
-			for _, sql := range []string{
-				"DROP VIEW IF EXISTS information_schema.TABLES",
-				sysview.InformationSchemaTablesV118DDL,
-			} {
-				result, err := txn.Exec(sql, executor.StatementOption{})
-				result.Close()
-				if err != nil {
-					return err
-				}
+			entry := versions.InformationSchemaTablesUpgradeEntry()
+			if err := entry.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
 			}
+			views := versions.InformationSchemaViewsUpgradeEntry()
+			if err := views.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
+			// Same-version refresh rail for PARTITIONS: a cluster already at
+			// the current version keeps its persisted definition until this
+			// reconciliation replaces it; the definition check makes the
+			// converged state an idempotent no-op. Crossing tenants keep
+			// using the v4_0_7 tenant upgrade entry.
+			partitions := versions.InformationSchemaPartitionsUpgradeEntry()
+			if err := partitions.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {
@@ -540,7 +541,20 @@ func SystemViewsExist(ctx context.Context, exec executor.SQLExecutor) (bool, err
 	err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		var err error
 		complete, err = motrace.SchemaViewsExistWithTxn(ctx, txn)
-		return err
+		if err != nil || !complete {
+			return err
+		}
+		for _, entry := range []versions.UpgradeEntry{
+			versions.InformationSchemaTablesUpgradeEntry(),
+			versions.InformationSchemaViewsUpgradeEntry(),
+			versions.InformationSchemaPartitionsUpgradeEntry(),
+		} {
+			complete, err = entry.CheckFunc(txn, catalog.System_Account)
+			if err != nil || !complete {
+				return err
+			}
+		}
+		return nil
 	}, executor.Options{}.WithAccountID(catalog.System_Account))
 	return complete, err
 }

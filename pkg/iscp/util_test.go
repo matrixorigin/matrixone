@@ -344,3 +344,22 @@ func TestExtractRowNativeRepr(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractRowFromVectorCopiesBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte{}, false, mp))
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+	row := make([]any, 1)
+	require.NoError(t, extractRowFromVector(context.Background(), vec, 0, row, 0, ReprSQLString))
+	copied := row[0].([]byte)
+	copied[0] = 'V'
+	require.Equal(t, "value", string(vec.GetBytesAt(0)))
+	require.NoError(t, extractRowFromVector(context.Background(), vec, 0, row, 1, ReprSQLString))
+	require.NotNil(t, row[0].([]byte))
+	require.Empty(t, row[0])
+	require.NoError(t, extractRowFromVector(context.Background(), vec, 0, row, 2, ReprSQLString))
+	require.Nil(t, row[0])
+}

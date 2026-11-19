@@ -123,7 +123,7 @@ func TestCleanOrphanTempTables(t *testing.T) {
 
 	// mock ExecWithResult
 	origExecWithResult := iscp.ExecWithResult
-	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return exec.Exec(ctx, sql, executor.Options{})
 	}
 	defer func() { iscp.ExecWithResult = origExecWithResult }()
@@ -160,7 +160,7 @@ func TestStartTempTableGC_Lifecycle(t *testing.T) {
 	// We mock ExecWithResult to signal via a channel.
 	called := make(chan struct{}, 1)
 	origExecWithResult := iscp.ExecWithResult
-	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		select {
 		case called <- struct{}{}:
 		default:
@@ -216,7 +216,7 @@ func TestStartTempTableGC_PanicRecovery(t *testing.T) {
 	recovered := make(chan struct{}, 1)
 
 	origExecWithResult := iscp.ExecWithResult
-	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	iscp.ExecWithResult = func(ctx context.Context, sql, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			panic("simulated panic in GC")

@@ -33,6 +33,7 @@ import (
 
 func TestSortBatchSpillsAndPreservesOrder(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc.Base.Lim.SpillSize = 64 << 20
 	input := newValuesBatch(proc, []int8{7, 1, 5, 1, 3, 9})
 	var got *batch.Batch
 	t.Cleanup(func() {
@@ -178,6 +179,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 
 	t.Run("precomputed order and extra argument", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		proc.Base.Lim.SpillSize = 64 << 20
 		input := newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
 		input.Attrs = []string{"id", "payload"}
 		key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
@@ -234,6 +236,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 
 	t.Run("evaluated extra vector", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		proc.Base.Lim.SpillSize = 64 << 20
 		input := newValuesBatch(proc, []int8{3, 1, 2})
 		extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{30, 10, 20})
 		delegatedInput := (*batch.Batch)(nil)
@@ -295,6 +298,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 
 func TestSortBatchWithPrecomputedOrderAndReleaseTransfersSourceOwnership(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc.Base.Lim.SpillSize = 64 << 20
 	var input = newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
 	key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
 	extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{100, 200, 300})
@@ -367,6 +371,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testi
 
 	run := func(releaseSource bool) (uint64, int64) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		proc.Base.Lim.SpillSize = 64 << 20
 		epoch := proc.Mp().StartResourcePeakEpoch()
 		require.NotNil(t, epoch)
 		input := batch.NewOffHeapWithSize(dataCols)

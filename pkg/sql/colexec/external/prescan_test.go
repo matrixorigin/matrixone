@@ -34,6 +34,8 @@ type prescanTrackingFS struct {
 	failReadAt  int
 	readCalls   int
 	partialRead bool
+	closeErr    error
+	onRead      func()
 }
 
 type prescanTrackingReader struct {
@@ -41,9 +43,14 @@ type prescanTrackingReader struct {
 	readErr     error
 	closes      int
 	partialRead bool
+	closeErr    error
+	onRead      func()
 }
 
 func (r *prescanTrackingReader) Read(p []byte) (int, error) {
+	if r.onRead != nil {
+		defer r.onRead()
+	}
 	if r.readErr != nil {
 		if r.partialRead {
 			n, _ := r.ReadCloser.Read(p[:1])
@@ -56,7 +63,7 @@ func (r *prescanTrackingReader) Read(p []byte) (int, error) {
 
 func (r *prescanTrackingReader) Close() error {
 	r.closes++
-	return r.ReadCloser.Close()
+	return errors.Join(r.ReadCloser.Close(), r.closeErr)
 }
 
 func (fs *prescanTrackingFS) Read(ctx context.Context, vec *fileservice.IOVector) error {
@@ -74,7 +81,7 @@ func (fs *prescanTrackingFS) Read(ctx context.Context, vec *fileservice.IOVector
 		if entry.ReadCloserForRead == nil {
 			continue
 		}
-		r := &prescanTrackingReader{ReadCloser: *entry.ReadCloserForRead, readErr: fs.readErr, partialRead: fs.partialRead}
+		r := &prescanTrackingReader{ReadCloser: *entry.ReadCloserForRead, readErr: fs.readErr, partialRead: fs.partialRead, closeErr: fs.closeErr, onRead: fs.onRead}
 		fs.readers = append(fs.readers, r)
 		fs.t.Cleanup(func() {
 			if r.closes == 0 {
@@ -122,7 +129,7 @@ func TestReadFileOffsetClosesTailScanReaders(t *testing.T) {
 		{name: "JSONLINE partial read error", format: tree.JSONLINE, readErr: errors.New("partial scan failed"), partialRead: true, cpus: 4, wantErr: true, wantReaders: 3},
 		{name: "open error", missing: true, cpus: 4},
 		{name: "later open error", failReadAt: 2, cpus: 4, wantReaders: 1},
-		{name: "strict canceled scan", strict: true, readErr: context.Canceled, cpus: 4, wantOffsets: []int64{0, -1}, wantReaders: 1},
+		{name: "strict canceled scan", strict: true, readErr: context.Canceled, cpus: 4, wantErr: true, wantReaders: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := "a\nb\nc\nd\ne\nf\n"

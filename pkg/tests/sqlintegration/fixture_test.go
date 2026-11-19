@@ -20,13 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +82,7 @@ func cleanupSQLIntegrationCatalog(db *sql.DB, statements ...string) error {
 	var cleanupErr error
 	for _, statement := range statements {
 		err := func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), sqlIntegrationCleanupTimeout(statement))
+			ctx, cancel := context.WithTimeout(context.Background(), testutils.SQLCleanupTimeout(statement))
 			defer cancel()
 			_, err := db.ExecContext(ctx, statement)
 			return err
@@ -92,18 +92,6 @@ func cleanupSQLIntegrationCatalog(db *sql.DB, statements ...string) error {
 		}
 	}
 	return cleanupErr
-}
-
-func sqlIntegrationCleanupTimeout(statement string) time.Duration {
-	words := strings.Fields(statement)
-	if len(words) >= 2 && strings.EqualFold(words[0], "drop") && strings.EqualFold(words[1], "account") {
-		// DROP ACCOUNT removes the tenant's complete bootstrap catalog, not one
-		// object. Under race instrumentation those serial DDLs can exceed the
-		// ordinary per-object budget. Keep a separate, bounded account budget;
-		// never retry an unknown-result DROP or skip the artifact checks.
-		return 2 * time.Minute
-	}
-	return 30 * time.Second
 }
 
 func TestCleanupSQLIntegrationCatalogAccountDeadline(t *testing.T) {

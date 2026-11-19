@@ -108,6 +108,14 @@ func (mc *memLogClient) Truncate(ctx context.Context, index logservice.Lsn) erro
 	return nil
 }
 
+func (mc *memLogClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN logservice.Lsn) error {
+	return mc.Truncate(ctx, psn)
+}
+
+func (mc *memLogClient) GetWALTruncate(ctx context.Context) (logservice.Lsn, logservice.Lsn, error) {
+	return 0, 0, nil
+}
+
 func (mc *memLogClient) GetTruncatedLsn(ctx context.Context) (logservice.Lsn, error) {
 	return 0, nil
 }
@@ -122,6 +130,22 @@ func (mc *memLogClient) GetLatestLsn(ctx context.Context) (logservice.Lsn, error
 
 func (mc *memLogClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {
 	return nil
+}
+
+func (mc *memLogClient) SetRequiredLsnIfCurrent(
+	ctx context.Context, lsn, expectedLsn logservice.Lsn, revision, owner uint64,
+) error {
+	return nil
+}
+
+func (mc *memLogClient) ClaimRequiredLsn(
+	ctx context.Context, expectedLsn logservice.Lsn, revision, owner, term, leaderID uint64,
+) error {
+	return nil
+}
+
+func (mc *memLogClient) GetRequiredLsnState(ctx context.Context) (logservice.Lsn, uint64, uint64, error) {
+	return 0, 0, 0, nil
 }
 
 func (mc *memLogClient) GetRequiredLsn(ctx context.Context) (logservice.Lsn, error) {

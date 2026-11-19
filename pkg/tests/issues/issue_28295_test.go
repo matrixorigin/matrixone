@@ -245,9 +245,21 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 				require.Equal(t, sql.NullBool{Bool: tc.want, Valid: true}, got)
 			}
 		}()
-		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
-			(select count(*),sum(i.v) from scalar_inner i where i.k<o.k having count(*)=o.k)
-			from having_outer o`), "not yet implemented")
+		func() {
+			rows, queryErr := conn.QueryContext(ctx, `select (0,null) <=>
+				(select count(*),sum(i.v) from scalar_inner i where i.k<o.k having count(*)=o.k)
+				from having_outer o order by o.k`)
+			require.NoError(t, queryErr)
+			defer func() { require.NoError(t, rows.Close()) }()
+			var values []bool
+			for rows.Next() {
+				var value bool
+				require.NoError(t, rows.Scan(&value))
+				values = append(values, value)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []bool{false, true, false, false, false}, values)
+		}()
 		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
 			(select count(*),sum(i.v) from scalar_inner i where i.k=o.k
 				group by i.k having count(*)=o.k)
@@ -384,12 +396,16 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 			`select (o.k,(select v from scalar_inner where k=1)) =
 				(select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
 				from scalar_outer o where o.k=1`,
-			`select (0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k),
-				(0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
-				from scalar_outer o where o.k=1`,
 		} {
-			require.ErrorContains(t, drainQueryError(ctx, conn, query), "not yet implemented")
+			assertBool(query, sql.NullBool{Valid: true})
 		}
+		var firstEmpty, secondEmpty bool
+		require.NoError(t, conn.QueryRowContext(ctx, `select
+			(0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k),
+			(0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
+			from scalar_outer o where o.k=1`).Scan(&firstEmpty, &secondEmpty))
+		require.True(t, firstEmpty)
+		require.True(t, secondEmpty)
 		assertBool(`select (o.k,(select 10)) =
 			(select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
 			from scalar_outer o where o.k=2`, sql.NullBool{Valid: true})
@@ -440,6 +456,72 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue28295_text") }()
 		assertBool("execute issue28295_text using @issue28295_a, @issue28295_b", sql.NullBool{Bool: true, Valid: true})
+
+		for _, skipped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("prepared operand skipped=%v", skipped), func(t *testing.T) {
+				query := func(marker string) string {
+					expr := fmt.Sprintf(`(o.k,(select %s)) <=>
+						(select count(*),max(i.k) from scalar_outer i where i.k<=o.k)`, marker)
+					if skipped {
+						expr = "case when o.k<0 then " + expr + " else 0 end"
+					}
+					return "select " + expr + " from scalar_outer o order by o.k"
+				}
+				readRows := func(run func() (*sql.Rows, error)) []bool {
+					t.Helper()
+					rows, queryErr := run()
+					require.NoError(t, queryErr)
+					defer func() { require.NoError(t, rows.Close()) }()
+					var values []bool
+					for rows.Next() {
+						var value bool
+						require.NoError(t, rows.Scan(&value))
+						values = append(values, value)
+					}
+					require.NoError(t, rows.Err())
+					return values
+				}
+				_, err := conn.ExecContext(ctx, "prepare row_operand_text from '"+query("?")+"'")
+				require.NoError(t, err)
+				defer func() {
+					cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					_, err := conn.ExecContext(cleanup, "deallocate prepare row_operand_text")
+					require.NoError(t, err)
+				}()
+				stmt, err := conn.PrepareContext(ctx, query("?"))
+				require.NoError(t, err)
+				defer func() { require.NoError(t, stmt.Close()) }()
+				for _, tc := range []struct {
+					literal string
+					value   any
+					want    []bool
+				}{
+					{"1", int64(1), []bool{true, false}},
+					{"NULL", nil, []bool{false, false}},
+					{"2", int64(2), []bool{false, true}},
+					{"'1'", "1", []bool{true, false}},
+					{"cast(2.0 as decimal(10,1))", float64(2), []bool{false, true}},
+					{"1", int64(1), []bool{true, false}},
+				} {
+					want := tc.want
+					if skipped {
+						want = []bool{false, false}
+					}
+					require.Equal(t, want, readRows(func() (*sql.Rows, error) {
+						return conn.QueryContext(ctx, query(tc.literal))
+					}), tc.literal)
+					require.Equal(t, want, readRows(func() (*sql.Rows, error) {
+						return stmt.QueryContext(ctx, tc.value)
+					}), tc.literal)
+					_, err = conn.ExecContext(ctx, "set @row_operand_value="+tc.literal)
+					require.NoError(t, err)
+					require.Equal(t, want, readRows(func() (*sql.Rows, error) {
+						return conn.QueryContext(ctx, "execute row_operand_text using @row_operand_value")
+					}), tc.literal)
+				}
+			})
+		}
 
 		prepared, err := conn.PrepareContext(ctx,
 			"select (?,?) = (select a,b from scalar_rows where id=1)")

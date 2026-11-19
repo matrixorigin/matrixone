@@ -45,7 +45,7 @@ func TestLongTokenTruncationLookup(t *testing.T) {
 	idx := NewIndex([]*Segment{seg}, nil)
 
 	bm25 := func(q, parser string) []any {
-		res, err := idx.SearchBagOfWords([]byte(q), parser, BM25, 100, nil)
+		res, err := idx.SearchBagOfWords([]byte(q), parser, BM25, 100, nil, 0)
 		require.NoError(t, err)
 		return resultIDs(res)
 	}

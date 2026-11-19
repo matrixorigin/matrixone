@@ -334,6 +334,9 @@ message GetBindRequest {
   uint32   Group       = 3;
   Sharding Sharding    = 4;
   uint64   OriginTable = 5;
+  // Cleanup observes retirement without creating a binding or refreshing the
+  // requesting service's liveness.
+  bool     LookupOnly = 6;
 }
 
 // GetBindResponse get bind request from allocator response. TN -> CN
@@ -341,6 +344,9 @@ message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
   uint64 AllocatorVersion = 3;
   string AllocatorID = 4;
+  // Acknowledges observation semantics. Legacy responses must still satisfy
+  // the valid-binding checks and cannot prove retirement through absence.
+  bool LookupOnly = 5;
 }
 
 // KeepLockTableBindRequest keep lock table bind request. CN -> TN

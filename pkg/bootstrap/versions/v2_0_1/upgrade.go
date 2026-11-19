@@ -60,25 +60,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-
-	for _, upgEntry := range tenantUpgEntries {
-		start := time.Now()
-
-		err := upgEntry.Upgrade(txn, uint32(tenantID))
-		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-
-		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", duration.Milliseconds()),
-			zap.Int32("tenantId", tenantID),
-			zap.String("toVersion", v.Metadata().Version))
-	}
-
-	return nil
+	return versions.RunHistoricalTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
@@ -89,12 +71,12 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 		err := upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
 		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.String("toVersion", v.Metadata().Version))
@@ -102,7 +84,7 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 	if needMigrateMoPubs {
 		if err := migrateMoPubs(txn); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster migrateMoPubs error",
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster migrateMoPubs error",
 				zap.Error(err),
 				zap.String("version", v.Metadata().Version))
 			return err

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -168,6 +169,22 @@ func TestEmptyEnumDomain(t *testing.T) {
 		require.Error(t, err)
 		_, err = ParseEnumValue("", uint16(index))
 		require.Error(t, err)
+	}
+}
+
+func TestParseEnumValueBoundaries(t *testing.T) {
+	for _, domain := range []string{"", "a,b,c", ",,", strings.Repeat(",", 65535), strings.Repeat(",", 65536)} {
+		members := strings.Split(domain, ",")
+		for _, number := range []uint16{0, 1, 2, 3, 4, 65535} {
+			got, err := ParseEnumValue(domain, number)
+			if number == 0 || number > uint16(len(members)) {
+				require.EqualError(t, err, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", number, len(members)).Error())
+				require.Zero(t, got)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, Enum(number), got)
+			}
+		}
 	}
 }
 

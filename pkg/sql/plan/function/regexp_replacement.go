@@ -16,13 +16,13 @@ package function
 
 import (
 	"encoding/binary"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 )
 
 const regexpReplaceMaxResultBytes = int64(types.MaxBlobLen)
@@ -326,47 +326,6 @@ func (m *regexpBinaryOffsetMapper) mapSubmatches(indices []int) {
 	m.positions = positions
 }
 
-func (rs *regexpSet) regexpFindSubmatchesAtOrAfterWithMatchType(
-	reg *regexp.Regexp,
-	pat, str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-) ([]int, bool, error) {
-	if startByte <= 0 {
-		indices := reg.FindStringSubmatchIndex(str)
-		return indices, indices != nil, nil
-	}
-	if startByte > len(str) {
-		return nil, false, nil
-	}
-
-	_, size := utf8.DecodeLastRuneInString(str[:startByte])
-	contextStart := startByte - size
-	if size < 1 {
-		contextStart = startByte - 1
-	}
-	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
-	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
-		wrappedPattern,
-		subjectIsBinary,
-		subjectIsBinary && strings.ContainsRune(pureMatchType, 'i'),
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	indices := wrapped.FindStringSubmatchIndex(str[contextStart:])
-	if len(indices) < 4 || indices[2] < 0 {
-		return nil, false, nil
-	}
-	for i := 2; i < len(indices); i++ {
-		if indices[i] >= 0 {
-			indices[i] += contextStart
-		}
-	}
-	return indices[2:], true, nil
-}
-
 func (rs *regexpSet) regexpVisitSubmatchesAtOrAfterWithMatchType(
 	reg *regexp.Regexp,
 	pat, str string,
@@ -381,12 +340,8 @@ func (rs *regexpSet) regexpVisitSubmatchesAtOrAfterWithMatchType(
 	visited := int64(0)
 	nextStart := searchStart
 	for nextStart <= len(searchSubject) {
-		indices, found, err := rs.regexpFindSubmatchesAtOrAfterWithMatchType(
-			reg, pat, searchSubject, nextStart, subjectIsBinary, pureMatchType)
-		if err != nil {
-			return visited, err
-		}
-		if !found {
+		indices := reg.FindStringSubmatchIndexAt(searchSubject, nextStart)
+		if indices == nil {
 			break
 		}
 		start, end := indices[0], indices[1]
@@ -448,14 +403,11 @@ func (rs *regexpSet) regexpVisitMatchesAtOrAfterWithMatchType(
 	visited := int64(0)
 	nextStart := searchStart
 	for nextStart <= len(searchSubject) {
-		start, end, found, err := rs.regexpFindAtOrAfterWithMatchType(
-			reg, pat, searchSubject, nextStart, subjectIsBinary, pureMatchType)
-		if err != nil {
-			return visited, err
-		}
-		if !found {
+		indices := reg.FindStringIndexAt(searchSubject, nextStart)
+		if indices == nil {
 			break
 		}
+		start, end := indices[0], indices[1]
 		encodedStart, encodedEnd := start, end
 		if subjectIsBinary {
 			start = mapper.byteOffset(start)
@@ -586,6 +538,33 @@ func (rs *regexpSet) regexpReplaceLiteralWithLimit(
 	return result.String(), nil
 }
 
+func regexpReplaceSingleTemplate(str string, indices []int, template regexpReplacementTemplate, maxBytes int64) (string, error) {
+	size, err := regexpAddReplacementSize(0, indices[0], maxBytes)
+	if err != nil {
+		return "", err
+	}
+	size, err = regexpAddTemplateSize(size, str, indices, template, maxBytes)
+	if err != nil {
+		return "", err
+	}
+	size, err = regexpAddReplacementSize(size, len(str)-indices[1], maxBytes)
+	if err != nil {
+		return "", err
+	}
+	var result strings.Builder
+	result.Grow(int(size))
+	if err := regexpWriteReplacementString(&result, str[:indices[0]], maxBytes); err != nil {
+		return "", err
+	}
+	if err := regexpWriteTemplate(&result, str, indices, template, maxBytes); err != nil {
+		return "", err
+	}
+	if err := regexpWriteReplacementString(&result, str[indices[1]:], maxBytes); err != nil {
+		return "", err
+	}
+	return result.String(), nil
+}
+
 func (rs *regexpSet) regularReplaceWithTemplate(
 	reg *regexp.Regexp,
 	pat, str, replacement string,
@@ -616,30 +595,7 @@ func (rs *regexpSet) regularReplaceWithTemplate(
 				reg, pat, str, regexpReplacementLiteral(template), startByte,
 				occurrence, subjectIsBinary, pureMatchType, maxBytes)
 		}
-		size, err := regexpAddReplacementSize(0, indices[0], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddTemplateSize(size, str, indices, template, maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddReplacementSize(size, len(str)-indices[1], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		var result strings.Builder
-		result.Grow(int(size))
-		if err := regexpWriteReplacementString(&result, str[:indices[0]], maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteTemplate(&result, str, indices, template, maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteReplacementString(&result, str[indices[1]:], maxBytes); err != nil {
-			return "", err
-		}
-		return result.String(), nil
+		return regexpReplaceSingleTemplate(str, indices, template, maxBytes)
 	}
 
 	upperBound, bounded := regexpReplaceOutputUpperBound(len(str), len(replacement))

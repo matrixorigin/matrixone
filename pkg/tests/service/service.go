@@ -927,22 +927,7 @@ func (c *testCluster) WaitCNStoreTaskServiceCreated(ctx context.Context, uuid st
 	ds, err := c.GetCNService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on cn store",
-				"cn store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ds.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ds, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
@@ -955,22 +940,7 @@ func (c *testCluster) WaitTNStoreTaskServiceCreated(ctx context.Context, uuid st
 	ds, err := c.GetTNService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on tn store",
-				"dn store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ds.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ds, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitTNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
@@ -983,22 +953,7 @@ func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid s
 	ls, err := c.GetLogService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on log store",
-				"log store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ls.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ls, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {

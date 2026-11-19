@@ -609,8 +609,35 @@ func (exec *varStdDevExec[T, A]) getResult(variance float64, varianceExponent, c
 		result = scaledVarianceSqrt(state)
 	}
 
+	// A non-finite final result means the exact aggregate overflowed the
+	// finite DOUBLE range (for example VARIANCE over +/-1e200 requires
+	// 2e400). The scaled state representation is what keeps finite STDDEV
+	// results available at these magnitudes; where the true value cannot be
+	// represented, return MySQL's ER_DATA_OUT_OF_RANGE rather than the raw
+	// "+Infinity" token that downstream consumers such as JSON
+	// serialization cannot express (issue 31355).
+	if math.IsInf(result, 0) {
+		var z T
+		return z, moerr.NewOutOfRangeNoCtxf("float64",
+			"DOUBLE value is out of range in '%s(...)'", exec.aggregateName())
+	}
+
 	z, err := exec.f2t(result, exec.aggInfo.retType.Scale)
 	return z, err
+}
+
+// aggregateName returns the canonical SQL spelling for its error messages.
+func (exec *varStdDevExec[T, A]) aggregateName() string {
+	switch {
+	case exec.isVar && exec.isPop:
+		return "variance"
+	case exec.isVar:
+		return "var_samp"
+	case exec.isPop:
+		return "stddev"
+	default:
+		return "stddev_samp"
+	}
 }
 
 func (exec *varStdDevExec[T, A]) getLegacyResult(sum, sumsq float64, cnt int64) (T, error) {
@@ -625,6 +652,18 @@ func (exec *varStdDevExec[T, A]) getLegacyResult(sum, sumsq float64, cnt int64) 
 	}
 	if !exec.isVar {
 		result = math.Sqrt(result)
+	}
+	// Same out-of-range contract as the modern finalize path (issue 31355):
+	// ER_DATA_OUT_OF_RANGE, never the unrepresentable "+Infinity" token.
+	// A NaN is reachable in this legacy formula with finite same-sign large
+	// inputs: sumsq overflows to +Inf while avg*avg*cnt/denominator is +Inf
+	// as well, so their difference is Inf-Inf (for example VAR_POP over
+	// 1e200, 1e200). NaN likewise cannot be delivered to SQL consumers
+	// (JSON serialization rejects it), so it takes the same error branch.
+	if math.IsInf(result, 0) || math.IsNaN(result) {
+		var z T
+		return z, moerr.NewOutOfRangeNoCtxf("float64",
+			"DOUBLE value is out of range in '%s(...)'", exec.aggregateName())
 	}
 	return exec.f2t(result, exec.aggInfo.retType.Scale)
 }

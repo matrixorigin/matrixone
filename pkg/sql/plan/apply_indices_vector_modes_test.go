@@ -47,7 +47,7 @@ func hnswAutoPlanFixture(t *testing.T, sql string) *plan.Query {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	return p.GetQuery()
 }
@@ -142,10 +142,11 @@ func TestHnswIterativeWidens(t *testing.T) {
 		mode      string
 		semi      bool
 		iterative bool
+		exact     int64
 	}{
-		{"pre", true, false},
-		{"iterative", true, true},
-		{"post", false, false},
+		{"pre", true, false, 5000},
+		{"iterative", true, true, 5000},
+		{"post", false, false, 0},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			query := hnswAutoPlanFixture(t, `select id from hnsw_auto where category = 1
@@ -155,6 +156,7 @@ func TestHnswIterativeWidens(t *testing.T) {
 			opts, err := hnswplan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
 			require.NoError(t, err)
 			require.Equal(t, tc.iterative, opts.Iterative)
+			require.Equal(t, tc.exact, opts.PrefilterExactThreshold, "only a prefiltered search scans a small membership")
 			require.Equal(t, tc.semi, findNodeOfType(query, plan.Node_JOIN) != nil && findSemiJoin(query) != nil)
 		})
 	}
@@ -204,7 +206,7 @@ func cuvsPlanFixture(t *testing.T, algo string, roles []string, sql string) *pla
 	statements, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	return p.GetQuery()
 }

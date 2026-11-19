@@ -245,6 +245,16 @@ func estimateColumnRowBytes(
 	row int,
 ) (uint64, error) {
 	fixed := binding.target.Type.TypeSize()
+	if binding.kind == conversionMaterializeText {
+		// Rendered text staging writes a variable-length payload: budget the
+		// descriptor plus a conservative bound on the rendered characters so
+		// individually valid rows are split to respect the byte budget.
+		rendered, err := renderedStageTextBound(column.DataType())
+		if err != nil {
+			return 0, err
+		}
+		return checkedRowBytes(ctx, fixed, rendered)
+	}
 	if binding.kind != conversionBorrowVarlen && binding.kind != conversionMaterializeDictionary {
 		if fixed < 0 {
 			return 0, moerr.NewInvalidInput(ctx, "invalid MatrixOne target width")
@@ -256,9 +266,16 @@ func estimateColumnRowBytes(
 		if !ok {
 			return 0, moerr.NewInvalidInput(ctx, "invalid Arrow Dictionary array")
 		}
-		valueKind, err := selectLoadConversion(dictionary.Dictionary().DataType(), binding.target.Type)
+		valueKind, err := selectLoadConversion(dictionary.Dictionary().DataType(), binding.target.Type, binding.target.TextStage)
 		if err != nil {
 			return 0, err
+		}
+		if valueKind == conversionMaterializeText {
+			rendered, err := renderedStageTextBound(dictionary.Dictionary().DataType())
+			if err != nil {
+				return 0, err
+			}
+			return checkedRowBytes(ctx, fixed, rendered)
 		}
 		if valueKind != conversionBorrowVarlen {
 			if fixed < 0 {

@@ -315,6 +315,16 @@ func TestJoinAccountIds(t *testing.T) {
 			wantS: "",
 		},
 		{
+			name:  "nil",
+			args:  args{accIds: nil},
+			wantS: "",
+		},
+		{
+			name:  "signed boundaries and duplicate",
+			args:  args{accIds: []int32{0, -1, -2147483648, 2147483647, 0}},
+			wantS: "0,-1,-2147483648,2147483647,0",
+		},
+		{
 			args: args{
 				accIds: []int32{1},
 			},
@@ -347,4 +357,33 @@ func TestGetAccounts(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nameInfoMap))
 	assert.Equal(t, 1, len(idInfoMap))
+}
+
+func TestMembershipListEdgeCases(t *testing.T) {
+	for _, tc := range []struct {
+		name, list, needle       string
+		allow, table, subscriber bool
+	}{
+		{"empty list and name", "", "", false, true, true},
+		{"trimmed privilege only", "a, b,", "b", true, false, false},
+		{"trailing empty member", "a, b,", "", true, true, true},
+		{"whitespace preserved for catalog lists", "a, b", " b", false, true, true},
+		{"all subscribers is case insensitive", "ALL", "missing", false, false, true},
+		{"wildcard tables and privilege", "*", "missing", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CanPubToAll(tc.needle, tc.list); got != tc.allow {
+				t.Errorf("CanPubToAll = %v, want %v", got, tc.allow)
+			}
+			if got := InSubMetaTables(&plan.SubscriptionMeta{Tables: tc.list}, tc.needle); got != tc.table {
+				t.Errorf("InSubMetaTables = %v, want %v", got, tc.table)
+			}
+			if got := (&PubInfo{SubAccountsStr: tc.list}).InSubAccounts(tc.needle); got != tc.subscriber {
+				t.Errorf("InSubAccounts = %v, want %v", got, tc.subscriber)
+			}
+		})
+	}
+	if got := SplitAccounts(" ,a, "); !reflect.DeepEqual(got, []string{"", "a", ""}) {
+		t.Errorf("SplitAccounts = %#v", got)
+	}
 }

@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy.engine import Result
+from ._sql_literals import sql_literal
 
 
 class MetadataColumn(Enum):
@@ -42,6 +43,16 @@ class MetadataColumn(Enum):
     MIN = "min"
     MAX = "max"
     SUM = "sum"
+
+
+def _metadata_boolean(value):
+    if value is None:
+        return False
+    if isinstance(value, (bool, int)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.lower() in ('true', 'false', '0', '1'):
+        return value.lower() in ('true', '1')
+    raise ValueError('Unexpected metadata boolean representation')
 
 
 @dataclass
@@ -68,7 +79,7 @@ class MetadataRow:
         return cls(
             col_name=row._mapping['col_name'],
             object_name=row._mapping['object_name'],
-            is_hidden=row._mapping['is_hidden'] == 'true',
+            is_hidden=_metadata_boolean(row._mapping['is_hidden']),
             obj_loc=row._mapping['obj_loc'],
             create_ts=row._mapping['create_ts'],
             delete_ts=row._mapping['delete_ts'],
@@ -110,6 +121,7 @@ class BaseMetadataManager:
         is_tombstone: Optional[bool] = None,
         indexname: Optional[str] = None,
         distinct_object_name: Optional[bool] = None,
+        source_column: Optional[str] = None,
     ) -> str:
         """
         Build metadata_scan SQL query.
@@ -139,14 +151,51 @@ class BaseMetadataManager:
             # Format: "db_name.table_name"
             table_ref = f"{dbname}.{tablename}"
 
-        # Column parameter - always use '*' for metadata_scan
-        column_param = "'*'"
+        if source_column is not None and (not isinstance(source_column, str) or not source_column):
+            raise ValueError('source_column must be a nonempty column name')
+        column_param = sql_literal(source_column if source_column is not None else '*')
+        table_token = sql_literal(table_ref)
 
         # Build the SQL query
         if distinct_object_name:
-            return f"SELECT DISTINCT(object_name) as object_name, * FROM metadata_scan('{table_ref}', {column_param}) g"
+            return f"SELECT DISTINCT object_name FROM metadata_scan({table_token}, {column_param}) g"
         else:
-            return f"SELECT * FROM metadata_scan('{table_ref}', {column_param}) g"
+            return f"SELECT * FROM metadata_scan({table_token}, {column_param}) g"
+
+    @staticmethod
+    def _needs_column_statistics(columns, source_column, distinct):
+        if source_column is not None or distinct or columns is None:
+            return False
+        if columns == '*' or columns == []:
+            return True
+        return any(
+            (column.value if isinstance(column, MetadataColumn) else column) in ('min', 'max', 'sum')
+            for column in columns
+        )
+
+    def _column_scan_sql(self, rows, dbname, tablename, is_tombstone, indexname):
+        names = dict.fromkeys(row._mapping['col_name'] for row in rows)
+        return [
+            self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, source_column=name)
+            for name in names
+        ]
+
+    @staticmethod
+    def _object_rows(rows):
+        """Wildcard sizes are per object; null counts are per-column null cells."""
+        objects = {}
+        common = ('rows_cnt', 'origin_size', 'compress_size', 'create_ts', 'delete_ts')
+        for row in rows:
+            values = row._mapping
+            name = values['object_name']
+            if name not in objects:
+                objects[name] = dict(values)
+            else:
+                item = objects[name]
+                if any(item.get(key) != values.get(key) for key in common):
+                    raise ValueError('Inconsistent wildcard metadata for object ' + str(name))
+                item['null_cnt'] = item.get('null_cnt', 0) + values.get('null_cnt', 0)
+        return list(objects.values())
 
     def _process_scan_result(
         self, result: Result, columns: Optional[Union[List[Union[MetadataColumn, str]], str]] = None
@@ -261,11 +310,12 @@ class BaseMetadataManager:
         if not rows:
             return {}
 
-        total_objects = len(set(row._mapping['object_name'] for row in rows))
-        total_original_size = sum(row._mapping.get('origin_size', 0) for row in rows)
-        total_compress_size = sum(row._mapping.get('compress_size', 0) for row in rows)
-        total_row_cnt = sum(row._mapping.get('rows_cnt', 0) for row in rows)
-        total_null_cnt = sum(row._mapping.get('null_cnt', 0) for row in rows)
+        objects = self._object_rows(rows)
+        total_objects = len(objects)
+        total_original_size = sum(row.get('origin_size', 0) for row in objects)
+        total_compress_size = sum(row.get('compress_size', 0) for row in objects)
+        total_row_cnt = sum(row.get('rows_cnt', 0) for row in objects)
+        total_null_cnt = sum(row.get('null_cnt', 0) for row in objects)
 
         return {
             "total_objects": total_objects,
@@ -320,16 +370,16 @@ class BaseMetadataManager:
             List of detailed statistics dictionaries
         """
         details = []
-        for row in rows:
+        for row in self._object_rows(rows):
             details.append(
                 {
-                    "object_name": row._mapping['object_name'],
-                    "create_ts": row._mapping['create_ts'],
-                    "delete_ts": row._mapping['delete_ts'],
-                    "row_cnt": row._mapping.get('rows_cnt', 0),
-                    "null_cnt": row._mapping.get('null_cnt', 0),
-                    "original_size": self._format_size(row._mapping.get('origin_size', 0)),
-                    "compress_size": self._format_size(row._mapping.get('compress_size', 0)),
+                    "object_name": row['object_name'],
+                    "create_ts": row['create_ts'],
+                    "delete_ts": row['delete_ts'],
+                    "row_cnt": row.get('rows_cnt', 0),
+                    "null_cnt": row.get('null_cnt', 0),
+                    "original_size": self._format_size(row.get('origin_size', 0)),
+                    "compress_size": self._format_size(row.get('compress_size', 0)),
                 }
             )
         return details
@@ -458,6 +508,7 @@ class MetadataManager(BaseMetadataManager):
         indexname: Optional[str] = None,
         columns: Optional[Union[List[Union[MetadataColumn, str]], str]] = None,
         distinct_object_name: Optional[bool] = None,
+        source_column: Optional[str] = None,
     ) -> Union[Result, List[MetadataRow]]:
         """
         Scan table metadata using metadata_scan function.
@@ -504,13 +555,29 @@ class MetadataManager(BaseMetadataManager):
             # Get all structured results
             rows = client.metadata.scan("test_db", "users", columns="*")
         """
+        if distinct_object_name and columns is not None:
+            if columns not in (['object_name'], [MetadataColumn.OBJECT_NAME]):
+                raise ValueError('distinct_object_name permits only columns=["object_name"] or columns=None')
         # Build SQL query
-        sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
+        sql = self._build_metadata_scan_sql(
+            dbname, tablename, is_tombstone, indexname, distinct_object_name, source_column
+        )
 
         # Execute the query using executor
         result = self._get_executor().execute(sql)
+        if self._needs_column_statistics(columns, source_column, distinct_object_name):
+            rows = result.fetchall()
+            if not rows:
+                return []
+            projected = []
+            for sql in self._column_scan_sql(rows, dbname, tablename, is_tombstone, indexname):
+                result = self._get_executor().execute(sql)
+                projected.extend(self._process_scan_result(result, columns))
+            return projected
 
         # Process result based on columns parameter
+        if distinct_object_name and columns is not None:
+            return [{'object_name': row[0]} for row in result.fetchall()]
         return self._process_scan_result(result, columns)
 
     def get_table_brief_stats(
@@ -538,7 +605,9 @@ class MetadataManager(BaseMetadataManager):
 
             Dictionary with brief statistics for table, tombstone, and indexes
         """
-        queries = self._prepare_brief_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+        queries = self._prepare_brief_stats(
+            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes
+        )
 
         result = {}
         for key, sql in queries:
@@ -575,7 +644,9 @@ class MetadataManager(BaseMetadataManager):
 
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
-        queries = self._prepare_detail_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+        queries = self._prepare_detail_stats(
+            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes
+        )
 
         result = {}
         for key, sql in queries:
@@ -694,6 +765,7 @@ class AsyncMetadataManager(BaseMetadataManager):
         indexname: Optional[str] = None,
         columns: Optional[List[Union[MetadataColumn, str]]] = None,
         distinct_object_name: Optional[bool] = None,
+        source_column: Optional[str] = None,
     ) -> Union[Result, List[MetadataRow]]:
         """
         Scan table metadata using metadata_scan function (async).
@@ -726,13 +798,29 @@ class AsyncMetadataManager(BaseMetadataManager):
             # Scan specific index
             result = await client.metadata.scan("test_db", "users", indexname="idx_name")
         """
+        if distinct_object_name and columns is not None:
+            if columns not in (['object_name'], [MetadataColumn.OBJECT_NAME]):
+                raise ValueError('distinct_object_name permits only columns=["object_name"] or columns=None')
         # Build SQL query
-        sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
+        sql = self._build_metadata_scan_sql(
+            dbname, tablename, is_tombstone, indexname, distinct_object_name, source_column
+        )
 
         # Execute the query using executor
         result = await self._get_executor().execute(sql)
+        if self._needs_column_statistics(columns, source_column, distinct_object_name):
+            rows = result.fetchall()
+            if not rows:
+                return []
+            projected = []
+            for sql in self._column_scan_sql(rows, dbname, tablename, is_tombstone, indexname):
+                result = await self._get_executor().execute(sql)
+                projected.extend(self._process_scan_result(result, columns))
+            return projected
 
         # Process result based on columns parameter
+        if distinct_object_name and columns is not None:
+            return [{'object_name': row[0]} for row in result.fetchall()]
         return self._process_scan_result(result, columns)
 
     async def get_table_brief_stats(
@@ -760,7 +848,9 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             Dictionary with brief statistics for table, tombstone, and indexes
         """
-        queries = self._prepare_brief_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+        queries = self._prepare_brief_stats(
+            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes
+        )
 
         result = {}
         for key, sql in queries:
@@ -797,7 +887,9 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
-        queries = self._prepare_detail_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+        queries = self._prepare_detail_stats(
+            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes
+        )
 
         result = {}
         for key, sql in queries:

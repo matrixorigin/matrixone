@@ -51,7 +51,6 @@ import (
 type TestTask struct {
 	jstr      string
 	dsize     int64
-	nlists    int64
 	ts        types.Timestamp
 	createdAt types.Timestamp
 	hour      int
@@ -90,7 +89,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(100),
-			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
 			hour:      3,
@@ -105,7 +103,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(1000000),
-			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
 			hour:      3,
@@ -119,7 +116,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(1000000),
-			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			hour:      3,
@@ -133,7 +129,6 @@ func getTestCases(t *testing.T) []TestTask {
 	"ivf_threads_build":{"t":"I", "v":8}
 	}}`,
 			dsize:    int64(1000000),
-			nlists:   int64(1000),
 			ts:       types.UnixToTimestamp(0),
 			hour:     3,
 			skipped:  false,
@@ -146,7 +141,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(1000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
@@ -164,7 +158,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(1000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
@@ -182,7 +175,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(10000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
@@ -200,7 +192,6 @@ func getTestCases(t *testing.T) []TestTask {
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
 			dsize:     int64(10000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
@@ -214,7 +205,6 @@ func getTestCases(t *testing.T) []TestTask {
 		{
 			jstr:      "",
 			dsize:     int64(10000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
@@ -228,7 +218,6 @@ func getTestCases(t *testing.T) []TestTask {
 		{
 			jstr:      "",
 			dsize:     int64(10000000),
-			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()

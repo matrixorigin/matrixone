@@ -238,11 +238,13 @@ func TestAsofJSONNumericRepeatedGroups(t *testing.T) {
 
 type jsonNumericAsofObservedExecutor struct {
 	colexec.ExpressionExecutor
-	before func()
+	before func() error
 }
 
 func (e *jsonNumericAsofObservedExecutor) Eval(proc *process.Process, bats []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	e.before()
+	if err := e.before(); err != nil {
+		return nil, err
+	}
 	return e.ExpressionExecutor.Eval(proc, bats, selectList)
 }
 
@@ -258,11 +260,12 @@ func TestAsofJSONNumericScanCancelAndReuse(t *testing.T) {
 	defer cancel()
 	proc.Ctx = ctx
 	calls := 0
-	arg.ctr.nonEqCondExec = &jsonNumericAsofObservedExecutor{ExpressionExecutor: arg.ctr.nonEqCondExec, before: func() {
+	arg.ctr.nonEqCondExec = &jsonNumericAsofObservedExecutor{ExpressionExecutor: arg.ctr.nonEqCondExec, before: func() error {
 		calls++
 		if calls == 1 {
 			cancel()
 		}
+		return nil
 	}}
 	_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels)
 	require.ErrorIs(t, err, context.Canceled)
@@ -287,10 +290,28 @@ func TestAsofJSONNumericScanCancelAndReuse(t *testing.T) {
 
 func TestAsofJSONNumericScanErrorsAndEmpty(t *testing.T) {
 	arg, proc, sels := newJSONNumericAsofScan(t, true, []string{"1", "18446744073709551615"}, []types.Timestamp{1, 2})
-	_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels)
-	require.Error(t, err)
-	require.False(t, found, "range errors cannot become NULL extension after an earlier match")
-	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels[:1])
+	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels)
+	require.NoError(t, err)
+	require.True(t, found, "a wider nonmatching JSON number must not hide the earlier match")
+	require.Zero(t, best)
+
+	// A genuine residual evaluation error must still propagate after a match.
+	executor := arg.ctr.nonEqCondExec
+	calls := 0
+	evalErr := moerr.NewInternalErrorNoCtx("residual evaluation failed")
+	arg.ctr.nonEqCondExec = &jsonNumericAsofObservedExecutor{ExpressionExecutor: executor, before: func() error {
+		calls++
+		if calls == 2 {
+			return evalErr
+		}
+		return nil
+	}}
+	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels)
+	require.ErrorIs(t, err, evalErr)
+	require.False(t, found, "evaluation errors cannot become NULL extension after an earlier match")
+	require.Equal(t, 2, calls)
+	arg.ctr.nonEqCondExec = executor
+	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, sels[:1])
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Zero(t, best)

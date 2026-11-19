@@ -416,6 +416,9 @@ func (v *legacyCollationVisitor) walkColDef(p *ColDef) error {
 	if err := v.walkGeneratedCol(p.GeneratedCol); err != nil {
 		return err
 	}
+	if err := v.walkType(p.EnumSetResultType); err != nil {
+		return err
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkColumn(p *Column) error {
@@ -1421,6 +1424,9 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 	if v.visited(p) {
 		return nil
 	}
+	if err := p.ValidateIntegerPrecision(); err != nil {
+		return err
+	}
 	for _, item0 := range p.Nodes {
 		if err := v.walkNode(item0); err != nil {
 			return err
@@ -1438,6 +1444,11 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 	}
 	if err := v.walkCorrelationSpec(p.Correlation); err != nil {
 		return err
+	}
+	for _, item0 := range p.EnumSetResultTypes {
+		if err := v.walkType(&item0); err != nil {
+			return err
+		}
 	}
 	return nil
 }

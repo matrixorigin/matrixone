@@ -394,7 +394,7 @@ func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
@@ -459,7 +459,7 @@ func TestUnionNestedTopClearsAllocationOwners(t *testing.T) {
 	statements, err := mysql.Parse(compilerCtx.GetContext(),
 		"select count(*), cast(sum(x) as signed) from ((select 1 x union select 1+0 union select 2 order by x limit 2) union select 3 union select 4) u", 1)
 	require.NoError(t, err)
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	c := newLazyUnionAllTestCompile(t)
 	c.isPrepare = false

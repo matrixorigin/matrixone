@@ -1,0 +1,327 @@
+[
+  {
+    "label": "nn-1-b_a",
+    "sql": "SELECT COUNT(DISTINCT b,a) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.23531549982726574
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nn-1-a_b",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.1537758749909699
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nn-1-b_a",
+    "sql": "SELECT COUNT(DISTINCT (b,a)) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.155478541739285
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nn-1-s_b",
+    "sql": "SELECT COUNT(DISTINCT s,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.241886124946177
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nn-1-c_b",
+    "sql": "SELECT COUNT(DISTINCT c,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.25373933324590325
+    },
+    "shuffle": false
+  },
+  {
+    "label": "grouped-1",
+    "sql": "SELECT g,COUNT(DISTINCT b,a) FROM qa30995.nn GROUP BY g ORDER BY g",
+    "result": {
+      "rows": [
+        [
+          0,
+          83335
+        ],
+        [
+          1,
+          83334
+        ],
+        [
+          2,
+          83334
+        ],
+        [
+          3,
+          83334
+        ]
+      ],
+      "seconds": 0.1835458343848586
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nullable-1",
+    "sql": "SELECT g,COUNT(DISTINCT a,b) FROM qa30995.nullable GROUP BY g ORDER BY g",
+    "result": {
+      "rows": [
+        [
+          0,
+          179820
+        ],
+        [
+          1,
+          179820
+        ],
+        [
+          2,
+          179820
+        ],
+        [
+          3,
+          179820
+        ],
+        [
+          4,
+          0
+        ]
+      ],
+      "seconds": 1.857587582897395
+    },
+    "shuffle": false
+  },
+  {
+    "label": "invalid-1",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=4",
+    "result": {
+      "rows": [
+        [
+          0
+        ]
+      ],
+      "seconds": 0.01889945799484849
+    },
+    "shuffle": false
+  },
+  {
+    "label": "empty-1",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=99",
+    "result": {
+      "rows": [
+        [
+          0
+        ]
+      ],
+      "seconds": 0.028903416823595762
+    },
+    "shuffle": false
+  },
+  {
+    "label": "empty-grouped-1",
+    "sql": "SELECT g,COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=99 GROUP BY g",
+    "result": {
+      "rows": [],
+      "seconds": 0.01120920805260539
+    },
+    "shuffle": false
+  },
+  {
+    "label": "nn-8-b_a",
+    "sql": "SELECT COUNT(DISTINCT b,a) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.10365100018680096
+    },
+    "shuffle": true
+  },
+  {
+    "label": "nn-8-a_b",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.1042547500692308
+    },
+    "shuffle": true
+  },
+  {
+    "label": "nn-8-b_a",
+    "sql": "SELECT COUNT(DISTINCT (b,a)) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.09193212492391467
+    },
+    "shuffle": true
+  },
+  {
+    "label": "nn-8-s_b",
+    "sql": "SELECT COUNT(DISTINCT s,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.17857958376407623
+    },
+    "shuffle": true
+  },
+  {
+    "label": "nn-8-c_b",
+    "sql": "SELECT COUNT(DISTINCT c,b) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.10856812493875623
+    },
+    "shuffle": true
+  },
+  {
+    "label": "grouped-8",
+    "sql": "SELECT g,COUNT(DISTINCT b,a) FROM qa30995.nn GROUP BY g ORDER BY g",
+    "result": {
+      "rows": [
+        [
+          0,
+          83335
+        ],
+        [
+          1,
+          83334
+        ],
+        [
+          2,
+          83334
+        ],
+        [
+          3,
+          83334
+        ]
+      ],
+      "seconds": 0.09897904191166162
+    },
+    "shuffle": true
+  },
+  {
+    "label": "nullable-8",
+    "sql": "SELECT g,COUNT(DISTINCT a,b) FROM qa30995.nullable GROUP BY g ORDER BY g",
+    "result": {
+      "rows": [
+        [
+          0,
+          179820
+        ],
+        [
+          1,
+          179820
+        ],
+        [
+          2,
+          179820
+        ],
+        [
+          3,
+          179820
+        ],
+        [
+          4,
+          0
+        ]
+      ],
+      "seconds": 1.7363116247579455
+    },
+    "shuffle": false
+  },
+  {
+    "label": "invalid-8",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=4",
+    "result": {
+      "rows": [
+        [
+          0
+        ]
+      ],
+      "seconds": 0.01222837483510375
+    },
+    "shuffle": false
+  },
+  {
+    "label": "empty-8",
+    "sql": "SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=99",
+    "result": {
+      "rows": [
+        [
+          0
+        ]
+      ],
+      "seconds": 0.00843374989926815
+    },
+    "shuffle": false
+  },
+  {
+    "label": "empty-grouped-8",
+    "sql": "SELECT g,COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=99 GROUP BY g",
+    "result": {
+      "rows": [],
+      "seconds": 0.010667125228792429
+    },
+    "shuffle": false
+  },
+  {
+    "label": "forced-spill",
+    "sql": "SELECT COUNT(DISTINCT b,a) FROM qa30995.nn",
+    "result": {
+      "rows": [
+        [
+          333337
+        ]
+      ],
+      "seconds": 0.6568884998559952
+    },
+    "shuffle": true
+  }
+]

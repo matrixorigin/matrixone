@@ -90,11 +90,6 @@ func NewMetricsAllocator[U Allocator](
 	return ret
 }
 
-type AllocateInfo struct {
-	Deallocator Deallocator
-	Size        uint64
-}
-
 var _ Allocator = new(MetricsAllocator[Allocator])
 
 func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {

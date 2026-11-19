@@ -18,13 +18,49 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestObjectListRetiredMetricsCannotRepublish(t *testing.T) {
+	const tableID uint64 = 0xfedcba9876543211
+	before := testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge)
+	list := NewObjectListWithTableID(tableID, false)
+	id := objectio.NewObjectid()
+	list.MarkAppendMaxPending(&id)
+	require.Equal(t, before+1, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+	list.retireMetrics()
+	v2.RemoveTxnAObjectMaxCommitState(tableID)
+	list.MarkAppendMaxPending(&id)
+	require.Equal(t, before, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+}
+
+func TestDatabaseRemovalRetiresChildTableMetrics(t *testing.T) {
+	c := MockCatalog(nil)
+	defer c.Close()
+	beforeSeries := testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge)
+	for i := 0; i < 8; i++ {
+		db, err := c.CreateDBEntry(fmt.Sprintf("metric_gc_%d", i), "", "", nil)
+		require.NoError(t, err)
+		id := objectio.NewObjectid()
+		table, err := db.CreateTableEntry(MockSchema(2, 0), nil, nil)
+		require.NoError(t, err)
+		table.dataObjects.MarkAppendMaxPending(&id)
+		table.tombstoneObjects.MarkAppendMaxPending(&id)
+		require.NoError(t, c.RemoveDBEntry(db))
+		// Simulate a callback already queued before catalog removal.
+		table.dataObjects.MarkAppendMaxPending(&id)
+		table.tombstoneObjects.MarkAppendMaxPending(&id)
+		require.Equal(t, beforeSeries, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+	}
+}
 
 func makeObjectListOrderTestEntry(
 	marker byte,
@@ -65,6 +101,57 @@ func collectVisibleObjectMarkers(list *ObjectList) []byte {
 	return markers
 }
 
+func TestObjectListGroupScanReleasesTreeLockBeforeCallback(t *testing.T) {
+	group := ObjectListGroupAppendableCreate
+	for _, mode := range []string{"all", "from-entry", "from-ts"} {
+		t.Run(mode, func(t *testing.T) {
+			list := NewObjectList(false)
+			var start *ObjectEntry
+			for i := 1; i <= 70; i++ {
+				entry := makeObjectListOrderTestEntry(byte(i), group, int64(i))
+				list.Set(entry)
+				if i == 10 {
+					start = entry
+				}
+			}
+			snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+			var markers []byte
+			visit := func(entry *ObjectEntry) bool {
+				if len(markers) == 0 {
+					done := make(chan struct{})
+					go func() {
+						list.Set(makeObjectListOrderTestEntry(100, group, 100))
+						close(done)
+					}()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("object-list writer blocked by scan callback")
+					}
+				}
+				markers = append(markers, entry.ID()[0])
+				return true
+			}
+			switch mode {
+			case "all":
+				snapshot.ScanGroup(group, visit)
+			case "from-entry":
+				snapshot.ScanGroupFrom(group, start, visit)
+			case "from-ts":
+				snapshot.AscendGroup(group, types.BuildTS(10, 0), visit)
+			}
+			first := byte(1)
+			if mode != "all" {
+				first = 10
+			}
+			require.Len(t, markers, 71-int(first))
+			for i, marker := range markers {
+				require.Equal(t, first+byte(i), marker)
+			}
+		})
+	}
+}
+
 func TestObjectListOrder(t *testing.T) {
 	list := NewObjectList(false)
 	entries := []*ObjectEntry{
@@ -97,6 +184,190 @@ func TestObjectListOrder(t *testing.T) {
 		require.Same(t, entry, list.GetLastestNode(entry.ID()))
 	}
 	require.Equal(t, []byte{8, 2, 7, 1}, collectVisibleObjectMarkers(list))
+}
+
+func TestObjectListCopiesOnlyModifiedGroups(t *testing.T) {
+	list := NewObjectList(false)
+	before := list.loadTrees()
+	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
+	list.Set(entry)
+	after := list.loadTrees()
+
+	require.NotSame(t, before, after)
+	require.NotSame(t, before.all, after.all)
+	require.Zero(t, before.all.Len())
+	require.Equal(t, 1, after.all.Len())
+	require.NotSame(t,
+		before.group(ObjectListGroupAppendableCreate),
+		after.group(ObjectListGroupAppendableCreate),
+	)
+	require.Zero(t, before.group(ObjectListGroupAppendableCreate).Len())
+	require.Equal(t, 1, after.group(ObjectListGroupAppendableCreate).Len())
+	for group := ObjectListGroupAppendableCreateWithDrop; group <= ObjectListGroupNonAppendableDrop; group++ {
+		require.Same(t, before.group(group), after.group(group))
+	}
+}
+
+func TestObjectListWaitDoesNotHoldTreeReadLock(t *testing.T) {
+	list := NewObjectList(false)
+	owner := newNamespaceWaitTxn(t)
+	owner.state.Store(int32(txnif.TxnStatePreparing))
+	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
+	entry.CreatedAt = txnif.UncommitTS
+	entry.CreateNode = txnbase.NewTxnMVCCNodeWithTxn(owner)
+	entry.ObjectState = ObjectState_Create_PrepareCommit
+	list.Set(entry)
+
+	waitDone := make(chan struct{})
+	go func() {
+		list.WaitUntilCommitted(types.BuildTS(4, 0))
+		close(waitDone)
+	}()
+	select {
+	case <-owner.waited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list did not wait for preparing object")
+	}
+
+	writeDone := make(chan struct{})
+	go func() {
+		list.Set(makeObjectListOrderTestEntry(2, ObjectListGroupAppendableCreate, 2))
+		close(writeDone)
+	}()
+	select {
+	case <-writeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list writer blocked behind a transaction wait")
+	}
+	owner.finish(false)
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list wait did not finish")
+	}
+}
+
+func TestVisibleObjectIteratorRefillsWithoutHoldingTreeLock(t *testing.T) {
+	list := NewObjectList(false)
+	for i := 0; i < 130; i++ {
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), ObjectListGroupAppendableCreate, int64(i+1)))
+	}
+	it := list.MakeVisibleCommittedObjectIt(txnbase.MockTxnReaderWithNow())
+	defer it.Release()
+	for want := 130; want > 0; want-- {
+		require.True(t, it.Next())
+		require.Equal(t, byte(want), it.Item().ID()[0])
+		if want == 130 {
+			// Publishing a new snapshot must not wait for the visible
+			// iterator, and it must not change the iterator's pinned view.
+			list.Set(makeObjectListOrderTestEntry(131, ObjectListGroupAppendableCreate, 131))
+		}
+	}
+	require.False(t, it.Next())
+}
+
+func TestObjectListSnapshotVisitAllUnlocked(t *testing.T) {
+	list := NewObjectList(false)
+	for i := 0; i < 130; i++ {
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), ObjectListGroupAppendableCreate, int64(i+1)))
+	}
+	snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+	var markers []byte
+	snapshot.VisitAllUnlocked(func(entry *ObjectEntry) bool {
+		markers = append(markers, entry.ID()[0])
+		if len(markers) == 1 {
+			// A publication must not wait for the callback or enter this
+			// pinned snapshot, including after it refills its batch.
+			list.Set(makeObjectListOrderTestEntry(131, ObjectListGroupAppendableCreate, 131))
+		}
+		return true
+	})
+	require.Len(t, markers, 130)
+	for i, marker := range markers {
+		require.Equal(t, byte(130-i), marker)
+	}
+}
+
+func TestTableRecurLoopAllowsObjectRemoval(t *testing.T) {
+	c := MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("recur_gc", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	for _, tombstone := range []bool{false, true} {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+		_, err = table.CreateCommittedObject(types.BuildTS(1, 0),
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: tombstone}, nil)
+		require.NoError(t, err)
+	}
+	var removed int
+	p := &LoopProcessor{
+		ObjectFn: func(obj *ObjectEntry) error {
+			removed++
+			return table.RemoveEntry(obj)
+		},
+		TombstoneFn: func(obj *ObjectEntry) error {
+			removed++
+			return table.RemoveEntry(obj)
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- table.RecurLoop(p) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("catalog recursion held a tree lock during object removal")
+	}
+	require.Equal(t, 2, removed)
+}
+
+func TestObjectListGroupSnapshotsConcurrentMutation(t *testing.T) {
+	list := NewObjectList(false)
+	const (
+		writes  = 120
+		readers = 8
+	)
+	start := make(chan struct{})
+	errC := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range writes {
+				snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+				for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+					it := snapshot.Group(group)
+					for ok := it.First(); ok; ok = it.Next() {
+						if actual := it.Item().ObjectListGroup(); actual != group {
+							it.Release()
+							errC <- fmt.Errorf("group snapshot returned %d, want %d", actual, group)
+							return
+						}
+					}
+					it.Release()
+				}
+			}
+		}()
+	}
+	close(start)
+	for i := range writes {
+		group := ObjectListGroup(i % int(ObjectListGroupNonAppendableDrop+1))
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), group, int64(i+1)))
+	}
+	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
+	require.Equal(t, writes, list.loadTree().Len())
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		require.Equal(t, writes/6, list.loadTrees().group(group).Len())
+	}
 }
 
 func TestObjectListGroupSeek(t *testing.T) {
@@ -363,4 +634,21 @@ func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
 	require.Same(t, updatedDrop, nodes[0])
 	require.Same(t, updatedDrop.prevVersion, nodes[1])
 	require.Empty(t, collectVisibleObjectMarkers(list))
+}
+
+func TestObjectListMetricPublicationReadsLatestState(t *testing.T) {
+	const tableID uint64 = 0xfedcba9876543212
+	defer v2.RemoveTxnAObjectMaxCommitState(tableID)
+	list := NewObjectListWithTableID(tableID, false)
+	id := objectio.NewObjectid()
+	list.MarkAppendMaxPending(&id)
+	// A callback can be delayed across later transitions. It must publish the
+	// current state when it finally obtains publication order.
+	latePublication := list.publishAppendMaxMetrics
+	list.MarkAppendMaxSealedWaiting(&id)
+	list.UpdateAppendMaxCommit(&id, types.BuildTS(9, 0))
+	latePublication()
+	label := fmt.Sprint(tableID)
+	require.Equal(t, float64(0), testutil.ToFloat64(v2.TxnAObjectMaxCommitStateGauge.WithLabelValues(label, "data", "pending")))
+	require.Equal(t, float64(1), testutil.ToFloat64(v2.TxnAObjectMaxCommitStateGauge.WithLabelValues(label, "data", "finalized")))
 }

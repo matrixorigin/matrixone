@@ -187,13 +187,21 @@ func TestMySQLWireMalformedExecuteKeepsPreparedTypesAndConnection(t *testing.T) 
 	require.Equal(t, byte(defines.OKHeader), execute(2, bind(0, 0, 0x78, 0x56))[0])
 	assertValue(0x5678)
 
-	closePayload := make([]byte, 5)
-	closePayload[0] = byte(COM_STMT_CLOSE)
-	binary.LittleEndian.PutUint32(closePayload[1:], 2)
-	writeWirePacket(t, clientConn, 0, closePayload)
-	writeWirePacket(t, clientConn, 0, []byte{byte(COM_PING)})
-	_, response = readWirePacket(t, clientConn)
-	require.Equal(t, byte(defines.OKHeader), response[0])
+	closeAndPing := func(id uint32) {
+		t.Helper()
+		closePayload := make([]byte, 5)
+		closePayload[0] = byte(COM_STMT_CLOSE)
+		binary.LittleEndian.PutUint32(closePayload[1:], id)
+		writeWirePacket(t, clientConn, 0, closePayload)
+		writeWirePacket(t, clientConn, 0, []byte{byte(COM_PING)})
+		sequence, pong := readWirePacket(t, clientConn)
+		require.Equal(t, byte(1), sequence)
+		require.NotEmpty(t, pong)
+		require.Equal(t, byte(defines.OKHeader), pong[0])
+	}
+	closeAndPing(0) // An unknown handle must not leave an ERR before PING.
+	closeAndPing(2)
+	closeAndPing(2) // A repeated close is also response-free.
 	_, err = ses.GetPrepareStmt(context.Background(), stmt.Name)
 	require.Error(t, err)
 }

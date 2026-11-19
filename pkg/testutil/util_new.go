@@ -1043,37 +1043,6 @@ func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []b
 	return vec
 }
 
-func NewEnumVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []uint16) *vector.Vector {
-	vec := vector.NewVec(typ)
-	if vs != nil {
-		for i := range vs {
-			if nulls != nil && nulls[i] {
-				if err := vector.AppendFixed(vec, types.Enum(0), true, m); err != nil {
-					vec.Free(m)
-					return nil
-				}
-			} else {
-				if err := vector.AppendFixed(vec, types.Enum(vs[i]), false, m); err != nil {
-					vec.Free(m)
-					return nil
-				}
-			}
-		}
-		return vec
-	}
-	for i := 1; i <= n; i++ {
-		v := i
-		if random {
-			v = rand.Int()
-		}
-		if err := vector.AppendFixed(vec, types.Enum(v), false, m); err != nil {
-			vec.Free(m)
-			return nil
-		}
-	}
-	return vec
-}
-
 func NewDatetimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
 	vec := vector.NewVec(typ)
 	if vs != nil {
@@ -1240,11 +1209,4 @@ func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, 
 		}
 	}
 	return vec
-}
-
-func NewRegMsg(bat *batch.Batch) *process.RegisterMessage {
-	return &process.RegisterMessage{
-		Batch: bat,
-		Err:   nil,
-	}
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -942,7 +943,7 @@ func TestGetExprValue(t *testing.T) {
 		// through the session compiler context after SET evaluation.
 		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
 		cvey.So(err, cvey.ShouldBeNil)
-		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false)
+		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false, nil)
 		cvey.So(err, cvey.ShouldBeNil)
 
 	})
@@ -1062,6 +1063,13 @@ func TestRewriteError(t *testing.T) {
 		want1 string
 		want2 string
 	}{
+		{
+			name:  "deadlock retains MySQL retry identity",
+			args:  args{err: moerr.NewDeadLockDetectedNoCtx()},
+			want:  1213,
+			want1: "40001",
+			want2: "deadlock detected",
+		},
 		{
 			name: "t1",
 			args: args{
@@ -1445,14 +1453,17 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	// MySQL's default (innodb_rollback_on_timeout=OFF) scopes an expired lock
+	// wait to the failing statement only; the transaction stays open, so the
+	// local and remote lock-wait-timeout codes are NOT whole-transaction fatal.
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
@@ -2931,6 +2942,231 @@ func Test_convertRowsIntoBatchError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func Test_mysqlColDef2PlanResultColDefIntegerSignedness(t *testing.T) {
+	// Saved-result metadata must round-trip wire integer signedness so an
+	// unsigned count column saves into an unsigned destination type (issue
+	// #31498) instead of forcing values through a signed destination.
+	cases := []struct {
+		mysqlType defines.MysqlType
+		signed    bool
+		wantOid   types.T
+	}{
+		{defines.MYSQL_TYPE_TINY, true, types.T_int8},
+		{defines.MYSQL_TYPE_TINY, false, types.T_uint8},
+		{defines.MYSQL_TYPE_SHORT, true, types.T_int16},
+		{defines.MYSQL_TYPE_SHORT, false, types.T_uint16},
+		{defines.MYSQL_TYPE_LONG, true, types.T_int32},
+		{defines.MYSQL_TYPE_LONG, false, types.T_uint32},
+		{defines.MYSQL_TYPE_LONGLONG, true, types.T_int64},
+		{defines.MYSQL_TYPE_LONGLONG, false, types.T_uint64},
+	}
+	for _, c := range cases {
+		column := new(MysqlColumn)
+		column.SetColumnType(c.mysqlType)
+		column.SetSigned(c.signed)
+		pCols, oids, _, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, c.wantOid, oids[0].Oid)
+		require.Equal(t, int32(c.wantOid), pCols.ResultCols[0].Typ.Id)
+	}
+}
+
+func Test_convertRowsIntoBatchUnsignedRoundTrip(t *testing.T) {
+	// The SHOW COUNT(*) WARNINGS/ERRORS column publishes uint64 values with
+	// unsigned LONGLONG metadata. Saving must keep unsigned metadata and must
+	// not truncate counts above MaxInt64 (issue #31498).
+	column := new(MysqlColumn)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+	column.SetName("@@session.warning_count")
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(column)
+	values := []uint64{0, 1, math.MaxInt64, uint64(math.MaxInt64) + 1, math.MaxUint64}
+	for _, v := range values {
+		mrs.AddRow([]any{v})
+	}
+	mrs.AddRow([]any{nil}) // NULL rows must keep the unsigned metadata intact.
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_uint64), pColDefs.ResultCols[0].Typ.Id)
+	vec := data.Vecs[0]
+	assert.Equal(t, types.T_uint64, vec.GetType().Oid)
+	assert.Equal(t, len(values)+1, vec.Length())
+	assert.Equal(t, values, vector.MustFixedColWithTypeCheck[uint64](vec)[:len(values)])
+	assert.True(t, vec.GetNulls().Contains(uint64(len(values))))
+
+	// Nonnegative int64 row values also save for narrower unsigned metadata.
+	tinyCol := new(MysqlColumn)
+	tinyCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+	tinyCol.SetSigned(false)
+	tinyCol.SetName("tiny_unsigned")
+	tiny := &MysqlResultSet{}
+	tiny.AddColumn(tinyCol)
+	tiny.AddRow([]any{int64(7)})
+	tinyData, tinyDefs, err := convertRowsIntoBatch(pool, tiny.Columns, tiny.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(types.T_uint8), tinyDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, []uint8{7}, vector.MustFixedColWithTypeCheck[uint8](tinyData.Vecs[0]))
+}
+
+func Test_convertRowsIntoBatchVarStringBytesAndBinaryType(t *testing.T) {
+	// Engine-extracted VARCHAR/TEXT/VARBINARY cells arrive as []byte, and the
+	// diff path also publishes VARBINARY columns as VAR_STRING with the binary
+	// charset. Saving must keep the exact bytes and the binary type instead of
+	// rendering []byte as a Go numeric list (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	textCol.SetName("v")
+	textCol.SetCharset(charsetVarchar)
+
+	binCol := new(MysqlColumn)
+	binCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	binCol.SetName("bin")
+	binCol.SetCharset(charsetBinary)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(textCol)
+	mrs.AddColumn(binCol)
+	mrs.AddRow([]any{[]byte("中文"), []byte{0xFF, 0x00, 0x0A}})
+	mrs.AddRow([]any{"plain", []byte{}})
+	mrs.AddRow([]any{nil, nil})
+	// Counterexample: NULL, empty string and embedded NUL must stay distinct.
+	mrs.AddRow([]any{[]byte{0x00, 0x31}, []byte{0x00, 0x31}})
+
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_varchar), pColDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, int32(types.T_varbinary), pColDefs.ResultCols[1].Typ.Id)
+
+	textVec := data.Vecs[0]
+	assert.Equal(t, types.T_varchar, textVec.GetType().Oid)
+	require.Equal(t, []byte("中文"), (textVec.GetBytesAt(0)))
+	require.Equal(t, []byte("plain"), (textVec.GetBytesAt(1)))
+	assert.True(t, textVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (textVec.GetBytesAt(3)))
+
+	binVec := data.Vecs[1]
+	assert.Equal(t, types.T_varbinary, binVec.GetType().Oid)
+	require.Equal(t, []byte{0xFF, 0x00, 0x0A}, (binVec.GetBytesAt(0)))
+	require.Empty(t, (binVec.GetBytesAt(1)))
+	assert.True(t, binVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (binVec.GetBytesAt(3)))
+}
+
+func Test_convertRowsIntoBatchVectorTextPresentation(t *testing.T) {
+	// VECF32 cells published under VARCHAR metadata must save the same
+	// "[2, 2]" display text the client sees, not the Go "%v" form "[2 2]"
+	// (issue #31535 comment case).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	vecCol.SetName("vec")
+	vecCol.SetCharset(charsetVarchar)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	textCol.SetName("t")
+	textCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	mrs.AddColumn(textCol)
+	mrs.AddRow([]any{[]float32{2, 2}, []byte("bytes text")})
+	mrs.AddRow([]any{[]float64{1.5, 2.5}, nil})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.Equal(t, []byte("[2, 2]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 2.5]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("bytes text"), (data.Vecs[1].GetBytesAt(0)))
+	assert.True(t, data.Vecs[1].GetNulls().Contains(1))
+}
+
+func Test_convertRowsIntoBatchBlockScaledAndNarrowVectorText(t *testing.T) {
+	// BF16/Float16/int8 vector cells and a block-scaled (vecf8) cell published
+	// under VARCHAR metadata must save the same text the client-visible result
+	// presents; an unparseable block-scaled cell keeps the pre-fix "%v"
+	// rendering instead of failing the saved result (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	vecCol.SetName("v")
+	vecCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	// Counterexample: fmt.Sprintf("%v") would render these as Go numeric
+	// lists such as "[16384 48640]".
+	mrs.AddRow([]any{[]types.BF16{types.BF16FromFloat32(2), types.BF16FromFloat32(-0.5)}})
+	mrs.AddRow([]any{[]types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(0.25)}})
+	mrs.AddRow([]any{[]int8{3, -7}})
+
+	cell, cellErr := types.StringToBlockScaled(types.BlockScaledMXFP8, "[1, 2]")
+	require.NoError(t, cellErr)
+	blockScaled := types.BlockScaledValue{Oid: types.T_array_float8, Cell: cell}
+	mrs.AddRow([]any{blockScaled})
+	corruptCell := types.BlockScaledValue{Oid: types.T_array_float8, Cell: []byte{}}
+	mrs.AddRow([]any{corruptCell})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.NotNil(t, data)
+	require.Equal(t, 5, int(data.Vecs[0].Length()))
+
+	require.Equal(t, []byte("[2, -0.5]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 0.25]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("[3, -7]"), (data.Vecs[0].GetBytesAt(2)))
+
+	// The client-visible presentation is the oracle for the block-scaled
+	// cell: the saved bytes must equal MysqlResultSet.GetString for it.
+	clientText, clientErr := mrs.GetString(context.TODO(), 3, 0)
+	require.NoError(t, clientErr)
+	require.Equal(t, []byte(clientText), (data.Vecs[0].GetBytesAt(3)))
+
+	// A cell that cannot be parsed keeps the pre-fix "%v" presentation
+	// instead of failing the whole saved result: BlockScaledValue implements
+	// fmt.Stringer through BlockScaledToJSON, whose text for a corrupt cell
+	// is "", so fmt.Sprintf("%v") saves the same empty text as before this fix.
+	require.Empty(t, (data.Vecs[0].GetBytesAt(4)))
+}
+
+func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
+	// Values that cannot be represented exactly must fail fast instead of
+	// panicking, wrapping sign, or truncating (issue #31498).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	run := func(mysqlType defines.MysqlType, value any) error {
+		column := new(MysqlColumn)
+		column.SetColumnType(mysqlType)
+		column.SetSigned(false)
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(column)
+		mrs.AddRow([]any{value})
+		_, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+		return err
+	}
+	// Negative signed values fail instead of wrapping around.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, int64(-1)))
+	// Out-of-range values fail instead of truncating to the wire width.
+	assert.Error(t, run(defines.MYSQL_TYPE_TINY, uint64(math.MaxUint8)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_SHORT, uint64(math.MaxUint16)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_LONG, uint64(math.MaxUint32)+1))
+	// Foreign value types surface a clean error rather than a panic.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, "7"))
+}
+
 func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
@@ -2977,8 +3213,10 @@ func Test_isLegal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+			_, _, dbErr := CDCParseTableInfo(context.Background(), tt.args.name, cdc.CDCPitrGranularity_DB)
+			assert.Equalf(t, tt.want, dbErr == nil, "dbNameIsLegal(%v)", tt.args.name)
+			_, _, tableErr := CDCParseTableInfo(context.Background(), "*."+tt.args.name, cdc.CDCPitrGranularity_Table)
+			assert.Equalf(t, tt.want, tableErr == nil, "tableNameIsLegal(%v)", tt.args.name)
 		})
 	}
 }
@@ -3028,8 +3266,10 @@ func Test_islegal(t *testing.T) {
 
 func Test_accountNameIsLegal(t *testing.T) {
 	assert.False(t, accountNameIsLegal(",."))
-	assert.False(t, dbNameIsLegal(",."))
-	assert.False(t, tableNameIsLegal(",."))
+	_, _, dbErr := CDCParseTableInfo(context.Background(), ",.", cdc.CDCPitrGranularity_DB)
+	assert.Error(t, dbErr)
+	_, _, tableErr := CDCParseTableInfo(context.Background(), "*.,.", cdc.CDCPitrGranularity_Table)
+	assert.Error(t, tableErr)
 }
 
 func Test_replaceStr2(t *testing.T) {
@@ -3554,4 +3794,63 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
+}
+
+// TestLowPrecFloatFrontendPaths covers the frontend value paths for the scalar
+// low-precision float types (#20567): getValueFromVector (const scalar), the legacy
+// extractRowFromVector row path, and convertEngineTypeToMysqlType (presented as FLOAT).
+func TestLowPrecFloatFrontendPaths(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	ctx := context.Background()
+
+	cases := []struct {
+		oid types.T
+		app func(*vector.Vector, float32)
+	}{
+		{types.T_bf16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.BF16FromFloat32(f), false, mp) }},
+		{types.T_float16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float16FromFloat32(f), false, mp) }},
+		{types.T_float8, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float8FromFloat32(f), false, mp) }},
+		{types.T_float4, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float4FromFloat32(f), false, mp) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// convertEngineTypeToMysqlType -> FLOAT.
+			col := &MysqlColumn{}
+			require.NoError(t, convertEngineTypeToMysqlType(ctx, c.oid, col))
+			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
+
+			// getValueFromVector widens a const scalar to float32.
+			cv := vector.NewVec(c.oid.ToType())
+			defer cv.Free(mp)
+			c.app(cv, 1.5)
+			got, err := getValueFromVector(ctx, cv, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, float32(1.5), got)
+
+			// extractRowFromVector (legacy any-row path) yields float32.
+			rv := vector.NewVec(c.oid.ToType())
+			defer rv.Free(mp)
+			c.app(rv, -2.0)
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, nil, rv, 0, row, 0, false))
+			require.Equal(t, float32(-2.0), row[0])
+		})
+	}
+}
+
+func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
+	for _, size := range []int{16, 1 << 20} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			prepared := &PrepareStmt{Sql: "select '" + strings.Repeat("x", size) + "'"}
+			ses := &Session{prepareStmts: map[string]*PrepareStmt{"audit": prepared}}
+			stmt := &tree.Select{}
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := makeExecuteSql(b.Context(), ses, stmt, true, "audit", "execute audit", 4); got != "exec..." {
+					b.Fatalf("unexpected diagnostic: %q", got)
+				}
+			}
+		})
+	}
 }

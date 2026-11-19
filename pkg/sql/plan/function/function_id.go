@@ -798,6 +798,15 @@ const (
 	// function `mo_view_check_option`
 	MO_VIEW_CHECK_OPTION = 604
 
+	// Local sliding-window ranks (issue #29947): argument-windowed frame-local
+	// competition rank, registered as value-window functions. Renumbered
+	// 605/606/607 -> 616/617/618 when main's technical-indicator kernels
+	// (#31017) claimed 605..615; ids are referenced by name everywhere, so
+	// renumbering is safe, and the ranks stay below the sentinel.
+	MRANK   = 616
+	CUMRANK = 617
+	TMRANK  = 618
+
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
 	ONNX_RUN = 556
@@ -870,6 +879,26 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// Technical-indicator window-function family (issue #29949): eleven
+	// native SQL window kernels with per-partition sequential state, per
+	// docs/design/technical_indicator_window_kernels.md section 5.1.
+	// IDs follow the upstream convention (newest id one below
+	// FUNCTION_END_NUMBER): 605..615 are the first free block above the
+	// internal helpers MO_VIEW_DEFINITION(603)/MO_VIEW_CHECK_OPTION(604);
+	// reusing those silently swaps their overloads and breaks the
+	// information_schema views maintenance.
+	SMA               = 605
+	WMA               = 606
+	TRIMA             = 607
+	EMA               = 608
+	WILDER            = 609
+	KAMA              = 610
+	DEMA              = 611
+	TEMA              = 612
+	T3                = 613
+	MMAXDRAWDOWN      = 614
+	CUMPOSITIVESTREAK = 615
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
@@ -892,13 +921,69 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 605
+	// 616/617/618 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
+	// renumbered above main's 605..615 indicator block.
+
+	// SQL exact weighted percentile aggregate quantileExactWeighted; remote
+	// dispatch is gated by cluster protocol 131. Re-issued 616 -> 619 when
+	// main's #31020 claimed 616..618 first; every reference is by name, so
+	// renumbering is safe.
+	QUANTILE_EXACT_WEIGHTED = 619
+
+	// Unsigned DECIMAL domain admission (issue #30940/#30941). Plan-composed
+	// identity step evaluated on the raw source value before the assignment
+	// cast quantizes to the target scale. The mode-resolved entry answers
+	// sql_mode at execution time (volatile, like cast_assign); the strict
+	// entry is built only by authoring-time DEFAULT validation; the ignore
+	// entry is chosen at build time for INSERT/UPDATE IGNORE. All are internal
+	// plan functions, never user-callable.
+	UNSIGNED_DECIMAL_ADMISSION        = 620
+	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
+	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
+
+	// Retained index prefix length of one index part, read from
+	// mo_catalog.mo_indexes.algo_params and reported by information_schema
+	// STATISTICS SUB_PART and SHOW INDEX Sub_part. Upstream #31739 allocated
+	// 620..622 first; the id is internal plan wiring only and every reference
+	// is by name, so this entry renumbers to 623 (design D13-5).
+	MO_INDEX_SUB_PART = 623
+
+	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
+	VECTOR_MATMUL = 629
+
+	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
+	VECBLOCK_JSON = 630
+
+	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
+	VECBLOCK_BINARY = 631
+
+	// Exponentially weighted window statistics (issue #29945). Renumbered
+	// from 605..609 when main's #31017/#31020/#31000/#31739 claimed 605..623;
+	// every reference is by name, so renumbering is safe.
+	EWM_MEAN = 624
+	EWM_VAR  = 625
+	EWM_STD  = 626
+	EWM_COV  = 627
+	EWM_CORR = 628
+
+	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
+	UNZIP_FILE           = 632
+	MO_IS_PHYSICAL_INDEX = 633
+
+	// Internal temporal candidate helpers.
+	TEMPORAL_DATETIME_BOUND  = 634
+	TEMPORAL_TIMESTAMP_BOUND = 635
+
+	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
+	FUNCTION_END_NUMBER = 636
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
-	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
+	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
+	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,
+	"_check_async_datalink_source":  CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
@@ -907,62 +992,66 @@ var functionIdRegister = map[string]int32{
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
-	"=":            EQUAL,
-	"<=>":          NULL_SAFE_EQUAL,
-	">":            GREAT_THAN,
-	">=":           GREAT_EQUAL,
-	"<":            LESS_THAN,
-	"<=":           LESS_EQUAL,
-	"<>":           NOT_EQUAL,
-	"!=":           NOT_EQUAL,
-	"not":          NOT,
-	"and":          AND,
-	"or":           OR,
-	"xor":          XOR,
-	"like":         LIKE,
-	"between":      BETWEEN,
-	"in":           IN,
-	"not_in":       NOT_IN,
-	"in_range":     IN_RANGE,
-	"+":            PLUS,
-	"-":            MINUS,
-	"*":            MULTI,
-	"/":            DIV,
-	"div":          INTEGER_DIV,
-	"%":            MOD,
-	"mod":          MOD,
-	"unary_plus":   UNARY_PLUS,
-	"unary_minus":  UNARY_MINUS,
-	"unary_tilde":  UNARY_TILDE,
-	"unary_mark":   NOT,
-	"case":         CASE,
-	"coalesce":     COALESCE,
-	"cast":         CAST,
-	"cast_strict":  CAST_STRICT,
-	"cast_assign":  CAST_ASSIGN,
-	"cast_ignore":  CAST_IGNORE,
-	"bit_cast":     BIT_CAST,
-	"is":           IS,
-	"is_not":       ISNOT,
-	"isnot":        ISNOT,
-	"is_null":      ISNULL,
-	"isnull":       ISNULL,
-	"ifnull":       ISNULL,
-	"ilike":        ILIKE,
-	"is_not_null":  ISNOTNULL,
-	"isnotnull":    ISNOTNULL,
-	"isunknown":    ISNULL,
-	"isnotunknown": ISNOTNULL,
-	"istrue":       ISTRUE,
-	"isnottrue":    ISNOTTRUE,
-	"isfalse":      ISFALSE,
-	"isnotfalse":   ISNOTFALSE,
-	"&":            OP_BIT_AND,
-	"|":            OP_BIT_OR,
-	"^":            OP_BIT_XOR,
-	"<<":           OP_BIT_SHIFT_LEFT,
-	">>":           OP_BIT_SHIFT_RIGHT,
-	"decode":       DECODE,
+	"=":           EQUAL,
+	"<=>":         NULL_SAFE_EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"xor":         XOR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"not_in":      NOT_IN,
+	"in_range":    IN_RANGE,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"cast_strict": CAST_STRICT,
+	"cast_assign": CAST_ASSIGN,
+	"cast_ignore": CAST_IGNORE,
+
+	"unsigned_decimal_admission":        UNSIGNED_DECIMAL_ADMISSION,
+	"unsigned_decimal_admission_strict": UNSIGNED_DECIMAL_ADMISSION_STRICT,
+	"unsigned_decimal_admission_ignore": UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+	"bit_cast":                          BIT_CAST,
+	"is":                                IS,
+	"is_not":                            ISNOT,
+	"isnot":                             ISNOT,
+	"is_null":                           ISNULL,
+	"isnull":                            ISNULL,
+	"ifnull":                            ISNULL,
+	"ilike":                             ILIKE,
+	"is_not_null":                       ISNOTNULL,
+	"isnotnull":                         ISNOTNULL,
+	"isunknown":                         ISNULL,
+	"isnotunknown":                      ISNOTNULL,
+	"istrue":                            ISTRUE,
+	"isnottrue":                         ISNOTTRUE,
+	"isfalse":                           ISFALSE,
+	"isnotfalse":                        ISNOTFALSE,
+	"&":                                 OP_BIT_AND,
+	"|":                                 OP_BIT_OR,
+	"^":                                 OP_BIT_XOR,
+	"<<":                                OP_BIT_SHIFT_LEFT,
+	">>":                                OP_BIT_SHIFT_RIGHT,
+	"decode":                            DECODE,
 
 	"prefix_eq":       PREFIX_EQ,
 	"prefix_in":       PREFIX_IN,
@@ -1000,13 +1089,23 @@ var functionIdRegister = map[string]int32{
 	"any_value":                    ANY_VALUE,
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
+	"ewmmean":                      EWM_MEAN,
+	"ewmvar":                       EWM_VAR,
+	"ewmstd":                       EWM_STD,
+	"ewmcov":                       EWM_COV,
+	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_is_physical_index":         MO_IS_PHYSICAL_INDEX,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
+	"mrank":                        MRANK,
+	"cumrank":                      CUMRANK,
+	"tmrank":                       TMRANK,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
 	"percentile_disc":              PERCENTILE_DISC,
+	"quantileexactweighted":        QUANTILE_EXACT_WEIGHTED,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -1213,6 +1312,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
@@ -1254,6 +1354,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"unzip_file":                     UNZIP_FILE,
 	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
@@ -1301,6 +1402,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_index_sub_part":              MO_INDEX_SUB_PART,
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
@@ -1514,6 +1616,8 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"vecblock_json":     VECBLOCK_JSON,
+	"vecblock_binary":   VECBLOCK_BINARY,
 	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,
@@ -1553,4 +1657,17 @@ var functionIdRegister = map[string]int32{
 
 	// date_trunc function
 	"date_trunc": DATE_TRUNC,
+
+	// technical-indicator window functions (issue #29949)
+	"sma":               SMA,
+	"wma":               WMA,
+	"trima":             TRIMA,
+	"ema":               EMA,
+	"wilder":            WILDER,
+	"kama":              KAMA,
+	"dema":              DEMA,
+	"tema":              TEMA,
+	"t3":                T3,
+	"mmaxdrawdown":      MMAXDRAWDOWN,
+	"cumpositivestreak": CUMPOSITIVESTREAK,
 }

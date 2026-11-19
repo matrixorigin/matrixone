@@ -1,0 +1,269 @@
+drop database if exists clone_transaction_visibility;
+create database clone_transaction_visibility;
+use clone_transaction_visibility;
+create table t(id int primary key, k int, u int, body text, key ix(k), unique key ux(u));
+insert into t values (1,10,100,'a'),(2,20,200,'b'),(3,20,300,'c'),(4,NULL,NULL,'d');
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  10  ¦  100  ¦  3A150A3A1501  𝄀
+2  ¦  20  ¦  200  ¦  3A15143A1502  𝄀
+3  ¦  20  ¦  300  ¦  3A15143A1503  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150A3A1501  𝄀
+2  ¦  3A15143A1502  𝄀
+3  ¦  3A15143A1503  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200  𝄀
+3  ¦  300
+deallocate prepare q;
+begin;
+delete from t where id=2;
+alter table t modify body longtext;
+commit;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  10  ¦  100  ¦  3A150A3A1501  𝄀
+3  ¦  20  ¦  300  ¦  3A15143A1503  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150A3A1501  𝄀
+3  ¦  3A15143A1503  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  100  𝄀
+3  ¦  300
+deallocate prepare q;
+begin;
+update t set k=11,u=101 where id=1;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3A150B3A1501  𝄀
+3  ¦  20  ¦  300  ¦  3A15143A1503  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150B3A1501  𝄀
+3  ¦  3A15143A1503  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101  𝄀
+3  ¦  300
+deallocate prepare q;
+alter table t modify body text;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3A150B3A1501  𝄀
+3  ¦  20  ¦  300  ¦  3A15143A1503  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150B3A1501  𝄀
+3  ¦  3A15143A1503  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101  𝄀
+3  ¦  300
+deallocate prepare q;
+alter table t modify body longtext;
+commit;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3A150B3A1501  𝄀
+3  ¦  20  ¦  300  ¦  3A15143A1503  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150B3A1501  𝄀
+3  ¦  3A15143A1503  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101  𝄀
+3  ¦  300
+deallocate prepare q;
+begin;
+delete from t where id=3;
+alter table t modify k bigint;
+commit;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[-5,64,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3B150B3A1501  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3B150B3A1501  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101
+deallocate prepare q;
+begin;
+delete from t where id=1;
+alter table t modify body text;
+rollback;
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,188,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `k` bigint DEFAULT NULL,
+  `u` int DEFAULT NULL,
+  `body` longtext DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ux` (`u`),
+  KEY `ix` (`k`)
+)
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[-5,64,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3B150B3A1501  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3B150B3A1501  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101
+deallocate prepare q;
+use clone_transaction_visibility;
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[-5,64,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  11  ¦  101  ¦  3B150B3A1501  𝄀
+4  ¦  null  ¦  null  ¦  003A1504
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3B150B3A1501  𝄀
+4  ¦  003A1504
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  101
+deallocate prepare q;
+create table control_t(id int primary key,k int,u int,body text,key ix(k),unique key ux(u));
+insert into control_t values (1,10,100,'a'),(2,20,200,'b'),(3,30,300,'c');
+begin;
+delete from control_t where id=2;
+commit;
+alter table control_t modify body longtext;
+select id,k,u,hex(serial_full(k,id)) as ix_key from control_t ignore index(ix,ux) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  u[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  10  ¦  100  ¦  3A150A3A1501  𝄀
+3  ¦  30  ¦  300  ¦  3A151E3A1503
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='control_t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='control_t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ix_key[-1,16383,0]  𝄀
+1  ¦  3A150A3A1501  𝄀
+3  ¦  3A151E3A1503
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  ux_key[4,32,0]  𝄀
+1  ¦  100  𝄀
+3  ¦  300
+deallocate prepare q;
+begin;
+delete from t where id=1;
+create table direct_clone clone t;
+select id,k,u from direct_clone order by id;
+➤ id[4,32,0]  ¦  k[-5,64,0]  ¦  u[4,32,0]  𝄀
+4  ¦  null  ¦  null
+rollback;
+select count(*) as direct_clone_after_rollback from mo_catalog.mo_tables where reldatabase=database() and relname='direct_clone';
+➤ direct_clone_after_rollback[-5,64,0]  𝄀
+0
+create table synthetic(id int primary key,k int not null,body text,key ix_synthetic(k));
+insert into synthetic values (1,10,'a'),(2,20,'b');
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('delete from `',@ix,'` where __mo_index_pri_col=1');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+alter table synthetic modify body longtext;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) from `',@ix,'` order by 1');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  hex(__mo_index_idx_col)[-1,16383,0]  𝄀
+2  ¦  3A15143A1502
+deallocate prepare q;
+alter table synthetic modify k bigint;
+select id,k,hex(serial_full(k,id)) from synthetic ignore index(ix_synthetic) order by id;
+➤ id[4,32,0]  ¦  k[-5,64,0]  ¦  hex(serial_full(k, id))[-1,16383,0]  𝄀
+1  ¦  10  ¦  3B150A3A1501  𝄀
+2  ¦  20  ¦  3B15143A1502
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) from `',@ix,'` order by 1');
+prepare q from @q;
+execute q;
+➤ __mo_index_pri_col[4,32,0]  ¦  hex(__mo_index_idx_col)[-1,16383,0]  𝄀
+1  ¦  3B150A3A1501  𝄀
+2  ¦  3B15143A1502
+deallocate prepare q;
+drop database clone_transaction_visibility;

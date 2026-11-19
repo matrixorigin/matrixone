@@ -1,0 +1,75 @@
+drop database if exists parquet_invalid_utf8;
+create database parquet_invalid_utf8;
+use parquet_invalid_utf8;
+drop stage if exists parquet_invalid_utf8_stage;
+create stage parquet_invalid_utf8_stage URL='file://$resources/into_outfile/parquet_invalid_utf8';
+create table bad_src (id int primary key, s varchar(30));
+insert into bad_src values (1,'plain'),(2,x'FF'),(3,'after'),(4,x'61FF62');
+select id, s from bad_src order by id
+into outfile 'stage://parquet_invalid_utf8_stage/bad.parquet' format 'parquet';
+invalid input: invalid UTF-8 value for VARCHAR
+select count(*) from stage_list('stage://parquet_invalid_utf8_stage/');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, hex(s) from bad_src order by id;
+➤ id[4,32,0]  ¦  hex(s)[12,240,0]  𝄀
+1  ¦  706C61696E  𝄀
+2  ¦  FF  𝄀
+3  ¦  6166746572  𝄀
+4  ¦  61FF62
+create table okv (id int primary key, s varchar(30));
+insert into okv values (1,'héllo'),(2,'世界'),(3,null),(4,'plain');
+select id, s from okv order by id
+into outfile 'stage://parquet_invalid_utf8_stage/okv.parquet' format 'parquet';
+create table okv_r like okv;
+load data infile {'filepath'='stage://parquet_invalid_utf8_stage/okv.parquet','format'='parquet'} into table okv_r;
+select id, hex(s) from okv_r order by id;
+➤ id[4,32,0]  ¦  hex(s)[12,240,0]  𝄀
+1  ¦  68C3A96C6C6F  𝄀
+2  ¦  E4B896E7958C  𝄀
+3  ¦  null  𝄀
+4  ¦  706C61696E
+create table vb (id int primary key, s varbinary(30));
+insert into vb values (1,x'706C61696E'),(2,x'FF'),(3,null),(4,x'61FF62');
+select id, s from vb order by id
+into outfile 'stage://parquet_invalid_utf8_stage/vb.parquet' format 'parquet';
+create table vb_r like vb;
+load data infile {'filepath'='stage://parquet_invalid_utf8_stage/vb.parquet','format'='parquet'} into table vb_r;
+select id, hex(s) from vb_r order by id;
+➤ id[4,32,0]  ¦  hex(s)[12,60,0]  𝄀
+1  ¦  706C61696E  𝄀
+2  ¦  FF  𝄀
+3  ¦  null  𝄀
+4  ¦  61FF62
+create table bn (id int primary key, s binary(2));
+insert into bn values (1,x'61FF'),(2,x'6162');
+select id, s from bn order by id
+into outfile 'stage://parquet_invalid_utf8_stage/bn.parquet' format 'parquet';
+create table bn_r like bn;
+load data infile {'filepath'='stage://parquet_invalid_utf8_stage/bn.parquet','format'='parquet'} into table bn_r;
+select id, hex(s) from bn_r order by id;
+➤ id[4,32,0]  ¦  hex(s)[12,4,0]  𝄀
+1  ¦  61FF  𝄀
+2  ¦  6162
+create table bad_text (id int primary key, s text);
+insert into bad_text values (1,x'FF');
+select id, s from bad_text order by id
+into outfile 'stage://parquet_invalid_utf8_stage/bad_text.parquet' format 'parquet';
+invalid input: invalid UTF-8 value for TEXT
+select count(*) from stage_list('stage://parquet_invalid_utf8_stage/') as remaining_files;
+➤ count(*)[-5,64,0]  𝄀
+3
+remove files from stage if exists 'stage://parquet_invalid_utf8_stage/*.parquet';
+select count(*) from stage_list('stage://parquet_invalid_utf8_stage/');
+➤ count(*)[-5,64,0]  𝄀
+0
+drop stage parquet_invalid_utf8_stage;
+drop table bad_text;
+drop table bn_r;
+drop table bn;
+drop table vb_r;
+drop table vb;
+drop table okv_r;
+drop table okv;
+drop table bad_src;
+drop database parquet_invalid_utf8;

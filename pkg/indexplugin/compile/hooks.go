@@ -137,6 +137,21 @@ type CompileContext interface {
 		action string, metadata []byte) error
 }
 
+// IndexMaintenanceRunner is an optional capability offered by the SQL owner
+// to an index plugin for one server-generated maintenance statement.
+type IndexMaintenanceRunner interface {
+	RunIndexMaintenanceSQL(sql, function, indexName string) error
+}
+
+// IndexMaintenanceDescriptor validates the owner-generated TVF arguments and
+// identifies a persisted InitSQL operation owned by this plugin.
+type IndexMaintenanceDescriptor interface {
+	ValidateIndexMaintenance(function string, literalArgs []string, spec *executor.IndexMaintenanceSpec) error
+	InitSQLMaintenanceFunction() string
+	IndexMaintenanceFunctions() []string
+	IndexMaintenanceRoles(function string, defs map[string]*plan.IndexDef) ([]string, error)
+}
+
 // Context is the algorithm-agnostic subset of context.Context the plugin needs.
 // Defined locally to avoid importing context.Context into the interface
 // surface; CompileContext implementations return the real context.Context via

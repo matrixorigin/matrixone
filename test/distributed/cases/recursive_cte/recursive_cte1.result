@@ -53,7 +53,7 @@ SQL parser error: table "cte_ab_10" does not exist
 truncate table non_cte_6;
 no such table recursive_cte1.non_cte_6
 drop table non_cte_7;
-no such table recursive_cte1.non_cte_7
+Unknown table 'recursive_cte1.non_cte_7'
 with non_cte_8(manager_id,name) as
 (select a.manager_id,
 a.name as job_name

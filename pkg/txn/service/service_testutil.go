@@ -49,23 +49,6 @@ func NewTestTxnService(
 	return NewTestTxnServiceWithLog(t, shard, sender, clock, nil)
 }
 
-// NewTestTxnServiceWithAllocator create a test TxnService for test
-func NewTestTxnServiceWithAllocator(
-	t *testing.T,
-	shard uint64,
-	sender rpc.TxnSender,
-	clock clock.Clock,
-	allocator lockservice.LockTableAllocator) TxnService {
-	return NewTestTxnServiceWithLogAndZombieAndLockTableAllocator(
-		t,
-		shard,
-		sender,
-		clock,
-		nil,
-		time.Minute,
-		allocator)
-}
-
 // NewTestTxnServiceWithLog is similar to NewTestTxnService, used to recovery tests
 func NewTestTxnServiceWithLog(
 	t *testing.T,
@@ -153,11 +136,6 @@ func NewTestClock(start int64) clock.Clock {
 	return clock.NewHLCClock(func() int64 {
 		return atomic.AddInt64(&ts, 1)
 	}, math.MaxInt64)
-}
-
-// NewTestSpecClock create test clock with timestamp factory
-func NewTestSpecClock(fn func() int64) clock.Clock {
-	return clock.NewHLCClock(fn, math.MaxInt64)
 }
 
 // TestSender test TxnSender for sending messages between TxnServices

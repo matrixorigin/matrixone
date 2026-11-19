@@ -1447,16 +1447,16 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValues(nil, tblStuff, row, deleteBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, deleteBuf, false))
 	require.Equal(t, "7", deleteBuf.String())
 
 	tblStuff.def.pkColIdxes = []int{0, 1}
 	deleteTupleBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValues(nil, tblStuff, row, deleteTupleBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, deleteTupleBuf, false))
 	require.Equal(t, "(7,'alice')", deleteTupleBuf.String())
 
 	alwaysTupleBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValuesAsTuple(nil, tblStuff, row, alwaysTupleBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, alwaysTupleBuf, true))
 	require.Equal(t, "(7,'alice')", alwaysTupleBuf.String())
 
 	emptyKeyBuf := &bytes.Buffer{}
@@ -1509,8 +1509,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	require.Equal(t,
 		"delete from `db1`.`t1` where serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and "+
 			"serial(`f64`) = serial(bit_cast(unhex('010000000000f87f') as double)) and `nullable` is null and "+
-			"serial(`pos_inf`) = serial(cast('+Inf' as float)) and "+
-			"serial(`neg_inf`) = serial(cast('-Inf' as double)) limit 1;\n",
+			"serial(`pos_inf`) = serial(bit_cast(unhex('0000807f') as float)) and "+
+			"serial(`neg_inf`) = serial(bit_cast(unhex('000000000000f0ff') as double)) limit 1;\n",
 		buf.String(),
 	)
 }

@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // RequiredIVFPlacement recognizes the generated scalar PRE access tree. The
@@ -85,7 +85,7 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 		return
 	}
 	spec := v.IndexSearchScan
-	if len(spec.Index.GetParts()) != 1 || spec.QueryPayload == nil || !rule.IsConstant(spec.QueryPayload, true) || spec.Index == nil || !catalog.IsIvfIndexAlgo(spec.Index.IndexAlgo) || spec.SourceTable == nil || spec.SourceTableDef == nil || !indexSearchScanCanParallelize(spec) ||
+	if len(spec.Index.GetParts()) != 1 || spec.QueryPayload == nil || !function.IsConstant(spec.QueryPayload, true) || spec.Index == nil || !catalog.IsIvfIndexAlgo(spec.Index.IndexAlgo) || spec.SourceTable == nil || spec.SourceTableDef == nil || !indexSearchScanCanParallelize(spec) ||
 		spec.ScanWork == nil || spec.ScanWork.Objects < 2 || !positiveScanWork(spec.ScanWork.Rows) || !positiveScanWork(spec.ScanWork.VectorBytesPerRow) || spec.ScanWork.Blocks <= 0 {
 		return
 	}

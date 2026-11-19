@@ -15,9 +15,15 @@
 package datalink
 
 import (
+	"net/url"
 	"reflect"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDatalink(t *testing.T) {
@@ -115,7 +121,7 @@ func TestParseDatalinkFailed(t *testing.T) {
 		},
 		{
 			name: "Test5 - Empty Stage",
-			data: "stage:///a/b/c/1.txt?size=c",
+			data: "stage:///?size=c",
 		},
 		{
 			name: "Test6 - Without scheme",
@@ -146,6 +152,65 @@ func TestParseDatalinkFailed(t *testing.T) {
 			validationErr := ValidateDatalink(tt.data, nil)
 			if validationErr == nil || err == nil || validationErr.Error() != err.Error() || reflect.TypeOf(validationErr) != reflect.TypeOf(err) {
 				t.Errorf("validation error=%v, want %v", validationErr, err)
+			}
+		})
+	}
+}
+
+// Path-form Stage names reach the same resolver and range parser as host names.
+func TestLogicalStageDatalink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	base, err := url.Parse("file:///tmp/base")
+	require.NoError(t, err)
+	for _, name := range []string{"two words", "part/name", "literal%2F"} {
+		canonical := tree.NewCStr(name, 1).Compare()
+		proc.GetStageCache().Set(canonical, stage.StageDef{Name: canonical, Url: base, Status: "enabled"})
+		uri := "stage:///" + url.PathEscape(name) + "/data.csv?offset=1&size=2"
+		path, bounds, err := ParseDatalink(uri, proc)
+		require.NoError(t, err)
+		require.Equal(t, "/tmp/base/data.csv", path)
+		require.Equal(t, []int64{1, 2}, bounds)
+		require.NoError(t, ValidateDatalink(uri, proc))
+		_, _, err = ParseDatalink("stage:///"+url.PathEscape(name)+"/data.csv?size=bad", proc)
+		var number *strconv.NumError
+		require.ErrorAs(t, err, &number)
+		require.Equal(t, "bad", number.Num)
+	}
+}
+
+func TestStageDatalinkRequiresProcess(t *testing.T) {
+	consumers := []struct {
+		name string
+		run  func(*testing.T, string) error
+	}{
+		{name: "parse", run: func(t *testing.T, uri string) error {
+			path, bounds, err := ParseDatalink(uri, nil)
+			require.Empty(t, path)
+			require.Nil(t, bounds)
+			return err
+		}},
+		{name: "validate", run: func(_ *testing.T, uri string) error { return ValidateDatalink(uri, nil) }},
+		{name: "new", run: func(t *testing.T, uri string) error {
+			got, err := NewDatalink(uri, nil)
+			require.Zero(t, got)
+			return err
+		}},
+		{name: "new async", run: func(t *testing.T, uri string) error {
+			got, err := NewAsyncDatalink(uri, nil)
+			require.Zero(t, got)
+			return err
+		}},
+		{name: "validate async", run: func(_ *testing.T, uri string) error { return ValidateAsyncDatalinkSource(uri, nil) }},
+	}
+	for _, tc := range []struct{ name, uri string }{
+		{name: "path form", uri: "stage:///a/b/c/1.txt?size=c"},
+		{name: "host form", uri: "stage://a/b/c/1.txt?size=c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, consumer := range consumers {
+				t.Run(consumer.name, func(t *testing.T) {
+					require.ErrorContains(t, consumer.run(t, tc.uri), "stage catalog lookup requires an initialized process")
+				})
 			}
 		})
 	}

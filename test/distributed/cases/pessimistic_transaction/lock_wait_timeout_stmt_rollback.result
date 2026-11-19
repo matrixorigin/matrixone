@@ -1,0 +1,34 @@
+drop database if exists lock_wait_stmt_rollback_db;
+create database lock_wait_stmt_rollback_db;
+use lock_wait_stmt_rollback_db;
+create table t(id int primary key, v int);
+insert into t values (1, 11), (2, 22), (3, 33), (4, 44);
+create table b(id int primary key, v int);
+insert into b values (1, 1);
+set @saved_lock_timeout = @@session.lock_wait_timeout;
+set session lock_wait_timeout = 1;
+use lock_wait_stmt_rollback_db;
+begin;
+update t set v = 100 where id in (2, 4);
+begin;
+update b set v = 77 where id = 1;
+update t set v = v + 1 where id in (1, 2, 3, 4);
+-- @regex("(?s)Lock wait timeout exceeded; try restarting transaction", true)
+Lock wait timeout exceeded; try restarting transaction
+select v as txn_still_open from b where id = 1;
+➤ txn_still_open[4,32,0]  𝄀
+77
+update b set v = 78 where id = 1;
+commit;
+select v as b_committed from b where id = 1;
+➤ b_committed[4,32,0]  𝄀
+78
+commit;
+select id, v from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  100  𝄀
+3  ¦  33  𝄀
+4  ¦  100
+set session lock_wait_timeout = @saved_lock_timeout;
+drop database lock_wait_stmt_rollback_db;

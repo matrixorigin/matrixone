@@ -327,18 +327,38 @@ execute integer_signed_peer using @v;
 set @v = cast(54322 as signed);
 execute integer_signed_peer using @v;
 deallocate prepare integer_signed_peer;
-drop index decimal_peer_idx on t;
 set @v = 54321;
 
+-- Reuse the same index for the explicit DOUBLE integer peer and its recovery.
 prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
+-- @regex("Index Table Scan on[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=1\b",true)
+explain analyze force execute integer_cast_peer using @v;
 execute integer_cast_peer using @v;
 set @v = 54322;
+execute integer_cast_peer using @v;
+set @v = 1152921504606846976;
 execute integer_cast_peer using @v;
 set @v = null;
 execute integer_cast_peer using @v;
 set @v = 54321;
+-- @regex("Index Table Scan on[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=1\b",true)
+explain analyze force execute integer_cast_peer using @v;
 execute integer_cast_peer using @v;
 deallocate prepare integer_cast_peer;
+drop index decimal_peer_idx on t;
+
+-- Native DECIMAL128 block pruning survives safe -> generic -> safe reuse.
+prepare native_integer_double_peer from 'select count(*), min(d18) from t where d18 = cast(? as double)';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute native_integer_double_peer using @v;
+execute native_integer_double_peer using @v;
+set @v = 1152921504606846976;
+execute native_integer_double_peer using @v;
+set @v = 54322;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute native_integer_double_peer using @v;
+execute native_integer_double_peer using @v;
+deallocate prepare native_integer_double_peer;
 
 -- #29661 residual: an exact TEXT peer must not narrow the native carrier.
 prepare native_text_peer from 'select count(*), min(d18) from t where d18 = ?';

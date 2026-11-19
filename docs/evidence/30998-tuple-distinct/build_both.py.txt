@@ -1,0 +1,19 @@
+from pathlib import Path
+import subprocess,shutil,json,hashlib,time
+p=Path(__file__).parent;w=Path('/private/tmp/mo-issue30995');branch='codex/perf-30995-tuple-distinct';base='94faf0209b9ac3254d31906f92e34405f1988203'
+assert not subprocess.check_output(['git','status','--porcelain'],cwd=w)
+flags='GOLDFLAGS=-ldflags="-w -extldflags \'-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib\' $(VERSION_INFO)"'
+receipts=[]
+try:
+ for variant,ref in [('baseline',base),('candidate',branch)]:
+  subprocess.run(['git','checkout','--detach',ref] if variant=='baseline' else ['git','checkout',ref],cwd=w,check=True)
+  head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=w,text=True).strip();assert not subprocess.check_output(['git','status','--porcelain'],cwd=w)
+  cmd=['make','build-with-prebuilt-native','GOBUILD_OPT=-p=1 -gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false',flags];started=time.time()
+  with (p/f'{variant}-build.log').open('wb') as f:r=subprocess.run(cmd,cwd=w,stdout=f,stderr=subprocess.STDOUT)
+  receipt={'variant':variant,'head':head,'command':cmd,'cwd':str(w),'started_epoch':started,'finished_epoch':time.time(),'exit':r.returncode,'source_clean_before_build':True}
+  if r.returncode==0:
+   dst=p/f'mo-service-{variant}';shutil.copy2(w/'mo-service',dst);receipt['binary_sha256']=hashlib.sha256(dst.read_bytes()).hexdigest();(p/f'{variant}-buildinfo.txt').write_bytes(subprocess.check_output(['go','version','-m',str(dst)],cwd=w))
+  receipts.append(receipt);(p/'build-receipts.json').write_text(json.dumps(receipts,indent=2));print(variant,r.returncode,flush=True)
+  if r.returncode:raise SystemExit(r.returncode)
+finally:subprocess.run(['git','checkout',branch],cwd=w,check=True)
+print('BOTH_BUILDS_PASS',flush=True)

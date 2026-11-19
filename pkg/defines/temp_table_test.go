@@ -30,3 +30,10 @@ func TestGenTempTableName(t *testing.T) {
 	assert.NotContains(t, name, "-")
 	assert.Equal(t, "__mo_tmp_123e4567e89b12d3a456426614174000_db1_t1", name)
 }
+
+func TestTempTableAliasKeyIsInjectiveForDottedNames(t *testing.T) {
+	first := TempTableAliasKey("x", "y.t")
+	second := TempTableAliasKey("x.y", "t")
+	assert.NotEqual(t, first, second)
+	assert.Equal(t, first, TempTableAliasKey("x", "y.t"))
+}

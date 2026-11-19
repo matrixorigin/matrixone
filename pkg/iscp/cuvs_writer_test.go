@@ -179,7 +179,7 @@ func TestNewCuvsCdcWriter_RejectsWrongIndexCount(t *testing.T) {
 	td := newTestCuvsTableDef("pk", "v", 4)
 	_, err := NewCuvsCdcWriter("cagra", "db", "tbl", "idx", td, td.Indexes[:1])
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "2 secondary tables")
+	require.Contains(t, err.Error(), "2 or 3 secondary tables")
 }
 
 func TestNewCuvsCdcWriter_RejectsMultiPartIndex(t *testing.T) {

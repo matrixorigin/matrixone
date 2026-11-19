@@ -31,12 +31,16 @@ const (
 	DefaultMaxTimeout          = time.Minute * 3
 	DefaultOneTryTimeout       = time.Minute
 	DefaultClientMaxEntryCount = 50
+	// The Log Service default is 100 MiB. Keep space for the LogRecord and
+	// RPC envelope even when TN's own RPC limit is configured higher.
+	DefaultMaxWALRecordSize = 99 * mpool.MB
 )
 
 type Config struct {
 	ClientMaxCount      int
 	ClientBufSize       int
 	ClientMaxEntryCount int
+	MaxWALRecordSize    int
 
 	MaxTimeout time.Duration
 
@@ -44,8 +48,9 @@ type Config struct {
 	ClientRetryInterval time.Duration
 	ClientRetryDuration time.Duration
 
-	ClientFactory LogServiceClientFactory
-	IsMockBackend bool
+	ClientFactory        LogServiceClientFactory
+	contextClientFactory func(context.Context) (logservice.Client, error)
+	IsMockBackend        bool
 }
 
 type LogServiceClientFactory logservice.ClientFactory
@@ -63,21 +68,32 @@ func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = false
 		cfg.ClientFactory = f
+		cfg.contextClientFactory = nil
+	}
+}
+
+func WithConfigOptContextClientFactory(f func(context.Context) (logservice.Client, error)) ConfigOption {
+	return func(cfg *Config) {
+		cfg.contextClientFactory = f
 	}
 }
 
 func WithConfigOptClientConfig(sid string, clientCfg *logservice.ClientConfig) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = false
-		cfg.ClientFactory = func() (client logservice.Client, err error) {
+		contextFactory := func(parent context.Context) (client logservice.Client, err error) {
 			ctx, cancel := context.WithTimeoutCause(
-				context.Background(), cfg.MaxTimeout, moerr.CauseNewLogServiceClient,
+				parent, cfg.MaxTimeout, moerr.CauseNewLogServiceClient,
 			)
 			defer cancel()
 			if client, err = logservice.NewClient(ctx, sid, *clientCfg); err != nil {
 				err = moerr.AttachCause(ctx, err)
 			}
 			return
+		}
+		cfg.contextClientFactory = contextFactory
+		cfg.ClientFactory = func() (logservice.Client, error) {
+			return contextFactory(context.Background())
 		}
 	}
 }
@@ -94,6 +110,12 @@ func WithConfigOptClientBufSize(bufSize int) ConfigOption {
 	}
 }
 
+func WithConfigOptMaxWALRecordSize(size int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.MaxWALRecordSize = size
+	}
+}
+
 func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 	return func(cfg *Config) {
 		cfg.MaxTimeout = timeout
@@ -103,6 +125,7 @@ func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 func WithConfigMockClient(backend MockBackend) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = true
+		cfg.contextClientFactory = nil
 		cfg.ClientFactory = func() (logservice.Client, error) {
 			return newMockBackendClient(backend), nil
 		}
@@ -148,6 +171,9 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.ClientMaxEntryCount <= 0 {
 		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
+	}
+	if cfg.MaxWALRecordSize <= 0 {
+		cfg.MaxWALRecordSize = DefaultMaxWALRecordSize
 	}
 	if cfg.ClientRetryTimes <= 0 {
 		cfg.ClientRetryTimes = DefaultRetryTimes

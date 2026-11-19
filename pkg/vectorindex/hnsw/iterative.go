@@ -100,7 +100,7 @@ func (s *HnswSearch[T]) searchIterative(
 	policy := IterativeSearch{}
 	round := policy.StartRound(nil, req, stats)
 	for {
-		keys, distances, err := s.searchOnce(sqlproc, query, indexCounts, uint(round.ITopK), rt.Membership, rt.OrigFuncName)
+		keys, distances, err := s.searchOnce(sqlproc, query, indexCounts, uint(round.ITopK), rt.Membership, false, rt.OrigFuncName)
 		if err != nil {
 			return nil, nil, err
 		}

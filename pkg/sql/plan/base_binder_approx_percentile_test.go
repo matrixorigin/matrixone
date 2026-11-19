@@ -107,7 +107,7 @@ func TestBuildPlanApproxPercentileRejectsInvalidPercentileSQL(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmts[0], false)
+			_, err = BuildPlan(ctx, stmts[0], false, nil)
 			require.ErrorContains(t, err,
 				"percentile argument of approx_percentile must be a non-null constant")
 		})

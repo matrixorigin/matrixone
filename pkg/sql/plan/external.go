@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -39,110 +38,19 @@ func filterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 }
 
 func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
-	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
-		return false
-	}
-
-	colPos := int(col.ColPos)
-	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
-		return false
-	}
-	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
-		return false
-	}
-	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
+	return colexec.FileLevelPlanner.IsFileLevelColumn(node, col)
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
-	if ref == nil {
-		return false
-	}
-	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists || overload.IsRealTimeRelated() {
-		return false
-	}
-	if !overload.CannotFold() {
-		return true
-	}
-
-	// mo_log_date is marked volatile to prevent ordinary constant folding, but
-	// it is a deterministic transform of __mo_filepath and is the established
-	// file-pruning primitive. Other volatile functions must stay at row level.
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
-	return functionID == function.MO_LOG_DATE
+	return colexec.FileLevelPlanner.IsSafeFileLevelFunction(ref)
 }
 
-func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
-	if expr == nil {
-		return false, false
-	}
-
-	switch typedExpr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if typedExpr.Col == nil {
-			return false, true
-		}
-		if isFileLevelColumn(node, typedExpr.Col) {
-			return true, false
-		}
-		return false, true
-	case *plan.Expr_F:
-		if typedExpr.F == nil || typedExpr.F.Func == nil {
-			return false, true
-		}
-		if !isSafeFileLevelFunction(typedExpr.F.Func) {
-			return false, true
-		}
-		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_List:
-		if typedExpr.List == nil {
-			return false, false
-		}
-		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
-		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
-		return false, false
-	default:
-		return false, true
-	}
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (bool, bool) {
+	return colexec.FileLevelPlanner.ClassifyFileLevelColumns(node, expr)
 }
 
 func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-
-	functionExpr, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
-		return false
-	}
-	if !isSafeFileLevelFunction(functionExpr.F.Func) {
-		return false
-	}
-	if functionExpr.F.Func.ObjName == "or" {
-		if len(functionExpr.F.Args) == 0 {
-			return false
-		}
-		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(node, arg) {
-				return false
-			}
-		}
-		return true
-	}
-
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
-	return hasFileLevelColumn && !hasUnsupportedColumn
+	return colexec.FileLevelPlanner.IsFileLevelFilter(node, expr)
 }
 
 func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {

@@ -64,6 +64,7 @@ type ViewSchemaProvider interface {
 // entry points do not construct it. Its provider is acquired lazily at the first
 // Describe; no worker, catalog write or cross-statement cache is created.
 type ViewSchemaRequest struct {
+	benchmark    viewSchemaBenchmarkState
 	ctx          context.Context
 	workCtx      context.Context
 	cancel       context.CancelCauseFunc

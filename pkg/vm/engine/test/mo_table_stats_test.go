@@ -23,10 +23,12 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
@@ -53,7 +56,7 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 	schema.Name = tableName
 
 	txnop := p.StartCNTxn()
-	_, _ = p.CreateDBAndTable(txnop, databaseName, schema)
+	_, firstTable := p.CreateDBAndTable(txnop, databaseName, schema)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -124,7 +127,94 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 				databaseName, tableName, databaseName, tableName),
 			executor.Options{}.WithTxn(txnop))
 		require.NoError(t, err)
+		require.NoError(t, txnop.Commit(p.Ctx))
 	}
+
+	// Reuse this fixture: its server-state checker prevents background MTS
+	// tasks from starting, so the seeded statistics cannot be overwritten.
+	t.Run("account size aggregation", func(t *testing.T) {
+		e.HandleMoTableStatsCtl("use_old_impl:false")
+		e.HandleMoTableStatsCtl("force_update:false")
+		runSQL := func(sql string) {
+			result, err := exec.Exec(p.Ctx, sql, executor.Options{})
+			require.NoError(t, err)
+			defer result.Close()
+		}
+		runSQL(frontend.MoCatalogMoIndexesDDL)
+		runSQL(frontend.MoCatalogMoTableStatsDDL)
+		secondSchema := catalog.MockSchemaAll(3, 2)
+		secondSchema.Name = "account_size_peer"
+		secondTable := func() engine.Relation {
+			op := p.StartCNTxn()
+			defer op.Rollback(p.Ctx)
+			rel := p.CreateTableInDB(op, databaseName, secondSchema)
+			require.NoError(t, op.Commit(p.Ctx))
+			return rel
+		}()
+		dbID, firstID, secondID := firstTable.GetDBID(p.Ctx), firstTable.GetTableID(p.Ctx), secondTable.GetTableID(p.Ctx)
+		statsTable := "mo_catalog." + catalog2.MO_TABLE_STATS
+		insert := func(account, database, table uint64, value string) {
+			runSQL(fmt.Sprintf("insert into %s (account_id,database_id,table_id,table_stats,update_time) values (%d,%d,%d,%s,'2026-01-01 00:00:00')",
+				statsTable, account, database, table, value))
+		}
+		// Each incomplete join key would count one of these unrelated rows.
+		insert(42, dbID, firstID, `'{"table_size":9999}'`)
+		insert(0, 9223372036854775807, firstID, `'{"table_size":9999}'`)
+		insert(0, dbID, 9223372036854775807, `'{"table_size":9999}'`)
+		for _, test := range []struct {
+			name, first, second string
+			want                uint64
+		}{
+			{"truncate before sum", `'{"table_size":1.8}'`, `'{"table_size":1.8}'`, 2},
+			{"SQL and JSON null", "NULL", `'{"table_size":null}'`, 0},
+			{"missing field and row", `'{}'`, "", 0},
+			{"exact integer sum", `'{"table_size":9007199254740992}'`, `'{"table_size":1}'`, 9007199254740993},
+			{"near uint64 limit", `'{"table_size":18446744073709549568}'`, `'{"table_size":1}'`, 18446744073709549569},
+			{"uint64 sum wraps", `'{"table_size":9223372036854775808}'`, `'{"table_size":9223372036854775808}'`, 0},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id in (%d,%d)", statsTable, dbID, firstID, secondID))
+				insert(0, dbID, firstID, test.first)
+				if test.second != "" {
+					insert(0, dbID, secondID, test.second)
+				}
+				sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0, 404}, false)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, map[uint64]uint64{0: test.want}, sizes)
+				values, accounts, ok, err := e.QueryTableStatsByAccounts(p.Ctx, []int{disttae.TableStatsTableSize}, []uint64{0, 404}, false, false)
+				require.NoError(t, err)
+				require.True(t, ok)
+				legacy := make(map[uint64]uint64)
+				for i, account := range accounts {
+					legacy[account] += uint64(values[0][i].(float64))
+				}
+				require.Equal(t, legacy, sizes)
+			})
+		}
+		// Run the destructive case last; the outer fixture owns final cleanup.
+		t.Run("dropped table stale statistics", func(t *testing.T) {
+			// Seed both rows independently of which sibling subtests ran.
+			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id in (%d,%d)", statsTable, dbID, firstID, secondID))
+			insert(0, dbID, firstID, `'{"table_size":1}'`)
+			insert(0, dbID, secondID, `'{"table_size":9999}'`)
+			sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, map[uint64]uint64{0: 10000}, sizes, "both live tables' statistics must be counted")
+
+			func() {
+				op := p.StartCNTxn()
+				defer op.Rollback(p.Ctx)
+				p.DeleteTableInDB(op, databaseName, secondSchema.Name)
+				require.NoError(t, op.Commit(p.Ctx))
+			}()
+			sizes, ok, err = e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, map[uint64]uint64{0: 1}, sizes, "a dropped table's stale statistics must be excluded")
+		})
+	})
 }
 
 func TestMoTableStatsMoCtl2(t *testing.T) {
@@ -212,6 +302,18 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 }
 
 func TestHandleGetChangedList(t *testing.T) {
+	originalLogger := logutil.GetGlobalLogger()
+	t.Cleanup(func() {
+		require.Same(t, originalLogger, logutil.GetGlobalLogger(), "test must restore the process-global logger")
+	})
+	var restoreLogger func() bool
+	// Register before fixture cleanup, so those cleanups still run with DEBUG.
+	t.Cleanup(func() {
+		if restoreLogger != nil && !restoreLogger() {
+			t.Error("the process-global logger was reconfigured during the test scope")
+		}
+	})
+
 	defer leaktest.AfterTest(t)()
 	var opts testutil.TestOptions
 
@@ -245,6 +347,32 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
+		// The original data size exercises CN-created multi-block objects.
+		// Check before compaction can replace those objects.
+		func() {
+			readTxn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, readTxn.Rollback(p.Ctx)) }()
+			readTxn.BindAccessInfo(0, 0, 0)
+			readDB, err := readTxn.GetDatabase(dbName)
+			require.NoError(t, err)
+			readRel, err := readDB.GetRelationByName(schema.Name)
+			require.NoError(t, err)
+			cnObjects := 0
+			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
+				if object.HasDropCommitted() {
+					continue
+				}
+				stats := object.GetObjectStats()
+				if stats.GetCNCreated() {
+					cnObjects++
+					require.EqualValues(t, rowsCnt, stats.Rows(), "table %s must retain the CN-created rows", schema.Name)
+					require.EqualValues(t, 2, stats.BlkCnt(), "table %s must retain the original two-block object", schema.Name)
+				}
+			}
+			require.Equal(t, 1, cnObjects, "table %s must retain one CN-created object", schema.Name)
+		}()
+
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		txn, _ := p.T.StartTxn()
 		ts := txn.GetStartTS()
@@ -271,9 +399,10 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
 
-	logutil.SetupMOLogger(&logutil.LogConfig{
+	restoreLogger = logutil.SetupMOLoggerForTest(&logutil.LogConfig{
 		Level: "debug",
 	})
+	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel))
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)

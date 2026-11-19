@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -64,8 +65,8 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	ses.Error(execCtx.reqCtx, execErr.Error())
 	if isTxnCommitResultUnknown(execErr) {
+		ses.Error(execCtx.reqCtx, execErr.Error())
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
@@ -74,6 +75,7 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
+		ses.Error(execCtx.reqCtx, execErr.Error())
 		// A nested fatal error may already have sealed the cleanup owner. Keep
 		// the original typed failure for the client instead of masking it with
 		// that owner's terminal rejection (or a secondary cleanup failure).
@@ -85,12 +87,31 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
 		return txnErr
 	}
-	logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
+	logRolledBackStatement(execCtx.reqCtx, ses, execErr)
 	return execErr
 }
 
+// A successful rollback can produce the same two statement logs on every
+// scheduled firing. Limit those logs only; transaction and panic failures have
+// their own diagnostics and must not share this budget.
+func logRolledBackStatement(ctx context.Context, ses FeSession, err error) {
+	writeLog := true
+	var fields []zap.Field
+	if ctx != nil && ctx.Value(defines.SQLTaskBackgroundKey{}) == true {
+		decision, allowed := logutil.AllowEvent("frontend.sql.task.statement.failed", logutil.DefaultRateLimitConfig)
+		writeLog = allowed
+		if allowed {
+			fields = logutil.EventFieldsWithDecision(fields, decision)
+		}
+	}
+	if writeLog {
+		ses.Error(ctx, err.Error(), fields...)
+	}
+	logStatementStringStatusWithLog(ctx, ses, "", fail, err, writeLog)
+}
+
 func isTxnCommitResultUnknown(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
+	return moerr.FindTxnUnknown(err) != nil
 }
 
 // requestContextErr reports cancellation of the request that owns the
@@ -307,6 +328,15 @@ type TxnHandler struct {
 	nextTxnIsolation       pbtxn.TxnIsolation
 	hasNextTxnIsolation    bool
 
+	// txnReadOnly is the access mode of the transaction owned by this
+	// handler. It is resolved when a new transaction is created: an explicit
+	// START TRANSACTION READ ONLY/READ WRITE mode wins; otherwise the
+	// transaction inherits the session transaction_read_only default,
+	// matching MySQL. The statement gate in executeStmtWithWorkspace rejects
+	// writes with ERROR 1792 while it is set. Do not confuse this with
+	// workspace.Readonly(), which is derived from actual write activity.
+	txnReadOnly bool
+
 	// lineageOwnerLifecycleValidation is set when an explicit user transaction
 	// mutates data-branch owner catalogs. Such a transaction cannot take the
 	// cluster-wide lifecycle row before doing its work: the client controls how
@@ -471,6 +501,68 @@ func transactionReadOnlyDefaultValue(
 	}
 }
 
+// TxnReadOnly reports the declared access mode of the transaction owned by
+// this handler. It differs from isReadOnlyTxnOp: the latter is derived from
+// actual write activity in the workspace, while this one comes from START
+// TRANSACTION READ ONLY/READ WRITE or the session transaction_read_only
+// default.
+func (th *TxnHandler) TxnReadOnly() bool {
+	if th == nil {
+		return false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txnReadOnly
+}
+
+// resolveTxnReadOnlyAccessMode computes the access mode for the transaction
+// being created. An explicit START TRANSACTION READ ONLY/READ WRITE mode
+// overrides the session default; a plain BEGIN and implicit or autocommit
+// transactions inherit the session transaction_read_only value, exactly like
+// MySQL. It must run before the new transaction is created so every
+// statement of the transaction observes the same mode.
+func resolveTxnReadOnlyAccessMode(execCtx *ExecCtx) (bool, error) {
+	if execCtx != nil && execCtx.txnOpt.byBegin {
+		if beginStmt, ok := execCtx.stmt.(*tree.BeginTransaction); ok {
+			switch beginStmt.Modes.RwMode {
+			case tree.READ_WRITE_MODE_READ_ONLY:
+				return true, nil
+			case tree.READ_WRITE_MODE_READ_WRITE:
+				return false, nil
+			}
+		}
+	}
+	return sessionTransactionReadOnly(execCtx)
+}
+
+// sessionTransactionReadOnly returns the session transaction_read_only
+// default. Sessions without an initialized variable map (internal executor
+// sessions) resolve to the registered default 0.
+func sessionTransactionReadOnly(execCtx *ExecCtx) (bool, error) {
+	if execCtx == nil || execCtx.ses == nil {
+		return false, nil
+	}
+	value, err := execCtx.ses.GetSessionSysVar(transactionReadOnlySystemVariable)
+	if err != nil {
+		return false, err
+	}
+	return transactionReadOnlyValueEnabled(value), nil
+}
+
+func transactionReadOnlyValueEnabled(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int64:
+		return v != 0
+	case int32:
+		return v != 0
+	case int:
+		return v != 0
+	}
+	return false
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -592,6 +684,12 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	// keeping this condition here also makes the post-boundary transaction
 	// explicit and prevents TRUNCATE/RENAME from reusing a stale workspace.
 	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
+		// Resolve the access mode of the new transaction before it starts so
+		// the statement gate observes it from the first statement onward.
+		th.txnReadOnly, err = resolveTxnReadOnlyAccessMode(execCtx)
+		if err != nil {
+			return err
+		}
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
 		if err != nil {
@@ -1064,6 +1162,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
 		return err
 	}
+	if err := th.applySequenceObligationsBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
@@ -1188,6 +1289,15 @@ func (th *TxnHandler) rollback(
 			if err != nil || hasRecovered {
 				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
+			}
+			if sess, ok := execCtx.ses.(*Session); ok {
+				// The statement rollback rewound the failed statement's
+				// workspace writes, including a SETVAL/restart reposition
+				// the statement may have staged: that boundary never
+				// persisted, so restore the issued-value protection the
+				// staged removal hid (J2). Transaction rollback instead
+				// discards both maps via clearSequenceObligations.
+				sess.restoreStagedSequenceObligations()
 			}
 			if owner := upstreamUserSession(execCtx.ses); owner != nil {
 				owner.rollbackTempTableStatement(
@@ -1392,6 +1502,11 @@ func (th *TxnHandler) rollbackUnsafe(
 		if owner := upstreamUserSession(execCtx.ses); owner != nil {
 			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
+	}
+	if sess, ok := execCtx.ses.(*Session); ok {
+		// Issued-value obligations of transaction-local sequence generations
+		// belong to the dying transaction; never let them stamp a later one.
+		sess.clearSequenceObligations()
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])

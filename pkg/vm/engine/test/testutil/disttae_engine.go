@@ -77,6 +77,7 @@ type TestDisttaeEngine struct {
 	newTxnMu                 sync.Mutex
 
 	rootDir string
+	wrapFS  func(fileservice.FileService) fileservice.FileService
 }
 
 func setServerLevelParams(de *TestDisttaeEngine) {
@@ -107,6 +108,9 @@ func NewTestDisttaeEngine(
 	for _, opt := range options {
 		opt(de)
 	}
+	if de.wrapFS != nil {
+		fs = de.wrapFS(fs)
+	}
 
 	if de.mp == nil {
 		de.mp, _ = mpool.NewMPool("test", 0, mpool.NoFixed)
@@ -127,7 +131,8 @@ func NewTestDisttaeEngine(
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer("")
 
-	var engineOpts []disttae.EngineOptions
+	// Keep workspace invariant checks independent of test order and log level.
+	engineOpts := []disttae.EngineOptions{disttae.WithWorkspaceAccountingChecksForTest()}
 	if de.insertEntryMaxCount != 0 {
 		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
 	}

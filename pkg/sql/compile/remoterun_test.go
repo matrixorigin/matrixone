@@ -134,7 +134,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:         "",
 		Role:         "",
 		ConnectionID: 0,
-		LastInsertID: 0,
+		LastInsertID: 500,
 		Database:     "",
 		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
@@ -150,12 +150,13 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SeqLastValue:   nil,
 		SqlHelper:      nil,
 	}
+	proc.SetLastInsertID(500)
 
 	remoteExecutionID := uuid.New()
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, 1<<32)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -166,6 +167,8 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.Equal(t, uint64(1<<32), restored.OdkuOrdinalBase)
+	require.Equal(t, uint64(500), restored.SessionInfo.LastInsertId)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
@@ -215,6 +218,7 @@ func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
 			}}}
 			localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy)
 			localTop.OrderedOutput = ordered
+			localTop.TopValueTag = 42
 			localTop.AppendChild(table_scan.NewArgument())
 			source := &Scope{
 				Magic: Remote, NodeInfo: engine.Node{Mcpu: 4},
@@ -233,6 +237,12 @@ func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
 			require.Equal(t, ordered, reg.OrderedStream)
 			gather, workers := newParallelScope(decoded)
 			require.Len(t, workers, 4)
+			for i, worker := range workers {
+				workerTop, ok := worker.RootOp.GetOperatorBase().GetChildren(0).(*top.Top)
+				require.True(t, ok)
+				require.Equal(t, int32(42)+(int32(i)<<16), workerTop.TopValueTag)
+				require.Equal(t, ordered, workerTop.OrderedOutput)
+			}
 			if ordered {
 				require.Equal(t, 1, reg.NilBatchCnt)
 				require.Equal(t, Merge, gather.Magic)
@@ -340,7 +350,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   &scopeContext{},
 		children: nil,
-		pipe:     nil,
 		regs:     nil,
 	}
 
@@ -360,7 +369,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   &scopeContext{},
 		children: nil,
-		pipe:     nil,
 		regs:     nil,
 	}
 	instructions := []*pipeline.Instruction{
@@ -595,6 +603,28 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
+	t.Run("OrderScanCutoffHint", func(t *testing.T) {
+		original := order.NewArgument()
+		defer original.Release()
+		original.ScanCutoffLimit = 500005
+		original.ScanCutoffTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredOrder := restored.(*order.Order)
+		require.Equal(t, original.ScanCutoffLimit, restoredOrder.ScanCutoffLimit)
+		require.Equal(t, original.ScanCutoffTag, restoredOrder.ScanCutoffTag)
+		require.Nil(t, restoredOrder.ScanCutoff, "execution state is not serialized")
+	})
+
+	t.Run("TopValueTag", func(t *testing.T) {
+		original := top.NewArgument().WithLimit(plan.MakePlan2Int64ConstExprWithType(3))
+		defer original.Release()
+		original.TopValueTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.TopValueTag, restored.(*top.Top).TopValueTag)
+	})
+
 	t.Run("TopOrderedOutput", func(t *testing.T) {
 		original := top.NewArgument().
 			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
@@ -605,11 +635,13 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 				},
 			}}).
 			WithOrderedOutput()
+		original.TopValueTag = 42
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		restoredTop, ok := restored.(*top.Top)
 		require.True(t, ok)
 		require.True(t, restoredTop.OrderedOutput)
+		require.Equal(t, original.TopValueTag, restoredTop.TopValueTag)
 		require.Equal(t, original.Limit, restoredTop.Limit)
 		require.Equal(t, original.Fs, restoredTop.Fs)
 	})
@@ -641,6 +673,14 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
 		require.True(t, restored.(*group.Group).DynamicGrouping)
+	})
+
+	t.Run("SortRollupIsCoordinatorOnly", func(t *testing.T) {
+		original := group.NewArgument()
+		original.SortRollup = true
+		defer original.Release()
+		_, _, err := convertToPipelineInstruction(original, nil, &scopeContext{}, 1)
+		require.ErrorContains(t, err, "sort rollup cannot be serialized")
 	})
 
 	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
@@ -1106,6 +1146,83 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
 }
 
+func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	pre := &preinsert.PreInsert{
+		HasAutoCol:                   true,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:                  true,
+				TrackAutoIncrementGenerated: true,
+				TrackOdkuResult:             true,
+				OdkuOrdinalColumn:           1,
+				OdkuAutoIncrementColumn:     0,
+			},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
+		"requires MORPC protocol version 134")
+	dedup := &dedupjoin.DedupJoin{
+		ODKUResultTracking: true,
+		Conditions:         [][]*planpb.Expr{{}, {}},
+	}
+	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.DedupJoin),
+			DedupJoin: &pipeline.DedupJoin{OdkuResultTracking: true},
+		}},
+	}}}
+	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 134")
+
+	// Presence is independently checked on the receiver, including zero.
+	require.ErrorContains(t, validateRemoteODKUBaselinePresence(proc, pipelinePre), "baseline")
+	proc.Base.SessionInfo.LastInsertIDSet = true
+	proc.Base.SessionInfo.LastInsertID = 0
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, pipelinePre))
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, dedupPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.Equal(t, int32(0), instruction.PreInsert.OdkuAutoIncrementColumn)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
+	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.DedupJoin.OdkuResultTracking)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
+}
+
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := testutil.NewProcess(t)
@@ -1536,6 +1653,17 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
+	t.Run("CRC32 JSON text retains existing cast gate", func(t *testing.T) {
+		crc := crc32JSONTextProtocolExpr(t, 0)
+		pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{crc}}}}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, pipeline), "protocol version 129")
+		for _, version := range []int64{defines.MORPCVersion129, defines.MORPCVersion134} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, pipeline))
+		}
+	})
+
 	t.Run("typed BIN/CONV sender and receiver boundary", func(t *testing.T) {
 		cases := []struct {
 			name       string
@@ -1773,6 +1901,34 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
+}
+
+func TestCRC32JSONTextBytesKeepsExistingStreamMinimum(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion134
+	crc := crc32JSONTextProtocolExpr(t, 0)
+	floatCast := floatConversionProtocolExpr(planfunction.CAST, types.T_varchar, types.T_float64)
+	for _, tc := range []struct {
+		name  string
+		exprs []*planpb.Expr
+		want  int64
+	}{
+		{"crc only", []*planpb.Expr{crc}, defines.MORPCVersion129},
+		{"crc then float", []*planpb.Expr{crc, floatCast}, defines.MORPCVersion132},
+		{"float then crc", []*planpb.Expr{floatCast, crc}, defines.MORPCVersion132},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := projection.NewArgument()
+			defer root.Release()
+			root.ProjectList = tc.exprs
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: root}
+			minimum := defines.MORPCVersion134
+			data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
+			require.NoError(t, err)
+			require.NotEmpty(t, data)
+			require.Equal(t, tc.want, minimum)
+		})
+	}
 }
 
 func TestRemoteASCIIResultProtocolValidation(t *testing.T) {
@@ -4995,7 +5151,6 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   nil,
 		children: nil,
-		pipe:     nil,
 		regs:     make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx

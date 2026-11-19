@@ -69,15 +69,21 @@ func TestLegacyDumpTableGCOnUpgrade(t *testing.T) {
 	legacyDir := filepath.Join(root, legacyDumpTableDir, dumpDir)
 	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(legacyDir, "object"), []byte("data"), 0o644))
+	recentDir := filepath.Join(root, legacyDumpTableDir,
+		"43_"+time.Now().UTC().Format(legacyDumpTableTimeLayout)+"_1-0")
+	require.NoError(t, os.MkdirAll(recentDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(recentDir, "object"), []byte("retained"), 0o644))
 
-	fs, err := fileservice.NewTestTmpFileService("tmp", root, 10*time.Millisecond)
+	fs, err := fileservice.NewTestTmpFileService("tmp", root, time.Hour)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		fs.Close(context.Background())
 	})
 
-	require.Eventually(t, func() bool {
-		_, err = os.Stat(legacyDir)
-		return os.IsNotExist(err)
-	}, 5*time.Second, 10*time.Millisecond)
+	fs.RunGCForTest(t.Context())
+	_, err = os.Stat(legacyDir)
+	require.True(t, os.IsNotExist(err))
+	data, err := os.ReadFile(filepath.Join(recentDir, "object"))
+	require.NoError(t, err)
+	require.Equal(t, "retained", string(data))
 }

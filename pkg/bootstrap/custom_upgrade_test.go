@@ -215,7 +215,7 @@ func TestUpgradeTenantRetry(t *testing.T) {
 					const offset = uint32(3)
 					tenantSQL := "select create_version from mo_account where account_id = 2"
 					accountSQL := "select account_id, account_name from mo_catalog.mo_account where account_name = 'tenant'"
-					latestSQL := fmt.Sprintf("select version, version_offset, state from %s order by create_at desc limit 1", catalog.MOVersionTable)
+					latestSQL := versions.LatestVersionSQL
 					// The memory executor lends this fixture-owned lookup row once.
 					accountRow := buildUpgradeTenantAccountRows([]int32{tenantID}, []string{"tenant"})
 					defer accountRow.Close()
@@ -307,7 +307,7 @@ func Test_UpgradeOneTenant_SameVersionWithCurrentOffsetRunsTenantHandler(t *test
 				switch {
 				case sql == fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID):
 					return buildTenantVersionResult(currentVer), nil
-				case sql == fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable):
+				case sql == versions.LatestVersionSQL:
 					return buildLatestVersionResult(currentVer, currentOffset, versions.StateReady), nil
 				case strings.Contains(sql, catalog.MOUpgradeTable) &&
 					strings.Contains(sql, fmt.Sprintf("where final_version = '%s' and final_version_offset = %d", currentVer, currentOffset)):
@@ -356,7 +356,7 @@ func Test_UpgradeOneTenant_SameVersionWithoutUpgradeEntriesNoops(t *testing.T) {
 				switch {
 				case sql == fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID):
 					return buildTenantVersionResult(currentVer), nil
-				case sql == fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable):
+				case sql == versions.LatestVersionSQL:
 					return buildLatestVersionResult(currentVer, currentOffset, versions.StateReady), nil
 				case strings.Contains(sql, catalog.MOUpgradeTable) &&
 					strings.Contains(sql, fmt.Sprintf("where final_version = '%s' and final_version_offset = %d", currentVer, currentOffset)):

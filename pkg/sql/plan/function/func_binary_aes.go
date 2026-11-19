@@ -355,7 +355,7 @@ func aesOverloads(decrypt bool) []overload {
 			}
 			result = append(result, overload{
 				overloadId: len(result), args: args, retType: resultType,
-				newOp: func() executeLogicOfOverload { return operation }, volatile: true,
+				newOp: func() executeLogicOfOverload { return operation }, volatile: true, executionStable: true,
 			})
 		}
 	}

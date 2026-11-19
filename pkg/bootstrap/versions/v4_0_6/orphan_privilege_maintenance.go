@@ -48,15 +48,11 @@ type OrphanPrivilegeKey struct {
 }
 
 // OrphanPrivilegeScan is process-local progress for one high-water-bounded
-// physical-key ring. HighWater fixes the upper key boundary, not a snapshot:
-// each page transaction can observe new rows inserted ahead of Cursor. Start
-// chooses the first ring segment after a process restart. Cursor identifies the
-// last physical key examined, whether that row was deleted or preserved.
+// upgrade scan. Cursor is the last physical key examined, including preserved
+// rows. HighWater fixes the upper key boundary rather than a transaction snapshot.
 type OrphanPrivilegeScan struct {
 	Initialized bool
-	Wrapped     bool
 	CursorValid bool
-	Start       string
 	Cursor      string
 	HighWater   string
 }
@@ -76,10 +72,8 @@ const (
 
 // MaintainOrphanObjectPrivilegesPage examines at most orphanPrivilegePageSize
 // rows from a stable physical-primary-key range and deletes only confirmed
-// orphans from that candidate set. It has no durable completion marker: callers
-// start a new high-water-bounded ring after completion so mixed-version writers
-// remain repairable. Start must be a hex-encoded physical-key threshold; an
-// empty Start scans from the physical minimum without a wrap segment.
+// orphans from that candidate set. The caller owns completion and transaction
+// boundaries; an interrupted scan can safely start again from the minimum key.
 func MaintainOrphanObjectPrivilegesPage(
 	txn executor.TxnExecutor,
 	accountID uint32,
@@ -87,9 +81,6 @@ func MaintainOrphanObjectPrivilegesPage(
 ) (next OrphanPrivilegeScan, scanComplete bool, err error) {
 	option := executor.StatementOption{}.WithAccountID(accountID)
 	next = scan
-	if err := validateOrphanPrivilegePhysicalKey(next.Start); err != nil {
-		return scan, false, err
-	}
 	if !next.Initialized {
 		highWater, found, err := loadOrphanPrivilegeHighWater(txn, option)
 		if err != nil {
@@ -105,17 +96,6 @@ func MaintainOrphanObjectPrivilegesPage(
 	candidates, err := loadOrphanPrivilegeCandidates(txn, option, next)
 	if err != nil {
 		return scan, false, err
-	}
-	if len(candidates) == 0 && !next.Wrapped && next.Start != "" {
-		// The randomized threshold can sort above HighWater. Wrap immediately;
-		// the empty suffix did not inspect a privilege candidate.
-		next.Wrapped = true
-		next.CursorValid = false
-		next.Cursor = ""
-		candidates, err = loadOrphanPrivilegeCandidates(txn, option, next)
-		if err != nil {
-			return scan, false, err
-		}
 	}
 	if len(candidates) == 0 {
 		return OrphanPrivilegeScan{}, true, nil
@@ -161,12 +141,6 @@ func MaintainOrphanObjectPrivilegesPage(
 	lastPhysicalKey := candidates[len(candidates)-1].physicalKey
 	segmentComplete := len(candidates) < orphanPrivilegePageSize || lastPhysicalKey == next.HighWater
 	if segmentComplete {
-		if !next.Wrapped && next.Start != "" {
-			next.Wrapped = true
-			next.CursorValid = false
-			next.Cursor = ""
-			return next, false, nil
-		}
 		return OrphanPrivilegeScan{}, true, nil
 	}
 	next.Cursor = lastPhysicalKey
@@ -207,19 +181,6 @@ func loadOrphanPrivilegeCandidates(
 		return nil, err
 	}
 	where := orphanPrivilegePhysicalKeyColumn + " <= " + highWater
-	if scan.Wrapped {
-		start, err := orphanPrivilegePhysicalKeySQL(scan.Start)
-		if err != nil {
-			return nil, err
-		}
-		where += " and " + orphanPrivilegePhysicalKeyColumn + " < " + start
-	} else if scan.Start != "" {
-		start, err := orphanPrivilegePhysicalKeySQL(scan.Start)
-		if err != nil {
-			return nil, err
-		}
-		where += " and " + orphanPrivilegePhysicalKeyColumn + " >= " + start
-	}
 	if scan.CursorValid {
 		cursor, err := orphanPrivilegePhysicalKeySQL(scan.Cursor)
 		if err != nil {

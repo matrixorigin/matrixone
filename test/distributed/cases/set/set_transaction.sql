@@ -14,7 +14,8 @@ select @@global.transaction_isolation;
 set global transaction_isolation = @saved_transaction_isolation;
 
 -- SESSION access modes support Connector/J compatibility and synchronize
--- transaction_read_only and tx_read_only; they do not enforce read-only writes.
+-- transaction_read_only and tx_read_only. Write enforcement lives in
+-- transaction_read_only.sql (#30909).
 set session transaction read only;
 select @@session.transaction_read_only, @@session.tx_read_only;
 set session transaction read write;

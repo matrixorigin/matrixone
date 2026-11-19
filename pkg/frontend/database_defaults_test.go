@@ -200,7 +200,7 @@ func TestDatabaseDefaultsStatementAdmission(t *testing.T) {
 		{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{DatabaseDefaults: &plan.DatabaseDefaults{DatabaseId: 42}}}}}},
 		{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_AlterDatabase{AlterDatabase: &plan.AlterDatabase{Database: "d"}}}}},
 	} {
-		require.True(t, shouldRebuildPreparePlan(false, p))
+		require.True(t, !planReuse(false, p, preparedLogicalPlan).reusable)
 	}
 }
 

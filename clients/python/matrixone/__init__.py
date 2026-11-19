@@ -37,6 +37,7 @@ from .exceptions import (
     QueryError,
     RestoreError,
     SnapshotError,
+    SnapshotNotFound,
     VersionError,
 )
 from .load_data import (
@@ -111,9 +112,12 @@ from .version import FeatureRequirement, VersionInfo, VersionManager, requires_v
 
 # Import SQLAlchemy 2.0 select support
 from .sqlalchemy_select import select, compile_select_to_sql
+from .sqlalchemy_ext.snapshot import with_snapshot, enable_snapshot_method
 
-__version__ = "1.0.0"
+__version__ = "0.1.16"
 __all__ = [
+    "with_snapshot",
+    "enable_snapshot_method",
     "Client",
     "Session",
     "AsyncClient",
@@ -124,6 +128,7 @@ __all__ = [
     "QueryError",
     "ConfigurationError",
     "SnapshotError",
+    "SnapshotNotFound",
     "CloneError",
     "BranchError",
     "MoCtlError",

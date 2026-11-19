@@ -42,11 +42,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMain(m *testing.M) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
+		Level:  "info",
 		Format: "console",
 	})
 
@@ -429,6 +431,29 @@ func TestTruncateLog(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
+}
+
+func TestTruncateLogRejectsFutureWithoutHidingLaterAppend(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		require.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		first, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		err = store.truncateLog(ctx, 1, first+100)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
+		second, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		truncated, err := store.getTruncatedLsn(ctx, 1)
+		require.NoError(t, err)
+		assert.Zero(t, truncated)
+		entries, _, err := store.queryLog(ctx, 1, first, math.MaxUint64)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries)
+		assert.Equal(t, second, entries[len(entries)-1].Lsn)
+		assert.Equal(t, cmd, entries[len(entries)-1].Data)
+	})
 }
 
 func TestGetTruncatedIndex(t *testing.T) {
@@ -1225,6 +1250,33 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+
+		// The preflight read belongs to the mutation's caller budget too.
+		// An unknown CN distinguishes a detached read (missing-CN error or
+		// successful no-op deletion) from rejection of the expired request.
+		expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1, 0))
+		defer cancelExpired()
+		for _, tc := range []struct {
+			name string
+			run  func(context.Context) error
+		}{
+			{"label", func(ctx context.Context) error {
+				return store.updateCNLabel(ctx, pb.CNStoreLabel{UUID: "missing-cn"})
+			}},
+			{"work_state", func(ctx context.Context) error {
+				return store.updateCNWorkState(ctx, pb.CNWorkState{UUID: "missing-cn"})
+			}},
+			{"patch", func(ctx context.Context) error {
+				return store.patchCNStore(ctx, pb.CNStateLabel{UUID: "missing-cn"})
+			}},
+			{"delete", func(ctx context.Context) error {
+				return store.deleteCNStore(ctx, pb.DeleteCNStore{StoreID: "missing-cn"})
+			}},
+		} {
+			t.Run("expired_"+tc.name, func(t *testing.T) {
+				require.ErrorIs(t, tc.run(expired), dragonboat.ErrInvalidDeadline)
+			})
+		}
 	}
 	runStoreTest(t, fn)
 }
@@ -1577,6 +1629,42 @@ func TestGetLeaderID(t *testing.T) {
 		assert.Equal(t, uint64(2), leaderID)
 	}
 	runStoreTest(t, fn)
+}
+
+func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	leaderID, term, err := store1.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), leaderID)
+	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
+	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	var lastTransfer time.Time
+	require.Eventually(t, func() bool {
+		id, currentTerm, leaderErr := store2.leaderState(1)
+		if leaderErr == nil && id == 2 && currentTerm > term {
+			return true
+		}
+		if time.Since(lastTransfer) >= time.Second {
+			if leaderID, _, err := store1.leaderState(1); err == nil && leaderID == 1 {
+				_ = store1.requestLeaderTransfer(1, 2)
+			}
+			lastTransfer = time.Now()
+		}
+		return false
+	}, 20*time.Second, 10*time.Millisecond)
+	// The old owner and revision still match: only the new Raft term may
+	// reject this reset before the new DataSync worker claims an owner.
+	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	state, err := store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
 }
 
 func TestAddLogShard(t *testing.T) {
@@ -2438,4 +2526,56 @@ func TestHAKeeperCheckWakeupRechecksDuringActiveCheck(t *testing.T) {
 		<-done
 		require.GreaterOrEqual(t, gate.calls, 2)
 	})
+}
+
+func TestAppendHeartbeatReplicas(t *testing.T) {
+	st := &store{runtime: runtime.DefaultRuntime()}
+	ready := []dragonboat.ShardInfo{
+		{ShardID: 9, ReplicaID: 2, ConfigChangeIndex: 11, LeaderID: 2, Term: 4, NonVotingNodes: map[uint64]string{7: "nonvoting"}, IsNonVoting: true},
+		{ShardID: 3, ReplicaID: 1, ConfigChangeIndex: 12, LeaderID: 1, Term: 5, Nodes: map[uint64]string{1: "voting"}},
+	}
+	pending := dragonboat.ShardInfo{ShardID: 7, Pending: true}
+	for _, tc := range []struct {
+		name   string
+		shards []dragonboat.ShardInfo
+		want   []pb.LogReplicaInfo
+	}{
+		{name: "empty", want: []pb.LogReplicaInfo{}},
+		{name: "pending", shards: []dragonboat.ShardInfo{pending}, want: []pb.LogReplicaInfo{}},
+		{name: "one ready among pending", shards: []dragonboat.ShardInfo{pending, ready[1], pending}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+		{name: "mixed", shards: []dragonboat.ShardInfo{ready[0], pending, ready[1]}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 9, Replicas: map[uint64]string{}, NonVotingReplicas: map[uint64]string{7: "nonvoting"}, Epoch: 11, LeaderID: 2, Term: 4}, ReplicaID: 2, IsNonVoting: true},
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), tc.shards)
+			require.NotNil(t, got)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, len(tc.want), cap(got))
+			gotWire, err := (&pb.LogStoreHeartbeat{Replicas: got}).Marshal()
+			require.NoError(t, err)
+			wantWire, err := (&pb.LogStoreHeartbeat{Replicas: tc.want}).Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wantWire, gotWire)
+			var decoded pb.LogStoreHeartbeat
+			require.NoError(t, decoded.Unmarshal(gotWire))
+			require.Len(t, decoded.Replicas, len(tc.want))
+			for i := range decoded.Replicas {
+				require.Equal(t, tc.want[i].ShardID, decoded.Replicas[i].ShardID)
+			}
+		})
+	}
+	require.Panics(t, func() {
+		st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{{ShardID: 8}})
+	})
+	core, logs := observer.New(zap.InfoLevel)
+	observed := &store{runtime: runtime.NewRuntime(metadata.ServiceType_LOG, "test", zap.New(core))}
+	require.Panics(t, func() {
+		observed.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{ready[0], pending, {ShardID: 8}})
+	})
+	require.Len(t, logs.FilterMessageSnippet("shard 7 is pending").All(), 1)
+
 }

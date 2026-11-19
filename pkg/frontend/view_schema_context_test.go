@@ -319,9 +319,9 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 			case tc.byID:
 				obj, def, err = child.ResolveById(42, snapshot)
 			case tc.index:
-				obj, def, err = child.ResolveIndexTableByRef(&pb.ObjectRef{SchemaName: tc.wantDatabase, ObjName: "source"}, "source", snapshot)
+				obj, def, err = child.ResolveIndexTableByRef(&pb.ObjectRef{SchemaName: tc.wantDatabase, ObjName: "source"}, "source", snapshot, nil)
 			default:
-				obj, def, err = child.Resolve(tc.database, "source", snapshot)
+				obj, def, err = child.Resolve(tc.database, "source", snapshot, nil)
 			}
 			switch {
 			case tc.cancel:

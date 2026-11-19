@@ -1,0 +1,27 @@
+{
+  "base": "94faf0209b9ac3254d31906f92e34405f1988203",
+  "candidate": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396",
+  "base_pkg_tree": "013381085ecf88cab176180c399e5b7715efc7ab",
+  "candidate_pkg_tree": "e92b301ddfb3ad233451251e6406dea894255a11",
+  "candidate_cmd_tree": "fa5c38e2429577d6b56b221f14b8434ef03bee5b",
+  "changed_go_files": {
+    "pkg/sql/compile/compile_test.go": "828aa590a5aaea5b8e2ce9d6d0935f10570db9285bf5611cb94afeafc4d9fe28",
+    "pkg/sql/plan/distinct_agg.go": "9edc1ed5d471c382825c89e3152d5dccb76e7c22116d9ff1bb403d8bcdc6e988",
+    "pkg/sql/plan/distinct_agg_test.go": "05503a07c86fed5143cec41e68f4ce895069e5a7682c56fce729f759e17d9924",
+    "pkg/vm/engine/tae/logtail/service/server_test.go": "a1631a798303ff7f68e389739f2f439d0c199bbbdd4bdcd64d532b826977144f",
+    "pkg/vm/engine/tae/logtail/service/test_fixture_test.go": "517f9fa6a00b96879616b66974e439bf6aeddd06d0a499100db63fc3b2a39624"
+  },
+  "native_inputs_unchanged_since_prior_build": true,
+  "go_version": "go version go1.27.1 darwin/arm64",
+  "platform": [
+    "darwin",
+    "arm64",
+    "1"
+  ],
+  "old_remote_head": "007b27c1cd53a6e90adf41ce4d34ab08aea45621",
+  "evidence_type": "fresh execution on rebased candidate; prior d32 evidence not substituted",
+  "datasets": {
+    "public": "earlier shared local fixture, runtime/config exact public-snapshot-*; passed before store loss",
+    "performance": "30998-isolated-94fa, recreated once in task-owned isolated-runtime; no failed-attempt samples mixed"
+  }
+}

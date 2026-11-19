@@ -147,11 +147,23 @@ func adjustArrowLoadCluster(c embed.Cluster, options arrowLoadClusterOptions) {
 // a real client would use. This is required for KILL QUERY, multi-session isolation, and
 // SHOW-PROCESSLIST-style observation to mean anything.
 func openArrowLoadDB(t testing.TB, c embed.Cluster, cnIndex int) *sql.DB {
+	return openArrowLoadDBInSchema(t, c, cnIndex, "")
+}
+
+func openArrowLoadDBInSchema(t testing.TB, c embed.Cluster, cnIndex int, schema string) *sql.DB {
+	return openArrowLoadDBWithTimeout(t, c, cnIndex, schema, 0)
+}
+
+func openArrowLoadDBWithTimeout(t testing.TB, c embed.Cluster, cnIndex int, schema string, ioTimeout time.Duration) *sql.DB {
 	t.Helper()
 	cn, err := c.GetCNService(cnIndex)
 	require.NoError(t, err)
 	port := cn.GetServiceConfig().CN.Frontend.Port
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/%s", port, schema)
+	if ioTimeout > 0 {
+		dsn += "?readTimeout=" + ioTimeout.String() + "&writeTimeout=" + ioTimeout.String()
+	}
+	db, err := sql.Open("mysql", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

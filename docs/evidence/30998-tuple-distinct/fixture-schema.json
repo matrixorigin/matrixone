@@ -1,0 +1,20 @@
+{
+  "qa30982_history_20261024.natural_unique5m": [
+    [
+      "natural_unique5m",
+      "CREATE TABLE `natural_unique5m` (\n  `k` bigint NOT NULL,\n  `g8` int NOT NULL\n)"
+    ]
+  ],
+  "qa30995.nn": [
+    [
+      "nn",
+      "CREATE TABLE `nn` (\n  `g` int NOT NULL,\n  `a` bigint NOT NULL,\n  `b` bigint NOT NULL,\n  `s` varchar(32) NOT NULL,\n  `c` char(32) NOT NULL\n)"
+    ]
+  ],
+  "qa30995.nullable": [
+    [
+      "nullable",
+      "CREATE TABLE `nullable` (\n  `g` int NOT NULL,\n  `a` bigint DEFAULT NULL,\n  `b` bigint DEFAULT NULL\n)"
+    ]
+  ]
+}

@@ -64,7 +64,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return result, nil
 	}
 
@@ -110,7 +110,7 @@ func TestGetJobSpecsEscapesJobNameLiteral(t *testing.T) {
 	}()
 
 	var capturedSQL string
-	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		capturedSQL = sql
 		return result, nil
 	}
@@ -146,7 +146,7 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return result, nil
 	}
 
@@ -265,7 +265,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				mpool.DeleteMPool(mp)
 			}()
 
-			ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+			ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 				return result, nil
 			}
 
@@ -495,7 +495,7 @@ func TestFlushStatusSucceedsOnOneAffectedRow(t *testing.T) {
 		ExecWithResult = oldExecWithResult
 	}()
 
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 1}, nil
 	}
 
@@ -521,7 +521,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		ExecWithResult = oldExecWithResult
 	}()
 
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 0}, nil
 	}
 
@@ -569,7 +569,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return result, nil
 	}
 

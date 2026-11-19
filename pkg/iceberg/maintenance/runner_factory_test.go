@@ -221,7 +221,7 @@ func TestCatalogRunnerFactoriesRequireFactoryAndResolvedCatalog(t *testing.T) {
 func TestResolveMaintenanceCatalogRequestPrefixSkipsWhenAlreadySetOrClientMissing(t *testing.T) {
 	ctx := context.Background()
 	req := api.CatalogRequest{Prefix: "explicit", Catalog: model.Catalog{Warehouse: "warehouse"}}
-	got, err := resolveMaintenanceCatalogRequestPrefix(ctx, nil, req)
+	got, err := api.ResolveCatalogRequestPrefix(ctx, nil, req)
 	require.NoError(t, err)
 	require.Equal(t, "explicit", got.Prefix)
 
@@ -229,14 +229,14 @@ func TestResolveMaintenanceCatalogRequestPrefixSkipsWhenAlreadySetOrClientMissin
 		t.Fatalf("GetConfig should not be called when prefix is already set")
 		return nil, nil
 	}}
-	got, err = resolveMaintenanceCatalogRequestPrefix(ctx, client, req)
+	got, err = api.ResolveCatalogRequestPrefix(ctx, client, req)
 	require.NoError(t, err)
 	require.Equal(t, "explicit", got.Prefix)
 
 	errClient := &catalog.MockClient{GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
 		return nil, api.NewError(api.ErrCatalogUnavailable, "config unavailable", nil)
 	}}
-	_, err = resolveMaintenanceCatalogRequestPrefix(ctx, errClient, api.CatalogRequest{Catalog: model.Catalog{Warehouse: "warehouse"}})
+	_, err = api.ResolveCatalogRequestPrefix(ctx, errClient, api.CatalogRequest{Catalog: model.Catalog{Warehouse: "warehouse"}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), string(api.ErrCatalogUnavailable))
 }
@@ -334,7 +334,7 @@ func TestNativeRewriteManifestsRunnerMaterializesWritesAndCommits(t *testing.T) 
 	require.Equal(t, int64(4), *commitReq.Updates[0].Snapshot.ParentSnapshotID)
 	require.Equal(t, int64(1), commitReq.Updates[0].Snapshot.SequenceNumber)
 	require.Equal(t, now.UnixMilli(), commitReq.Updates[0].Snapshot.TimestampMS)
-	require.Equal(t, "rewrite_manifests", commitReq.Updates[0].Snapshot.Summary["operation"])
+	require.Equal(t, "replace", commitReq.Updates[0].Snapshot.Summary["operation"])
 	require.Equal(t, "set-snapshot-ref", commitReq.Updates[1].Type)
 	require.Equal(t, "main", commitReq.Updates[1].Ref)
 	require.Equal(t, commitReq.Updates[0].Snapshot.SnapshotID, commitReq.Updates[1].SnapshotID)

@@ -445,7 +445,7 @@ func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 
 	originalBuild := buildPlanWithAuthorization
 	defer func() { buildPlanWithAuthorization = originalBuild }()
-	buildPlanWithAuthorization = func(context.Context, FeSession, plan2.CompilerContext, tree.Statement) (*planPb.Plan, error) {
+	buildPlanWithAuthorization = func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.PlanningInput) (*planPb.Plan, error) {
 		return nil, errors.New("prepared EXPLAIN must consume the initialized plan")
 	}
 

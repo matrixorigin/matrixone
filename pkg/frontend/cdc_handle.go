@@ -260,7 +260,7 @@ func doUpdateCDCTask(
 		)
 	}
 
-	ts := getPu(service).TaskService
+	ts := getPu(service).GetTaskService()
 	if ts == nil {
 		if isCDCRestart(targetTaskStatus) {
 			eventCDCRestartTaskServiceUnavailable.WarnLazy(func() []zap.Field {

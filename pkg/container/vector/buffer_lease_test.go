@@ -107,6 +107,42 @@ func TestBorrowedFixedVectorWindowAndCleanRelease(t *testing.T) {
 	require.Equal(t, int32(1), cleanup.Load())
 }
 
+func TestBorrowedVectorAppendWithinCapacity(t *testing.T) {
+	for _, limit := range []uint64{16, 256} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			state := newTestVectorAllocationAccount(t, limit, 32)
+			t.Cleanup(func() {
+				require.Zero(t, mp.CurrNB())
+				finalizeTestVectorAllocationAccount(t, state)
+				mpool.DeleteMPool(mp)
+			})
+			values := []int64{11, 22, 33, 0}
+			data := types.EncodeSlice(values)
+			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+			require.NoError(t, err)
+			t.Cleanup(lease.Release)
+			vec, err := NewBorrowedFixedVectorWithAllocation(
+				types.T_int64.ToType(), 3, data[:3*8], lease, state.selection,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { vec.Free(mp) })
+			err = AppendFixed(vec, int64(44), false, mp)
+			if limit == 16 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, BorrowedLease, vec.DataBackingKind())
+				require.Equal(t, 3, vec.Length())
+				require.Zero(t, state.account.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
+				require.Equal(t, []int64{11, 22, 33, 44}, MustFixedColNoTypeCheck[int64](vec))
+			}
+			require.Equal(t, []int64{11, 22, 33, 0}, values, "spare leased capacity is still immutable")
+		})
+	}
+}
+
 func TestBorrowedVectorMaterializeOwnedIsTransactional(t *testing.T) {
 	values := make([]int64, mpool.MB/8+1)
 	copy(values, []int64{7, 8, 9})
@@ -376,4 +412,105 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	vec.Free(nil)
 	require.Nil(t, dataLease.Bytes())
 	require.Nil(t, areaLease.Bytes())
+}
+
+func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
+	for _, sharedArea := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sharedArea=%v", sharedArea), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.T_int64.ToType()
+			if sharedArea {
+				typ = types.T_varchar.ToType()
+			}
+			backing := make([]byte, typ.TypeSize()+32)
+			releases := 0
+			lease, err := NewRefCountedBufferLease(backing, int64(len(backing)), func() { releases++ })
+			require.NoError(t, err)
+			releaseIncoming := sync.OnceFunc(lease.Release)
+			t.Cleanup(releaseIncoming)
+			dst := NewOffHeapVecWithType(typ)
+			t.Cleanup(func() { dst.Free(mp) })
+			require.NoError(t, dst.InstallBorrowedData(backing[:typ.TypeSize()], lease))
+			if sharedArea {
+				require.NoError(t, dst.InstallBorrowedArea(backing[typ.TypeSize():], lease))
+			}
+			releaseIncoming()
+			src := NewConstNull(typ, 1, mp)
+			t.Cleanup(func() { src.Free(mp) })
+			require.NoError(t, src.CloneWindowTo(dst, 0, 1, nil))
+			require.True(t, dst.IsConstNull())
+			require.Equal(t, OwnedMPoolUnique, dst.DataBackingKind())
+			require.Nil(t, dst.GetData())
+			if sharedArea {
+				require.Zero(t, releases, "dropping the data reference must preserve the area's reference")
+				require.Equal(t, BorrowedLease, dst.AreaBackingKind())
+				require.Equal(t, backing[typ.TypeSize():], dst.GetArea())
+			} else {
+				require.Equal(t, 1, releases)
+				dst.ResetWithNewType(&typ)
+				require.NoError(t, AppendFixed(dst, int64(7), false, mp))
+				require.Equal(t, int64(7), GetFixedAtNoTypeCheck[int64](dst, 0))
+			}
+			dst.Free(mp)
+			require.Equal(t, 1, releases)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestPrepareDataForInplaceMutation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	values := []int64{11, 22, 33}
+	data := types.EncodeSlice(values)
+	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	defer lease.Release()
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	require.Error(t, vec.PrepareDataForInplaceMutation(nil))
+	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.Equal(t, []int64{11, 22, 33}, MustFixedColNoTypeCheck[int64](vec))
+	require.NoError(t, vec.PrepareDataForInplaceMutation(mp))
+	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
+	MustFixedColNoTypeCheck[int64](vec)[0] = 99
+	require.Equal(t, []int64{11, 22, 33}, values)
+}
+
+func TestPrepareDataForInplaceMutationAccountRejection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 16, 32)
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+		finalizeTestVectorAllocationAccount(t, state)
+		mpool.DeleteMPool(mp)
+	}()
+	values := []int64{11, 22, 33}
+	data := types.EncodeSlice(values)
+	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	defer lease.Release()
+	vec, err := NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), len(values), data, lease, state.selection)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	require.ErrorIs(t, vec.PrepareDataForInplaceMutation(mp), mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.Equal(t, values, MustFixedColNoTypeCheck[int64](vec))
+	require.Zero(t, state.account.Snapshot().Used)
+}
+
+func TestFixedSortCompactKeepsOwnedStorage(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, AppendFixedList(vec, []int64{3, 1, 3, 2}, nil, mp))
+	require.NoError(t, vec.InplaceSortAndCompact(mp))
+	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](vec))
+	require.True(t, vec.GetSorted())
+	require.NoError(t, AppendFixed(vec, int64(4), false, mp))
+	require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColNoTypeCheck[int64](vec))
 }

@@ -528,6 +528,8 @@ execute temporal_join_cast using @temporal_join_value;
 show count(*) warnings;
 insert into temporal_join_left values (1, '00:00:00');
 execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+show warnings;
 set @temporal_join_value = '00:00:00.000000';
 execute temporal_join_cast using @temporal_join_value;
 show count(*) warnings;

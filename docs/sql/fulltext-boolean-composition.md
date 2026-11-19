@@ -23,9 +23,13 @@ by a valid fulltext index. Nested expressions and repeated MATCH calls are
 supported. Several MATCH hits do not duplicate a base row.
 
 Within this composition domain, the relevance is the index's emitted score,
-or FLOAT32 zero if the index emits no result for the row. Zero is false and
-any nonzero score, including a negative score, is true. Comparisons use the
-actual score. Indexed all-NULL content without a search result also has score
+or FLOAT32 zero if the index emits no result for the row. MATCH as a Boolean,
+whether as a condition or through CAST(... AS BOOL), is true for every row the
+index returns, whatever its score, and false for the others, exactly as a MATCH
+alone in WHERE. A term found in every document scores zero but still matches.
+Comparisons, numeric casts and projections use the actual score; a column projected
+from MATCH, such as a derived-table alias, is a score, also when an outer
+condition uses it. Indexed all-NULL content without a search result also has score
 zero; a non-NULL indexed sibling can still match. Scalar NULL values keep SQL
 three-valued logic, so a predicate is retained by WHERE only when it is true.
 

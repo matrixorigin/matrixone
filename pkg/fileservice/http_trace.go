@@ -110,16 +110,9 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 	// connection was just put into the idle pool and immediately retrieved
 	if info.WasIdle {
 		metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
-		// Connection was idle, now it's active
-		// Use the connection object as the key (info.Conn is the underlying connection)
-		if info.Conn != nil {
-			trackConnActive(info.Conn)
-		}
-	} else {
-		// New connection, mark as active
-		if info.Conn != nil {
-			trackConnActive(info.Conn)
-		}
+	}
+	if info.Conn != nil {
+		trackConnActive(info.Conn)
 	}
 	if !start.IsZero() {
 		metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())

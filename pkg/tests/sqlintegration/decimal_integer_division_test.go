@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Reuse the canonical one-CN fixture; each scenario owns two source rows and
-// one ODKU target. Repeat on the same instance after checking database teardown.
+// Exercise the full matrix, then recreate the same database with
+// NO_UNSIGNED_SUBTRACTION and representative contracts. Verify each teardown.
 func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		setupCtx, cancelSetup := context.WithTimeout(t.Context(), 120*time.Second)
@@ -50,21 +50,35 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 				defer cancel()
 				// Fatal SQL errors belong to this round, never the parent test.
 				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+				if round == 1 {
+					exec("set session sql_mode='NO_UNSIGNED_SUBTRACTION'")
+				}
 				exec("create database " + schema)
 				exec("use " + schema)
 				exec("create table src(id int primary key,d decimal(10,3),w decimal(18,3),i int,u bigint unsigned)")
+				if round == 1 {
+					var existing int
+					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from src").Scan(&existing))
+					require.Zero(t, existing, "recreated source must not expose rows from the previous database")
+				}
 				exec("insert into src values(1,5.678,5.678,2,2),(2,-5.678,-5.678,-2,2)")
 				for _, object := range []string{"table", "view"} {
-					for _, tc := range []struct{ name, query, want string }{
-						{"narrow", "select d div i as q from src", "int"},
-						{"wide", "select w div i as q from src", "bigint"},
-						{"unsigned", "select d div u as q from src where id=1", "int unsigned"},
-						{"folded", "select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q", "int"},
-						{"derived", "select q from (select d div i as q from src) s", "int"},
-						{"ordered", "select d div i as q from src order by id desc limit 1", "int"},
-						{"signed_threshold", "select cast(d as decimal(11,3)) div i as q from src", "bigint"},
-						{"unsigned_threshold", "select cast(d as decimal(11,3)) div u as q from src where id=1", "int unsigned"},
+					for _, tc := range []struct {
+						name, query, want string
+						recheck           bool
+					}{
+						{"narrow", "select d div i as q from src", "int", true},
+						{"wide", "select w div i as q from src", "bigint", true},
+						{"unsigned", "select d div u as q from src where id=1", "int unsigned", true},
+						{"folded", "select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q", "int", false},
+						{"derived", "select q from (select d div i as q from src) s", "int", false},
+						{"ordered", "select d div i as q from src order by id desc limit 1", "int", false},
+						{"signed_threshold", "select cast(d as decimal(11,3)) div i as q from src", "bigint", false},
+						{"unsigned_threshold", "select cast(d as decimal(11,3)) div u as q from src where id=1", "int unsigned", true},
 					} {
+						if round == 1 && !tc.recheck {
+							continue
+						}
 						name := object + "_" + tc.name
 						exec("create " + object + " " + name + " as " + tc.query)
 						var got string
@@ -85,72 +99,76 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 						}
 					}
 				}
-				exec("insert into src values(3,null,null,2,2)")
-				for _, peer := range []string{"i", "u"} {
-					name := "null_" + peer
-					exec("create view " + name + " as select d div " + peer + " as q from src where id=3")
-					for _, consumer := range []string{"table", "view"} {
-						outer := consumer + "_via_" + name
-						exec("create " + consumer + " " + outer + " as select q from " + name)
-						var isNull bool
-						require.NoError(t, conn.QueryRowContext(ctx, "select q is null from "+outer).Scan(&isNull))
-						require.True(t, isNull, outer)
+				if round == 0 {
+					exec("insert into src values(3,null,null,2,2)")
+					for _, peer := range []string{"i", "u"} {
+						name := "null_" + peer
+						exec("create view " + name + " as select d div " + peer + " as q from src where id=3")
+						for _, consumer := range []string{"table", "view"} {
+							outer := consumer + "_via_" + name
+							exec("create " + consumer + " " + outer + " as select q from " + name)
+							var isNull bool
+							require.NoError(t, conn.QueryRowContext(ctx, "select q is null from "+outer).Scan(&isNull))
+							require.True(t, isNull, outer)
+						}
 					}
 				}
 				exec("create view negative_unsigned as select d div u as q from src where id=2")
 				var negative int64
 				require.ErrorContains(t, conn.QueryRowContext(ctx, "select q from negative_unsigned").Scan(&negative), "out of range")
-				// The unsigned overload shares SELECT diagnostics with scalar DIV.
-				for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO"} {
-					exec("set session sql_mode='" + mode + "'")
-					for _, tc := range []struct {
-						expression string
-						null       bool
-						value      int64
-						warnings   int
-					}{
-						{expression: "cast(1 as decimal(10,3)) div cast(0 as unsigned)", null: true, warnings: 1},
-						{expression: "cast(null as decimal(10,3)) div cast(0 as unsigned)", null: true},
-						{expression: "if(false,cast(1 as decimal(10,3)) div cast(0 as unsigned),7)", value: 7},
-						{expression: "cast(5 as decimal(10,3)) div cast(2 as unsigned)", value: 2},
-					} {
-						var q sql.NullInt64
-						require.NoError(t, conn.QueryRowContext(ctx, "select "+tc.expression).Scan(&q))
-						require.Equal(t, !tc.null, q.Valid, tc.expression)
-						if q.Valid {
-							require.Equal(t, tc.value, q.Int64, tc.expression)
+				if round == 0 {
+					// The unsigned overload shares SELECT diagnostics with scalar DIV.
+					for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO"} {
+						exec("set session sql_mode='" + mode + "'")
+						for _, tc := range []struct {
+							expression string
+							null       bool
+							value      int64
+							warnings   int
+						}{
+							{expression: "cast(1 as decimal(10,3)) div cast(0 as unsigned)", null: true, warnings: 1},
+							{expression: "cast(null as decimal(10,3)) div cast(0 as unsigned)", null: true},
+							{expression: "if(false,cast(1 as decimal(10,3)) div cast(0 as unsigned),7)", value: 7},
+							{expression: "cast(5 as decimal(10,3)) div cast(2 as unsigned)", value: 2},
+						} {
+							var q sql.NullInt64
+							require.NoError(t, conn.QueryRowContext(ctx, "select "+tc.expression).Scan(&q))
+							require.Equal(t, !tc.null, q.Valid, tc.expression)
+							if q.Valid {
+								require.Equal(t, tc.value, q.Int64, tc.expression)
+							}
+							func() {
+								rows, err := conn.QueryContext(ctx, "show warnings")
+								require.NoError(t, err)
+								defer rows.Close()
+								count := 0
+								for rows.Next() {
+									var level, message string
+									var code int
+									require.NoError(t, rows.Scan(&level, &code, &message))
+									require.Equal(t, "Warning", level)
+									require.Equal(t, 1365, code)
+									require.Equal(t, "Division by 0", message)
+									count++
+								}
+								require.NoError(t, rows.Err())
+								want := tc.warnings
+								if mode == "" {
+									want = 0
+								}
+								require.Equal(t, want, count, tc.expression)
+							}()
 						}
-						func() {
-							rows, err := conn.QueryContext(ctx, "show warnings")
-							require.NoError(t, err)
-							defer rows.Close()
-							count := 0
-							for rows.Next() {
-								var level, message string
-								var code int
-								require.NoError(t, rows.Scan(&level, &code, &message))
-								require.Equal(t, "Warning", level)
-								require.Equal(t, 1365, code)
-								require.Equal(t, "Division by 0", message)
-								count++
-							}
-							require.NoError(t, rows.Err())
-							want := tc.warnings
-							if mode == "" {
-								want = 0
-							}
-							require.Equal(t, want, count, tc.expression)
-						}()
 					}
-				}
-				exec("set session sql_mode=''")
-				for _, mode := range []string{"", "NO_UNSIGNED_SUBTRACTION"} {
-					exec("set session sql_mode='" + mode + "'")
-					var q int64
-					err := conn.QueryRowContext(ctx, "select d div u from src where id=2").Scan(&q)
-					require.ErrorContains(t, err, "out of range")
-					require.NoError(t, conn.QueryRowContext(ctx, "select cast(-1 as decimal(10,3)) div cast(2 as unsigned)").Scan(&q))
-					require.Zero(t, q)
+					exec("set session sql_mode=''")
+					for _, mode := range []string{"", "NO_UNSIGNED_SUBTRACTION"} {
+						exec("set session sql_mode='" + mode + "'")
+						var q int64
+						err := conn.QueryRowContext(ctx, "select d div u from src where id=2").Scan(&q)
+						require.ErrorContains(t, err, "out of range")
+						require.NoError(t, conn.QueryRowContext(ctx, "select cast(-1 as decimal(10,3)) div cast(2 as unsigned)").Scan(&q))
+						require.Zero(t, q)
+					}
 				}
 				var max string
 				require.NoError(t, conn.QueryRowContext(ctx, "select cast('18446744073709551615' as decimal(20,0)) div cast(1 as unsigned)").Scan(&max))
@@ -192,6 +210,8 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 				var remaining int
 				require.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from information_schema.schemata where schema_name=?", schema).Scan(&remaining))
 				require.Zero(t, remaining)
+				require.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from information_schema.tables where table_schema=?", schema).Scan(&remaining))
+				require.Zero(t, remaining, "dropped database must not expose its old tables")
 			})
 			if t.Failed() {
 				return

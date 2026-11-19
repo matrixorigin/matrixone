@@ -33,7 +33,7 @@ func (o *issue24822Optimizer) CurrentContext() CompilerContext {
 }
 
 func (o *issue24822Optimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	logicPlan, err := BuildPlan(o.ctx, stmt, false)
+	logicPlan, err := BuildPlan(o.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}

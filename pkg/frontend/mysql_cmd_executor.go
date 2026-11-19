@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -305,8 +306,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RoleId = tenant.GetDefaultRoleID()
 	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
-	stm.Host = ses.respr.GetStr(PEER)
-	stm.Database = ses.respr.GetStr(DBNAME)
+	stm.Host = ses.GetResponser().GetStr(PEER)
+	stm.Database = ses.GetResponser().GetStr(DBNAME)
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
 	stm.SqlSourceType = sqlType
@@ -342,6 +343,9 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	// whole statement rather than trying to recognize one SQL expression shape:
 	// invalid, nested, or future selector forms must not become a logging leak.
 	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
+		return diagnostic
+	}
+	if diagnostic := redactOutfileStatementText(statement, text); diagnostic != text {
 		return diagnostic
 	}
 
@@ -565,7 +569,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
@@ -604,10 +608,15 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
-		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
+		// The operands come from the visible base tables' catalog definitions,
+		// not user SQL. Limit the capability to this generated query. Its
+		// VALUE_SCAN is compiled on the coordinator (compileValueScan uses
+		// c.addr), so the capability need not cross the process wire.
+		indexCtx := process.WithTrustedIndexRelationAccess(ctx)
+		rets, err := ExeSqlInBgSes(indexCtx, bh, sqlBuilder.String())
 		if err != nil {
 			return nil, err
 		}
@@ -1001,6 +1010,11 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
 				return 0, err
 			}
+		case types.T_array_float8, types.T_array_float4:
+			// Rows hold the dequantized []float32.
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
 		case types.T_array_int8:
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
 				return 0, err
@@ -1086,6 +1100,12 @@ func estimatePreparedCursorArrayCopyBytes(
 			length = len(vector.GetArrayAt[types.Float16](vec, row))
 		case types.T_array_int8:
 			length = len(vector.GetArrayAt[int8](vec, row))
+		case types.T_array_float8, types.T_array_float4:
+			c, err := types.ParseBlockScaledCell(vec.GetBytesAt(row))
+			if err != nil {
+				return err
+			}
+			length = c.Dim
 		}
 		bytes := uint64(length)
 		if bytes > math.MaxUint64/elementBytes {
@@ -1177,6 +1197,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	return nil
 }
 
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -1222,75 +1272,7 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 		return moerr.NewNoDB(reqCtx)
 	}
 
-	//Get table infos for the database from the cube
-	//case 1: there are no table infos for the db
-	//case 2: db changed
-	//NOTE: it costs too much time.
-	//It just reduces the information in the auto-completion (auto-rehash) of the mysql client.
-	//var attrs []ColumnInfo
-	//
-	//if tableInfos == nil || db != dbName {
-	//	txnHandler := ses.GetTxnHandler()
-	//	eng := ses.GetStorage()
-	//	db, err := eng.Database(reqCtx, dbName, txnHandler.GetTxn())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	names, err := db.Relations(reqCtx)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	for _, name := range names {
-	//		table, err := db.Relation(reqCtx, name)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		defs, err := table.TableDefs(reqCtx)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		for _, def := range defs {
-	//			if attr, ok := def.(*engine.AttributeDef); ok {
-	//				attrs = append(attrs, &engineColumnInfo{
-	//					name: attr.Attr.Name,
-	//					typ:  attr.Attr.Type,
-	//				})
-	//			}
-	//		}
-	//	}
-	//
-	//	if tableInfos == nil {
-	//		tableInfos = make(map[string][]ColumnInfo)
-	//	}
-	//	tableInfos[tableName] = attrs
-	//}
-	//
-	//cols, ok := tableInfos[tableName]
-	//if !ok {
-	//	//just give the empty info when there is no such table.
-	//	attrs = make([]ColumnInfo, 0)
-	//} else {
-	//	attrs = cols
-	//}
-	//
-	//for _, c := range attrs {
-	//	col := new(MysqlColumn)
-	//	col.SetName(c.GetName())
-	//	err = convertEngineTypeToMysqlType(c.GetType(), col)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	/*
-	//		mysql CMD_FIELD_LIST response: send the column definition per column
-	//	*/
-	//	err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
+	// Return an empty field list to avoid catalog scans for client auto-completion.
 	return nil
 }
 
@@ -1847,12 +1829,6 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-		} else if assign.System && name == "optimizer_hints" {
-			err = setVarFunc(assign.System, assign.Global, name, value, sql)
-			if err != nil {
-				return err
-			}
-			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -2345,44 +2321,54 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(execCtx.proc, planExpr)
+		err = func() error {
+			restore := bindFrontendExpressionContext(execCtx.proc, execCtx.reqCtx)
+			defer restore()
+			executor, err := colexec.NewExpressionExecutor(execCtx.proc, planExpr)
+			if err != nil {
+				return err
+			}
+			defer executor.Free()
+			vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
+
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
+			sels := vector.GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+
+			err = bat.Shrink(sels, false, ses.proc.Mp())
+			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
+
+			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+			rows = rows[:bat.Vecs[0].Length()]
+			for i := range rows {
+				s0, isNull := v0.GetStrValue(uint64(i))
+				if isNull {
+					rows[i][0] = ""
+				} else {
+					rows[i][0] = string(s0)
+				}
+				s1, isNull := v1.GetStrValue(uint64(i))
+				if isNull {
+					rows[i][1] = ""
+				} else {
+					rows[i][1] = string(s1)
+				}
+			}
+			return nil
+		}()
 		if err != nil {
 			return err
-		}
-		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			executor.Free()
-			return err
-		}
-
-		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := vector.GetSels()
-		for i, b := range bs {
-			if b {
-				sels = append(sels, int64(i))
-			}
-		}
-		executor.Free()
-
-		bat.Shrink(sels, false)
-		vector.PutSels(sels)
-
-		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
-		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
-		rows = rows[:bat.Vecs[0].Length()]
-		for i := range rows {
-			s0, isNull := v0.GetStrValue(uint64(i))
-			if isNull {
-				rows[i][0] = ""
-			} else {
-				rows[i][0] = string(s0)
-			}
-			s1, isNull := v1.GetStrValue(uint64(i))
-			if isNull {
-				rows[i][1] = ""
-			} else {
-				rows[i][1] = string(s1)
-			}
 		}
 	}
 
@@ -2571,7 +2557,7 @@ func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.Tab
 		return nil, err
 	}
 
-	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2612,14 +2598,35 @@ func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfi
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, statementSQL ...string) error {
+	rawSQL := ""
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return doExplainStmtWithExecutionInput(reqCtx, ses, stmt, nil, "", rawSQL)
+}
 
+// The caller supplies only statement-local scheduling text whose provenance is
+// known. Without it, EXPLAIN retains the unscoped planning path.
+func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	var exPlan *plan.Plan
+	input, intent, eligible := planningInputForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
+	if eligible {
+		compiler := ses.GetTxnCompileCtx()
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input)
+		if err == nil {
+			exPlan, _, err = validateCapturedExecutionBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
+				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
+			})
+		}
+	} else {
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -2643,10 +2650,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 				return moerr.NewInternalError(reqCtx, "failed to copy exPlan")
 			}
 		}
-	}
-	rawSQL := ""
-	if len(statementSQL) > 0 {
-		rawSQL = statementSQL[0]
 	}
 	return writeExplainResult(reqCtx, ses, stmt, exPlan, es, rawSQL, nil)
 }
@@ -2805,8 +2808,10 @@ func explainSchedulingEnabled(ses *Session) bool {
 // Note: for pass the compile quickly. We will remove the comments in the future.
 func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) error {
 	rawSQL := execCtx.sqlOfStmt
+	schedulingSQL := ""
 	if carrier, ok := execCtx.cw.(interface{ SchedulingSQL() string }); ok && carrier.SchedulingSQL() != "" {
-		rawSQL = carrier.SchedulingSQL()
+		schedulingSQL = carrier.SchedulingSQL()
+		rawSQL = schedulingSQL
 	}
 	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.ifIsExeccute {
 		es, err := getExplainOption(execCtx.reqCtx, stmt.Options)
@@ -2826,7 +2831,7 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 		}
 		return writeExplainResult(execCtx.reqCtx, ses.(*Session), stmt, exPlan, es, rawSQL, sqlMode)
 	}
-	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt, rawSQL)
+	return doExplainStmtWithExecutionInput(execCtx.reqCtx, ses.(*Session), stmt, execCtx.proc, schedulingSQL, rawSQL)
 }
 
 func preparedExplainPlan(ctx context.Context, txnCW *TxnComputationWrapper) (*plan.Plan, error) {
@@ -3138,6 +3143,15 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// A prepared executable explain cannot own the client LOCAL transfer
+	// either: every later EXECUTE would run the wrapped load without the pipe
+	// and upload goroutine that only a plain tree.Load admission creates
+	// (issue #32453). Reject the unsupported combination at admission, before
+	// any planning, caching or response publication, so no EXECUTE route can
+	// reach a nil upload stream.
+	if err := executableExplainLocalLoadReject(execCtx.reqCtx, saveStmt); err != nil {
+		return nil, err
+	}
 	// Every executable handle must prove which policy actually participated
 	// in planning. Publication cannot repair missing provenance afterward.
 	if !preparedOwnerPolicyCaptured(execCtx) {
@@ -3160,8 +3174,14 @@ func createPrepareStmtInSession(
 	}
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
+	execCtx.directIndexReadAdmitted = false
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
-		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt)
+		// Quoted SQL PREPARE starts with PrepareString in the outer request,
+		// while authorization must inspect the parsed PrepareStmt being bound.
+		previousStmt := execCtx.stmt
+		execCtx.stmt = stmt
+		defer func() { execCtx.stmt = previousStmt }()
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})
 	if err != nil {
@@ -3186,7 +3206,7 @@ func createPrepareStmtInSession(
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
-		shouldCachePrepareCompile(prepareControl.Plan) &&
+		planReuse(false, prepareControl.Plan, preparedPhysicalCompile).reusable &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
@@ -3208,6 +3228,7 @@ func createPrepareStmtInSession(
 			nil,
 			nil,
 			groupConcatFloor,
+			nil,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -3240,6 +3261,7 @@ func createPrepareStmtInSession(
 		divPrecisionIncrementSet: true,
 		remapDb:                  maps.Clone(execCtx.remapDb),
 		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
+		directIndexReadAdmitted:  execCtx.directIndexReadAdmitted,
 		tempTableVersion:         owner.GetTempTableVersion(),
 		ddlVersion:               owner.getDDLVersion(),
 		cloneSQL:                 cloneSQL,
@@ -3279,7 +3301,7 @@ func createPrepareStmtInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		if prepareStmt.ColDefData, err = resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...); err != nil {
+		if prepareStmt.ColDefData, err = makeStatementColumnDefData(execCtx.reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
 	}
@@ -3345,7 +3367,7 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 }
 
 func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st)
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st, nil)
 	if err != nil {
 		return err
 	}
@@ -3477,7 +3499,7 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3493,7 +3515,6 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
-	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -3509,17 +3530,9 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }
@@ -3724,7 +3737,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	// Object lifecycle locks are part of GRANT's correctness contract. Force the
 	// private transaction into the same pessimistic RC protocol as DROP even on
 	// optimistic deployments; LockOp intentionally skips optimistic txns.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3742,7 +3755,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3760,6 +3773,10 @@ func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivi
 // handleSwitchRole switches the role to another role
 func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 	return doSwitchRole(execCtx.reqCtx, ses.(*Session), sr)
+}
+
+func handleSetDefaultRole(ses FeSession, execCtx *ExecCtx, sdr *tree.SetDefaultRole) error {
+	return doSetDefaultRole(execCtx.reqCtx, ses.(*Session), sdr)
 }
 
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
@@ -3893,43 +3910,53 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
-		if err != nil {
-			return err
-		}
-		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			executor.Free()
-			return err
-		}
-
-		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := vector.GetSels()
-		for i, b := range bs {
-			if b {
-				sels = append(sels, int64(i))
+		err = func() error {
+			restore := bindFrontendExpressionContext(proc, execCtx.reqCtx)
+			defer restore()
+			executor, err := colexec.NewExpressionExecutor(proc, planExpr)
+			if err != nil {
+				return err
 			}
-		}
-		executor.Free()
+			defer executor.Free()
+			vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
 
-		bat.Shrink(sels, false)
-		vector.PutSels(sels)
-		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
-		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
-		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
-		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
-		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
-		v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
-		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i].GetString(area0)
-			rows[i][1] = v1[i].GetString(area1)
-			rows[i][2] = v2[i]
-			rows[i][3] = v3[i].GetString(area3)
-			rows[i][4] = v4[i].GetString(area4)
-			rows[i][5] = v5[i]
-			rows[i][6] = v6[i].GetString(area6)
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
+			sels := vector.GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+
+			err = bat.Shrink(sels, false, proc.Mp())
+			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
+			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
+			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
+			v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+			v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
+			v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
+			v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
+			rows = rows[:len(v0)]
+			for i := range v0 {
+				rows[i][0] = v0[i].GetString(area0)
+				rows[i][1] = v1[i].GetString(area1)
+				rows[i][2] = v2[i]
+				rows[i][3] = v3[i].GetString(area3)
+				rows[i][4] = v4[i].GetString(area4)
+				rows[i][5] = v5[i]
+				rows[i][6] = v6[i].GetString(area6)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
 	}
 
@@ -4257,7 +4284,7 @@ func buildPlan(
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 ) (*plan2.Plan, error) {
-	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false)
+	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, nil)
 }
 
 func buildPlanWithPrepareMode(
@@ -4266,6 +4293,7 @@ func buildPlanWithPrepareMode(
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
+	planningInput *plan2.PlanningInput,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
 		// LOAD planning may inspect an external source before producing a plan.
@@ -4296,7 +4324,7 @@ func buildPlanWithPrepareMode(
 		// Handle specific statement types
 		if s, ok := stmt.(*tree.Insert); ok {
 			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -4311,26 +4339,32 @@ func buildPlanWithPrepareMode(
 			return ret, err
 		}
 
-		// Default handling of various statements
-		switch stmt := stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-			opt := plan2.NewBaseOptimizer(ctx)
-			optimized, err := opt.Optimize(stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
+		// The integration-only route exercises the same PREPARE/rebuild owner.
+		// Ordinary builds inline a constant false and have no activation switch.
+		var validationSelected bool
+		ret, validationSelected, err = buildViewSchemaValidationPlan(reqCtx, ses, ctx, stmt, isPrepareStmt)
+		if !validationSelected {
+			// Default handling of various statements
+			switch stmt := stmt.(type) {
+			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
+				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+				opt := plan2.NewBaseOptimizer(ctx)
+				optimized, err := opt.Optimize(stmt, isPrepareStmt, planningInput)
+				if err != nil {
+					return nil, err
+				}
 
-			ret = &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: optimized,
-				},
+				ret = &plan2.Plan{
+					Plan: &plan2.Plan_Query{
+						Query: optimized,
+					},
+				}
+			default:
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, planningInput)
 			}
-		default:
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 		}
 
 		if ret != nil {
@@ -4406,12 +4440,12 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 // buildPlanWithAuthorization wraps buildPlan with the plan-level permission
 // check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
 // the common planning boundary shared by this and direct compile paths.
-var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.PlanningInput) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
 	// Step 1: Call buildPlan to construct the execution plan
-	plan, err := buildPlan(reqCtx, ses, ctx, stmt)
+	plan, err := buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -4428,7 +4462,7 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot, *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
@@ -4466,7 +4500,7 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		object, exists := resolved[key]
 		if !exists {
 			var err error
-			object.ref, object.def, err = resolveFn(key.database, name, snapshot)
+			object.ref, object.def, err = resolveFn(key.database, name, snapshot, nil)
 			if err != nil {
 				return true, err
 			}
@@ -4583,6 +4617,7 @@ func containsSelectInto(stmts []tree.Statement) bool {
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	execCtx.input.clearRecordFragments()
 	// Inputs that carry a rewrite policy use the snapshot captured at their
 	// protocol boundary. Other inputs retain their existing session-level
 	// behavior.
@@ -4598,6 +4633,16 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
 	var statementRemaps []map[string]string
+	var cached *cachedPlan
+	if execCtx.input.getPreparePlan() == nil {
+		if cause := context.Cause(execCtx.reqCtx); cause != nil {
+			return nil, cause
+		}
+		cached = cachedPlanForInput(ses, execCtx.input)
+		if cause := context.Cause(execCtx.reqCtx); cause != nil {
+			return nil, cause
+		}
+	}
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		execCtx.input.genSqlSourceType(ses)
 		// Binary execute carries the prepared plan directly in UserInput. Check
@@ -4621,10 +4666,12 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
-	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
+	} else if cause := context.Cause(execCtx.reqCtx); cause != nil {
+		return nil, cause
+	} else if cached != nil {
 		var remapErr error
-		statementSchedulingSQL, sources, schedulingErr := schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
+		statementSchedulingSQL, sources, fragments, schedulingErr := schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource, nil)
 		if schedulingErr != nil {
 			return nil, schedulingErr
 		}
@@ -4638,6 +4685,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if len(statementRemaps) != len(cached.stmts) {
 			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of remapdb policies is not equal to cached statements")
 		}
+		execCtx.input.setRecordFragments(fragments, parserSQLMode)
 		execCtx.input.setSqlSourceTypes(ses, sources)
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -4649,7 +4697,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.cachedPlanSQL = execCtx.input.getHash()
 			tcw.cachedPlanIndex = i
 			tcw.cachedPlanGeneration = cached.plans[i]
-			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
+			tcw.planSnapshotTS = cached.planSnapshotTS[i]
+			tcw.hasPlanSnapshotTS = true
 			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
@@ -4668,6 +4717,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var cmdGetDdlStmt *InternalCmdGetDdl
 	var cmdGetObjectStmt *InternalCmdGetObject
 	var cmdObjectListStmt *InternalCmdObjectList
+	var parsedFragments []mysql.SQLFragment
 	var err error
 	// if the input is an option ast, we should use it directly
 	if execCtx.input.getStmt() != nil {
@@ -4721,7 +4771,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
-		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		stmts, parsedFragments, err = parseSqlWithFragments(execCtx, ses.GetMySQLParser(), parserSQLMode)
 		if err != nil {
 			return nil, err
 		}
@@ -4770,6 +4820,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 	var statementSchedulingSQL []string
 	var sources []string
+	var recordFragments []mysql.SQLFragment
 	if execCtx.input.getStmt() != nil {
 		statementSchedulingSQL = []string{execCtx.input.getSql()}
 		source := constant.InternalSql
@@ -4778,8 +4829,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		sources = []string{source}
 	} else {
-		statementSchedulingSQL, sources, err = schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
+		statementSchedulingSQL, sources, recordFragments, err = schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource, parsedFragments)
 		if err != nil {
 			return nil, err
 		}
@@ -4787,6 +4838,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if len(statementSchedulingSQL) != len(stmts) || len(sources) != len(stmts) {
 		return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to statements")
 	}
+	execCtx.input.setRecordFragments(recordFragments, parserSQLMode)
 	execCtx.input.setSqlSourceTypes(ses, sources)
 	for i, stmt := range stmts {
 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -4800,6 +4852,20 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
+	lowerCaseTableNames, sqlMode := parseSqlOptions(execCtx)
+	return p.ParseWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+}
+
+func parseSqlWithFragments(execCtx *ExecCtx, p *mysql.MySQLParser, schedulingSQLMode string) ([]tree.Statement, []mysql.SQLFragment, error) {
+	lowerCaseTableNames, sqlMode := parseSqlOptions(execCtx)
+	if lowerCaseTableNames != 1 || sqlMode != schedulingSQLMode {
+		stmts, err := p.ParseWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+		return stmts, nil, err
+	}
+	return p.ParseWithSQLModeAndFragments(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+}
+
+func parseSqlOptions(execCtx *ExecCtx) (int64, string) {
 	// The publication binding probe names the exact catalog object the
 	// validation snapshot certified through the executed statement this
 	// parse produces, so its identifiers keep source case and binding can
@@ -4809,12 +4875,7 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
 		lowerCaseTableNames = 0
 	}
-	return p.ParseWithSQLMode(
-		execCtx.reqCtx,
-		execCtx.input.getSql(),
-		lowerCaseTableNames,
-		sessionSQLModeForParser(execCtx.ses),
-	)
+	return lowerCaseTableNames, sessionSQLModeForParser(execCtx.ses)
 }
 
 func sessionSQLMode(ses FeSession) string {
@@ -5071,6 +5132,7 @@ func nextSQLModeStatementInput(
 func newSQLStatementInput(input *UserInput, sql string) *UserInput {
 	statementInput := *input
 	statementInput.sql = sql
+	statementInput.clearRecordFragments()
 	statementInput.hashedSql = ""
 	statementInput.sqlSourceType = nil
 	statementInput.genHash()
@@ -5092,6 +5154,7 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	// Source entries are read-only; reclassification replaces the entire slice.
 	rewrittenInput := *input
 	rewrittenInput.sql = rewritten
+	rewrittenInput.clearRecordFragments()
 	rewrittenInput.genHash()
 	return &rewrittenInput, nil
 }
@@ -5141,6 +5204,9 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if err := checkFrontendIndexTarget(reqCtx, ses, stmt); err != nil {
+		return stats, err
+	}
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
@@ -5340,6 +5406,53 @@ func unwrapExecutableExplainStatement(stmt tree.Statement) tree.Statement {
 	}
 }
 
+// executableExplainWrapsLocalLoad reports whether an executable explain wrapper
+// directly or transitively wraps a LOCAL load statement.
+//
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute their wrapped statement in the
+// engine to collect runtime analysis data, but the client-to-server LOCAL
+// upload stream (io.Pipe, writer, and the transfer goroutine) is created only
+// by executeStatusStmt for a plain tree.Load. Executing a LOCAL load through
+// the explain runner leaves proc.LoadLocalReader unset, so the pipeline
+// dereferences a nil pipe reader at first read (issue #32453). Plain EXPLAIN
+// only plans the wrapped statement and never runs the load, so it is
+// deliberately not unwrapped here: a wrapped LOCAL load must keep planning.
+func executableExplainWrapsLocalLoad(stmt tree.Statement) bool {
+	for {
+		switch explain := stmt.(type) {
+		case *tree.ExplainAnalyze:
+			stmt = explain.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = explain.Statement
+		default:
+			load, ok := stmt.(*tree.Load)
+			return ok && load.Local
+		}
+	}
+}
+
+// executableExplainLocalLoadReject returns the canonical checked rejection for
+// a statement that would execute a LOAD DATA LOCAL INFILE through an explain
+// wrapper that cannot own the client LOCAL transfer (issue #32453). Every
+// other statement shape returns nil here: plain EXPLAIN, non-LOCAL loads and
+// bare loads keep their existing behavior at every admission point that shares
+// this predicate.
+func executableExplainLocalLoadReject(ctx context.Context, stmt tree.Statement) error {
+	switch explain := stmt.(type) {
+	case *tree.ExplainAnalyze:
+		if executableExplainWrapsLocalLoad(explain) {
+			return moerr.NewNotSupported(ctx,
+				"EXPLAIN ANALYZE LOAD DATA LOCAL INFILE is not supported")
+		}
+	case *tree.ExplainPhyPlan:
+		if executableExplainWrapsLocalLoad(explain) {
+			return moerr.NewNotSupported(ctx,
+				"EXPLAIN PHYPLAN LOAD DATA LOCAL INFILE is not supported")
+		}
+	}
+	return nil
+}
+
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func canExecuteStatementInUncommittedTransaction(
 	reqCtx context.Context,
@@ -5410,10 +5523,47 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	return readTime, writeTime, err
 }
 
-// An upload either reaches the protocol EOF or retires its connection. Retrying
-// reads or draining an unlimited client stream after failure cannot establish a
-// bounded, reusable command boundary. Only the upload owner frees its buffer;
-// the cancellation watcher interrupts I/O and is joined before owner cleanup.
+// Bounds for the post-cancellation upload drain. A single read timeout does not
+// bound the drain: a trickling or endless client stream is retired by the total
+// wait and byte budgets instead. The total wait is installed as an absolute
+// deadline on every network read (not just between packets), so one stalling
+// header or payload cannot outlive it. Package variables, not constants, so
+// lifecycle tests can shrink the budgets without long sleeps.
+var (
+	// loadLocalDrainReadTimeout bounds one silent read while draining, so a
+	// stalled client cannot pin the statement goroutine after failure.
+	loadLocalDrainReadTimeout = time.Second
+	// loadLocalDrainMaxWait bounds the whole drain, however many packets arrive.
+	loadLocalDrainMaxWait = 30 * time.Second
+	// loadLocalDrainMaxBytes bounds the payload volume drained from cancel on.
+	loadLocalDrainMaxBytes int64 = 256 * 1024 * 1024
+)
+
+// loadLocalDrainCapable is the narrow slice of the protocol the upload owner
+// needs to interrupt in-flight network I/O and run the post-cancellation
+// drain. *Conn implements it, and *MysqlProtocolImpl proxies the same contract
+// to its *Conn so real sessions drain instead of disconnecting (#30640); any
+// other MysqlRrWr keeps the legacy behaviour of retiring the connection
+// immediately on cancellation.
+type loadLocalDrainCapable interface {
+	InterruptLoadLocalIO()
+	ClearLoadLocalIOInterrupt()
+	DiscardLoadLocalPacket(time.Duration, time.Time, int64) (discarded int64, eof bool, err error)
+}
+
+// The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
+// the drain contract: without these proxies the owner falls back to Disconnect
+// and a finite client upload loses its connection instead of receiving the
+// statement error. Fail here, at build time, on any future refactor.
+var _ loadLocalDrainCapable = &MysqlProtocolImpl{}
+
+// An upload either reaches the protocol EOF or retires its connection. Any
+// error or cancellation interrupts the in-flight network I/O, then a bounded
+// drain still gives a finite client stream the chance to reach its protocol
+// EOF: the statement error can then reach the client and the connection stays
+// usable. An unlimited stream is retired by the drain budgets. Only the upload
+// owner frees its buffer; the cancellation watcher interrupts I/O and is
+// joined before owner cleanup.
 func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
 	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
@@ -5438,16 +5588,38 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		select {
 		case <-ctx.Done():
 			_ = reader.CloseWithError(ctx.Err())
-			disconnect()
+			if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+				// Interrupt the in-flight network I/O without closing the
+				// socket; the owner below decides between drain and retire.
+				drainer.InterruptLoadLocalIO()
+			} else {
+				disconnect()
+			}
 		case <-quitC:
 		}
 	}()
+	// joinWatcher makes the one-shot cancellation watcher quiescent before the
+	// owner touches socket deadlines for drain or reuse. The watcher itself
+	// never reads the client and never waits on the upload pipe (its two calls
+	// are non-blocking socket/pipe operations), so joining it is bounded; after
+	// the join it can never again expire a deadline on this connection.
+	watcherJoined := false
+	joinWatcher := func() {
+		if !watcherJoined {
+			watcherJoined = true
+			close(quitC)
+			<-watcherDone
+		}
+	}
 	var reachedEOF bool
 	defer func() {
-		close(quitC)
-		<-watcherDone
+		joinWatcher()
 		if !reachedEOF {
 			disconnect()
+		} else if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// A late cancellation may have poked I/O deadlines on a connection
+			// that stays alive for the next command.
+			drainer.ClearLoadLocalIOInterrupt()
 		}
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -5457,6 +5629,16 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	if err != nil {
 		return
 	}
+	// The client has accepted the upload; a later cancellation or failure
+	// drains its finite remainder before the command boundary is answered —
+	// including an interrupted frame whose exact progress was preserved. A
+	// fatal framing/transport error still requires connection retirement.
+	requestAccepted := true
+	// drainOnExit requests the bounded post-failure drain below for an ordinary
+	// (non-cancellation) error, so the SQL error — not 2013 — answers the
+	// command on a connection that stays usable, exactly as after a
+	// cancellation drain.
+	drainOnExit := false
 
 	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
 	handleNetworkTimeout := func(err error) error {
@@ -5501,7 +5683,22 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 
 	for {
 		if err = checkLockTableBinds(); err != nil {
-			return
+			if ctx.Err() == nil {
+				// Ordinary statement-side error (e.g. lock table bind
+				// changed, which is exactly the #30640 2013 flavor): a
+				// drain-capable protocol resyncs the finite client stream
+				// at its upload EOF below, so this error reaches the
+				// client on a reusable connection. A legacy protocol keeps
+				// retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
+				return
+			}
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 		readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer)
 		if err != nil {
@@ -5510,12 +5707,27 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 				err = nil
 				break
 			}
+			if ctx.Err() == nil {
+				if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+					return timeoutErr
+				}
 
-			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
-				return timeoutErr
+				// Ordinary upload-side error (e.g. the parser retired the
+				// pipe after rejecting the stream — the over-budget record
+				// flavor of #30640): the same command-boundary contract as
+				// the bind-change case above applies — resync the finite
+				// client stream at its upload EOF so this error, not 2013,
+				// answers the command on a reusable connection. A legacy
+				// protocol keeps retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
+				return err
 			}
-
-			return err
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 
 		updateTimeStats(readTime, writeTime)
@@ -5529,10 +5741,69 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		epoch += 1
 	}
 
+	// The statement side retired this upload while a finite client may still be
+	// sending. Resync the protocol at the upload EOF so the original statement
+	// error and the next command can still use this connection; a stream that
+	// never terminates within the drain budgets keeps the legacy behaviour of
+	// retiring the connection (see the cleanup defer above).
+	if !reachedEOF && requestAccepted && (ctx.Err() != nil || drainOnExit) {
+		if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// Join the cancellation watcher BEFORE lifting its interrupt: a
+			// watcher's InterruptLoadLocalIO landing after the clear used to
+			// expire the drain's deadline mid-arm and disconnect a finite
+			// client (the renewed #30640 2013). After the join nothing can
+			// touch this connection's deadlines again but the drain itself.
+			joinWatcher()
+			drainer.ClearLoadLocalIOInterrupt()
+			reachedEOF = drainLoadLocalUpload(ses, execCtx, drainer)
+		}
+	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
 	return
+}
+
+// drainLoadLocalUpload discards client upload packets after cancellation until
+// the upload's protocol EOF, so a finite client still receives its statement
+// error on a connection that stays usable. The drain is bounded three ways: a
+// single silent read outlasts loadLocalDrainReadTimeout, total drain time
+// outlasts loadLocalDrainMaxWait, and drained payload exceeds
+// loadLocalDrainMaxBytes. True means the protocol EOF was reached; false means
+// the caller must retire the connection because the stream did not terminate
+// within its budgets. The empty upload packet is the protocol EOF marker (see
+// readThenWrite).
+func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
+	deadline := time.Now().Add(loadLocalDrainMaxWait)
+	var drainedBytes int64
+	for {
+		// The absolute deadline is installed on every network read of this
+		// packet, so a trickled header or payload cannot outlive the drain's
+		// total budget one byte at a time.
+		discarded, eof, err := drainer.DiscardLoadLocalPacket(loadLocalDrainReadTimeout, deadline, loadLocalDrainMaxBytes-drainedBytes)
+		ses.CountPayload(int(discarded))
+		if err == nil && eof {
+			return true
+		}
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: client stalled during drain, retiring connection")
+			} else {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain read failed, retiring connection: %v", err)
+			}
+			return false
+		}
+		drainedBytes += discarded
+		switch {
+		case drainedBytes > loadLocalDrainMaxBytes:
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)
+			return false
+		case time.Now().After(deadline):
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain outlasted %s, retiring connection", loadLocalDrainMaxWait)
+			return false
+		}
+	}
 }
 
 func makeCompactTxnInfo(op TxnOperator) string {
@@ -5634,6 +5905,25 @@ func executeStmtWithTxn(ses FeSession,
 		wasDisabled := execCtx.proc.IncrStatementDisabled()
 		execCtx.proc.SetIncrStatementDisabled(true)
 		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
+
+		// Derived statements on a shared-transaction background executor
+		// (e.g. nested procedure bodies) skip executeStmtWithWorkspace, so
+		// the READ ONLY admission runs here before dispatch instead. The gate
+		// evaluates the originating user session and the temporary bindings
+		// live at this moment; origin-less maintenance executions stay
+		// exempt inside it.
+		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
+			return err
+		}
+		effective, database, resolveErr := effectiveStatementForTxn(execCtx.reqCtx, ses, execCtx.stmt)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		admissionCtx := *execCtx
+		admissionCtx.effectiveTxnDefaultDatabase = database
+		if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effective); err != nil {
+			return err
+		}
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5761,6 +6051,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
+	// Reject writes in a READ ONLY transaction (MySQL ERROR 1792). This runs
+	// before TxnHandler.Create so a DDL statement inside an explicit read-only
+	// transaction is rejected before its implicit commit, and the rejection
+	// leaves the transaction fully usable for reads.
+	if err = enforceReadOnlyTxnAccessMode(
+		ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+		return err
+	}
+
 	//in session migration, the txn forced to be autocommit.
 	//then the txn can be committed.
 	if execCtx.inMigration {
@@ -5800,6 +6099,22 @@ func executeStmtWithWorkspace(ses FeSession,
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
+	}
+	// A statement that started without an active transaction could only run
+	// the name check at the earlier admission point. Resolve existing target
+	// kinds now, before a workspace statement or frontend side effect starts.
+	if err = checkFrontendIndexTargetWithCatalog(execCtx, effectiveStmt); err != nil {
+		return err
+	}
+	if execCtx.deferReadOnlyOwnership {
+		// The pre-Create admission deferred an unqualified multi-source
+		// UPDATE verdict (READ ONLY path without an active transaction):
+		// re-run the gate now that a catalog transaction is attached.
+		execCtx.deferReadOnlyOwnership = false
+		if err = enforceReadOnlyTxnAccessMode(
+			ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+			return err
+		}
 	}
 	if backSes, ok := ses.(*backSession); ok {
 		if hook := backSes.processHook; hook != nil {
@@ -5919,11 +6234,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 			panic("need txn handler 3")
 		}
 
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
 	}()
 
 	err = dispatchStmt(ses, statsArr, execCtx)
@@ -5933,6 +6243,9 @@ func executeStmtWithIncrStmt(ses FeSession,
 func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	// Evict this stale entry before rebuilding so a successful replan replaces
 	// it instead of paying the validation/rebuild cost forever.
+	if cause := context.Cause(execCtx.reqCtx); cause != nil {
+		return cause
+	}
 	if session, ok := ses.(*Session); ok {
 		session.removeCachedPlan(execCtx.input.getHash())
 	}
@@ -5979,7 +6292,7 @@ func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
-		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
+		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().resolveForCatalogValidation)
 		if err != nil {
 			return err
 		}
@@ -5988,6 +6301,9 @@ func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 			if err != nil {
 				return err
 			}
+		}
+		if cause := context.Cause(execCtx.reqCtx); cause != nil {
+			return cause
 		}
 		if flag {
 			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
@@ -6079,8 +6395,14 @@ func executeStmt(ses *Session,
 			ses.SetDatabaseName("")
 		}
 	case *tree.ExplainAnalyze:
+		if err = executableExplainLocalLoadReject(execCtx.reqCtx, st); err != nil {
+			return
+		}
 		ses.SetData(nil)
 	case *tree.ExplainPhyPlan:
+		if err = executableExplainLocalLoadReject(execCtx.reqCtx, st); err != nil {
+			return
+		}
 		ses.SetData(nil)
 	case *tree.ShowTableStatus:
 		ses.SetShowStmtType(ShowTableStatus)
@@ -6299,6 +6621,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		TimeZone:               ses.GetTimeZone(),
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
+		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
@@ -6403,6 +6726,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	var cws []ComputationWrapper
 	if err == nil {
 		execCtx.input = executionInput
+		executionInput.clearRecordFragments()
 		cws, err = GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 			ses.GetUserName(),
 			pu.StorageEngine,
@@ -6479,10 +6803,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 	var sqlRecord []string
 	if !stagedSQLMode {
-		sqlRecord, err = sqlForRecordByStatementWithSQLMode(execCtx.reqCtx, input.getSql(), sessionSQLModeForParser(ses))
+		sqlRecord, err = input.sqlForRecord(execCtx.reqCtx, sessionSQLModeForParser(ses), len(cws))
 		if err != nil {
 			return err
 		}
+	}
+	input.clearRecordFragments()
+	if executionInput != input {
+		executionInput.clearRecordFragments()
 	}
 	stagedInputs := make([]*UserInput, 0, 1)
 	stagedSQLRecords := make([]string, 0, 1)
@@ -6586,6 +6914,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		// A COM_QUERY may contain multiple statements.  The previous statement
+		// can have published a generated ODKU value to the session after the
+		// process was initialized, so reseed the expression-visible process
+		// value before planning this statement.
+		lastInsertID := ses.GetLastInsertID()
+		proc.SetLastInsertID(lastInsertID)
+		// Retry restoration uses the session snapshot carried by SessionInfo. Keep
+		// that attempt baseline aligned when COM_QUERY reuses the process across
+		// statements.
+		proc.Base.SessionInfo.LastInsertID = lastInsertID
+		proc.Base.SessionInfo.LastInsertIDSet = true
+		proc.ResetODKUResult()
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)
 		}
@@ -6606,6 +6946,23 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if err2 != nil {
 			return err2
 		}
+		if receipt, ok := makeOutfileReceipt(diagnosticStmt); ok && ses.tStmt != nil {
+			ses.tStmt.SetOutfileReceipt(*receipt)
+		}
+		// Explicit index targets must be rejected before an implicit DDL commit.
+		// EXECUTE was resolved above, so the saved target is checked with the
+		// current role and input provenance rather than the EXECUTE wrapper.
+		if resolveErr == nil {
+			admissionCtx := *execCtx
+			admissionCtx.input = currentInput
+			if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
+				proc.Base.TxnOperator = handler.GetTxn()
+			}
+			if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effectiveStmt); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
@@ -6615,6 +6972,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// completion and must not commit the new transaction opened by BEGIN.
 		_, replacementBegin := stmt.(*tree.BeginTransaction)
 		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore {
+			// A writing implicit-commit statement (TRUNCATE, RENAME) would
+			// commit an active READ ONLY transaction below and then execute in
+			// a fresh write-capable transaction. MySQL instead rejects the
+			// statement with ERROR 1792 and keeps the transaction alive for
+			// reads, so gate before the implicit commit happens.
+			execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+			execCtx.txnOpt.activeTxnAtStartKnown = true
+			if err = enforceReadOnlyTxnAccessMode(ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
@@ -6645,6 +7015,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				}
 				execCtx.input = currentInput
 				rebuilt, buildErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(), ses.GetUserName(), pu.StorageEngine, proc, ses)
+				currentInput.clearRecordFragments()
 				if buildErr != nil {
 					return buildErr
 				}
@@ -6728,7 +7099,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				seconds = float64(value)
 			}
 			if seconds > 0 {
-				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+				proc.Base.UnixTime = sessionTimestampToUnixNano(seconds)
 			}
 		}
 		if ses.proc != nil {
@@ -6803,6 +7174,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				ses.GetUserName(),
 				pu.StorageEngine,
 				proc, ses)
+			nextInput.clearRecordFragments()
 			if nextErr != nil {
 				return recordParseError(nextInput, nextErr)
 			}
@@ -6871,10 +7243,36 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	return nil
 }
 
+// sessionTimestampToUnixNano converts a validated timestamp system variable.
+// Round only the fractional seconds: multiplying the full epoch by 1e9 can
+// round just below a microsecond boundary before temporal functions truncate it.
+func sessionTimestampToUnixNano(seconds float64) int64 {
+	whole, fraction := math.Modf(seconds)
+	fractionMicros := min(int64(math.RoundToEven(fraction*1e6)), 999999)
+	// Like MySQL, cap the rounded fraction rather than carrying into a new second.
+	unixMicros := int64(whole)*1e6 + fractionMicros
+	// The accepted DOUBLE upper endpoint can round above MaxInt64 nanoseconds.
+	// Keep the last complete microsecond representable by the statement clock.
+	unixMicros = min(unixMicros, math.MaxInt64/int64(time.Microsecond))
+	return unixMicros * int64(time.Microsecond)
+}
+
 // sqlForRecordByStatement keeps the sanitized per-statement text aligned with
 // the parser's AST list. HandleSqlForRecord intentionally preserves blank and
 // comment-only semicolon fragments for its existing callers; execution skips
 // those fragments, so filter them here before indexing by computation wrapper.
+func (ui *UserInput) sqlForRecord(ctx context.Context, sqlMode string, statementCount int) ([]string, error) {
+	defer ui.clearRecordFragments()
+	if ui.getStmt() == nil && ui.getPreparePlan() == nil &&
+		ui.recordFragments != nil && ui.recordSQL == ui.getSql() && ui.recordSQLMode == sqlMode {
+		records := sqlForRecordFromFragments(ui.recordFragments)
+		if len(records) == statementCount {
+			return records, nil
+		}
+	}
+	return sqlForRecordByStatementWithSQLMode(ctx, ui.getSql(), sqlMode)
+}
+
 func sqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
 	return sqlForRecordByStatementWithSQLMode(ctx, sql, "")
 }
@@ -6886,33 +7284,38 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
 		return parsers.HandleSqlForRecord(sql), nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}
-	records, err := parsers.HandleSqlForRecordByStatementWithSQLMode(ctx, sql, sqlMode)
-	if err != nil {
-		return nil, err
+	return sqlForRecordFromFragments(fragments), nil
+}
+
+func sqlForRecordFromFragments(fragments []mysql.SQLFragment) []string {
+	parts := make([]string, len(fragments))
+	for i, fragment := range fragments {
+		parts[i] = fragment.SQL
 	}
+	records := parsers.HandleSqlForRecordFragments(parts)
 	if len(fragments) == 1 {
-		return records, nil
+		return records
 	}
 	byStatement := make([]string, 0, len(records))
 	for i, fragment := range fragments {
-		if parsers.FragmentHasStatement(fragment) {
+		if parsers.FragmentHasStatement(fragment.SQL) {
 			byStatement = append(byStatement, records[i])
 		}
 	}
 	if len(byStatement) == 0 {
-		return []string{""}, nil
+		return []string{""}
 	}
-	return byStatement, nil
+	return byStatement
 }
 
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
 // optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
 // this text is control-plane input and must never be sanitized first.
-func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool, fragments []mysql.SQLFragment) ([]string, []string, []mysql.SQLFragment, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
 		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
 		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
@@ -6921,17 +7324,20 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		if !internalSource {
 			source = statementSQLSource(sql, sqlMode)
 		}
-		return []string{sql}, []string{source}, nil
+		return []string{sql}, []string{source}, nil, nil
 	}
-	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
-	if err != nil {
-		return nil, nil, err
+	if fragments == nil {
+		var err error
+		fragments, err = parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	// Rewriting only prepends optimizer hints and retains original SQL. Ordinary
 	// source markers therefore have identical meaning before and after rewrite.
 	sources, err := sqlSourcesByFragment(ctx, sql, sqlMode, fragments, internalSource)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	byStatement := make([]string, 0, len(fragments))
 	bySource := sources[:0]
@@ -6946,9 +7352,9 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		if internalSource {
 			source = constant.InternalSql
 		}
-		return []string{sql}, []string{source}, nil
+		return []string{sql}, []string{source}, fragments, nil
 	}
-	return byStatement, bySource, nil
+	return byStatement, bySource, fragments, nil
 }
 
 func checkNodeCanCache(p *plan2.Plan) bool {
@@ -6965,7 +7371,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
-		if q.Query.GetHasForeignKeyAction() {
+		if q.Query.GetHasForeignKeyAction() || !planReuse(false, p, ordinaryPlanGeneration).reusable {
 			return false
 		}
 		for _, node := range q.Query.Nodes {
@@ -7277,8 +7683,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
 		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// A valid COM_STMT_CLOSE is response-free even when the handle was
+			// already closed. Drivers do not read a reply to this command.
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
-			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
+			return nil, nil
 		}
 		preStmt.closeCursor()
 		preStmt.resetBinaryParamState()
@@ -7292,10 +7700,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			// The SQL cleanup path retains its own error bookkeeping. Sending its
+			// error to a binary client would desynchronize the next command.
+			ses.Error(execCtx.reqCtx, "failed to close binary prepared statement", zap.Error(err))
 		}
 		restoreRowCount(ses, ses.GetProc(), savedRowCount)
-		return resp, nil
+		return nil, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET
@@ -7547,6 +7957,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetSigned(false)
 	case types.T_float32:
 		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The low-precision float types have no MySQL wire type; present them as
+		// FLOAT (they widen losslessly to float32 for the protocol).
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 	case types.T_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
 	case types.T_char:
@@ -7554,7 +7968,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)

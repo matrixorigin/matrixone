@@ -1,0 +1,483 @@
+drop database if exists txn_readonly;
+create database txn_readonly;
+use txn_readonly;
+create table t (a int primary key);
+insert into t values (1);
+start transaction read only;
+select @@session.transaction_read_only, @@session.tx_read_only;
+➤ @@transaction_read_only[-1,16383,0]  ¦  @@tx_read_only[-1,16383,0]  𝄀
+0  ¦  0
+select * from t;
+a
+1
+insert into t values (2);
+Cannot execute statement in a READ ONLY transaction.
+update t set a = a + 1;
+Cannot execute statement in a READ ONLY transaction.
+delete from t;
+Cannot execute statement in a READ ONLY transaction.
+replace into t values (3);
+Cannot execute statement in a READ ONLY transaction.
+truncate table t;
+Cannot execute statement in a READ ONLY transaction.
+create table ddl_t (a int);
+Cannot execute statement in a READ ONLY transaction.
+create index idx_a on t (a);
+Cannot execute statement in a READ ONLY transaction.
+drop table t;
+Cannot execute statement in a READ ONLY transaction.
+alter table t add column b int;
+Cannot execute statement in a READ ONLY transaction.
+rename table t to t2;
+Cannot execute statement in a READ ONLY transaction.
+select * from t;
+a
+1
+commit;
+select count(*) from t;
+count(*)
+1
+set session transaction read only;
+begin;
+insert into t values (2);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+1
+rollback;
+start transaction read write;
+insert into t values (2);
+commit;
+select count(*) from t;
+count(*)
+2
+insert into t values (3);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+set session transaction read write;
+select @@session.transaction_read_only, @@session.tx_read_only;
+➤ @@transaction_read_only[-1,16383,0]  ¦  @@tx_read_only[-1,16383,0]  𝄀
+0  ¦  0
+start transaction read only;
+create temporary table tmp (a int);
+insert into tmp values (7);
+select * from tmp;
+a
+7
+update tmp set a = a + 1;
+select * from tmp;
+a
+8
+drop table tmp;
+commit;
+select count(*) from t;
+count(*)
+2
+start transaction read only;
+prepare s from 'insert into t values (9)';
+execute s;
+Cannot execute statement in a READ ONLY transaction.
+deallocate prepare s;
+prepare s2 from 'select count(*) from t';
+execute s2;
+count(*)
+2
+deallocate prepare s2;
+commit;
+start transaction read only;
+explain analyze insert into t values (9);
+Cannot execute statement in a READ ONLY transaction.
+rollback;
+select count(*) from t;
+count(*)
+2
+create temporary table tmp (a int);
+insert into tmp values (7);
+start transaction read only;
+delete tmp from t as tmp;
+Cannot execute statement in a READ ONLY transaction.
+delete y from t as y;
+Cannot execute statement in a READ ONLY transaction.
+delete tmp from tmp as tmp;
+commit;
+select count(*) from t;
+count(*)
+2
+drop table tmp;
+drop procedure if exists txn_read_only_wp;
+create procedure txn_read_only_wp() 'begin insert into t values (9); end';
+drop procedure if exists txn_read_only_rp;
+create procedure txn_read_only_rp() 'begin select count(*) from t; end';
+set session transaction read only;
+call txn_read_only_wp();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+call txn_read_only_rp();
+count(*)
+2
+rollback;
+select count(*) from t;
+count(*)
+2
+set session transaction read write;
+start transaction read only;
+explain phyplan insert into t values (9);
+Cannot execute statement in a READ ONLY transaction.
+rollback;
+select count(*) from t;
+count(*)
+2
+create table dq (a int primary key);
+insert into dq values (1), (2);
+create temporary table dqt (a int);
+start transaction read only;
+delete txn_readonly.dqt from dq as dqt;
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from dq;
+count(*)
+2
+delete txn_readonly.dqt from txn_readonly.dqt;
+commit;
+select count(*) from dq;
+count(*)
+2
+delete txn_readonly.dqt from dq as dqt;
+select count(*) from dq;
+count(*)
+0
+drop table dq;
+drop table dqt;
+create table up (a int primary key, b int);
+insert into up values (1, 10), (2, 20);
+create temporary table ut (a int primary key, b int);
+insert into ut values (1, 100), (2, 200);
+start transaction read only;
+update ut join up on ut.a = up.a set ut.b = up.b;
+select b from ut order by a;
+b
+10
+20
+update ut join up on ut.a = up.a set up.b = 999;
+Cannot execute statement in a READ ONLY transaction.
+select b from up order by a;
+b
+10
+20
+commit;
+drop table ut;
+drop table up;
+create table pe (a int primary key);
+insert into pe values (1);
+create temporary table pt (a int primary key);
+drop procedure if exists txn_read_only_tp_proc;
+create procedure txn_read_only_tp_proc() 'begin insert into pt values (1); insert into pt values (2); end';
+drop procedure if exists txn_read_only_xp;
+create procedure txn_read_only_xp() 'begin drop table pt; insert into pe values (9); end';
+drop procedure if exists txn_read_only_tr;
+create procedure txn_read_only_tr() 'begin truncate table pe; end';
+start transaction read only;
+call txn_read_only_tp_proc();
+select count(*) from pt;
+count(*)
+2
+call txn_read_only_xp();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from pe;
+count(*)
+1
+call txn_read_only_tr();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from pe;
+count(*)
+1
+commit;
+drop procedure if exists txn_read_only_xp2;
+create procedure txn_read_only_xp2() 'begin drop table pt2; insert into pe values (9); end';
+create temporary table pt2 (a int primary key);
+call txn_read_only_xp2();
+select count(*) from pe;
+count(*)
+2
+call txn_read_only_tr();
+select count(*) from pe;
+count(*)
+0
+drop procedure txn_read_only_tp_proc;
+drop procedure txn_read_only_xp;
+drop procedure txn_read_only_tr;
+drop procedure txn_read_only_xp2;
+drop table if exists pt;
+drop table if exists pt2;
+drop table pe;
+create table nw (a int primary key);
+insert into nw values (1);
+drop procedure if exists ro_inner_ins;
+create procedure ro_inner_ins() 'begin insert into nw values (9); end';
+drop procedure if exists ro_outer_call;
+create procedure ro_outer_call() 'begin call ro_inner_ins(); end';
+start transaction read only;
+call ro_outer_call();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from nw;
+count(*)
+1
+rollback;
+select count(*) from nw;
+count(*)
+1
+call ro_outer_call();
+select count(*) from nw;
+count(*)
+2
+delete from nw where a = 9;
+drop procedure ro_inner_ins;
+drop procedure ro_outer_call;
+drop table nw;
+create table bsrc (a int primary key);
+insert into bsrc values (1);
+data branch create table txn_readonly.bchild from txn_readonly.bsrc;
+start transaction read only;
+data branch create table txn_readonly.bchild2 from txn_readonly.bsrc;
+Cannot execute statement in a READ ONLY transaction.
+data branch delete table txn_readonly.bchild;
+Cannot execute statement in a READ ONLY transaction.
+data branch merge txn_readonly.bchild into txn_readonly.bsrc;
+Cannot execute statement in a READ ONLY transaction.
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output as txn_readonly.bdiff;
+Cannot execute statement in a READ ONLY transaction.
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output count;
+COUNT(*)
+0
+select count(*) from txn_readonly.bchild;
+count(*)
+1
+rollback;
+data branch delete table txn_readonly.bchild;
+drop table bsrc;
+create table uo_p (id int primary key, pv int);
+insert into uo_p values (1, 10);
+create temporary table uo_t (id int primary key, tv int);
+insert into uo_t values (1, 100);
+start transaction read only;
+update uo_t join uo_p on uo_t.id = uo_p.id set tv = 1;
+select tv from uo_t;
+tv
+1
+update uo_t join uo_p on uo_t.id = uo_p.id set pv = 9;
+Cannot execute statement in a READ ONLY transaction.
+update uo_t join uo_p on uo_t.id = uo_p.id set id = 2;
+Cannot execute statement in a READ ONLY transaction.
+select pv from uo_p;
+pv
+10
+commit;
+select tv from uo_t;
+tv
+1
+drop table uo_t;
+drop table uo_p;
+set session transaction_read_only = 1;
+set @gcm_save = @@global.group_concat_max_len;
+set global group_concat_max_len = 2048;
+select @@global.group_concat_max_len;
+@@global.group_concat_max_len
+2048
+set global group_concat_max_len = @gcm_save;
+select @@global.group_concat_max_len;
+@@global.group_concat_max_len
+1024
+set session transaction_read_only = 0;
+drop procedure if exists txn_read_only_dp;
+create procedure txn_read_only_dp() 'begin prepare ds from ''insert into t values (9)''; execute ds; end';
+drop procedure if exists txn_read_only_dsel;
+create procedure txn_read_only_dsel() 'begin prepare ss from ''select count(*) from t''; execute ss; end';
+set session transaction read only;
+call txn_read_only_dp();
+Cannot execute statement in a READ ONLY transaction.
+call txn_read_only_dsel();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+set session transaction read write;
+call txn_read_only_dp();
+select count(*) from t;
+count(*)
+3
+call txn_read_only_dsel();
+count(*)
+3
+delete from t where a = 9;
+drop procedure txn_read_only_dp;
+drop procedure txn_read_only_dsel;
+set session transaction_read_only = 1;
+delete from t;
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+set session tx_read_only = 0;
+insert into t values (3);
+select count(*) from t;
+count(*)
+3
+create table uo2_p (id int primary key, pv int);
+insert into uo2_p values (1, 10);
+create temporary table uo2_t (id int primary key, tv int);
+insert into uo2_t values (1, 100);
+set session transaction_read_only = 1;
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set tv = 1;
+select tv from uo2_t;
+tv
+1
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set pv = 9;
+Cannot execute statement in a READ ONLY transaction.
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set id = 2;
+Cannot execute statement in a READ ONLY transaction.
+select pv from uo2_p;
+pv
+10
+select tv from uo2_t;
+tv
+1
+set session transaction_read_only = 0;
+drop table uo2_t;
+drop table uo2_p;
+create procedure dcl_wp() 'begin insert into t values (9); end';
+set session transaction_read_only = 1;
+create role dcl_r;
+create user dcl_u identified by 'Test@1234';
+grant select on table txn_readonly.t to dcl_r;
+revoke select on table txn_readonly.t from dcl_r;
+drop user dcl_u;
+drop role dcl_r;
+call dcl_wp();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+3
+set session transaction_read_only = 0;
+call dcl_wp();
+select count(*) from t;
+count(*)
+4
+delete from t where a = 9;
+drop procedure dcl_wp;
+set session transaction_read_only = 1;
+create account ro_acct admin_name = 'ro_admin' identified by 'Test@1234';
+drop account ro_acct;
+create role ro_r6;
+create user ro_u6 identified by 'Test@1234';
+grant ro_r6 to ro_u6;
+set default role ro_r6 to ro_u6;
+alter role ro_r6 add rule 'select a from txn_readonly.t where a > 0' on table txn_readonly.t;
+alter role ro_r6 drop rule on table txn_readonly.t;
+create publication ro_pub database txn_readonly account all;
+drop publication ro_pub;
+drop user ro_u6;
+drop role ro_r6;
+set session transaction_read_only = 0;
+create database r7_src;
+create database r7_dst;
+create table r7_dst.leak (a int primary key);
+set enable_remap_hint = 1;
+use r7_src;
+create temporary table leak (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into leak values (1);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from r7_dst.leak;
+count(*)
+0
+prepare r7_pp from 'insert into leak values (1)';
+execute r7_pp;
+Cannot execute statement in a READ ONLY transaction.
+deallocate prepare r7_pp;
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table leak;
+create temporary table r7_dst.okt (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into okt values (1);
+select count(*) from okt;
+count(*)
+1
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table r7_dst.okt;
+set enable_remap_hint = 0;
+use txn_readonly;
+drop table r7_dst.leak;
+drop database r7_src;
+drop database r7_dst;
+create sequence r8_sq;
+select nextval('r8_sq');
+nextval(r8_sq)
+1
+set session transaction_read_only = 1;
+select nextval('r8_sq');
+Cannot execute statement in a READ ONLY transaction.
+select currval('r8_sq');
+currval(r8_sq)
+1
+select setval('r8_sq', 100);
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+select nextval('r8_sq');
+nextval(r8_sq)
+2
+prepare r8_pp from 'select nextval(''r8_sq'')';
+set session transaction_read_only = 1;
+execute r8_pp;
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+deallocate prepare r8_pp;
+drop sequence r8_sq;
+create sequence r9_sq;
+select nextval('r9_sq');
+nextval(r9_sq)
+1
+create view r9_v as select nextval('r9_sq') as nv;
+create temporary table r9_tt (a int);
+set session transaction_read_only = 1;
+select * from r9_v;
+Cannot execute statement in a READ ONLY transaction.
+insert into r9_tt select nextval('r9_sq');
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from r9_tt;
+count(*)
+0
+insert into r9_tt values (1);
+select count(*) from r9_tt;
+count(*)
+1
+select currval('r9_sq');
+currval(r9_sq)
+1
+create view r9_v2 as select 1 as a;
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+select nextval('r9_sq');
+nextval(r9_sq)
+2
+select * from r9_v;
+nv
+3
+insert into r9_tt select nextval('r9_sq');
+select currval('r9_sq');
+currval(r9_sq)
+4
+select count(*) from r9_tt;
+count(*)
+2
+drop temporary table r9_tt;
+drop view r9_v;
+drop sequence r9_sq;
+drop table t;
+drop database txn_readonly;

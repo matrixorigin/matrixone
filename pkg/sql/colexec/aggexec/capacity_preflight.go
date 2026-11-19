@@ -672,7 +672,7 @@ func distinctArgumentRowHash(
 		case types.T_char:
 			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
 		case types.T_json, types.T_array_float32, types.T_array_float64,
-			types.T_array_bf16, types.T_array_float16:
+			types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 			scratch = keycodec.AppendCanonicalValue(
 				scratch[:0], typ, vec.GetRawBytesAt(row))
 			value = scratch
@@ -2367,6 +2367,11 @@ func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
 	return exec.applyStringSourceEvents(&events, eventCount)
 }
 
+func hasDefaultFixedMinMaxMetadata(vec *vector.Vector) bool {
+	return vec.GetPrepareParamKind() == vector.PrepareParamNone &&
+		vec.GetPrepareParamKinds() == nil && !vec.HasStringSourceMetadata()
+}
+
 func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	offset int,
 	groups []uint64,
@@ -2381,7 +2386,41 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
 		return err
 	}
-	values := vector.MustFixedColNoTypeCheck[T](vectors[0])
+	values, selection, indirect := fixedAggregateInput[T](vectors[0])
+	if hasDefaultFixedMinMaxMetadata(vectors[0]) {
+		// Ordinary fixed values cannot create a provenance sidecar when every
+		// touched destination is ordinary too. Validate the same active/standby
+		// targets without simulating winners or recording metadata events.
+		plain := true
+		for row, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(physicalRow)) {
+				continue
+			}
+			_ = fixedAggregateValueAt(values, selection, indirect, physicalRow)
+			_, y, state, err := exec.validatePreflightTarget(group)
+			if err != nil {
+				return err
+			}
+			// Preserve the original metadata preflight's shape errors as well
+			// as its allocation checks; an incomplete target must fall back.
+			if len(state.vecs) == 0 || state.vecs[0] == nil ||
+				max(int(state.length), int(y)+1) < state.vecs[0].Length() ||
+				!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+				plain = false
+				break
+			}
+		}
+		if plain {
+			return nil
+		}
+	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
 		if err != nil {
@@ -2392,7 +2431,7 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 			var zero T
 			return zero, vector.PrepareParamNone, false, nil
 		}
-		return values[physicalRow],
+		return fixedAggregateValueAt(values, selection, indirect, physicalRow),
 			vectors[0].GetPrepareParamKindAt(physicalRow), true, nil
 	}
 	if err := exec.preflightFixedStringSources(groups, candidate,
@@ -2422,6 +2461,46 @@ func (exec *minMaxExecFixed[T]) PreflightBatchMerge(
 	}
 	if offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if len(groups) > hashmap.UnitLimit {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	// Merging ordinary fixed values cannot create provenance metadata when
+	// every touched destination is ordinary too. Validate the same sources
+	// and active/standby targets without simulating per-group winners.
+	plain := true
+	for row, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y := other.getXY(uint64(offset + row))
+		if x < 0 || x >= len(other.state) ||
+			int(y) >= int(other.state[x].length) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if len(other.state[x].vecs) == 0 || other.state[x].vecs[0] == nil ||
+			!hasDefaultFixedMinMaxMetadata(other.state[x].vecs[0]) {
+			plain = false
+			break
+		}
+		source := other.state[x].vecs[0]
+		if source.IsNull(uint64(y)) {
+			continue
+		}
+		_ = vector.GetFixedAtNoTypeCheck[T](source, int(y))
+		_, targetRow, state, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		if len(state.vecs) == 0 || state.vecs[0] == nil ||
+			max(int(state.length), int(targetRow)+1) < state.vecs[0].Length() ||
+			!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return nil
 	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		x, y := other.getXY(uint64(offset + row))

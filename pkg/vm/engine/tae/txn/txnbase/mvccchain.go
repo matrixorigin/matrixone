@@ -27,11 +27,10 @@ type MVCCChain[T txnif.MVCCNode[T]] struct {
 	*sync.RWMutex
 	MVCC      *common.GenericSortedDList[T]
 	comparefn func(T, T) int
-	newnodefn func() T
 	zero      T
 }
 
-func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, newnodefn func() T, rwlocker *sync.RWMutex) MVCCChain[T] {
+func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, rwlocker *sync.RWMutex) MVCCChain[T] {
 	if rwlocker == nil {
 		rwlocker = new(sync.RWMutex)
 	}
@@ -39,7 +38,6 @@ func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, newnodefn func(
 		MVCC:      common.NewGenericSortedDList(comparefn),
 		RWMutex:   rwlocker,
 		comparefn: comparefn,
-		newnodefn: newnodefn,
 	}
 }
 func (be *MVCCChain[T]) DepthLocked() int {
@@ -68,51 +66,6 @@ func (be *MVCCChain[T]) InsertLocked(vun T) (node *common.GenericDLNode[T]) {
 	un := vun
 	node = be.MVCC.Insert(un)
 	return
-}
-
-// [start, end]
-// Check whether there is any committed node in between [start, end]
-// -----+------+-------+--------+----------+--------->
-//
-//	    |      |       |        |          |      Time
-//	    |     start    |       end         |
-//	commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
-//	   (1)            (2)                 (3)
-func (be *MVCCChain[T]) HasCommittedNodeInRangeLocked(start, end types.TS) (ok bool) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
-		un := n.GetPayload()
-		in, before := un.CommittedIn(start, end)
-
-		// case (2)
-		// A committed node is found. Stop the loop.
-		// Found
-		if in {
-			ok = true
-			return false
-		}
-
-		// case (3)
-		// Committed after the end ts or uncommitted.
-		// Go to prev node
-		// Not found
-		if !before {
-			return true
-		}
-
-		// case (1)
-		// Committed before the start ts. Stop the loop.
-		// Not found
-		return false
-	}, false)
-	return
-}
-
-func (be *MVCCChain[T]) MustOneNodeLocked() (T, bool) {
-	var nilT T
-	if be.MVCC.Depth() != 1 {
-		return nilT, be.MVCC.Depth() == 0
-	}
-	return be.MVCC.GetHead().GetPayload(), false
 }
 
 // GetLatestNodeLocked gets the latest mvcc node.
@@ -189,44 +142,6 @@ func (be *MVCCChain[T]) NeedWaitCommittingLocked(ts types.TS) (bool, txnif.TxnRe
 		return false, nil
 	}
 	return un.NeedWaitCommitting(ts)
-}
-
-func (be *MVCCChain[T]) HasUncommittedNodeLocked() bool {
-	var found bool
-	be.LoopChainLocked(func(n T) bool {
-		if n.IsCommitted() {
-			return false
-		} else {
-			if !n.IsAborted() {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
-}
-
-func (be *MVCCChain[T]) HasCommittedNodeLocked() bool {
-	var found bool
-	be.LoopChainLocked(func(n T) bool {
-		if n.IsCommitted() {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func (be *MVCCChain[T]) IsCreatingOrAbortedLocked() bool {
-	un, empty := be.MustOneNodeLocked()
-	if empty {
-		return true
-	}
-	if un.IsNil() {
-		return false
-	}
-	return un.IsActive() || un.IsAborted()
 }
 
 func (be *MVCCChain[T]) CheckConflictLocked(txn txnif.TxnReader) (err error) {

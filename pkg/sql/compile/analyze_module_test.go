@@ -998,3 +998,64 @@ func TestPreparedAnalyzeResetDropsPreviousRequestResource(t *testing.T) {
 		require.Equal(t, uint64(1<<6), reasons)
 	}
 }
+
+func TestPipelineTreeDisplayModes(t *testing.T) {
+	root := &table_clone.TableClone{}
+	root.GetOperatorBase().AppendChild(&table_clone.TableClone{})
+	root.GetOperatorBase().AppendChild(&table_clone.TableClone{})
+	root.GetOperatorBase().OpAnalyzer = process.NewAnalyzer(0, false, false, "table clone")
+
+	for _, tc := range []struct {
+		name   string
+		level  DebugLevel
+		option ExplainOption
+	}{
+		{name: "normal", level: NormalLevel},
+		{name: "old", level: OldLevel},
+		{name: "verbose", level: VerboseLevel, option: ExplainOption{Verbose: true}},
+		{name: "analyze", level: AnalyzeLevel, option: ExplainOption{Verbose: true, Analyze: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, position := range []struct {
+				name       string
+				root, tail bool
+			}{
+				{name: "root", root: true, tail: true},
+				{name: "tail", tail: true},
+				{name: "non-tail"},
+			} {
+				t.Run(position.name, func(t *testing.T) {
+					var debug, explain bytes.Buffer
+					ShowPipelineTree(root, "prefix", position.root, position.tail, nil, tc.level, &debug)
+					explainPipeline(root, "prefix", position.root, position.tail, nil, &tc.option, &explain)
+					require.Equal(t, debug.String(), explain.String())
+					require.Contains(t, debug.String(), "table clone")
+					require.Contains(t, debug.String(), "├── table clone")
+					require.Contains(t, debug.String(), "└── table clone")
+					if tc.level == NormalLevel && position.root {
+						require.Equal(t, "  Pipeline: └── table clone\nprefix       ├── table clone\nprefix       └── table clone", debug.String())
+					}
+				})
+			}
+		})
+	}
+
+	reg := &process.WaitRegister{}
+	connectorOp := &connector.Connector{Reg: reg}
+	var receiver bytes.Buffer
+	ShowPipelineTree(connectorOp, "", true, true, map[*process.WaitRegister]int{reg: 7}, NormalLevel, &receiver)
+	require.Contains(t, receiver.String(), "to MergeReceiver [7]")
+	receiver.Reset()
+	ShowPipelineTree(connectorOp, "", false, false, nil, NormalLevel, &receiver)
+	require.NotContains(t, receiver.String(), "MergeReceiver")
+
+	var explain bytes.Buffer
+	explainPipeline(root, "", true, true, nil, &ExplainOption{Analyze: true}, &explain)
+	require.Contains(t, explain.String(), "TimeCost:0ns")
+	require.NotContains(t, explain.String(), "idx:")
+
+	var empty bytes.Buffer
+	ShowPipelineTree(nil, "", true, true, nil, NormalLevel, &empty)
+	explainPipeline(nil, "", true, true, nil, &ExplainOption{}, &empty)
+	require.Empty(t, empty.String())
+}

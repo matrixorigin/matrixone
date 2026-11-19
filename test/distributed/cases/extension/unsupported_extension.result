@@ -1,0 +1,65 @@
+drop database if exists unsupported_extension;
+drop user if exists extension_connect_only;
+create database unsupported_extension;
+create table unsupported_extension.t(id int primary key);
+load some_ext;
+not supported: extension statements are not supported in MatrixOne
+select 1 as alive;
+➤ alive[-5,64,0]  𝄀
+1
+create extension pg as myext file '/missing.so';
+not supported: extension statements are not supported in MatrixOne
+select 1 as alive;
+➤ alive[-5,64,0]  𝄀
+1
+prepare rejected_load from 'load some_ext';
+not supported: extension statements are not supported in MatrixOne
+execute rejected_load;
+invalid state prepared statement 'rejected_load' does not exist
+set @extension_sql = 'create extension pg as myext file ''/missing.so''';
+prepare rejected_create from @extension_sql;
+not supported: extension statements are not supported in MatrixOne
+execute rejected_create;
+invalid state prepared statement 'rejected_create' does not exist
+prepare extension_control from 'select 1 as alive';
+execute extension_control;
+➤ alive[-5,64,0]  𝄀
+1
+deallocate prepare extension_control;
+load data inline format='csv', data='1' into table unsupported_extension.t;
+select id from unsupported_extension.t;
+➤ id[4,32,0]  𝄀
+1
+begin;
+insert into unsupported_extension.t values (2);
+load some_ext;
+not supported: extension statements are not supported in MatrixOne
+select count(*) as committed_rows from unsupported_extension.t;
+➤ committed_rows[-5,64,0]  𝄀
+1
+rollback;
+set autocommit=0;
+insert into unsupported_extension.t values (3);
+create extension pg as myext file '/missing.so';
+not supported: extension statements are not supported in MatrixOne
+select count(*) as committed_rows from unsupported_extension.t;
+➤ committed_rows[-5,64,0]  𝄀
+1
+rollback;
+set autocommit=1;
+select id from unsupported_extension.t;
+➤ id[4,32,0]  𝄀
+1
+create user extension_connect_only identified by 'extension_pw';
+load some_ext;
+not supported: extension statements are not supported in MatrixOne
+select 1 as alive;
+➤ alive[-5,64,0]  𝄀
+1
+create extension pg as myext file '/missing.so';
+not supported: extension statements are not supported in MatrixOne
+select 1 as alive;
+➤ alive[-5,64,0]  𝄀
+1
+drop user extension_connect_only;
+drop database unsupported_extension;

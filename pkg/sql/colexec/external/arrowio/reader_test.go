@@ -1158,3 +1158,52 @@ func FuzzArrowIPCPlanningAndOpenNeverPanicOrLeak(f *testing.F) {
 			admission.pending.Load(), admission.max.Load())
 	})
 }
+
+func TestFileIdentityValidationForPlanningAndReading(t *testing.T) {
+	payload, records := makeIPC(t, ContainerFile)
+	defer releaseRecords(records)
+	const path = "arrow-identity-validation"
+	base := writeMemoryFile(t, path, payload)
+	size := int64(len(payload))
+	valid := fileservice.ObjectIdentity{ETag: "v1", Size: size}
+	tests := []struct {
+		name     string
+		fs       fileservice.FileService
+		identity fileservice.ObjectIdentity
+		wantErr  string
+	}{
+		{name: "invalid", fs: base, identity: fileservice.ObjectIdentity{Size: size}, wantErr: "object identity requires"},
+		{name: "size mismatch", fs: base, identity: fileservice.ObjectIdentity{ETag: "v1", Size: size + 1}, wantErr: "does not match planned size"},
+		{name: "unsupported", fs: base, identity: valid, wantErr: "conditional Arrow object reads"},
+		{name: "valid", fs: newIdentityMemoryFS(base, valid), identity: valid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, planning := range []bool{false, true} {
+				admission := new(testAdmission)
+				opts := Options{ExpectedIdentity: &tt.identity}
+				if planning {
+					plan, err := InspectFile(context.Background(), tt.fs, path, size, admission, opts)
+					if tt.wantErr != "" {
+						require.ErrorContains(t, err, tt.wantErr)
+						require.Nil(t, plan)
+					} else {
+						require.NoError(t, err)
+						require.NotNil(t, plan)
+					}
+				} else {
+					reader, err := Open(context.Background(), tt.fs, path, size, ContainerFile, admission, opts)
+					if tt.wantErr != "" {
+						require.ErrorContains(t, err, tt.wantErr)
+						require.Nil(t, reader)
+					} else {
+						require.NoError(t, err)
+						require.NoError(t, reader.Close())
+					}
+				}
+				require.Zero(t, admission.pending.Load())
+				require.Zero(t, admission.active.Load())
+			}
+		})
+	}
+}

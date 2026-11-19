@@ -1,0 +1,99 @@
+select round(1e308,-307);
+➤ round(1e308, -307)[8,53,31]  𝄀
+1.0E308
+select round(1e308,-308);
+➤ round(1e308, -308)[8,53,31]  𝄀
+1.0E308
+select round(1e308,-309);
+➤ round(1e308, -309)[8,53,31]  𝄀
+0.0
+select round(-1e308,-307);
+➤ round(-1e308, -307)[8,53,31]  𝄀
+-1.0E308
+select round(-1e308,-308);
+➤ round(-1e308, -308)[8,53,31]  𝄀
+-1.0E308
+select truncate(1e308,-307);
+➤ truncate(1e308, -307)[8,53,31]  𝄀
+1.0E308
+select truncate(1e308,-308);
+➤ truncate(1e308, -308)[8,53,31]  𝄀
+1.0E308
+select truncate(1e308,-309);
+➤ truncate(1e308, -309)[8,53,31]  𝄀
+0.0
+select truncate(-1e308,-308);
+➤ truncate(-1e308, -308)[8,53,31]  𝄀
+-1.0E308
+select round(1e200,-308);
+➤ round(1e200, -308)[8,53,31]  𝄀
+0.0
+select round(1.5e308,-307)/1e307;
+➤ round(1.5e308, -307) / 1e307[8,53,31]  𝄀
+15.0
+select round(1e308,-307)/1e307;
+➤ round(1e308, -307) / 1e307[8,53,31]  𝄀
+10.0
+select round(-1e308,-307)/1e307;
+➤ round(-1e308, -307) / 1e307[8,53,31]  𝄀
+-10.0
+select truncate(1e308,-307)/1e307;
+➤ truncate(1e308, -307) / 1e307[8,53,31]  𝄀
+10.0
+select truncate(-1e308,-307)/1e307;
+➤ truncate(-1e308, -307) / 1e307[8,53,31]  𝄀
+-10.0
+select round(1.5e308,-308);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'round(1.5e+308,-308)'
+select round(1e308,10);
+➤ round(1e308, 10)[8,53,31]  𝄀
+1.0E308
+select truncate(1e308,10);
+➤ truncate(1e308, 10)[8,53,31]  𝄀
+1.0E308
+select truncate(1.5e26,-25);
+➤ truncate(1.5e26, -25)[8,53,31]  𝄀
+1.5E26
+select truncate(-1.5e26,-25);
+➤ truncate(-1.5e26, -25)[8,53,31]  𝄀
+-1.5E26
+select truncate(1.4e26,-25);
+➤ truncate(1.4e26, -25)[8,53,31]  𝄀
+1.4E26
+select truncate(1.5e24,-23);
+➤ truncate(1.5e24, -23)[8,53,31]  𝄀
+1.5E24
+select truncate(truncate(1.5e26,-25),-25);
+➤ truncate(truncate(1.5e26, -25), -25)[8,53,31]  𝄀
+1.5E26
+select round(truncate(1.5e26,-25),-25);
+➤ round(truncate(1.5e26, -25), -25)[8,53,31]  𝄀
+1.5E26
+select round(1e20,-1);
+➤ round(1e20, -1)[8,53,31]  𝄀
+1.0E20
+drop database if exists bvt31355;
+create database bvt31355;
+use bvt31355;
+create table t(g int, x double);
+insert into t values (1,1e200),(1,-1e200),(2,null),(3,5.0);
+select variance(x) from t where g=1;
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'variance(...)'
+select stddev(x) from t where g=1;
+➤ stddev(x)[8,53,31]  𝄀
+1.0E200
+select g, var_pop(x) from t where g in (2,3) group by g order by g;
+➤ g[4,32,0]  ¦  var_pop(x)[8,53,31]  𝄀
+2  ¦  null  𝄀
+3  ¦  0.0
+select g, stddev_pop(x) from t group by g order by g;
+➤ g[4,32,0]  ¦  stddev_pop(x)[8,53,31]  𝄀
+1  ¦  1.0E200  𝄀
+2  ¦  null  𝄀
+3  ¦  0.0
+select g, var_pop(x) from t group by g order by g;
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'variance(...)'
+select json_object('v', variance(x)) from t where g=1;
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'variance(...)'
+drop table t;
+drop database bvt31355;

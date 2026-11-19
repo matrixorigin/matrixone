@@ -108,6 +108,40 @@ def visibility(conn, other_id):
         assert all(row[3] == 'sys' and row[4] == USER for row in rows), rows
 
 
+def disconnect_request(admin, changed_user):
+    label = 'changed_user' if changed_user else 'unchanged_root'
+    marker = 'session_auth_disconnect_' + label
+    disconnected = connect()
+    cid = None
+    try:
+        if changed_user:
+            change_user(disconnected, USER, args.password)
+            sql(disconnected, f'set role {ROLE}')
+        cid = sql(disconnected, 'select connection_id()')[0][0]
+        backend_node = node(admin, disconnected)
+        disconnected._execute_command(3, 'select sleep(60) /* ' + marker + ' */')
+        admission_deadline = time.monotonic() + 10
+        while not running(admin, cid, marker):
+            assert time.monotonic() < admission_deadline, 'disconnect target never entered processlist'
+            time.sleep(.02)
+        closed_at = time.monotonic()
+        disconnected._force_close()  # No COM_QUIT: exercise production client EOF.
+        while True:
+            rows = sql(admin, 'select conn_id from information_schema.processlist where conn_id=%s', (cid,))
+            elapsed = time.monotonic() - closed_at
+            assert elapsed <= 10, f'{label}: disconnected backend remained alive beyond 10s ({elapsed:.3f}s)'
+            if not rows:
+                return {'case': label, 'conn_id': cid, 'node_id': backend_node,
+                        'disappeared': True, 'elapsed_seconds': elapsed}
+            time.sleep(.02)
+    finally:
+        disconnected._force_close()
+        # Preserve the original assertion if a probe fails, while bounding its backend lifetime.
+        if cid is not None:
+            with contextlib.suppress(pymysql.MySQLError):
+                sql(admin, f'kill connection {cid}')
+
+
 def main():
     with contextlib.ExitStack() as stack:
         admin = stack.enter_context(contextlib.closing(connect()))
@@ -205,25 +239,14 @@ def main():
                 raise AssertionError('self KILL CONNECTION left connection usable')
             except pymysql.MySQLError:
                 pass
-            # Disconnect cleanup must cancel a changed ordinary user's running request.
-            disconnected = connect()
-            change_user(disconnected, USER, args.password)
-            sql(disconnected, f'set role {ROLE}')
-            cid = sql(disconnected, 'select connection_id()')[0][0]
-            disconnected._execute_command(3, 'select sleep(60) /* session_auth_disconnect */')
-            deadline = time.monotonic() + 10
-            while not running(admin, cid, 'session_auth_disconnect'):
-                assert time.monotonic() < deadline
-                time.sleep(.02)
-            disconnected._force_close()  # No COM_QUIT: exercise in-flight client EOF.
-            while sql(admin, 'select conn_id from information_schema.processlist where conn_id=%s', (cid,)):
-                assert time.monotonic() < deadline, 'disconnected backend remained alive'
-                time.sleep(.02)
+            disconnects = [disconnect_request(admin, changed_user=True),
+                           disconnect_request(admin, changed_user=False)]
             print(json.dumps({'status': 'PASS', 'remote_cn': remote_port,
-                              'actor_node': actor_node, 'checks': ['visibility/show/function/view/prepared',
+                              'actor_node': actor_node, 'disconnects': disconnects,
+                              'checks': ['visibility/show/function/view/prepared',
                               'remote query+connection denial without effect', 'role downgrade+upgrade (single and multi-statement, prepared)',
                               'COM_CHANGE_USER denial+own kill', 'failed user+role switches', 'self kill',
-                              'changed-user disconnect cancellation']}))
+                              'changed-user and unchanged-root disconnect cancellation']}))
         finally:
             # Close all test sessions before dropping their catalog objects.
             stack.close()

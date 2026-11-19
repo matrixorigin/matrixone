@@ -48,10 +48,22 @@ func (c *Compile) joinInputsOnCoordinator(probe, build []*Scope) bool {
 // A WINDOW scope cannot be encoded remotely. Preserve its coordinator stage
 // before either broadcast or shuffle attaches it to a different scope tree.
 func (c *Compile) joinNeedsLocalWindow(node *plan.Node, probe, build []*Scope) bool {
-	if !node.Stats.HashmapStats.Shuffle && c.joinInputsOnCoordinator(probe, build) {
+	localInputs := c.joinInputsOnCoordinator(probe, build)
+	if !node.Stats.HashmapStats.Shuffle && localInputs {
 		return false
 	}
-	return scopesContainOperator(probe, vm.Window) || scopesContainOperator(build, vm.Window)
+	hasWindow := scopesContainOperator(probe, vm.Window) || scopesContainOperator(build, vm.Window)
+	if hasWindow && localInputs && len(c.cnList) == 1 && sameExecutionAddr(c.cnList[0].Addr, c.addr) {
+		// A coordinator-only shuffle never encodes the Window tree. Keep the
+		// selected hash-join topology instead of silently forcing broadcast.
+		// A CN-pinned source can add another receiver to shuffleJoinStageNodes;
+		// retain the old fallback when that owner is not the coordinator.
+		owner, pinned := sinkScanDependencyNode(probe, build)
+		if !pinned || sameExecutionAddr(owner.Addr, c.addr) {
+			return false
+		}
+	}
+	return hasWindow
 }
 
 // JoinMap is a process-local dependency, not a remotely transported result.

@@ -147,9 +147,9 @@ func icebergDeleteTasksToPipeline(tasks []api.DeleteFileTask) []*pipeline.Iceber
 			DeleteFilePath:     file.FilePath,
 			ReferencedDataFile: task.AppliesToPath,
 			EqualityFieldIds:   intSliceToInt32(file.EqualityIDs),
-			DeleteSchemaId:     int32(firstNonZeroInt(task.DeleteSchemaID, file.DeleteSchemaID)),
+			DeleteSchemaId:     int32(firstNonZero(task.DeleteSchemaID, file.DeleteSchemaID)),
 			PartitionSpecId:    int32(file.SpecID),
-			SequenceNumber:     firstNonZeroInt64(task.SequenceNumber, file.SequenceNumber),
+			SequenceNumber:     firstNonZero(task.SequenceNumber, file.SequenceNumber),
 			CredentialScope:    task.CredentialScope,
 		})
 	}
@@ -484,22 +484,11 @@ func icebergDeleteType(content api.DataFileContent) string {
 	}
 }
 
-func firstNonZeroInt(values ...int) int {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
+func firstNonZero[T int | int64](value, fallback T) T {
+	if value != 0 {
+		return value
 	}
-	return 0
-}
-
-func firstNonZeroInt64(values ...int64) int64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
+	return fallback
 }
 
 func intSliceToInt32(in []int) []int32 {

@@ -11,6 +11,12 @@ fields terminated by ',' lines terminated by '\n';
 -- the three columns are hidden: not in `select *`, not in the table shape
 select * from em_csv;
 desc em_csv;
+-- @regex("CREATE EXTERNAL TABLE `em_csv`", true)
+-- @regex("`a` int DEFAULT NULL", true)
+-- @regex("`s` varchar\(20\) COLLATE utf8mb4_general_ci DEFAULT NULL", true)
+-- @regex("FILEPATH'='[^']*external_table_file/error_mode\.csv'", true)
+-- @regex("'FORMAT'='csv'", true)
+-- @regex("ENCLOSED BY '' LINES TERMINATED BY '\\n'", true)
 show create table em_csv;
 
 -- a query that does not ask to see errors fails on the first bad record,

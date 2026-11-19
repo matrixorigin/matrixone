@@ -1,0 +1,19 @@
+drop database if exists fk_trunc_drop_31724;
+create database fk_trunc_drop_31724;
+use fk_trunc_drop_31724;
+create table parent(id int primary key, v int);
+create table child(id int primary key, pid int, constraint fk_child_31724 foreign key (pid) references parent(id));
+insert into parent values (1,1);
+insert into child values (10,1);
+truncate table parent;
+Cannot truncate a table referenced in a foreign key constraint (fk_child_31724)
+insert into parent values (2,2);
+drop table parent;
+Cannot drop table 'parent' referenced by a foreign key constraint 'fk_child_31724' on table 'child'.
+insert into parent values (3,3);
+set session foreign_key_checks = 0;
+truncate table parent;
+Cannot truncate a table referenced in a foreign key constraint (fk_child_31724)
+drop table parent;
+set session foreign_key_checks = 1;
+drop database fk_trunc_drop_31724;

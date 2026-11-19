@@ -81,17 +81,6 @@ func TestNormalizeParallelOption(t *testing.T) {
 	}
 }
 
-func TestGetParallelUploadPoolSingleton(t *testing.T) {
-	p1 := getParallelUploadPool()
-	p2 := getParallelUploadPool()
-	if p1 == nil || p2 == nil {
-		t.Fatalf("pool not initialized")
-	}
-	if p1 != p2 {
-		t.Fatalf("expected singleton pool")
-	}
-}
-
 type mockParallelStorage struct {
 	supports bool
 	exists   bool

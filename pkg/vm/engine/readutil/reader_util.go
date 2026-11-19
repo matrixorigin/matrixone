@@ -49,12 +49,6 @@ func WithBlockFilter(
 	}
 }
 
-// func WithMemFilter(filter MemPKFilter) ReaderOption {
-// 	return func(r *reader) {
-// 		r.filterState.memFilter = filter
-// 	}
-// }
-
 func NewSimpleReader(
 	ctx context.Context,
 	ds engine.DataSource,

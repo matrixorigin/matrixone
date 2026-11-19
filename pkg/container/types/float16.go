@@ -42,6 +42,13 @@ type Float16 uint16
 // BF16
 // ----------------------------------------------------------------------------
 
+// BF16MaxFinite and Float16MaxFinite are the largest finite magnitudes of bf16 and float16.
+// A float32 just above one rounds back to it, not to Inf, but is outside the type's range.
+var (
+	BF16MaxFinite    = BF16(0x7f7f).ToFloat32()
+	Float16MaxFinite = Float16(0x7bff).ToFloat32()
+)
+
 // ToFloat32 widens a bfloat16 to float32 by placing its bits in the high half
 // of the float32 representation.
 func (b BF16) ToFloat32() float32 {

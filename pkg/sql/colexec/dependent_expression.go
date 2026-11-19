@@ -145,7 +145,7 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 					executor.timeDependent = overload.IsRealTimeRelated()
 					executor.volatile = true // Frame demand already owns memoization.
 					executor.folded.needFoldingCheck = false
-					executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
+					executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
 					if err := executor.init(proc, len(args), typ, allocation); err != nil {
 						executor.Free()
 						return nil, err

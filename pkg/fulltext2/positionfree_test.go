@@ -99,7 +99,7 @@ func TestSearchBagOfWordsCJK(t *testing.T) {
 	require.NoError(t, err)
 	phraseIDs := resultIDs(phrase)
 
-	bow, err := idx.SearchBagOfWords([]byte("我家有三个人"), ParserGojieba, BM25, 10, nil)
+	bow, err := idx.SearchBagOfWords([]byte("我家有三个人"), ParserGojieba, BM25, 10, nil, 0)
 	require.NoError(t, err)
 	bowIDs := resultIDs(bow)
 

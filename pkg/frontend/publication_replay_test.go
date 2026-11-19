@@ -1,0 +1,238 @@
+// Copyright 2026 Matrix Origin
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package frontend
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPublicationStatementForReplayPreservesAuthorization(t *testing.T) {
+	for _, tables := range []string{pubsub.TableAll, "", "review-items,other-items"} {
+		for _, accounts := range []string{"", pubsub.AccountAll, "review-sub,other-sub"} {
+			t.Run(tables+"/accounts="+accounts, func(t *testing.T) {
+				pub := &pubsub.PubInfo{PubName: "review-pub", DbName: "review-db", TablesStr: tables,
+					SubAccountsStr: accounts, Comment: "owner's C:\\copy\\"}
+				original := *pub
+				stmt := publicationStatementForReplay(pub)
+				t.Cleanup(stmt.Free)
+				require.Equal(t, pub.PubName, string(stmt.Name))
+				require.Equal(t, pub.DbName, string(stmt.Database))
+				require.Equal(t, pub.Comment, stmt.Comment)
+				require.False(t, stmt.IfNotExists)
+				if tables == pubsub.TableAll || tables == "" {
+					require.Empty(t, stmt.Table)
+				} else {
+					require.Len(t, stmt.Table, 2)
+					require.Equal(t, "review-items", string(stmt.Table[0].Name()))
+					require.Equal(t, "other-items", string(stmt.Table[1].Name()))
+				}
+				require.NotNil(t, stmt.AccountsSet)
+				require.Equal(t, accounts == pubsub.AccountAll, stmt.AccountsSet.All)
+				if accounts == "" || accounts == pubsub.AccountAll {
+					require.Empty(t, stmt.AccountsSet.SetAccounts)
+				} else {
+					require.Len(t, stmt.AccountsSet.SetAccounts, 2)
+					require.Equal(t, "review-sub", string(stmt.AccountsSet.SetAccounts[0]))
+					require.Equal(t, "other-sub", string(stmt.AccountsSet.SetAccounts[1]))
+				}
+				require.Equal(t, original, *pub, "replay must not rewrite historical authorization metadata")
+			})
+		}
+	}
+}
+
+func TestCreatePublicationFromRestoreInfoPropagatesError(t *testing.T) {
+	for _, accounts := range []string{"", pubsub.AccountAll} {
+		t.Run("accounts="+accounts, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			failure := errors.New("account metadata unavailable")
+			bh.sql2err[getAccountIdNamesSql] = failure
+			pub := &pubsub.PubInfo{PubName: "p", DbName: "db", TablesStr: pubsub.TableAll, SubAccountsStr: accounts}
+			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), failure)
+			require.Equal(t, []string{getAccountIdNamesSql}, bh.executedSQLs, "replay must abort before any catalog write")
+		})
+	}
+}
+
+func TestPublicationStatementForReplayPreservesCatalogIdentifiers(t *testing.T) {
+	for _, accounts := range []string{pubsub.AccountAll, "CaseSub", ""} {
+		t.Run("accounts="+accounts, func(t *testing.T) {
+			pub := &pubsub.PubInfo{PubName: "Case`Pub", DbName: "Case DB", TablesStr: "PublishedT,publishedt",
+				SubAccountsStr: accounts, Comment: "owner's C:\\copy\\"}
+			original := *pub
+			statement := publicationStatementForReplay(pub)
+			t.Cleanup(statement.Free)
+			require.Equal(t, pub.PubName, string(statement.Name))
+			require.Equal(t, pub.DbName, string(statement.Database))
+			require.Len(t, statement.Table, 2)
+			require.Equal(t, "PublishedT", string(statement.Table[0].Name()))
+			require.Equal(t, "publishedt", string(statement.Table[1].Name()))
+			require.Equal(t, accounts == pubsub.AccountAll, statement.AccountsSet.All)
+			if accounts == "CaseSub" {
+				require.Equal(t, "CaseSub", string(statement.AccountsSet.SetAccounts[0]))
+			} else {
+				require.Empty(t, statement.AccountsSet.SetAccounts)
+			}
+			require.Equal(t, original, *pub)
+		})
+	}
+}
+
+func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
+	for _, tables := range []string{pubsub.TableAll, "", "t1"} {
+		t.Run("tables="+tables, func(t *testing.T) {
+			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
+			pub := &pubsub.PubInfo{PubName: "pub1", DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			bh.sql2result[buildTableInfoListSQL("db1", "", 42, sysAccountID)] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"},
+				[][]interface{}{{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""}})
+			want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
+				tables == pubsub.TableAll, tables, pubsub.AccountAll, "", true)
+			require.NoError(t, err)
+			insertion := errors.New("publication insertion reached")
+			bh.sql2err[want] = insertion
+			statement := publicationStatementForReplay(pub)
+			t.Cleanup(statement.Free)
+			require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, tables == pubsub.TableAll, 1), insertion)
+			require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
+			for _, sql := range bh.executedSQLs {
+				require.False(t, strings.Contains(sql, "mo_subs"), "failed insertion must not change subscriptions")
+			}
+		})
+	}
+}
+
+func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
+	for _, tc := range []struct{ tables, want string }{
+		{pubsub.TableAll, pubsub.TableAll}, {"", ""}, {"t1", "t1"},
+		{"ext-t", ""}, {"ext-t,t1", "t1"}, {"missing,ext-t", "missing"},
+	} {
+		t.Run("tables="+tc.tables, func(t *testing.T) {
+			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
+			pub := &pubsub.PubInfo{PubAccountId: 7, PubName: "pub1", DbName: "db1", TablesStr: tc.tables,
+				SubAccountsStr: pubsub.AccountAll, Comment: "owner's copy"}
+			original := *pub
+			query := buildTableInfoListSQL("db1", "", 42, 7)
+			bh.sql2result[query] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+			})
+			replay, err := publicationInfoForBulkRestore(ctx, bh, pub, 42, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, replay.TablesStr)
+			require.Equal(t, original, *pub)
+			if tc.tables == "" || tc.tables == pubsub.TableAll {
+				require.Empty(t, bh.executedSQLs, "ALL and explicit-empty require no table enumeration")
+			} else {
+				require.Equal(t, []string{query}, bh.executedSQLs, "read source tenant at the historical timestamp")
+			}
+			// Exercise the shared backend with the explicit mode a real replay
+			// executor supplies. The mock executor has no session; fail-closed
+			// mode resolution is checked separately below and SQL tests exercise
+			// the complete replay with a real background session.
+			statement := publicationStatementForReplay(replay)
+			t.Cleanup(statement.Free)
+			if tc.want == "missing" {
+				require.ErrorContains(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), "table 'missing' not exists")
+			} else {
+				want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
+					tc.want == pubsub.TableAll, tc.want, pubsub.AccountAll, pub.Comment, true)
+				require.NoError(t, err)
+				insertion := errors.New("publication insertion reached")
+				bh.sql2err[want] = insertion
+				if tc.want == "" || tc.want == pubsub.TableAll {
+					require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), insertion)
+				} else {
+					require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), insertion)
+				}
+				require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
+			}
+			require.Equal(t, original, *pub)
+		})
+	}
+}
+
+func TestPublicationReplayRequiresCaseModeForRetainedSelection(t *testing.T) {
+	for _, tables := range []string{"t1", "ext-t,t1"} {
+		t.Run(tables, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			pub := &pubsub.PubInfo{PubAccountId: 7, PubName: "pub1", DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			query := buildTableInfoListSQL("db1", "", 42, 7)
+			bh.sql2result[query] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+			})
+			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+			require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil),
+				"session variable lower_case_table_names is unavailable")
+			require.Equal(t, []string{query}, bh.executedSQLs, "missing mode must fail before catalog writes")
+		})
+	}
+}
+
+func TestPublicationReplayOmitsOnlyKnownUnservableViews(t *testing.T) {
+	views := map[string]*tableInfo{
+		"skipped":        {dbName: "db1", tblName: "v_ft", typ: view, unservable: true},
+		"working":        {dbName: "db1", tblName: "v_ok", typ: view},
+		"ordinary":       {dbName: "db1", tblName: "t1", typ: "BASE TABLE", unservable: true},
+		"other database": {dbName: "other", tblName: "v_other", typ: view, unservable: true},
+		"nil":            nil,
+	}
+	omitted := publicationOmittedViews(views)
+	require.Len(t, omitted, 2)
+	require.Nil(t, publicationOmittedViews(nil))
+	for _, tc := range []struct{ tables, want string }{
+		{"v_ft,t1", "t1"}, {"v_ft", ""}, {"v_ft,v_ok", "v_ok"},
+		{"missing,v_ft", "missing"}, {"t1,v_ft", "t1"}, {"v_other,v_ft", "v_other"},
+		{"ext-t,v_ft", ""}, {pubsub.TableAll, pubsub.TableAll}, {"", ""},
+	} {
+		t.Run(tc.tables, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: tc.tables, SubAccountsStr: "selected_sub"}
+			original := *pub
+			bh.sql2result[buildTableInfoListSQL("db1", "", 42, 7)] = newMrsForRestoreStringRows(
+				[]string{"name", "type", "kind", "view"}, [][]interface{}{
+					{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+					{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+					{"v_ft", "VIEW", catalog.SystemViewRel, ""},
+					{"v_ok", "VIEW", catalog.SystemViewRel, ""},
+					{"v_other", "VIEW", catalog.SystemViewRel, ""},
+				})
+			replay, err := publicationInfoForBulkRestore(defines.AttachAccountId(t.Context(), sysAccountID), bh, pub, 42, omitted)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, replay.TablesStr)
+			require.Equal(t, original, *pub)
+		})
+	}
+}
+
+func TestPublicationReplayPropagatesHistoricalTableError(t *testing.T) {
+	bh := &backgroundExecTest{}
+	bh.init()
+	pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: "ext-t"}
+	query := buildTableInfoListSQL("db1", "", 42, 7)
+	failure := errors.New("historical table metadata unavailable")
+	bh.sql2err[query] = failure
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), failure)
+	require.Equal(t, []string{query}, bh.executedSQLs, "failed historical lookup must abort before catalog writes")
+}

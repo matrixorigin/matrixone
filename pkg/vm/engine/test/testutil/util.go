@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -52,20 +52,15 @@ func GetDefaultTestPath(module string, t *testing.T) string {
 	return filepath.Join("/tmp", dirName, module, t.Name())
 }
 
-func MakeDefaultTestPath(module string, t *testing.T) string {
-	path := GetDefaultTestPath(module, t)
-	err := os.MkdirAll(path, os.FileMode(0755))
-	assert.Nil(t, err)
-	return path
-}
-
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
 
-func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
+// WithDisttaeEngineFileService wraps the file service the disttae engine reads through.
+func WithDisttaeEngineFileService(wrap func(fileservice.FileService) fileservice.FileService) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
-		e.mp = mp
+		e.wrapFS = wrap
 	}
 }
+
 func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
 		e.insertEntryMaxCount = v
@@ -209,79 +204,6 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	}
 
 	return defs, nil
-}
-
-func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.TableDef {
-	indexes := []*plan.IndexDef{
-		{
-			IndexName:          "hnsw_idx",
-			TableExist:         true,
-			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: catalog2.Hnsw_TblType_Metadata,
-			IndexTableName:     "meta_tbl",
-			Parts:              []string{idxColName},
-			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
-		},
-		{
-			IndexName:          "hnsw_idx",
-			TableExist:         true,
-			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: catalog2.Hnsw_TblType_Storage,
-			IndexTableName:     "storage_tbl",
-			Parts:              []string{idxColName},
-			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
-		},
-	}
-	for _, def := range defs {
-		if con, ok := def.(*engine.ConstraintDef); ok {
-			con.Cts = append(con.Cts, &engine.IndexDef{
-				Indexes: indexes,
-			})
-		}
-	}
-	return defs
-}
-
-func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {
-	tblDef := plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{},
-	}
-
-	tblDef.Name = schema.Name
-	tblDef.TblId = tableId
-
-	for idx := range schema.ColDefs {
-		tblDef.Cols = append(tblDef.Cols, &plan.ColDef{
-			ColId:     uint64(schema.ColDefs[idx].Idx),
-			Name:      schema.ColDefs[idx].Name,
-			Hidden:    schema.ColDefs[idx].Hidden,
-			NotNull:   !schema.ColDefs[idx].Nullable(),
-			TblName:   schema.Name,
-			DbName:    databaseName,
-			ClusterBy: schema.ColDefs[idx].ClusterBy,
-			Primary:   schema.ColDefs[idx].IsPrimary(),
-			Pkidx:     int32(schema.GetPrimaryKey().Idx),
-			Typ: plan.Type{
-				Id:          int32(schema.ColDefs[idx].Type.Oid),
-				NotNullable: !schema.ColDefs[idx].Nullable(),
-				Width:       schema.ColDefs[idx].Type.Oid.ToType().Width,
-			},
-			Seqnum: uint32(schema.ColDefs[idx].Idx),
-		})
-	}
-
-	tblDef.Pkey.PkeyColName = schema.GetPrimaryKey().Name
-	tblDef.Pkey.PkeyColId = uint64(schema.GetPrimaryKey().Idx)
-	tblDef.Pkey.Names = append(tblDef.Pkey.Names, schema.GetPrimaryKey().Name)
-	tblDef.Pkey.CompPkeyCol = nil
-	tblDef.Pkey.Cols = append(tblDef.Pkey.Cols, uint64(schema.GetPrimaryKey().Idx))
-
-	tblDef.Name2ColIndex = make(map[string]int32)
-	for idx := range schema.ColDefs {
-		tblDef.Name2ColIndex[schema.ColDefs[idx].Name] = int32(schema.ColDefs[idx].Idx)
-	}
-
-	return tblDef
 }
 
 func NewDefaultTableReader(

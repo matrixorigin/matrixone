@@ -1,0 +1,16 @@
+from pathlib import Path
+import subprocess,json,os,time,re,hashlib
+p=Path(__file__).parent;w=Path('/private/tmp/mo-issue30995');tools=p.parent/'tools'
+env=os.environ.copy();env.update(GOWORK='off',GOEXPERIMENT='simd',GOMEMLIMIT='3GiB',GOFLAGS='-p=2',CGO_CFLAGS=f'-I{w}/cgo -I{w}/thirdparties/install/include',CGO_LDFLAGS=f'-L{w}/thirdparties/install/lib',DYLD_LIBRARY_PATH=f'{w}/cgo:{w}/thirdparties/install/lib')
+env['PATH']=subprocess.check_output(['go','env','GOROOT'],cwd=w,text=True).strip()+'/bin:'+env['PATH'];env['GOTOOLCHAIN']='local'
+runner=['.agents/skills/mo-dev/scripts/mo-cgo-test','-p=1','-gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false','-count=1','-timeout=300s']
+pattern='^TestTupleCountDistinct|^TestOptimize.*Distinct|^TestDistinctKey|^Test.*LocalPreAggregation|^TestPadSpaceRemoteProtocolValidation$|^TestReadBarrier'
+selection={pkg:[n for f in (w/pkg).glob('*_test.go') for n in re.findall('^func (Test[A-Za-z0-9_]+)',f.read_text(),re.M) if re.search(pattern,n)] for pkg in ['pkg/sql/plan','pkg/sql/compile','pkg/vm/engine/tae/logtail/service']};assert all(selection.values());(p/'test-selection.json').write_text(json.dumps({'pattern':pattern,'tests':selection},indent=2))
+commands=[('normal-plan-service',runner+['./pkg/sql/plan','./pkg/vm/engine/tae/logtail/service']),('normal-compile',runner+['-v','-run',pattern,'./pkg/sql/compile']),('race',runner+['-race','-v','-run',pattern,'./pkg/sql/plan','./pkg/sql/compile','./pkg/vm/engine/tae/logtail/service'])]
+receipts=[]
+for name,cmd in commands:
+ started=time.time()
+ with (p/f'{name}.log').open('wb') as f:r=subprocess.run(cmd,cwd=w,env=env,stdout=f,stderr=subprocess.STDOUT)
+ receipts.append({'name':name,'command':cmd,'cwd':str(w),'started_epoch':started,'finished_epoch':time.time(),'exit':r.returncode,'source_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=w,text=True).strip()});(p/'test-receipts.json').write_text(json.dumps(receipts,indent=2));print(name,r.returncode,flush=True)
+ if r.returncode:raise SystemExit(r.returncode)
+print('UT_RACE_PASS',flush=True)

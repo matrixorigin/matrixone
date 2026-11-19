@@ -1,0 +1,78 @@
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = default;
+drop database if exists load_unterminated_enclosure;
+create database load_unterminated_enclosure;
+use load_unterminated_enclosure;
+create table t(a int, b varchar(20));
+load data infile '$resources/load_data/unterminated_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  226363  ¦  3
+truncate table t;
+load data local infile '$resources/load_data/unterminated_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  226363  ¦  3
+set sql_mode = '';
+truncate table t;
+load data infile '$resources/load_data/unterminated_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  226363  ¦  3
+truncate table t;
+load data local infile '$resources/load_data/unterminated_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  226363  ¦  3
+truncate table t;
+load data infile '$resources/load_data/unterminated_enclosure.csv' into table t fields terminated by ',' enclosed by '"' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  226363  ¦  3
+truncate table t;
+load data infile '$resources/load_data/closed_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  6363  ¦  2
+truncate table t;
+load data local infile '$resources/load_data/closed_enclosure.csv' into table t fields terminated by ',' lines terminated by '\n';
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select a, hex(b), length(b) from t order by a;
+➤ a[4,32,0]  ¦  hex(b)[12,160,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  616161  ¦  3  𝄀
+2  ¦  626262  ¦  3  𝄀
+3  ¦  6363  ¦  2
+drop database load_unterminated_enclosure;
+set sql_mode = @saved_sql_mode;

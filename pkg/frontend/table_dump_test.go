@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1135,7 +1137,7 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 			ses.txnHandler.storage = eng
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
-			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def).Times(2)
 			err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: t.TempDir(),
 			})
@@ -1169,7 +1171,7 @@ func TestHandleLoadTableRejectsNonObjectBackedRelations(t *testing.T) {
 			ses.txnHandler.storage = eng
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
-			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def).Times(2)
 
 			err := handleLoadTable(context.Background(), ses, &tree.LoadTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil),
@@ -2212,5 +2214,79 @@ func TestReadTableDumpManifestBindingFormats(t *testing.T) {
 			require.Equal(t, payload, got.BoundExpressions)
 		}
 		require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+	}
+}
+
+func TestTableDumpDefaultHashesMatchPre31067(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "default_quote_hashes_pre31067.json"))
+	require.NoError(t, err)
+	var fixtures []struct {
+		Name         string
+		Definition   []byte
+		PhysicalHash string
+		LogicalHash  string
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 12)
+	for _, f := range fixtures {
+		t.Run(f.Name, func(t *testing.T) {
+			var def plan.TableDef
+			require.NoError(t, def.Unmarshal(f.Definition))
+			before := proto.Clone(&def)
+			physical, err := tableSchemaHash(&def)
+			require.NoError(t, err)
+			require.Equal(t, f.PhysicalHash, physical)
+			logical, err := tableLogicalSchemaHashWithResolver(t.Context(), &def, nil)
+			require.NoError(t, err)
+			require.Equal(t, f.LogicalHash, logical)
+			require.True(t, proto.Equal(before, &def), "hashing must not rewrite catalog defaults")
+		})
+	}
+}
+
+func TestTableDumpRejectsResolvedInternalIndex(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		flags      uint64
+		deny       bool
+		missingDef bool
+	}{
+		{catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd", "", 0, true, false},
+		{"legacy_storage", catalog.SystemIndexRel, 0, true, false},
+		{"plugin_storage", "unregistered_index_kind", 0, true, false},
+		{"flagged_storage", catalog.SystemOrdinaryRel, features.IndexTable, true, false},
+		{"unknown_definition", "", 0, true, true},
+		{"ordinary", catalog.SystemOrdinaryRel, 0, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetFromRealUser(true)
+			ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "admin", DefaultRole: "accountadmin"})
+			ses.SetDatabaseName("app")
+			eng := mock_frontend.NewMockEngine(ctrl)
+			ses.txnHandler.storage = eng
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "app", gomock.Any()).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), tc.name, nil).Return(rel, nil)
+			var def *plan.TableDef
+			if !tc.missingDef {
+				def = &plan.TableDef{Name: tc.name, TableType: tc.kind, FeatureFlag: tc.flags}
+			}
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+			_, _, got, err := getTableForDump(context.Background(), ses, tree.NewTableName(tree.Identifier(tc.name), tree.ObjectNamePrefix{}, nil))
+			if !tc.deny {
+				require.NoError(t, err)
+				require.Same(t, rel, got)
+			} else if tc.missingDef {
+				require.ErrorContains(t, err, "table definition is unavailable")
+				require.Nil(t, got)
+			} else {
+				require.ErrorContains(t, err, "privilege")
+				require.Nil(t, got)
+			}
+		})
 	}
 }

@@ -7,6 +7,15 @@ DROP DATABASE IF EXISTS temporal_28932;
 CREATE DATABASE temporal_28932;
 USE temporal_28932;
 SET time_zone = '+00:00';
+-- Fractional session timestamp ingestion preserves microseconds (issue 31047).
+SET timestamp = 1704067200.125000;
+SELECT CAST(NOW(6) AS CHAR) = '2024-01-01 00:00:00.125000' AS now_exact, CAST(CURRENT_TIMESTAMP(6) AS CHAR) = '2024-01-01 00:00:00.125000' AS current_exact;
+SET timestamp = 1704067200.999999;
+SELECT CAST(NOW(6) AS CHAR) = '2024-01-01 00:00:00.999999' AS now_exact, CAST(CURRENT_TIMESTAMP(6) AS CHAR) = '2024-01-01 00:00:00.999999' AS current_exact;
+SET sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+SET timestamp = 1704067200.500000;
+SELECT CAST(NOW(3) AS CHAR) = '2024-01-01 00:00:00.500' AS millis_exact, CAST(NOW(6) AS CHAR) = '2024-01-01 00:00:00.500000' AS micros_exact;
+SET sql_mode = @old_sql_mode;
 SET timestamp = 1704164645.123456;
 SET explicit_defaults_for_timestamp = OFF;
 CREATE TABLE legacy_ts (id INT PRIMARY KEY, ts TIMESTAMP(6) NOT NULL DEFAULT '2000-01-01 00:00:00');

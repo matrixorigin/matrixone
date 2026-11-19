@@ -122,7 +122,7 @@ Unknown database dis_db_01
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
-no such table isolation_2.dis_table_04
+Unknown table 'isolation_2.dis_table_04'
 begin;
 use isolation_2;
 create external table ex_table_dis(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';

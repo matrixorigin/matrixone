@@ -180,7 +180,7 @@ create table first_fail(id int primary key auto_increment);
 create table later_ok(id int primary key auto_increment);
 insert into first_fail values (1);
 insert into later_ok values (5);
-create table drop_multi_guard.child(id int primary key, fid int, foreign key(fid) references drop_multi.first_fail(id));
+create table drop_multi_guard.child(id int primary key, fid int, constraint fk_child_first_fail foreign key(fid) references drop_multi.first_fail(id));
 set @later_ok_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and relname = 'later_ok' and reldatabase_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_multi'));
 begin;
 drop table first_fail, later_ok;

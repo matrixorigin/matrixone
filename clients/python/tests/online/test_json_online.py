@@ -23,6 +23,7 @@ from matrixone.sqlalchemy_ext import (
     json_insert,
     json_replace,
     json_set,
+    json_unquote,
 )
 
 from .test_config import online_config
@@ -117,10 +118,17 @@ def test_table(client):
         pass
 
 
-@pytest.mark.parametrize('function,expected', [
-    (json_extract, 7), (json_extract_string, 'value'), (json_extract_float64, 7.0),
-    (json_set, 9), (json_insert, 7), (json_replace, 9),
-])
+@pytest.mark.parametrize(
+    'function,expected',
+    [
+        (json_extract, 7),
+        (json_extract_string, 'value'),
+        (json_extract_float64, 7.0),
+        (json_set, 9),
+        (json_insert, 7),
+        (json_replace, 9),
+    ],
+)
 def test_json_path_quoted_key_roundtrip(client, function, expected):
     path = '$."owner\'s"'
     value = 'value' if function is json_extract_string else 7
@@ -137,14 +145,73 @@ def test_json_path_quoted_key_roundtrip(client, function, expected):
     assert actual == expected
 
 
+@pytest.mark.parametrize(
+    'key',
+    [
+        'ordinary',
+        "owner's",
+        'a"b',
+        'a\\b',
+        'x.y',
+        '',
+        '*',
+        'items[0]',
+        '\n\t\r\b\f\x00',
+        '中文😀',
+        "x'), 'different path') --",
+    ],
+)
+def test_bracket_access_reads_literal_member(client, key):
+    # Distinguish a literal member from nested traversal, wildcards and arrays.
+    document = {'x': {'y': 'nested'}, 'items': ['array'], 'other': 'decoy', key: 'selected'}
+    value = literal(document, type_=JSON)[key]
+    row = client.execute(select(value, value.astext, value.cast(String))).rows[0]
+    assert json.loads(row[0]) == 'selected'
+    assert row[1] == row[2] == 'selected'
+
+
+def test_nested_bracket_access_and_reuse(client):
+    document = {'x.y': {'a"b': 'quoted', '😀': 'unicode', 'null': None}, 'x': {'y': 'decoy'}}
+    parent = literal(document, type_=JSON)['x.y']
+    first = parent['a"b']
+    second = parent['😀']
+    row = client.execute(select(parent, first.astext, second.astext, parent['missing'].astext)).rows[0]
+    assert json.loads(row[0]) == document['x.y']
+    assert row[1:] == ('quoted', 'unicode', None)
+    assert client.execute(select(parent['null'])).scalar() == 'null'
+
+
+def test_bracket_access_typed_values_and_predicates(client):
+    value = literal({"owner's": {'n.m': 7, '*': True, 'a"b': 'selected'}}, type_=JSON)["owner's"]
+    number = value['n.m']
+    text = value['a"b']
+    row = client.execute(
+        select(
+            number.cast(Integer),
+            number.cast(Numeric()),
+            value['*'].asbool,
+            text.astext == 'selected',
+            number == 7,
+            number != 8,
+            number > 6,
+            number < 8,
+            number >= 7,
+            number <= 7,
+        )
+    ).rows[0]
+    assert row == (7.0, 7.0, True, True, True, True, True, True, True, True)
+
+
 class TestJSONExtract:
     """Test json_extract function execution."""
 
     def test_extract_single_path(self, client, test_table):
         """Test extracting single JSON field."""
-        results = client.query(
-            Product.product_name, json_extract(Product.specifications, '$.brand').label('brand')
-        ).execute()
+        results = (
+            client.query(Product.product_name, json_extract(Product.specifications, '$.brand').label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         rows = results.rows
         assert len(rows) == 3
@@ -154,7 +221,9 @@ class TestJSONExtract:
     def test_extract_nested_path(self, client, test_table):
         """Test extracting nested JSON field."""
         results = (
-            client.query(Product.product_name, json_extract(Product.specifications, '$.hardware.processor').label('cpu'))
+            client.query(
+                Product.product_name, json_extract(Product.specifications, '$.hardware.processor').label('cpu')
+            )
             .filter(Product.product_id == 1)
             .execute()
         )
@@ -164,7 +233,13 @@ class TestJSONExtract:
 
     def test_extract_with_filter(self, client, test_table):
         """Test json_extract in WHERE clause."""
-        results = client.query(Product).filter(json_extract(Product.specifications, '$.brand') == '"Dell"').execute()
+        # json_extract returns a JSON-typed value, not a plain string, so use
+        # json_unquote before comparing against a plain Python string.
+        results = (
+            client.query(Product)
+            .filter(json_unquote(json_extract(Product.specifications, '$.brand')) == 'Dell')
+            .execute()
+        )
 
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Laptop'
@@ -231,7 +306,9 @@ class TestJSONModification:
         stmt = (
             update(Product)
             .values(
-                specifications=json_insert(Product.specifications, '$.brand', 'ShouldNotChange', '$.warranty', '2 years')
+                specifications=json_insert(
+                    Product.specifications, '$.brand', 'ShouldNotChange', '$.warranty', '2 years'
+                )
             )
             .where(Product.product_id == 2)
         )
@@ -255,16 +332,27 @@ class TestJSONModification:
 
         result = client.query(Product).filter(Product.product_id == 3).first()
         specs = json.loads(result.specifications) if isinstance(result.specifications, str) else result.specifications
-        assert specs['price'] == '499.99'  # Updated
+        # json_replace keeps the numeric Python value as a JSON number.
+        assert specs['price'] == 499.99  # Updated
         assert 'discount' not in specs  # Not added
 
 
 class TestStandardSyntax:
     """Test SQLAlchemy standard JSON syntax."""
 
+    def test_default_projection(self, client, test_table):
+        table = Product.__table__.alias('products')
+        expression = table.c.specifications['hardware']['processor']
+        result = client.execute(select(expression).where(table.c.product_id == 1)).scalar()
+        assert json.loads(result) == 'Intel i7'
+
     def test_dict_access(self, client, test_table):
         """Test column['key'] dictionary access."""
-        results = client.query(Product.product_name, Product.specifications['brand'].label('brand')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['brand'].label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         assert len(results.rows) == 3
         assert '"Dell"' in results.rows[0][1]
@@ -281,7 +369,11 @@ class TestStandardSyntax:
 
     def test_astext_removes_quotes(self, client, test_table):
         """Test .astext removes JSON quotes."""
-        results = client.query(Product.product_name, Product.specifications['brand'].astext.label('brand')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['brand'].astext.label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         # No quotes
         assert results.rows[0][1] == 'Dell'
@@ -289,7 +381,11 @@ class TestStandardSyntax:
 
     def test_cast_to_numeric(self, client, test_table):
         """Test .cast(Numeric) for numeric conversion."""
-        results = client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         # Returns numeric values
         assert results.rows[0][1] == 1299.99
@@ -297,7 +393,9 @@ class TestStandardSyntax:
 
     def test_filter_with_dict_syntax(self, client, test_table):
         """Test WHERE with column['key']."""
-        results = client.query(Product).filter(Product.specifications['brand'] == 'Dell').execute()  # Auto-quotes
+        # Compare the plain-text form: .astext removes JSON quoting, matching
+        # how plain string values behave in MySQL/MatrixOne WHERE clauses.
+        results = client.query(Product).filter(Product.specifications['brand'].astext == 'Dell').execute()
 
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Laptop'
@@ -346,12 +444,42 @@ class TestBooleanHandling:
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Monitor'
 
-    def test_string_boolean_comparison(self, client, test_table):
-        """Test filtering with string 'true'/'false'."""
-        results = client.query(Product).filter(Product.specifications['verified'] == 'true').execute()
+    def test_string_boolean_comparison(self, client):
+        """Python string 'true' matches JSON STRING values, not JSON booleans."""
+        # Dedicated mixed fixture: the shared Product table stores verified as
+        # booleans, which the STRING guard must not select for == 'true'.
+        class MixedVerified(Base):
+            __tablename__ = 'test_json_verified_string_bool_online'
+            product_id = Column(Integer, primary_key=True)
+            product_name = Column(String(200))
+            specifications = Column(JSON)
 
-        # Laptop and Monitor are verified
-        assert len(results.rows) == 2
+        try:
+            client.drop_table(MixedVerified)
+        except Exception:
+            pass
+        client.create_table(MixedVerified)
+        try:
+            client.batch_insert(
+                MixedVerified,
+                [
+                    {'product_id': 1, 'product_name': 'BoolTrue', 'specifications': {'verified': True}},
+                    {'product_id': 2, 'product_name': 'StringTrue', 'specifications': {'verified': 'true'}},
+                    {'product_id': 3, 'product_name': 'BoolFalse', 'specifications': {'verified': False}},
+                ],
+            )
+            equal = client.query(MixedVerified).filter(MixedVerified.specifications['verified'] == 'true').execute()
+            unequal = client.query(MixedVerified).filter(MixedVerified.specifications['verified'] != 'true').execute()
+            equal_ids = sorted(row[0] for row in equal.rows)
+            unequal_ids = sorted(row[0] for row in unequal.rows)
+            assert equal_ids == [2]
+            assert unequal_ids == [1, 3]
+            assert set(equal_ids).isdisjoint(unequal_ids)
+        finally:
+            try:
+                client.drop_table(MixedVerified)
+            except Exception:
+                pass
 
     def test_asbool_property(self, client, test_table):
         """Test .asbool property."""

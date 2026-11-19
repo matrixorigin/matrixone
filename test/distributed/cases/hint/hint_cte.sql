@@ -584,7 +584,7 @@ WITH RECURSIVE numbers AS (
                        (SELECT COUNT(*) FROM test_cte_rewrite.sales WHERE id <= n) AS cumulative_count
                    FROM numbers
                )
-SELECT * FROM sales_with_numbers;
+SELECT * FROM sales_with_numbers ORDER BY n;
 
 
 -- CTE + ROLLUP/CUBE + 聚合 + Rewrite

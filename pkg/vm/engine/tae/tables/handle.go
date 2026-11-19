@@ -72,6 +72,9 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 
 	dropped := h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
+		// Validation must not wait for sealing: callers can hold the table
+		// selection lock. Capacity exhaustion/compaction own sealing; an
+		// unknown commit bound remains conservative until they publish it.
 		return h.ThrowAppenderAndErr()
 	}
 	h.object.Ref()

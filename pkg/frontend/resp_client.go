@@ -249,6 +249,21 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 	return resper.writeClientBatch(execCtx, crs, bat)
 }
 
+// markSequenceRetryPublished sets the statement's tier-2 publication flag
+// (design §4 D, G1/F1) exactly once — the first batch that passes the
+// writeClientBatch early-outs marks the statement published before any of
+// its bytes reach the wire, which is what makes "publication wins"
+// enforceable at the retry quiescence boundary. Background/internal
+// statements carry no state and skip the mark (default-deny).
+func markSequenceRetryPublished(execCtx *ExecCtx) {
+	if execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	if retryState := execCtx.proc.GetSequenceRetryState(); retryState != nil {
+		retryState.MarkPublished()
+	}
+}
+
 // saveResultBatch persists a result batch without writing it to the client.
 // Server cursors use this path while retaining rows for COM_STMT_FETCH, so
 // cursor execution must keep the same save_query_result lifecycle as a normal
@@ -267,6 +282,14 @@ func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.Cou
 	if bat == nil {
 		return nil
 	}
+
+	// Tier-2 publication flag (design §4 D, G1/F1): the first result batch
+	// entering the client write path marks the statement published BEFORE
+	// any of its bytes are written, so tier-2 retry arbitration can never
+	// replay a delivered prefix. This is the single publication point for
+	// result batches; the unsynchronized ResultRows accounting in RespResult
+	// stays ordinary statistics and is never consulted for admission.
+	markSequenceRetryPublished(execCtx)
 
 	ses := execCtx.ses.(*Session)
 	ec := ses.GetExportConfig()

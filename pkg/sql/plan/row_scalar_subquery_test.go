@@ -276,20 +276,22 @@ func TestRowConstructorNonEqAggregateMasksDistinctLiteral(t *testing.T) {
 	require.Equal(t, 2, masked, "both unary aggregates must ignore synthetic rows")
 }
 
-func TestRowConstructorNonEqAggregateRejectsUnsafeComposition(t *testing.T) {
-	for _, test := range []struct{ sql, want string }{
-		{`select n.N_NATIONKEY from NATION n where (0,null) <=>
+func TestRowConstructorNonEqAggregateKeepsCompleteRelation(t *testing.T) {
+	for _, sql := range []string{
+		`select n.N_NATIONKEY from NATION n where (0,null) <=>
 			(select count(*),sum(r.R_REGIONKEY) from REGION r
-			 where r.R_REGIONKEY<n.N_REGIONKEY limit 0)`, "pagination in non-equality correlated aggregate"},
-		{`select n.N_NATIONKEY from NATION n where (0,null) <=>
+			 where r.R_REGIONKEY<n.N_REGIONKEY limit 0)`,
+		`select n.N_NATIONKEY from NATION n where (0,null) <=>
 			(select sum(coalesce(r.R_REGIONKEY,0)),sum(r.R_REGIONKEY) from REGION r
-			 where r.R_REGIONKEY<n.N_REGIONKEY)`, "unsupported non-equality correlated aggregate input"},
-		{`select n.N_NATIONKEY, (n.N_REGIONKEY,(select R_REGIONKEY from REGION where R_REGIONKEY=1)) =
+			 where r.R_REGIONKEY<n.N_REGIONKEY)`,
+		`select n.N_NATIONKEY, (n.N_REGIONKEY,(select R_REGIONKEY from REGION where R_REGIONKEY=1)) =
 			(select count(*),sum(r.R_REGIONKEY) from REGION r where r.R_REGIONKEY<n.N_REGIONKEY)
-			from NATION n`, "outer composition cannot be safely decorrelated"},
+			from NATION n`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
-		require.ErrorContains(t, err, test.want)
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
 	}
 }
 

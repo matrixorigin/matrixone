@@ -281,7 +281,6 @@ func (e *InternalSQLExecutor) ExecSQL(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -433,7 +432,6 @@ func (e *InternalSQLExecutor) ExecSQLInDatabase(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -625,56 +623,11 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 		}
 
 		if vec.IsNull(uint64(rowIdx)) {
-			// Handle NULL values - set destination to nil or zero value
+			// NULL resets byte slices; other destinations are left unchanged.
 			switch d := dest[i].(type) {
-			// case *string:
-			// 	*d = ""
 			case *[]byte:
 				*d = nil
-			// case *sql.NullString:
-			// 	d.Valid = false
-			// 	d.String = ""
-			// case *sql.NullInt16:
-			// 	d.Valid = false
-			// 	d.Int16 = 0
-			// case *sql.NullInt32:
-			// 	d.Valid = false
-			// 	d.Int32 = 0
-			// case *sql.NullInt64:
-			// 	d.Valid = false
-			// 	d.Int64 = 0
-			// case *sql.NullBool:
-			// 	d.Valid = false
-			// 	d.Bool = false
-			// case *bool:
-			// 	*d = false
-			// case *sql.NullFloat64:
-			// 	d.Valid = false
-			// 	d.Float64 = 0
-			// case *sql.NullTime:
-			// 	d.Valid = false
-			// 	d.Time = time.Time{}
-			// case *int8:
-			// 	*d = 0
-			// case *int16:
-			// 	*d = 0
-			// case *int32:
-			// 	*d = 0
-			// case *int64:
-			// 	*d = 0
-			// case *uint8:
-			// 	*d = 0
-			// case *uint16:
-			// 	*d = 0
-			// case *uint32:
-			// 	*d = 0
-			// case *uint64:
-			// 	*d = 0
-			// case *types.TS:
-			// 	*d = types.TS{}
 			default:
-				// For other types, try to set to nil if possible
-				// This is a simplified implementation
 			}
 			continue
 		}
@@ -728,28 +681,6 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int8, type %T", dest))
 		}
 
-	// case types.T_int16:
-	// 	val := vector.GetFixedAtWithTypeCheck[int16](vec, int(idx))
-	// 	if d, ok := dest.(*int16); ok {
-	// 		*d = val
-	// 	} else if d, ok := dest.(*sql.NullInt16); ok {
-	// 		d.Int16 = val
-	// 		d.Valid = true
-	// 	} else {
-	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int16, type %T", dest))
-	// 	}
-
-	// case types.T_int32:
-	// 	val := vector.GetFixedAtWithTypeCheck[int32](vec, int(idx))
-	// 	if d, ok := dest.(*int32); ok {
-	// 		*d = val
-	// 	} else if d, ok := dest.(*sql.NullInt32); ok {
-	// 		d.Int32 = val
-	// 		d.Valid = true
-	// 	} else {
-	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int32, type %T", dest))
-	// 	}
-
 	case types.T_int64:
 		val := vector.GetFixedAtWithTypeCheck[int64](vec, int(idx))
 		if d, ok := dest.(*int64); ok {
@@ -767,22 +698,6 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		} else {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int64, type %T", dest))
 		}
-
-	// case types.T_uint8:
-	// 	val := vector.GetFixedAtWithTypeCheck[uint8](vec, int(idx))
-	// 	if d, ok := dest.(*uint8); ok {
-	// 		*d = val
-	// 	} else {
-	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint8, type %T", dest))
-	// 	}
-
-	// case types.T_uint16:
-	// 	val := vector.GetFixedAtWithTypeCheck[uint16](vec, int(idx))
-	// 	if d, ok := dest.(*uint16); ok {
-	// 		*d = val
-	// 	} else {
-	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint16, type %T", dest))
-	// 	}
 
 	case types.T_uint32:
 		val := vector.GetFixedAtWithTypeCheck[uint32](vec, int(idx))
@@ -802,29 +717,6 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*uint64); ok {
 			*d = val
 		}
-		// else if d, ok := dest.(*sql.NullInt64); ok {
-		// 	// Support sql.NullInt64 for uint64 values (e.g., dat_id)
-		// 	// Note: This may overflow if uint64 value exceeds int64 max, but it's acceptable for most use cases
-		// 	// where database IDs and account IDs are typically within int64 range
-		// 	if val <= uint64(math.MaxInt64) {
-		// 		d.Int64 = int64(val)
-		// 		d.Valid = true
-		// 	} else {
-		// 		// If value exceeds int64 max, we can't represent it in NullInt64
-		// 		// This should be rare in practice for database/account IDs
-		// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("uint64 value %d exceeds int64 max, cannot convert to sql.NullInt64", val))
-		// 	}
-		// } else {
-		// 	return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint64, type %T", dest))
-		// }
-
-	// case types.T_timestamp:
-	// 	val := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, int(idx))
-	// 	if d, ok := dest.(*types.Timestamp); ok {
-	// 		*d = val
-	// 	} else {
-	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for timestamp, type %T", dest))
-	// 	}
 
 	case types.T_TS:
 		val := vector.GetFixedAtWithTypeCheck[types.TS](vec, int(idx))
@@ -843,13 +735,6 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 			d.String = byteJson.String()
 			d.Valid = true
 		}
-		// else if d, ok := dest.(*[]byte); ok {
-		// 	// For byte slice, get the JSON bytes and make a copy
-		// 	*d = make([]byte, len(bytesVal))
-		// 	copy(*d, bytesVal)
-		// } else {
-		// 	return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for JSON, type %T", dest))
-		// }
 
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported vector type: %v, type %T", vec.GetType().Oid, dest))
@@ -871,7 +756,6 @@ var _ SQLExecutor = (*InternalSQLExecutor)(nil)
 type defChangedBackoff struct {
 	baseInterval time.Duration
 	getLastErr   func() error
-	getAttempt   func() int
 }
 
 // Next implements BackoffStrategy

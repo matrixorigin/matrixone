@@ -279,6 +279,37 @@ func TestConfiguredProxyStartupFailureWakesShutdown(t *testing.T) {
 	}
 }
 
+func TestStartupFailureIsReportedAfterSuccessfulRoleCleanup(t *testing.T) {
+	oldLifecycle := serviceLifecycle
+	oldProfileInterval := *profileInterval
+	t.Cleanup(func() {
+		serviceLifecycle = oldLifecycle
+		*profileInterval = oldProfileInterval
+	})
+	s := newServiceSupervisor()
+	serviceLifecycle = s
+	*profileInterval = 0
+	startupErr := errors.New("administrator decision required")
+	finishCN := s.registerTask(serviceRoleCN)
+	finishCN(nil) // CN startup failed, but its resources closed successfully.
+	finishTN := s.registerTask(serviceRoleTN)
+	go func() {
+		<-s.roles[serviceRoleTN].stopC
+		finishTN(nil)
+	}()
+	s.notifyFatal(startupErr)
+	mainStopper := stopper.NewStopper("test-main")
+	defer mainStopper.Stop()
+	done := make(chan error, 1)
+	go func() { done <- waitSignalToStop(mainStopper, make(chan struct{})) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, startupErr)
+	case <-time.After(time.Second):
+		t.Fatal("startup failure did not finish ordered shutdown")
+	}
+}
+
 func TestServiceSupervisorFatalCleanupReapsDynamicCN(t *testing.T) {
 	oldProxy := cnProxy
 	cnProxy = nil

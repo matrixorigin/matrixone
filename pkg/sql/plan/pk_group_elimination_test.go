@@ -530,6 +530,11 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
 		{"varchar to wider char", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
 		{"char widening", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"char to same width varchar", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 10, uint32(types.CharsetUTF8)), true},
+		{"varchar widening", stringType(types.T_varchar, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), true},
+		{"char to narrower varchar", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 9, uint32(types.CharsetUTF8)), false},
+		{"char to varchar charset change", stringType(types.T_char, 10, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), false},
+		{"unknown width char to varchar", stringType(types.T_char, 0, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), false},
 		{"varchar to narrower char", stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), stringType(types.T_char, 10, uint32(types.CharsetUTF8)), false},
 		{"unbounded varchar to char", stringType(types.T_varchar, 0, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
 		{"varchar to char charset change", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
@@ -986,7 +991,7 @@ func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) 
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 			require.ErrorContains(t, err, "standalone INTERVAL expression in ORDER BY")

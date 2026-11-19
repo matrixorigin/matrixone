@@ -60,7 +60,7 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT n1.N_NATIONKEY, (SELECT (SELECT n1.N_NATIONKEY + n2.N_REGIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY = n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n1`, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	p, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 	require.NoError(t, err)
 	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -115,7 +115,8 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 			}()
 			require.NoError(t, op.SetAllocationAccount(account))
 			require.NoError(t, op.Prepare(proc))
-			var keys, results []int32
+			var keys []int32
+			var results []int64
 			var nulls []bool
 			for {
 				result, err := vm.Exec(op, proc)
@@ -124,17 +125,19 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 				if b == nil {
 					break
 				}
+				require.Equal(t, types.T_int32, b.Vecs[0].GetType().Oid)
+				require.Equal(t, types.T_int64, b.Vecs[1].GetType().Oid)
 				for row := 0; row < b.RowCount(); row++ {
 					keys = append(keys, vector.GetFixedAtNoTypeCheck[int32](b.Vecs[0], row))
 					null := b.Vecs[1].IsNull(uint64(row))
 					nulls = append(nulls, null)
 					if !null {
-						results = append(results, vector.GetFixedAtNoTypeCheck[int32](b.Vecs[1], row))
+						results = append(results, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
 					}
 				}
 			}
 			require.Equal(t, []int32{1, 2, 2, 4}, keys)
-			require.Equal(t, []int32{11, 22, 22}, results)
+			require.Equal(t, []int64{11, 22, 22}, results)
 			require.Equal(t, []bool{false, false, false, true}, nulls)
 			op.Reset(proc, false, nil)
 			require.Equal(t, opened, closed)

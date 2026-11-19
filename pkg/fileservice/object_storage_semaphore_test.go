@@ -16,6 +16,8 @@ package fileservice
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -215,4 +217,105 @@ func TestObjectStorageSemaphoreReleasesOnError(t *testing.T) {
 
 	// another call should proceed after the failed one
 	require.NoError(t, sem.Delete(context.Background(), "x"))
+}
+
+func TestObjectStorageSemaphoreReadLifecycle(t *testing.T) {
+	for _, conditional := range []bool{false, true} {
+		name := "ordinary"
+		if conditional {
+			name = "identity"
+		}
+		t.Run(name, func(t *testing.T) {
+			terminalErr := error(io.EOF)
+			if conditional {
+				terminalErr = errors.New("read failed")
+			}
+			closeErr := errors.New("close failed")
+			var closes, reads int
+			body := &readCloser{r: readerFunc(func(buf []byte) (int, error) {
+				reads++
+				if reads == 1 {
+					buf[0] = 'a'
+					return 1, nil
+				}
+				if reads == 2 {
+					buf[0] = 'b'
+					return 1, terminalErr
+				}
+				return 0, io.EOF
+			}), closeFunc: func() error { closes++; return closeErr }}
+			source := &readTestObjectStorage{open: func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error) {
+				return body, nil
+			}}
+			wrapped := newObjectStorageSemaphore(source, 1)
+			reader, err := openTestObject(t.Context(), wrapped, conditional)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = reader.Close() })
+			buf := make([]byte, 1)
+			n, err := reader.Read(buf)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			require.Equal(t, byte('a'), buf[0])
+			require.Len(t, wrapped.semaphore, 1)
+			n, err = reader.Read(buf)
+			require.ErrorIs(t, err, terminalErr)
+			require.Equal(t, 1, n)
+			require.Equal(t, byte('b'), buf[0])
+			require.Empty(t, wrapped.semaphore)
+			require.Zero(t, closes)
+			// A finished reader must never release a subsequent reader's permit.
+			source.open = func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("next")), nil
+			}
+			next, err := openTestObject(t.Context(), wrapped, conditional)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = next.Close() })
+			require.ErrorIs(t, reader.Close(), closeErr)
+			require.ErrorIs(t, reader.Close(), closeErr)
+			require.Len(t, wrapped.semaphore, 1)
+			_, err = reader.Read(buf)
+			require.ErrorIs(t, err, io.EOF)
+			require.Len(t, wrapped.semaphore, 1)
+			require.Equal(t, 1, closes)
+			require.NoError(t, next.Close())
+			require.Empty(t, wrapped.semaphore)
+			openErr := errors.New("open failed")
+			source.open = func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error) {
+				return nil, openErr
+			}
+			failed, err := openTestObject(t.Context(), wrapped, conditional)
+			require.Nil(t, failed)
+			require.ErrorIs(t, err, openErr)
+			require.Empty(t, wrapped.semaphore)
+			// A supported but saturated entry point must cancel before provider I/O.
+			wrapped.semaphore <- struct{}{}
+			t.Cleanup(func() {
+				select {
+				case <-wrapped.semaphore:
+				default:
+				}
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			source.open = func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error) {
+				t.Error("canceled read reached provider")
+				return nil, openErr
+			}
+			failed, err = openTestObject(ctx, wrapped, conditional)
+			require.Nil(t, failed)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Len(t, wrapped.semaphore, 1)
+		})
+	}
+}
+func TestObjectStorageSemaphoreReadConcurrentClose(t *testing.T) {
+	var wrapped *objectStorageSemaphore
+	testObjectStorageReadConcurrentClose(t, func(body io.ReadCloser) io.ReadCloser {
+		wrapped = newObjectStorageSemaphore(&readTestObjectStorage{open: func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error) {
+			return body, nil
+		}}, 1)
+		reader, err := openTestObject(t.Context(), wrapped, false)
+		require.NoError(t, err)
+		return reader
+	}, func() { require.Empty(t, wrapped.semaphore) })
 }

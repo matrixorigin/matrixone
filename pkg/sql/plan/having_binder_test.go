@@ -312,3 +312,47 @@ func TestBindOrderedSetPercentileRejectsNilOrderExpression(t *testing.T) {
 	_, err := binder.BindAggFunc(NamePercentileCont, ast, 0, true)
 	require.ErrorContains(t, err, "percentile_cont requires an ORDER BY expression")
 }
+
+// Bare output names in aggregate HAVING are resolved after actual GROUP BY
+// identities, but before ungrouped inputs. Aggregate arguments keep input scope.
+func TestHavingAggregateAliasResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, query, wantErr string
+		aggregates                 int
+	}{
+		{"aggregate collision", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having n_name=30", "", 1},
+		{"scalar collision", "ONLY_FULL_GROUP_BY", "select n_regionkey,n_regionkey+1 as n_name,sum(n_nationkey) total from nation group by n_regionkey having n_name=2", "", 1},
+		{"arithmetic alias", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having n_name*2>50", "", 1},
+		{"case alias", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having case when n_name>50 then true else false end", "", 1},
+		{"grouped source absent from projection", "ONLY_FULL_GROUP_BY", "select sum(n_nationkey) as n_regionkey from nation group by nation.n_regionkey having N_REGIONKEY>0", "", 1},
+		{"source and alias aggregates stay distinct", "ONLY_FULL_GROUP_BY", "select n_name,sum(n_nationkey) as n_regionkey from nation group by n_name having sum(n_regionkey)>0", "", 2},
+		{"self alias first", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_nationkey from nation group by n_regionkey having n_nationkey>0 and sum(n_nationkey)>0", "", 1},
+		{"source aggregate first", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_nationkey from nation group by n_regionkey having sum(n_nationkey)>0 and n_nationkey>0", "", 1},
+		{"permissive mode", "", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having n_name=30", "", 1},
+		{"native strict mode", "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having n_name=30", "must appear in the GROUP BY clause", 0},
+		{"qualified source", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having nation.n_name<>''", "must appear in the GROUP BY clause", 0},
+		{"invalid projected source", "ONLY_FULL_GROUP_BY", "select n_comment as n_name,sum(n_nationkey) from nation group by n_regionkey having n_name<>''", "must appear in the GROUP BY clause", 0},
+		{"alias is not aggregate input", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as total from nation group by n_regionkey having sum(total)>0", "does not exist", 0},
+		{"nested aggregate remains invalid", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name from nation group by n_regionkey having sum(sum(n_nationkey))>0", "cannot be nested", 0},
+		{"different duplicate aliases remain ambiguous", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name,count(*) as n_name from nation group by n_regionkey having n_name>0", "ambiguous", 0},
+		{"equivalent duplicate aliases", "ONLY_FULL_GROUP_BY", "select n_regionkey,sum(n_nationkey) as n_name,sum(n_nationkey) as n_name from nation group by n_regionkey having n_name>0", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.SetSqlModeOverride(tc.mode)
+			p, err := runOneStmt(mock, t, tc.query)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			var aggregates int
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG {
+					aggregates += len(node.AggList)
+				}
+			}
+			require.Equal(t, tc.aggregates, aggregates, "aliases and explicit calls must reuse the same aggregate")
+		})
+	}
+}

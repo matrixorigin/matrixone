@@ -494,7 +494,9 @@ select cast(n as signed) from q where p.id=2) as c from guarded_values p order b
 2  ¦  2
 select p.id, (with q(n) as (select p.val)
 select cast(n as signed) from q where p.id=1) as c from guarded_values p order by p.id;
-invalid argument cast to int, bad value bad
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null
 select p.id, (with q(n) as (select p.val)
 select cast(n as signed) from (select distinct n from q) d where p.id=2) as c
 from guarded_values p order by p.id;
@@ -521,7 +523,9 @@ execute wrapped_cast using @wrapped_demand;
 2  ¦  2
 set @wrapped_demand=1;
 execute wrapped_cast using @wrapped_demand;
-invalid argument cast to int, bad value bad
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null
 set @wrapped_demand=2;
 execute wrapped_cast using @wrapped_demand;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
@@ -1049,7 +1053,9 @@ execute active_runtime_seed using @cte_demand;
 2  ¦  1
 set @cte_demand='bad';
 execute active_runtime_seed using @cte_demand;
-invalid argument cast to int, bad value bad
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
 set @cte_demand=2;
 execute active_runtime_seed using @cte_demand;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀

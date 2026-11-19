@@ -97,6 +97,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		LastInsertID:                        500,
 		MaxErrorCount:                       128,
 		MaxErrorCountSet:                    true,
 		LCTimeNames:                         "fr_FR",
@@ -157,6 +158,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			LastInsertId:                        500,
 			MaxErrorCount:                       128,
 			MaxErrorCountSet:                    true,
 		})
@@ -169,6 +171,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, uint64(500), info.LastInsertID)
 		require.Equal(t, 128, info.MaxErrorCount)
 		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
@@ -278,6 +281,51 @@ func TestProcessCodecHelpers(t *testing.T) {
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
 		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
+}
+
+func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	for _, offset := range []int{-14 * 3600, -120, -119, -61, -60, -59, 0, 61, 14 * 3600} {
+		proc.Base.SessionInfo.TimeZone = time.FixedZone("fixed", offset)
+		first, err := proc.BuildProcessInfo("select 1")
+		require.NoError(t, err)
+		require.True(t, first.SessionInfo.FixedOffsetPresent)
+		require.Equal(t, int64(offset), first.SessionInfo.FixedOffsetSeconds)
+		require.Empty(t, first.SessionInfo.TimeZoneName)
+		require.Empty(t, first.SessionInfo.TimeZone)
+		wire, err := first.Marshal()
+		require.NoError(t, err)
+		var received pipeline.ProcessInfo
+		require.NoError(t, received.Unmarshal(wire))
+		decoded, err := ConvertToProcessSessionInfo(received.SessionInfo)
+		require.NoError(t, err)
+		for _, date := range []time.Time{{}, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)} {
+			_, actual := date.In(decoded.TimeZone).Zone()
+			require.Equal(t, offset, actual)
+		}
+		proc.Base.SessionInfo.TimeZone = decoded.TimeZone
+		forwarded, err := proc.BuildProcessInfo("select 1")
+		require.NoError(t, err)
+		require.True(t, forwarded.SessionInfo.FixedOffsetPresent)
+		require.Equal(t, int64(offset), forwarded.SessionInfo.FixedOffsetSeconds)
+		require.Empty(t, forwarded.SessionInfo.TimeZone)
+	}
+	for _, offset := range []int{1 << 32, -(1 << 32)} {
+		proc.Base.SessionInfo.TimeZone = time.FixedZone("", offset)
+		_, err := proc.BuildProcessInfo("select 1")
+		require.Error(t, err, "out-of-range offsets must fail instead of publishing UTC")
+	}
+	_, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		FixedOffsetPresent: true, FixedOffsetSeconds: 1, TimeZoneName: "UTC",
+	})
+	require.Error(t, err)
+	_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		FixedOffsetPresent: true, FixedOffsetSeconds: 1 << 32,
+	})
+	require.Error(t, err)
+	_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{FixedOffsetSeconds: 1})
+	require.Error(t, err)
 }
 
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
@@ -1118,6 +1166,21 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 	})
 }
 
+func TestBuildProcessInfoBaselinePresenceRequiresActualOwner(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LastInsertIDSet = false
+	proc.SetLastInsertID(0)
+	info, err := proc.BuildProcessInfo("select last_insert_id()")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.LastInsertIdSet)
+	require.Zero(t, info.SessionInfo.LastInsertId)
+	proc.Base.LastInsertID = nil
+	info, err = proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.False(t, info.SessionInfo.LastInsertIdSet, "a missing owner cannot be advertised as authoritative0")
+}
+
 func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
@@ -1143,5 +1206,47 @@ func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, selectStatement, forwarded.StatementRuntimeSelect)
 		}()
+	}
+}
+
+func TestDMLStatementProfileCodecRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		statement, query string
+		ignore           bool
+	}{
+		{"Select", "DQL", false}, {"Insert", "DML", false}, {"Update", "DML", false},
+		{"Load", "DML", true}, {"Insert", "DML", true}, {"", "", false}, {"Create Table", "DDL", false},
+	} {
+		t.Run(fmt.Sprintf("%s/%t", tc.statement, tc.ignore), func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			t.Cleanup(proc.Free)
+			proc.GetStmtProfile().SetStatementRuntimeProfile(tc.statement, tc.query, tc.ignore)
+			info, err := proc.BuildProcessInfo("context roundtrip")
+			require.NoError(t, err)
+			data, err := info.Marshal()
+			require.NoError(t, err)
+			var wire pipeline.ProcessInfo
+			require.NoError(t, wire.Unmarshal(data))
+			svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil).(*codecService)
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.NoError(t, err)
+			t.Cleanup(decoded.Free)
+			require.Equal(t, proc.IsDMLStatement(), decoded.IsDMLStatement())
+			require.Equal(t, proc.IsSelectStatement(), decoded.IsSelectStatement())
+			require.Equal(t, tc.ignore, decoded.GetStmtProfile().GetStatementIgnore())
+			forwarded, err := decoded.BuildProcessInfo("forward context")
+			require.NoError(t, err)
+			require.Equal(t, info.StatementRuntimeDml, forwarded.StatementRuntimeDml)
+			// An old sender's missing DML bit remains unknown, never !SELECT.
+			wire.StatementRuntimeDml = false
+			legacy, err := svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.NoError(t, err)
+			t.Cleanup(legacy.Free)
+			require.False(t, legacy.IsDMLStatement())
+			wire.StatementRuntimeDml = true
+			wire.StatementRuntimeSelect = true
+			_, err = svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.ErrorContains(t, err, "conflicting SELECT and DML")
+		})
 	}
 }

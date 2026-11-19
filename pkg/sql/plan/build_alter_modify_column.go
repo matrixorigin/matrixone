@@ -25,6 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// alterColumnIsPrimary identifies logical members, including composite primary keys.
+func alterColumnIsPrimary(tableDef *TableDef, col *ColDef) bool {
+	if col.Primary {
+		return true
+	}
+	if tableDef.Pkey != nil {
+		for _, name := range tableDef.Pkey.Names {
+			if strings.EqualFold(name, col.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func updateNewColumnInTableDef(
 	cctx CompilerContext,
 	tableDef *TableDef,
@@ -33,6 +48,7 @@ func updateNewColumnInTableDef(
 	nPos *tree.ColumnPosition,
 ) (bool, error) {
 	ctx := cctx.GetContext()
+	primaryAffected := alterColumnIsPrimary(tableDef, oCol)
 
 	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
 	if err != nil {
@@ -65,7 +81,7 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 
-	return nCol.Primary, nil
+	return primaryAffected || alterColumnIsPrimary(tableDef, nCol), nil
 
 }
 
@@ -200,7 +216,7 @@ func checkChangeTypeCompatible(
 	// old dimension: a mixed-dimension column that breaks distance queries and HNSW/IVFFLAT index
 	// construction (#28917). Reject any vector dimension change here, at validation, BEFORE the
 	// copy runs, rather than relying on the per-row cast guard to fail mid-copy.
-	if types.T(origin.Id).IsArrayRelate() && types.T(to.Id).IsArrayRelate() && origin.Width != to.Width {
+	if types.T(origin.Id).IsArray() && types.T(to.Id).IsArray() && origin.Width != to.Width {
 		return moerr.NewNotSupportedf(ctx,
 			"change vector dimension from %d to %d", origin.Width, to.Width)
 	}

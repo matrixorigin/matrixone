@@ -140,6 +140,16 @@ load data infile {'filepath'='$resources/parquet/ts_no_tz_test.parquet', 'format
 select * from ts_test;
 drop table ts_test;
 
+create table ts_test_ctl(id bigint, v datetime);
+insert into ts_test_ctl values (1, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+set @ts_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+insert into ts_test_ctl values (2, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+set session sql_mode = @ts_saved_sql_mode;
+drop table ts_test_ctl;
+
 -- compressed file load
 drop table if exists none_compression;
 CREATE TABLE none_compression (
@@ -354,6 +364,7 @@ load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet',
 select * from pq_decimal_boundary;
 select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
 select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
+-- @metacmp(true)
 select dec_p9_s2 * 1.1 from pq_decimal_boundary LIMIT 1;
 
 

@@ -1,0 +1,24 @@
+-- feature: information_schema.PARTITIONS keeps one NULL-field row per ordinary base table (issue #31927)
+drop database if exists prt_31927_db;
+create database prt_31927_db;
+use prt_31927_db;
+create table p31927 (a int);
+insert into p31927 values (1), (2);
+select table_name, partition_name, partition_ordinal_position, partition_method, partition_expression, partition_description from information_schema.partitions where table_schema='prt_31927_db' order by table_name;
+create table abmoxindexyt (a int);
+select table_name, partition_name, partition_name is null as is_ordinary_row from information_schema.partitions where table_schema='prt_31927_db' and table_name='abmoxindexyt';
+create table pr_rng31927 (a int) partition by range (a) (partition p0 values less than (10), partition p1 values less than (100));
+insert into pr_rng31927 values (1), (11);
+select partition_name, partition_ordinal_position, partition_method, partition_expression, partition_description from information_schema.partitions where table_schema='prt_31927_db' and table_name='pr_rng31927' order by partition_ordinal_position;
+select table_name, table_rows >= 0 as rows_finite, data_length >= 0 as size_finite from information_schema.partitions where table_schema='prt_31927_db' order by table_name;
+create index idx_p31927 on p31927(a);
+select count(*) > 0 as idx_witness from mo_catalog.mo_tables where account_id = current_account_id() and reldatabase = 'prt_31927_db' and startswith(relname, '__mo_index_');
+select count(*) as idx_internal_leak from information_schema.partitions where table_schema = 'prt_31927_db' and startswith(table_name, '__mo_index_');
+create or replace view pv31927 as select 1 as x;
+select count(*) as view_leak from information_schema.partitions where table_schema='prt_31927_db' and table_name='pv31927';
+create sequence sq31927 start with 1;
+select count(*) as seq_leak from information_schema.partitions where table_schema='prt_31927_db' and table_name='sq31927';
+create temporary table ttmp31927 (a int);
+select count(*) as temp_leak from information_schema.partitions where table_schema='prt_31927_db' and table_name='ttmp31927';
+drop database prt_31927_db;
+select count(*) as postprt_absence from information_schema.partitions where table_schema='prt_31927_db';

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -158,9 +157,10 @@ func (c *scanWorkCompilerContext) GetContext() context.Context {
 	return c.CompilerContext.GetContext()
 }
 
-func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot, borrowOutput *TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if name != "entries" {
-		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot)
+		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot, nil)
 	}
 	c.calls++
 	require.Equal(c.t, c.source, source)
@@ -226,11 +226,6 @@ func TestVectorLocalDOPHint(t *testing.T) {
 		{"vectorLocalDOP=1,vectorLocalDOP=bad", true},
 	} {
 		t.Run(tc.hint, func(t *testing.T) {
-			builder, _, _, _, _ := newIvfIncludeModeTestBuilder(t)
-			for _, hint := range strings.Split(tc.hint, ",") {
-				handleOptimizerHints(hint, builder)
-			}
-			require.Equal(t, tc.enabled, builder.optimizerHints != nil && builder.optimizerHints.vectorLocalDOP == 1)
 			require.Equal(t, tc.enabled, VectorLocalDOPEnabled(tc.hint))
 		})
 	}

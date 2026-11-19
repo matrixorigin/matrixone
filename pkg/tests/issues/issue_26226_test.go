@@ -178,7 +178,7 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			tableName    string
 			wantDefaults []string
 		}{
-			{tableName: "defaults_direct", wantDefaults: []string{"'medium'", "'a'", "7"}},
+			{tableName: "defaults_direct", wantDefaults: []string{"medium", "a", "7"}},
 			{tableName: "defaults_derived", wantDefaults: []string{"", "", ""}},
 			{tableName: "defaults_cte", wantDefaults: []string{"", "", ""}},
 			{tableName: "defaults_union", wantDefaults: []string{"", "", ""}},

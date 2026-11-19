@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import datetime
 import json
+from dataclasses import replace
+from types import SimpleNamespace
+from typing import List, Optional
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+
+import matrixone.cdc as cdc_module
 
 from matrixone.cdc import (
     AsyncCDCManager,
@@ -29,6 +35,27 @@ def test_build_mysql_uri() -> None:
 
     with pytest.raises(ValueError):
         build_mysql_uri(host="127.0.0.1", port="6001", user="root", password="111")
+
+
+@pytest.mark.parametrize(
+    "account,user,password",
+    [
+        (None, "root", "normal"),
+        ("tenant", "admin", "p:a:ss"),
+        (None, "user%name", "p%40word"),
+        ("组%1", "user@name", "密 码@:/%"),
+    ],
+)
+def test_build_mysql_uri_roundtrips_cdc_credentials(account, user, password) -> None:
+    from urllib.parse import unquote
+
+    uri = build_mysql_uri("db.example", 6001, user, password, account)
+    credentials, host_port = uri.removeprefix("mysql://").rsplit("@", 1)
+    encoded_identity, encoded_password = credentials.rsplit(":", 1)
+
+    assert unquote(encoded_identity) == (f"{account}#{user}" if account else user)
+    assert unquote(encoded_password) == password
+    assert host_port == "db.example:6001"
 
 
 class TestCDCManagerSQLGeneration:
@@ -328,6 +355,101 @@ class TestCDCManagerSQLGeneration:
 
         assert len(marks) == 1
         assert marks[0].table == "orders"
+
+    def test_list_late_table_watermarks_parses_hlc_timestamp(self, monkeypatch) -> None:
+        class FixedDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2025, 1, 2, 3, 24, 5, 123456, tzinfo=datetime.timezone.utc)
+
+        monkeypatch.setattr(
+            cdc_module,
+            "datetime",
+            SimpleNamespace(datetime=FixedDateTime, timezone=datetime.timezone, timedelta=datetime.timedelta),
+        )
+        task = CDCTaskInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            source_uri=None,
+            sink_uri=None,
+            sink_type=None,
+            table_mapping=None,
+            state="running",
+            checkpoint=None,
+            err_msg=None,
+            created_time=None,
+        )
+        timestamp = datetime.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)
+        nanos = int(timestamp.timestamp()) * 1_000_000_000 + timestamp.microsecond * 1_000
+        watermark = CDCWatermarkInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            database="test_db",
+            table="orders",
+            watermark=f"{nanos}-7",
+            err_msg=None,
+        )
+        watermarks = [watermark] + [
+            replace(watermark, table=table, watermark=value)
+            for table, value in [
+                ("future_orders", "20990101"),
+                ("future_events", "20990101-030405"),
+                ("missing", None),
+                ("invalid", "not-a-timestamp"),
+                ("bad_logical", f"{nanos}-invalid"),
+                ("out_of_range", "999999999999999999999999999-0"),
+            ]
+        ]
+        self.manager.list = Mock(return_value=[task])  # type: ignore[method-assign]
+        self.manager.list_watermarks = Mock(return_value=watermarks)  # type: ignore[method-assign]
+
+        assert self.manager.list_late_table_watermarks() == [watermark]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("20990101", datetime.datetime(2099, 1, 1, tzinfo=datetime.timezone.utc)),
+        ("20990101-030405", datetime.datetime(2099, 1, 1, 3, 4, 5, tzinfo=datetime.timezone.utc)),
+        ("20990101-07", datetime.datetime(2099, 1, 1, 7, tzinfo=datetime.timezone.utc)),
+        (
+            "20990101T030405.123456+02:30",
+            datetime.datetime(2099, 1, 1, 3, 4, 5, 123456, tzinfo=datetime.timezone(datetime.timedelta(minutes=150))),
+        ),
+        ("20990101T030405Z", datetime.datetime(2099, 1, 1, 3, 4, 5, tzinfo=datetime.timezone.utc)),
+        ("2025-01-02 03:04:05", datetime.datetime(2025, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)),
+        (
+            "2025-01-02T03:04:05+00:00:30.500000",
+            datetime.datetime(2025, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=30.5))),
+        ),
+        ("2025-1-2 3:4:5", datetime.datetime(2025, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)),
+        ("2025", datetime.datetime(1970, 1, 1, 0, 0, 0, 2, tzinfo=datetime.timezone.utc)),
+        ("2025-001", datetime.datetime(1970, 1, 1, 0, 0, 0, 2, tzinfo=datetime.timezone.utc)),
+        ("20990101-24", datetime.datetime(1970, 1, 1, 0, 0, 0, 20990, tzinfo=datetime.timezone.utc)),
+        ("1735787045123456789-7", datetime.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)),
+        ("1735787045123456789", datetime.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)),
+        ("999-0", datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)),
+        ("1000-0", datetime.datetime(1970, 1, 1, 0, 0, 0, 1, tzinfo=datetime.timezone.utc)),
+        ("999999999-9", datetime.datetime(1970, 1, 1, 0, 0, 0, 999999, tzinfo=datetime.timezone.utc)),
+        ("1000000000-0", datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=datetime.timezone.utc)),
+        ("253402300799999999999-0", datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)),
+        ("253402300800000000000-0", None),
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("invalid", None),
+        ("1735787045123456789-bad", None),
+        ("1735787045123456789-", None),
+        ("1735787045123456789-7-extra", None),
+        ("9999-12-31T24:00", None),
+        ("99991231T24:00", None),
+    ],
+)
+def test_parse_watermark_timestamp(value, expected) -> None:
+    actual = cdc_module._parse_watermark_timestamp(value)
+    assert actual == expected
+    if expected is not None:
+        assert actual.utcoffset() == expected.utcoffset()
 
 
 @pytest.mark.asyncio

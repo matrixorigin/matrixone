@@ -12,7 +12,7 @@ SELECT 'Corn' REGEXP 'Corn' AS 'Corn';
 1
 SELECT 'Acorn' REGEXP 'Corn' AS 'Acorn';
 ➤ Acorn[-7,1,0]  𝄀
-0
+1
 SELECT 'Corner' REGEXP 'Corn' AS 'Corner';
 ➤ Corner[-7,1,0]  𝄀
 1
@@ -224,3 +224,12 @@ WHERE b REGEXP '^Power';
 1  ¦  PowerSlave  𝄀
 2  ¦  Powerage
 drop table t1;
+SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b') REGEXP '^b' AS cr_default;
+cr_default
+0
+SELECT CONCAT('a', CONVERT(CHAR(10) USING utf8mb4), 'b') REGEXP '^b' AS lf_default;
+lf_default
+0
+SELECT CONCAT('a', CONVERT(UNHEX('C285') USING utf8mb4), 'b') REGEXP '^b' AS nel_default;
+nel_default
+0

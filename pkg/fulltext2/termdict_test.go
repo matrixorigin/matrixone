@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"runtime"
 	"sort"
 	"testing"
 
@@ -80,6 +81,16 @@ func TestTermDictGet(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, ok, miss)
 	}
+}
+
+func TestTermDictRetainsDataThroughGC(t *testing.T) {
+	d, expected := buildDict(t, "apple", "apply", "banana")
+	runtime.GC()
+	value, ok, err := d.get("apple")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, expected["apple"], value)
+	require.Equal(t, []string{"apple", "apply"}, collectPrefix(t, d, "app"))
 }
 
 func TestTermDictPrefixASCII(t *testing.T) {

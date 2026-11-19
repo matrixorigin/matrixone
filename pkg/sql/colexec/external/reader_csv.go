@@ -15,6 +15,7 @@
 package external
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -44,7 +46,7 @@ type CsvReader struct {
 	param      *ExternalParam
 	plh        *ParseLineHandler
 	reader     io.ReadCloser
-	prevStr    string
+	pending    jsonLinePending
 	ignoreLine int
 	ignoreTag  int
 }
@@ -66,6 +68,7 @@ func NewCsvReader(param *ExternalParam, proc *process.Process) (*CsvReader, erro
 }
 
 func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
+	r.pending = jsonLinePending{}
 	r.param = param
 	r.ignoreLine = r.ignoreTag
 
@@ -86,7 +89,10 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		return true, nil
 	}
 
-	csvParser, err := newCSVParserFromReader(param.Extern, r.reader)
+	cfg := CSVConfigForLoad(param.Extern)
+	cfg.AllowUnterminatedEnclosureAtEOF = param.Extern.ExternType == int32(pbplan.ExternType_LOAD) &&
+		!param.Extern.Parallel && param.Extern.Format == tree.CSV
+	csvParser, err := csvparser.NewCSVParser(cfg, bufio.NewReader(r.reader), csvparser.ReadBlockSize, false)
 	if err != nil {
 		r.reader.Close()
 		r.reader = nil
@@ -107,7 +113,7 @@ func (r *CsvReader) ReadBatch(
 }
 
 func (r *CsvReader) Close() error {
-	r.prevStr = ""
+	r.pending = jsonLinePending{}
 	r.plh = nil
 	if r.reader != nil {
 		err := r.reader.Close()
@@ -123,6 +129,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	if bat == nil || bat.VectorCount() == 0 {
 		return false, moerr.NewInternalError(proc.Ctx, "external CSV reader requires at least one materialized column")
 	}
+	defer func() {
+		if err != nil {
+			r.pending = jsonLinePending{}
+		}
+	}()
 	param := r.param
 	ctx := proc.Ctx
 	csvReader := r.plh.csvReader
@@ -133,7 +144,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
 		case <-ctx.Done():
-			finish = true
+			return false, ctx.Err()
 		default:
 		}
 		if !finish {
@@ -157,11 +168,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			r.reader = nil
 			r.plh = nil
 			fileFinished = true
-			if r.prevStr != "" && param.Extern.Format == tree.JSONLINE && !param.ErrorMode.Tolerate {
+			if len(r.pending.data) != 0 && param.Extern.Format == tree.JSONLINE && !param.ErrorMode.Tolerate {
 				// A record still held over at end of file never completed:
 				// the file is truncated or the record is malformed. Fail
 				// instead of silently dropping it.
-				r.prevStr = ""
+				r.pending = jsonLinePending{}
 				return false, moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
 			}
 			break
@@ -188,56 +199,62 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
 			raw := row[0].Val
-			if param.ErrorMode.Tolerate {
-				// The text this record is parsed from, so a failure reports
-				// the source line rather than the decoded fields.
-				param.ErrorMode.RawText = r.prevStr + raw
+			open := byte('{')
+			if param.Extern.JsonData == tree.ARRAY {
+				open = '['
 			}
-			row, err = r.transJson2Lines(proc.Ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
+			if param.ErrorMode.Tolerate {
+				param.ErrorMode.RawText = raw
+			}
+			if len(r.pending.data) != 0 {
+				if err = r.pending.append(raw, csvReader.MaxRecordSize()); err != nil {
+					return false, err
+				}
+				if !r.pending.closed {
+					if curBatchSize >= param.maxBatchSize {
+						break
+					}
+					continue
+				}
+				raw = string(r.pending.data)
+			}
+			row, err = r.transJson2Lines(ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
-				// transJson2Lines holds the text over in prevStr only when the
-				// record is genuinely truncated; that -- not the EOF error
-				// alone -- is what makes this a continuation.
-				truncated := r.prevStr != ""
+				truncated := jsonLineTruncated(err, raw, open)
 				if truncated && !param.ErrorMode.Tolerate {
-					// Held over for the next line. Nothing is appended for
-					// this record, so there is no partial row to trim once
-					// the batch ends. (Rows used to be written into
-					// pre-allocated slots, which is why the batch tail was
-					// trimmed here; they are appended now.)
-					logutil.Infof("unexpected EOF, wait for next batch")
+					if len(r.pending.data) == 0 {
+						if err = r.pending.append(raw, csvReader.MaxRecordSize()); err != nil {
+							return false, err
+						}
+						if r.pending.closed {
+							r.pending.closed = false
+							r.pending.sealed = true
+						}
+					} else {
+						// A closed root reported as truncated cannot be repaired by a suffix.
+						r.pending.closed = false
+						r.pending.sealed = true
+					}
+					if curBatchSize >= param.maxBatchSize {
+						break
+					}
 					continue
 				}
 				if !param.ErrorMode.Tolerate {
 					return false, err
 				}
 				if truncated {
-					// Under tolerance a truncated object is THIS line's
-					// failure, not a claim on the lines after it. Holding it
-					// over would append every following line to it and report
-					// one failure at EOF, losing every good record in between
-					// -- and it would buy nothing: a continuation line that
-					// starts with a quote makes the CSV splitter fail the
-					// whole scan, so a multi-line object is not reliably
-					// readable in the first place.
-					r.prevStr = ""
-					err = moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
+					err = moerr.NewInvalidInput(ctx, "incomplete json record")
 				}
-				// A line that is not valid JSON is reported as a failed record
-				// rather than failing the query.
 				if err = appendErrorRow(proc, bat, nil, i, param, err); err != nil {
 					return false, err
 				}
-				// A reject row is a row: the batch has to be handed on at the
-				// same size limit as a row that parsed. Skipping this check let
-				// a run of malformed records build one batch far past
-				// maxBatchSize -- each carrying a copy of its source text in
-				// __mo_error_text -- defeating the transport and memory bound.
 				if curBatchSize >= param.maxBatchSize {
 					break
 				}
 				continue
 			}
+			r.pending = jsonLinePending{}
 		}
 
 		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
@@ -256,7 +273,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 // jsonLineTruncated reports whether a failed parse means "truncated" rather
 // than "malformed": the parser ran off the end of the text, and the text opens
 // the expected value, so appending the next line can still complete it. Only
-// such text is held over in prevStr. The prefix test matters because the
+// such text may be held over. The prefix test matters because the
 // parser reports a bare word ("this is not json") as an unexpected EOF too,
 // and holding that over would glue it onto the following line.
 func jsonLineTruncated(err error, str string, open byte) bool {
@@ -268,7 +285,6 @@ func jsonLineTruncated(err error, str string, open byte) bool {
 }
 
 // transJson2Lines converts JSON string to CSV fields.
-// Uses r.prevStr instead of param.prevStr.
 func (r *CsvReader) transJson2Lines(ctx context.Context, str string, attrs []plan.ExternAttr, cols []*plan.ColDef, jsonData string) ([]csvparser.Field, error) {
 	switch jsonData {
 	case tree.OBJECT:
@@ -312,15 +328,10 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		}
 	}
 	res := make([]csvparser.Field, resultSize)
-	if r.prevStr != "" {
-		str = r.prevStr + str
-		r.prevStr = ""
-	}
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		if jsonLineTruncated(err, str, '{') {
-			r.prevStr = str
 			return nil, err
 		}
 		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json object")
@@ -365,12 +376,26 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res[attr.ColFieldIndex] = csvparser.Field{Val: text}
+			continue
+		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)}
+		res[attr.ColFieldIndex] = csvparser.Field{
+			Val: val,
+			// A BIT column's JSON NUMBER token carries the exported uint64
+			// value, so flag the token provenance for getColData's value
+			// conversion instead of letting both byte-semantic consumers read
+			// the token text as raw bytes. Kafka JSON keeps its existing byte
+			// conversion (#30653 is the file JSONLINE export contract).
+			IsJSONNumber: !kafkaJSON && tp == int32(types.T_bit) && scalarIsJSONNumber(valN),
+		}
 	}
 	return res, nil
 }
@@ -380,14 +405,13 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		err error
 		res = make([]csvparser.Field, 0, len(attrs))
 	)
-	if r.prevStr != "" {
-		str = r.prevStr + str
-		r.prevStr = ""
-	}
+	// Kafka consumes the same array records, but #30653's export contract
+	// covers file JSONLINE sources only; Kafka BIT columns keep the byte
+	// conversion.
+	kafkaJSON := r.param != nil && r.param.KafkaScan != nil
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		if jsonLineTruncated(err, str, '[') {
-			r.prevStr = str
 			return nil, err
 		}
 		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json array")
@@ -425,22 +449,101 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			res = append(res, csvparser.Field{Val: string(data)})
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res = append(res, csvparser.Field{Val: text})
+			continue
+		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)})
+		res = append(res, csvparser.Field{
+			Val: val,
+			// Same scalar provenance as the object shape: a BIT column's
+			// JSON NUMBER token is the exported uint64 value, not a raw-byte
+			// payload. Kafka JSON keeps its existing byte conversion.
+			IsJSONNumber: !kafkaJSON && tp == int32(types.T_bit) && scalarIsJSONNumber(valN),
+		})
 	}
 	return res, nil
+}
+
+// vecBlockJSONText returns the JSON text of an object value of a vecf8/vecf4 column, the
+// exact form of the cell.
+func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
+	if !types.T(tp).IsBlockScaledArray() {
+		return "", false, nil
+	}
+	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
+		return "", false, nil
+	}
+	var text strings.Builder
+	if err := writeJSONLexemes(&text, valN); err != nil {
+		return "", false, err
+	}
+	return text.String(), true, nil
+}
+
+// writeJSONLexemes writes a parsed JSON value as JSON text, numbers as their original
+// lexemes (-0 stays -0).
+func writeJSONLexemes(text *strings.Builder, node bytejson.Node) error {
+	switch v := node.V.(type) {
+	case *bytejson.Group:
+		lb, rb := byte('['), byte(']')
+		if v.Obj {
+			lb, rb = '{', '}'
+		}
+		text.WriteByte(lb)
+		for i, child := range v.Values {
+			if i > 0 {
+				text.WriteByte(',')
+			}
+			if v.Obj {
+				key, err := json.Marshal(v.Keys[i])
+				if err != nil {
+					return err
+				}
+				text.Write(key)
+				text.WriteByte(':')
+			}
+			if err := writeJSONLexemes(text, child); err != nil {
+				return err
+			}
+		}
+		text.WriteByte(rb)
+	case json.Number:
+		text.WriteString(v.String())
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		text.Write(b)
+	}
+	return nil
+}
+
+func (r *CsvReader) legacyJSONBinary() bool {
+	return r.param != nil && r.param.Extern != nil && r.param.Extern.JsonBinary == plan.JSONBinaryLegacyBase64
+}
+
+// scalarIsJSONNumber reports whether the node holds an unquoted JSON NUMBER
+// scalar token, as opposed to a string, group (object/array) or boolean
+// token. Quoted JSON digits stay string scalars and keep byte semantics.
+func scalarIsJSONNumber(node bytejson.Node) bool {
+	_, ok := node.V.(json.Number)
+	return ok
 }
 
 // jsonLineScalarText preserves numeric array boundaries for vector columns.
 // Node.String uses Go slice formatting, whose spaces are removed by the vector
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
-func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
+func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
-	if !typ.IsArrayRelate() || !ok || group.Obj {
+	if !(typ.IsArrayRelate() || typ.IsBlockScaledArray()) || !ok || group.Obj {
 		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
 		// {"$binary":"<base64>"} objects so the loader can tell MO-encoded
 		// binary payloads apart from plain-text JSON strings. Only the
@@ -458,6 +561,17 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 				return string(decoded), nil
 			}
 		}
+		if legacyBinary && (typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob) {
+			encoded, ok := node.V.(string)
+			if !ok {
+				return "", moerr.NewInvalidInput(ctx, "legacy JSONLINE binary value must be a base64 string or a $binary wrapper")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", moerr.NewInvalidInput(ctx, "invalid base64 payload in legacy JSONLINE binary column")
+			}
+			return string(decoded), nil
+		}
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder
@@ -474,17 +588,6 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 	}
 	text.WriteByte(']')
 	return text.String(), nil
-}
-
-// isJsonNullSentinel decides NULL solely from the undecoded JSON input: only
-// a raw JSON string equal to the JsonNull sentinel ("\N") is NULL. A wrapped
-// base64 payload that decodes to the sentinel's bytes (e.g. X'5C4E') is a
-// value and must never be lost to NULL (matrixone#30635). For any non-string
-// scalar the converted text can never equal the sentinel, so this matches the
-// previous value-based comparison for every other column type.
-func isJsonNullSentinel(node bytejson.Node) bool {
-	s, ok := node.V.(string)
-	return ok && s == JsonNull
 }
 
 // isExternalErrorAttr reports whether an attribute is one of the synthesized

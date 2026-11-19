@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 )
 
 const tenantUpgradeTestHangTimeout = 10 * time.Second
@@ -212,8 +214,8 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 1, 0), nil
 				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 0"):
 					return executor.Result{AffectedRows: 1}, nil
-				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1") &&
-					strings.Contains(sql, "state = 2"):
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1"):
+					require.NotContains(t, sql, "state =", "the cluster owner publishes readiness")
 					finalized.Store(true)
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
@@ -276,6 +278,45 @@ func TestShouldRunTenantUpgrade(t *testing.T) {
 	}
 }
 
+func TestTenantUpgradeFinishesTaskWhenCountsAlreadyMatch(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		var taskReady, countUpdated bool
+		op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		op.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: ""}).AnyTimes()
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
+				return buildUpgradeVersionResult(100, versions.StateUpgradingTenant, "4.0.6", "4.0.7", 1, 0, versions.Yes, versions.Yes, 1, 1), nil
+			case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+				return buildUpgradeTenantTaskRows([]uint64{200}, []int32{10}, []int32{10}), nil
+			case strings.Contains(sql, "select account_id, create_version from mo_account"):
+				return buildUpgradeTenantAccountRows([]int32{10}, []string{"4.0.7"}), nil
+			case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1"):
+				taskReady = true
+				return executor.Result{AffectedRows: 1}, nil
+			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where id = 100 for update"):
+				return buildUpgradeVersionResult(100, versions.StateUpgradingTenant, "4.0.6", "4.0.7", 1, 0, versions.Yes, versions.Yes, 1, 1), nil
+			case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1"):
+				require.NotContains(t, sql, "state =")
+				countUpdated = true
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+		}, op)
+		h := newTestVersionHandler("4.0.7", "4.0.6", versions.Yes, versions.Yes, 1)
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
+			func(s *service) { s.handles = []VersionHandle{h} })
+		defer s.stopper.Stop()
+		didWork, err := s.newTenantUpgradePass(t.Context())()
+		require.NoError(t, err)
+		require.True(t, didWork)
+		require.True(t, taskReady)
+		require.True(t, countUpdated)
+		require.Zero(t, h.callHandleTenantUpgrade.Load())
+	})
+}
+
 func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -326,8 +367,8 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 					return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
 						currentVersion, currentVersion, newVersionOffset, 0,
 						versions.Yes, versions.Yes, 1, 0), nil
-				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1") &&
-					strings.Contains(sql, "state = 2"):
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1"):
+					require.NotContains(t, sql, "state =", "the cluster owner publishes readiness")
 					finalized.Store(true)
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
@@ -400,8 +441,8 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 				case strings.Contains(sql, "from mo_upgrade") &&
 					strings.Contains(sql, "where id = 100 for update"):
 					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 3, 2), nil
-				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3") &&
-					strings.Contains(sql, "state = 2"):
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3"):
+					require.NotContains(t, sql, "state =", "the cluster owner publishes readiness")
 					finalized.Store(true)
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
@@ -459,8 +500,8 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 				case strings.Contains(sql, "from mo_upgrade") &&
 					strings.Contains(sql, "where id = 100 for update"):
 					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 3, 2), nil
-				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3") &&
-					strings.Contains(sql, "state = 2"):
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3"):
+					require.NotContains(t, sql, "state =", "the cluster owner publishes readiness")
 					finalized.Store(true)
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
@@ -557,6 +598,88 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
 	)
+}
+
+func TestTenantUpgradeConflictRetriesOtherRangeInFreshTransaction(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		ctrl := gomock.NewController(t)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+		exec := mock_executor.NewMockSQLExecutor(ctrl)
+		rollbackErr := errors.New("rollback failed")
+		transactions := 0
+		var completed []uint64
+		exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+			func(_ context.Context, fn func(executor.TxnExecutor) error, _ executor.Options) error {
+				transactions++
+				attempt := transactions
+				aborted := false
+				txnExec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					require.False(t, aborted, "SQL must not run in the aborted transaction")
+					switch {
+					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
+						return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 2, 0), nil
+					case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+						return buildUpgradeTenantTaskRows([]uint64{200}, []int32{10}, []int32{12}), nil
+					case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 13"):
+						if attempt == 2 {
+							return buildUpgradeTenantTaskRows([]uint64{201}, []int32{20}, []int32{20}), nil
+						}
+						return executor.Result{}, nil
+					case strings.Contains(sql, "from mo_account where account_id >= 10"):
+						if attempt == 1 {
+							aborted = true
+							return executor.Result{}, moerr.NewLockConflictNoCtx()
+						}
+						return buildUpgradeTenantAccountRows([]int32{10}, []string{"3.0.1"}), nil
+					case strings.Contains(sql, "from mo_account where account_id >= 20"):
+						return buildUpgradeTenantAccountRows([]int32{20}, []string{"3.0.1"}), nil
+					case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1"):
+						if strings.Contains(sql, "where id = 200") {
+							completed = append(completed, 200)
+						} else if strings.Contains(sql, "where id = 201") {
+							completed = append(completed, 201)
+						} else {
+							t.Fatalf("unexpected task update: %s", sql)
+						}
+						return executor.Result{AffectedRows: 1}, nil
+					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where id = 100 for update"):
+						return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 2, 0), nil
+					case strings.Contains(sql, "update mo_upgrade set total_tenant"):
+						return executor.Result{AffectedRows: 1}, nil
+					default:
+						t.Fatalf("unexpected SQL in transaction %d: %s", attempt, sql)
+						return executor.Result{}, nil
+					}
+				}, txnOperator)
+				err := fn(txnExec)
+				if attempt == 1 {
+					return errors.Join(err, rollbackErr)
+				}
+				return err
+			})
+
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
+			func(s *service) {
+				s.handles = append(s.handles, newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 0))
+			})
+		pass := s.newTenantUpgradePass(t.Context())
+		worked, err := pass()
+		require.False(t, worked)
+		require.ErrorIs(t, err, rollbackErr, "preserve a separate rollback failure")
+		worked, err = pass()
+		require.NoError(t, err)
+		require.True(t, worked)
+		require.Equal(t, []uint64{201}, completed)
+		worked, err = pass()
+		require.NoError(t, err)
+		require.False(t, worked, "the partial scan must wrap without reconciling")
+		worked, err = pass()
+		require.NoError(t, err)
+		require.True(t, worked)
+		require.Equal(t, []uint64{201, 200}, completed)
+		require.Equal(t, 4, transactions)
+	})
 }
 
 func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.T) {

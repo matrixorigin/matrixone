@@ -119,5 +119,7 @@ union all
 select cast('1' as varchar) from mixed_projection_src
 ) src
 order by bitmap;
-invalid argument cast to uint64, bad value a
+➤ bitmap[-5,64,0]  𝄀
+0  𝄀
+1
 drop database br_set_lca;

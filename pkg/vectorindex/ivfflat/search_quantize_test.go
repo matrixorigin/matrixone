@@ -113,7 +113,7 @@ func TestLoadQuantizeBounds(t *testing.T) {
 func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, int32(1), req.PartitionCount)
 		require.NotNil(t, req.Filter)
@@ -138,7 +138,7 @@ func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "centroids", req.Table)
 		require.Equal(t, int32(1), req.PartitionCount)
@@ -244,7 +244,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 func TestIvfflatSearchLifecycleWrappers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(sqlexec.RelationScanRequest) executor.Result {
 		return executor.Result{Mp: mp}
 	}

@@ -214,18 +214,18 @@ func TestJsonLengthOperator(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// json_length with JSON null: null → NULL
+	// json_length with JSON null: null → 1 (#30781: literal null is a scalar)
 	{
 		tc := tcTemp{
-			info: "json_length with JSON null: null -> NULL",
+			info: "json_length with JSON null: null -> 1",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{`null`},
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{true}),
+				[]int64{1},
+				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
 		succeed, info := tcc.RunAndFree()

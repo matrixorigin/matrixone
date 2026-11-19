@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/perf_abba.py", line 9, in <module>
+    with Service(variant,f'perf-abba-{phase}-{variant}') as svc:
+         ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/harness.py", line 29, in __enter__
+    else:raise TimeoutError('SQL and query service registration readiness')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: SQL and query service registration readiness

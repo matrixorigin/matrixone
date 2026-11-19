@@ -49,7 +49,7 @@ func buildLoadNullIfTestPlan(t *testing.T, expression string, legacy bool) (*pla
 		}
 		result, err = buildLoad(load, ctx, false)
 	} else {
-		result, err = BuildPlan(ctx, statement, false)
+		result, err = BuildPlan(ctx, statement, false, nil)
 	}
 	// Replacing @v with the scan column must not modify the caller's AST.
 	require.Equal(t, before, tree.String(original, dialect.MYSQL))
@@ -124,7 +124,7 @@ func TestExternalNullIfCollatedColumnRequiresProjection(t *testing.T) {
 		"create external table collated_nullif(s varchar(32)) infile{'filepath'='ignored.csv'} fields terminated by ',' set s=nullif(s,'sentinel') collate utf8mb4_bin", 1)
 	require.NoError(t, err)
 	defer statement.Free()
-	_, err = BuildPlan(ctx, statement, false)
+	_, err = BuildPlan(ctx, statement, false, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }

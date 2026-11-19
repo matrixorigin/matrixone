@@ -165,15 +165,7 @@ func (a StartNonVotingLogService) IsFinish(state ClusterState) bool {
 	return false
 }
 
-type StopLogService struct {
-	Replica
-}
-
-func (a StopLogService) String() string {
-	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
-}
-
-func (a StopLogService) IsFinish(state ClusterState) bool {
+func (a Replica) logShardStopped(state ClusterState) bool {
 	if store, ok := state.LogState.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
@@ -183,6 +175,18 @@ func (a StopLogService) IsFinish(state ClusterState) bool {
 	}
 
 	return true
+}
+
+type StopLogService struct {
+	Replica
+}
+
+func (a StopLogService) String() string {
+	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
+}
+
+func (a StopLogService) IsFinish(state ClusterState) bool {
+	return a.Replica.logShardStopped(state)
 }
 
 type StopNonVotingLogService struct {
@@ -194,14 +198,7 @@ func (a StopNonVotingLogService) String() string {
 }
 
 func (a StopNonVotingLogService) IsFinish(state ClusterState) bool {
-	if store, ok := state.LogState.Stores[a.UUID]; ok {
-		for _, replicaInfo := range store.Replicas {
-			if replicaInfo.ShardID == a.ShardID {
-				return false
-			}
-		}
-	}
-	return true
+	return a.Replica.logShardStopped(state)
 }
 
 type KillLogZombie struct {
@@ -213,15 +210,7 @@ func (a KillLogZombie) String() string {
 }
 
 func (a KillLogZombie) IsFinish(state ClusterState) bool {
-	if store, ok := state.LogState.Stores[a.UUID]; ok {
-		for _, replicaInfo := range store.Replicas {
-			if replicaInfo.ShardID == a.ShardID {
-				return false
-			}
-		}
-	}
-
-	return true
+	return a.Replica.logShardStopped(state)
 }
 
 type AddTnReplica struct {

@@ -24,10 +24,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/collation/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -46,6 +48,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -261,7 +265,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
 	// FSP is supplied as the single argument and overrides this below.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -286,7 +290,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	// SYSDATE() follows the same default FSP=0 rule as NOW() and
 	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -492,9 +496,10 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	defExprInShowColumns       = 4 //default expr in the show columns.
-	generatedExprOrigin  uint8 = 5 // generated column expression origin string
-	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	defExprInShowColumns        = 4 //default expr in the show columns.
+	generatedExprOrigin   uint8 = 5 // generated column expression origin string
+	generatedExprExtra    uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	generatedDefaultExtra uint8 = 7 // expression default Extra: "DEFAULT_GENERATED" or ""
 )
 
 // Geometry subtype and SRID live in the column type's Scale and Width (see
@@ -560,16 +565,48 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS
+// and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
+// its value, like MySQL. Expression-classified defaults keep their origin
+// text; literal-classified DECIMAL/BIT defaults render the resolved value at
+// the declared type (issue #31161), and every unrecognized shape falls back
+// to the origin text.
+func columnDefaultValue(def *plan.Default) []byte {
+	origin := def.OriginString
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return nil
+	}
+	if !isExpressionDefault(def.Expr, origin) {
+		if rendered, ok := renderTypedLiteralDefault(def); ok {
+			return functionUtil.QuickStrToBytes(rendered)
+		}
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// OriginString uses the persisted formatter's escapes, independently of
+	// the querying session's SQL mode. Keep lexical decoding with its owner.
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	token, value := scanner.Scan()
+	if token != mysql.STRING || scanner.Pos != n {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// A decoded empty literal is a non-NULL value, unlike an absent default.
+	return []byte(value)
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 6], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 7], but got NULL")
 	}
-	if tp > generatedExprExtra {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 6], but got %d", tp))
+	if tp > generatedDefaultExtra {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 7], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -591,7 +628,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -634,39 +671,32 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
-		formatStr := func(str string) string {
-			tmp := strings.Replace(str, "`", "``", -1)
-			strLen := len(tmp)
-			if strLen < 2 {
-				return tmp
-			}
-			if tmp == "''" {
-				return ""
-			}
-			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
-			}
-			return strings.Replace(tmp, "'", "''", -1)
-		}
+		// Same display as information_schema.COLUMNS.COLUMN_DEFAULT: decode a
+		// string literal via the MySQL scanner. OriginString is already SQL text,
+		// so re-escaping (the old formatStr) doubled quotes/backticks.
 		f = func(s []byte) ([]byte, error) {
 			def := new(plan.Default)
 			err := types.Decode(s, def)
 			if err != nil {
 				return nil, err
 			}
-			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
-				return nil, nil
+			return columnDefaultValue(def), nil
+		}
+	case generatedDefaultExtra:
+		// EXTRA for a column default: DEFAULT_GENERATED for an expression
+		// default, empty otherwise (issue #31161). The SQL surfaces compare
+		// length(...) > 0, so a literal default returns a non-NULL empty
+		// string.
+		f = func(s []byte) ([]byte, error) {
+			def := new(plan.Default)
+			err := types.Decode(s, def)
+			if err != nil {
+				return nil, err
 			}
-			trimmed := strings.TrimSpace(def.OriginString)
-			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-				return functionUtil.QuickStrToBytes(trimmed), nil
+			if isExpressionDefault(def.Expr, def.OriginString) {
+				return functionUtil.QuickStrToBytes(defaultGeneratedExtra), nil
 			}
-
-			fStr := formatStr(def.OriginString)
-			if len(fStr) == 0 {
-				return []byte{}, nil
-			}
-			return functionUtil.QuickStrToBytes(fStr), nil
+			return []byte{}, nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -766,12 +796,14 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		members := strings.Split(enumStr, ",")
+		var members []string
 		if typ.Oid == types.T_uint64 {
 			if enumStr == "" {
 				return nil, nil
 			}
 			members = types.DecodeSetValues(enumStr)
+		} else {
+			members = strings.Split(enumStr, ",")
 		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
@@ -852,8 +884,127 @@ func moShowColUnique(constraintStr string, colName string) bool {
 	return containsCol
 }
 
+// internalDeclaredLabelCharLength derives the information_schema character
+// metadata of a declared ENUM or SET column from the catalog label list:
+// ENUM reports its longest member, SET reports every member joined by the
+// separating commas. A T_enum with an empty label string is the declared
+// single empty member of ENUM(”): a zero-length domain, absent only as a
+// NULL label argument. A T_uint64 type carries declared labels only for SET
+// columns, so an empty or NULL label argument keeps the ordinary unsigned
+// integer identity. Geometry SRID annotations and JSON array declarations
+// share the attribute storage but never under these two OIDs.
+func internalDeclaredLabelCharLength(oid types.T, declaredLabels string) (int64, bool) {
+	switch oid {
+	case types.T_enum:
+		if len(declaredLabels) == 0 {
+			return 0, true
+		}
+		longest := 0
+		for _, member := range strings.Split(declaredLabels, ",") {
+			if width := utf8.RuneCountInString(member); width > longest {
+				longest = width
+			}
+		}
+		return int64(longest), true
+	case types.T_uint64:
+		members := types.DecodeSetValues(declaredLabels)
+		if len(members) == 0 {
+			return 0, false
+		}
+		length := int64(len(members) - 1)
+		for _, member := range members {
+			length += int64(utf8.RuneCountInString(member))
+		}
+		return length, true
+	}
+	return 0, false
+}
+
+// builtInInternalIndexSubPart reports the retained prefix length of one
+// index part from mo_catalog.mo_indexes.algo_params. MySQL reports
+// information_schema.STATISTICS.SUB_PART and SHOW INDEX Sub_part as the
+// number of indexed characters and SQL NULL when the whole column is
+// indexed. Rows without metadata, parts without a retained prefix
+// (including FULLTEXT parts, which never persist one), and legacy rows a
+// parser cannot decode return SQL NULL rather than fabricating a length.
+func builtInInternalIndexSubPart(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	indexParameters := vector.GenerateFunctionStrParameter(parameters[0])
+	columnNames := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		params, paramsNull := indexParameters.GetStrValue(i)
+		columnName, columnNull := columnNames.GetStrValue(i)
+		if paramsNull || columnNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		prefixLength := int64(0)
+		valid := false
+		lengths, err := catalog.IndexPrefixLengthsFromParamsWithError(
+			functionUtil.QuickBytesToStr(params))
+		if err == nil {
+			column := functionUtil.QuickBytesToStr(columnName)
+			if value, ok := lengths[column]; ok {
+				prefixLength, valid = int64(value), true
+			} else {
+				// Older catalog rows can retain the declared spelling's
+				// case; rename reconciliation matches case-insensitively.
+				for part, value := range lengths {
+					if strings.EqualFold(part, column) {
+						prefixLength, valid = int64(value), true
+						break
+					}
+				}
+			}
+		}
+		if err := rs.Append(prefixLength, !valid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// internalDeclaredLabelOctetLength scales the label metadata to the byte
+// bound MySQL reports. Declared labels are stored and rendered as full
+// UTF-8, the domain the default VARCHAR charset metadata already claims
+// for CHARACTER_OCTET_LENGTH, so the UTF-8 maximum is the multiplier.
+func internalDeclaredLabelOctetLength(characterLength int64) int64 {
+	return characterLength * int64(utf8.UTFMax)
+}
+
+// declaredLabelColumn reports whether row i is an ENUM/SET column with
+// declared labels. It stays false for the historical one-argument overload,
+// which never receives the label argument.
+func declaredLabelColumn(declaredLabels vector.FunctionParameterWrapper[types.Varlena], hasDeclaredLabels bool, oid types.T, i uint64) bool {
+	if !hasDeclaredLabels {
+		return false
+	}
+	labels, labelNull := declaredLabels.GetStrValue(i)
+	if labelNull {
+		return false
+	}
+	_, declared := internalDeclaredLabelCharLength(oid, functionUtil.QuickBytesToStr(labels))
+	return declared
+}
+
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// The declared label parameter exists only for the two-argument overload
+	// bound by information_schema.COLUMNS. The historical one-argument form
+	// must keep its exact pre-existing behavior for persisted definitions
+	// written by older binaries.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -865,6 +1016,18 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if hasDeclaredLabels {
+				labels, labelNull := declaredLabels.GetStrValue(i)
+				if !labelNull {
+					if charLength, ok := internalDeclaredLabelCharLength(
+						typ.Oid, functionUtil.QuickBytesToStr(labels)); ok {
+						if err := rs.Append(charLength, false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 			}
 			if typ.Oid == types.T_text {
 				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
@@ -888,6 +1051,11 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 
 func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -899,6 +1067,18 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if hasDeclaredLabels {
+				labels, labelNull := declaredLabels.GetStrValue(i)
+				if !labelNull {
+					if charLength, ok := internalDeclaredLabelCharLength(
+						typ.Oid, functionUtil.QuickBytesToStr(labels)); ok {
+						if err := rs.Append(internalDeclaredLabelOctetLength(charLength), false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 			}
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:
@@ -997,6 +1177,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 			return int64(typ.Width), true
 		}
 		return 22, true
+	case types.T_bf16:
+		// the significand bits, the implicit leading bit included
+		return 8, true
+	case types.T_float16:
+		return 11, true
+	case types.T_float8:
+		return 4, true
+	case types.T_float4:
+		return 2, true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width > 0 {
 			return int64(typ.Width), true
@@ -1007,6 +1196,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// Label-declared ENUM/SET columns are character metadata: MySQL leaves
+	// NUMERIC_PRECISION NULL rather than reporting SET's bitmap backing store
+	// as a 20-digit unsigned integer. The one-argument overload never sees
+	// the label argument and keeps its historical behavior.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -1018,6 +1216,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if declaredLabelColumn(declaredLabels, hasDeclaredLabels, typ.Oid, i) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if precision, ok := internalNumericPrecision(typ); ok {
 				if err := rs.Append(precision, false); err != nil {
@@ -1035,6 +1239,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 
 func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// See builtInInternalNumericPrecision: ENUM/SET numeric metadata is NULL.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -1046,6 +1256,12 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if declaredLabelColumn(declaredLabels, hasDeclaredLabels, typ.Oid, i) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if scale, ok := internalNumericScale(typ); ok {
 				if err := rs.Append(scale, false); err != nil {
@@ -1197,23 +1413,85 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 // JSON stores an encoded value; concatenation consumes its JSON text, including
 // quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
-func concatStringValue(source types.T, value []byte) ([]byte, error) {
+func concatStringValue(ctx context.Context, source types.T, value []byte) ([]byte, error) {
 	if source != types.T_json {
 		return value, nil
 	}
-	return types.DecodeJson(value).MarshalJSON()
+	return marshalJSONForFloatStringProof(ctx, types.DecodeJson(value))
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	direct := !rs.GetResultVector().IsConst()
 	for i := range ps {
 		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
+		// JSON conversion can fail before a later NULL argument is visited.
+		// Keep that left-to-right behavior on the existing conversion path.
+		direct = direct && parameters[i].GetType().Oid != types.T_json
 	}
+	allocationLimit := mpool.MaxAllocationSize()
+	var inline [types.VarlenaInlineSize]byte
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if direct {
+			var size int64
+			isNull, tooLarge := false, false
+			for _, p := range ps {
+				value, null := p.GetStrValue(i)
+				if null {
+					isNull = true
+					break
+				}
+				if int64(len(value)) > allocationLimit-size {
+					tooLarge = true
+				} else if !tooLarge {
+					size += int64(len(value))
+				}
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Check both the row length and cumulative area before arithmetic in
+			// the writer. A later NULL above still takes precedence over size.
+			if tooLarge || (size > types.VarlenaInlineSize &&
+				size > allocationLimit-int64(len(rs.GetResultVector().GetArea()))) {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if size <= types.VarlenaInlineSize {
+				// Reuse bounded scratch for inline values. Passing a descriptor
+				// through the writer callback would allocate it on every row.
+				dst := inline[:int(size)]
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				if err := rs.AppendBytes(dst, false); err != nil {
+					return err
+				}
+				continue
+			}
+			// Inputs remain owned by the child expressions. The synchronous
+			// writer reserves the result's storage before copying into it, so
+			// no intermediate concatenation escapes mpool admission.
+			if err := rs.AppendBytesWithWriter(int(size), func(dst []byte) error {
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 			continue
@@ -1230,7 +1508,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				v, err := concatStringValue(proc.Ctx, parameters[j].GetType().Oid, v)
 				if err != nil {
 					return err
 				}
@@ -1375,6 +1653,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 			v, null := fp.GetValue(idx)
 			return float64(v), null, nil
 		}
+	case types.T_bf16:
+		p.float = lowPrecisionIntervalFloat[types.BF16](v)
+	case types.T_float16:
+		p.float = lowPrecisionIntervalFloat[types.Float16](v)
+	case types.T_float8:
+		p.float = lowPrecisionIntervalFloat[types.Float8](v)
+	case types.T_float4:
+		p.float = lowPrecisionIntervalFloat[types.Float4](v)
 	case types.T_int64:
 		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
 		p.float = func(idx uint64) (float64, bool, error) {
@@ -1502,6 +1788,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
 	}
 	return p, nil
+}
+
+func lowPrecisionIntervalFloat[T types.LowPrecFloat](v *vector.Vector) func(uint64) (float64, bool, error) {
+	fp := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(idx uint64) (float64, bool, error) {
+		v, null := fp.GetValue(idx)
+		return float64(v.ToFloat32()), null, nil
+	}
 }
 
 func (p intervalParam) useDecimalComparison() bool {
@@ -1863,9 +2157,11 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	// MySQL: DATABASE() / SCHEMA() return NULL when there is no default database.
+	db := proc.GetSessionInfo().GetDatabase()
+	isNull := len(db) == 0
 	for i := uint64(0); i < uint64(length); i++ {
-		db := proc.GetSessionInfo().GetDatabase()
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), false); err != nil {
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), isNull); err != nil {
 			return err
 		}
 	}
@@ -1948,10 +2244,6 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
-}
-
-func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	return padResultByteLengthWithCharacterWidth(src, tgtLen, pad, maxBytes, utf8.UTFMax)
 }
 
 func padResultByteLengthWithCharacterWidth(
@@ -2665,6 +2957,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 func makeUUIDSwapFlagGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+	// typeswitch:partial low-precision floats (bf16/f16/f8/f4) are rejected as index keys (lowPrecisionKeyError), so this physical-serial path never receives them
 	switch param.GetType().Oid {
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
@@ -2913,6 +3206,53 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 			if err := rs.Append(val, false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// DATETIME is a wall-clock value. Convert it directly using the session time
+// zone so a DST gap follows UNIX_TIMESTAMP's normalization policy instead of
+// the strict DATETIME-to-TIMESTAMP assignment cast.
+func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	zone := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := p1.GetValue(i)
+			if null || value == types.ZeroDatetime {
+				if err := rs.Append(types.Decimal128{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			unixMicro := int64(value.ToTimestamp(zone)) - int64(types.UnixToTimestamp(0))
+			if unixMicro < 0 {
+				unixMicro = 0
+			}
+			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := p1.GetValue(i)
+		if null || value == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		unix := value.ToTimestamp(zone).Unix()
+		if unix < 0 {
+			unix = 0
+		}
+		if err := rs.Append(unix, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -3417,6 +3757,7 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 }
 
 func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and the default returns the unsupported-type error
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3478,6 +3819,22 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 			val := vector.GetFixedAtNoTypeCheck[float64](v, idx)
 			ps.EncodeFloat64(val)
 		}, nil
+	case types.T_bf16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeBF16(vector.GetFixedAtNoTypeCheck[types.BF16](v, idx))
+		}, nil
+	case types.T_float16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat16(vector.GetFixedAtNoTypeCheck[types.Float16](v, idx))
+		}, nil
+	case types.T_float8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat8(vector.GetFixedAtNoTypeCheck[types.Float8](v, idx))
+		}, nil
+	case types.T_float4:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat4(vector.GetFixedAtNoTypeCheck[types.Float4](v, idx))
+		}, nil
 	case types.T_date:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Date](v, idx)
@@ -3532,6 +3889,7 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
@@ -3629,6 +3987,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		panic("for builtInSerial(), bitmap should not be nil")
 	}
 	hasNull := v.HasNull()
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and not packed by serial
 	switch v.GetType().Oid {
 	case types.T_bool:
 		s := vector.ExpandFixedCol[bool](v)
@@ -4046,6 +4405,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
@@ -4121,6 +4481,18 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_bf16:
+		rs := vector.MustFunctionResult[types.BF16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float16:
+		rs := vector.MustFunctionResult[types.Float16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float8:
+		rs := vector.MustFunctionResult[types.Float8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float4:
+		rs := vector.MustFunctionResult[types.Float4](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -4159,6 +4531,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
@@ -4177,7 +4550,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
+func serialExtractExceptStrings[T types.Number | types.BF16 | types.Float16 | types.Float8 | types.Float4 | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4260,9 +4633,30 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 	return nil
 }
 
+// serialExtractCheckCell validates an element extracted as a vecf8/vecf4 value: it must be
+// a stored cell of that format and, when the type declares a dimension, of that dimension.
+func serialExtractCheckCell(typ *types.Type, value []byte) error {
+	f, ok := typ.Oid.BlockScaledFormat()
+	if !ok {
+		return nil
+	}
+	c, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return err
+	}
+	if c.Format != f {
+		return moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+	}
+	if int(typ.Width) != types.MaxArrayDimension && int(typ.Width) != c.Dim {
+		return moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return nil
+}
+
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+	resTyp := result.GetResultVector().GetType()
 
 	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
 	if p2.WithAnyNullValue() {
@@ -4290,6 +4684,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			}
 
 			if value, ok := el.([]byte); ok {
+				if err := serialExtractCheckCell(resTyp, value); err != nil {
+					return err
+				}
 				if err := result.AppendBytes(value, false); err != nil {
 					return err
 				}
@@ -4327,6 +4724,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 		}
 
 		if value, ok := tuple[v2].([]byte); ok {
+			if err := serialExtractCheckCell(resTyp, value); err != nil {
+				return err
+			}
 			if err := result.AppendBytes(value, false); err != nil {
 				return err
 			}
@@ -4534,8 +4934,8 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	second := int(t2.Sec())
 	microsecond := int(t2.MicroSec())
 
-	days1 := calcDaysSinceZero(int(t1.Year()), int(t1.Month()), int(t1.Day()))
-	days2 := calcDaysSinceZero(year, month, day)
+	days1 := types.MySQLDayNumber(int(t1.Year()), int(t1.Month()), int(t1.Day()))
+	days2 := types.MySQLDayNumber(year, month, day)
 	days1 -= sign * days2
 
 	tmp := (int64(days1)*SecondsIn24Hours+
@@ -4553,22 +4953,6 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	seconds = int(tmp / 1e6)
 	microseconds = int(tmp % 1e6)
 	return
-}
-
-// calcDaynr calculates days since 0000-00-00.
-func calcDaysSinceZero(year int, month int, day int) int {
-	if year == 0 && month == 0 {
-		return 0
-	}
-
-	delsum := 365*year + 31*(month-1) + day
-	if month <= 2 {
-		year--
-	} else {
-		delsum -= (month*4 + 23) / 10
-	}
-	temp := ((year/100 + 1) * 3) / 4
-	return delsum + year/4 - temp
 }
 
 // Seconds in 0000 AD
@@ -4597,18 +4981,6 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
-}
-
-// CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
-			continue
-		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
-	}
-	return res, nil
 }
 
 func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5014,6 +5386,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			return err
 		}
 		if isNull {
+			// Invalid bytes for the requested charset already produced NULL;
+			// attach the boundary diagnostic MySQL requires (Warning 1300).
+			appendBinaryToTextUtf8Warning(proc, value)
 			err = rs.AppendMustNullForBytesResult()
 		} else {
 			err = rs.AppendMustBytesValue(value)
@@ -5039,8 +5414,71 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesByStringDomain(
-		parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	if length <= 1 {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+	input := parameters[0]
+	binary, perRow := stringDomainMode(input)
+	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
+		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+
+	// Reuse only within this evaluation; power-of-two growth stays below 128KiB total.
+	const maxScratch = 64 << 10
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := vector.OptGetBytesParamFromWrapper(rs, 0, input)
+	var inline [types.VarlenaInlineSize]byte
+	scratch := inline[:]
+	for row := uint64(0); row < uint64(length); row++ {
+		value, _ := param.GetStrValue(row)
+		if len(value) > maxScratch {
+			if err := rs.AppendBytes(bytes.ToLower(value), false); err != nil {
+				return err
+			}
+			continue
+		}
+		isASCII, hasUpper := true, false
+		for _, c := range value {
+			if c >= utf8.RuneSelf {
+				isASCII = false
+				break
+			}
+			hasUpper = hasUpper || ('A' <= c && c <= 'Z')
+		}
+
+		var err error
+		switch {
+		case !isASCII:
+			err = rs.AppendBytes(bytes.Map(unicode.ToLower, value), false)
+		case !hasUpper:
+			err = rs.AppendBytes(value, false)
+		default:
+			if len(value) > cap(scratch) {
+				size := 32
+				for size < len(value) {
+					size *= 2
+				}
+				scratch = make([]byte, size)
+			}
+			dst := scratch[:len(value)]
+			for i := range dst {
+				c := value[i]
+				if 'A' <= c && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				dst[i] = c
+			}
+			err = rs.AppendBytes(dst, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(input, result, proc)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

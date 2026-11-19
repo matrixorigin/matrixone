@@ -135,8 +135,9 @@ func (c *subscriptionMetadataTestContext) DatabaseExists(
 func (c *subscriptionMetadataTestContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if strings.EqualFold(databaseName, INFORMATION_SCHEMA) &&
 		strings.EqualFold(tableName, informationSchemaStatistics) {
 		obj, tableDef := subscriptionStatisticsTestView()
@@ -144,9 +145,9 @@ func (c *subscriptionMetadataTestContext) Resolve(
 	}
 	subscription := c.subscriptionFor(databaseName)
 	if subscription == nil {
-		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot)
+		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 	}
-	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot)
+	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot, nil)
 	if err != nil || tableDef == nil {
 		return obj, tableDef, err
 	}
@@ -197,7 +198,7 @@ type subscriptionMetadataTestOptimizer struct {
 }
 
 func (o subscriptionMetadataTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	built, err := BuildPlan(o.ctx, stmt, false)
+	built, err := BuildPlan(o.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +438,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	queryPlan, err := BuildPlan(ctx, statements[0], true)
+	queryPlan, err := BuildPlan(ctx, statements[0], true, nil)
 	require.NoError(t, err)
 	require.True(t, PreparedPlanDependsOnSubscriptionMetadata(queryPlan))
 	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
@@ -594,7 +595,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount)
 		require.Nil(t, ctx.GetQueryingSubscription())
@@ -602,37 +603,77 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 
 	for _, mode := range []int64{1, 2} {
 		t.Run(fmt.Sprintf("case-insensitive mode %d deduplicates", mode), func(t *testing.T) {
-			optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
+			_, ctx := newSubscriptionMetadataTestOptimizer(t)
 			ctx.lowerCaseTableNames = mode
 			ctx.metadata = metadata
-
-			queryPlan, err := runOneStmt(optimizer, t,
-				"select count(*) from information_schema.statistics")
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			visible, err := builder.visibleSubscriptionMetadata(nil)
 			require.NoError(t, err)
-			require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()),
-				maxSubscriptionStatisticsPublisherBranches)
-			require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount)
+			require.Len(t, visible, maxSubscriptionStatisticsPublisherBranches)
+			var matching []string
+			for _, subscription := range visible {
+				if strings.EqualFold(subscription.Meta.SubName, "SubCase") {
+					matching = append(matching, subscription.Meta.SubName)
+				}
+			}
+			require.Equal(t, []string{"SubCase"}, matching)
+			require.Equal(t, []int{maxSubscriptionStatisticsPublisherBranches}, ctx.metadataLimits)
+			require.Zero(t, ctx.publisherBindCount)
 			require.Nil(t, ctx.GetQueryingSubscription())
+			_, err = builder.visibleSubscriptionMetadata(nil)
+			require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+			if mode == 1 {
+				// Retain one complete boundary-sized plan without an outer filter.
+				optimizer, full := newSubscriptionMetadataTestOptimizer(t)
+				full.lowerCaseTableNames = mode
+				full.metadata = metadata
+				queryPlan, err := runOneStmt(optimizer, t, "select count(*) from information_schema.statistics")
+				require.NoError(t, err)
+				require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), maxSubscriptionStatisticsPublisherBranches)
+				require.Equal(t, maxSubscriptionStatisticsPublisherBranches, full.publisherBindCount)
+				require.Nil(t, full.GetQueryingSubscription())
+			}
 		})
 	}
 }
 
 func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
+	t.Run("admission is per builder", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
+		ctx.metadata = subscriptionMetadataTestSet(129)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		visible, err := builder.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		require.Len(t, visible, 129)
+		_, err = builder.visibleSubscriptionMetadata(nil)
+		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+		fresh := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		visible, err = fresh.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		require.Len(t, visible, 129)
+		require.Equal(t, []int{256, 256}, ctx.metadataLimits)
+	})
+
 	_, ctx := newSubscriptionMetadataTestOptimizer(t)
-	ctx.metadata = subscriptionMetadataTestSet(129)
 	statements, err := mysql.Parse(context.Background(),
 		"select count(*) from information_schema.statistics", 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
 
-	for build := 0; build < 2; build++ {
-		queryPlan, buildErr := BuildPlan(ctx, statements[0], false)
+	wantScans := []map[string]int{
+		{"sub_00": 1, "sub_01": 1},
+		{"sub_00": 1, "sub_01": 1, "sub_02": 1},
+	}
+	for build := range wantScans {
+		ctx.metadata = subscriptionMetadataTestSet(build + 2)
+		queryPlan, buildErr := BuildPlan(ctx, statements[0], false, nil)
 		require.NoError(t, buildErr)
-		require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), 129)
+		require.Equal(t, wantScans[build], statisticsPublisherScanCounts(queryPlan.GetQuery()))
 		require.Nil(t, ctx.GetQueryingSubscription())
 	}
-	require.Equal(t, 258, ctx.publisherBindCount,
+	require.Equal(t, []int{256, 256}, ctx.metadataLimits)
+	require.Equal(t, 5, ctx.publisherBindCount,
 		"the statement-wide budget must be fresh for each independent build")
 }
 
@@ -647,7 +688,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
-		plan, err := BuildPlan(ctx, statements[0], false)
+		plan, err := BuildPlan(ctx, statements[0], false, nil)
 		return plan, err, ctx
 	}
 
@@ -794,7 +835,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount,
 			"admission must reject the occurrence before binding any publisher view")
@@ -815,7 +856,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount,
 			"the fifth occurrence must fail admission before binding another publisher view")
@@ -838,7 +879,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		canceledCtx, cancel := context.WithCancelCause(context.Background())
 		cancel(wantErr)
 		ctx.SetContext(canceledCtx)
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, wantErr)
 		require.Zero(t, ctx.metadataCalls,
 			"pre-canceled planning must stop before subscription enumeration")
@@ -859,7 +900,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		ctx.SetContext(planningCtx)
 		ctx.cancelPublisherBind = 1
 		ctx.cancelPlanning = cancel
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, 1, ctx.publisherBindCount,
 			"the loop must observe cancellation before binding the next publisher view")
@@ -903,7 +944,7 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 					if len(statements) != 1 {
 						b.Fatalf("expected one statement, got %d", len(statements))
 					}
-					_, err = BuildPlan(ctx, statements[0], false)
+					_, err = BuildPlan(ctx, statements[0], false, nil)
 					statements[0].Free()
 					if err != nil {
 						b.Fatal(err)
@@ -1295,8 +1336,10 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.Equal(t, subscriptionColumnsFunctionName, columnsNode.TableDef.TblFunc.Name)
 	require.Equal(t, "key_priority", columnsNode.TableDef.Cols[17].Name)
 	require.Equal(t, int32(types.T_int64), columnsNode.TableDef.Cols[17].Typ.Id)
-	require.Equal(t, "table_owner", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
-	require.Equal(t, int32(types.T_uint32), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
+	// The unsigned-attribute mask column ships code-only after table_owner;
+	// no shipped view definition references it yet.
+	require.Equal(t, "att_is_unsigned", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
+	require.Equal(t, int32(types.T_int8), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
 
 	_, err = builder.buildSubscriptionTables(tableFunction, columnsCtx, nil, nil)
 	require.NoError(t, err, "COLUMNS enumerates authorized subscription View candidates before binding")

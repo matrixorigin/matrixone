@@ -149,7 +149,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,6 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
 	}
-	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
 		viewStr = tableDef.ViewSql.View
@@ -241,13 +240,20 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	// FixMe  We need a better escape function
-	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
-	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
+	sqlStr := showCreateViewSQL(tblName, viewData.Stmt)
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// showCreateViewSQL returns the rewrite query for SHOW CREATE VIEW. The view
+// name and its stored definition are quoted as SQL string literals so that
+// the result is the stored text byte for byte, backslashes included.
+func showCreateViewSQL(viewName, viewStmt string) string {
+	return fmt.Sprintf(
+		"select %s as `View`, %s as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`",
+		formatStrLit(viewName), formatStrLit(viewStmt))
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
@@ -389,8 +395,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and %s and relname != '%s' and relkind != '%s' and (%s)",
+		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Historical rows cannot be matched against current object grants. A
 	// subscription is admitted by subscriber-local broad authorization and keeps
@@ -465,8 +471,8 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and (%s)",
-		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and %s and relname != '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -492,7 +498,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +566,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -636,7 +642,22 @@ func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, de
 	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
-func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
+// descColumnLikeInstaller installs the DESCRIBE <table> <col> shortcut's
+// derived LIKE predicate for the current build and returns the undo function.
+// The derived comparison never survives the build: the frontend reuses the
+// saved prepared AST (computation_wrapper.go, mysql_cmd_executor.go), and a
+// persisted derived LIKE would keep the first build's stored spelling and
+// skip re-derivation on replan. Restoring the authored statement makes every
+// plan regenerate the predicate from the current column spelling.
+func descColumnLikeInstaller(stmt *tree.ShowColumns, pattern string) func() {
+	savedLike := stmt.Like
+	stmt.Like = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal(pattern, pattern, false, tree.P_char))
+	return func() {
+		stmt.Like = savedLike
+	}
+}
+
+func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
@@ -652,12 +673,16 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	catalogTblName := tblName
+	if tableDef.IsTemporary {
+		catalogTblName = tableDef.Name
 	}
 
 	colIdToOriginName := make(map[uint64]string)
@@ -669,6 +694,31 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		colNameOrigin := col.GetOriginCaseName()
 		colIdToOriginName[col.ColId] = colNameOrigin
 		colNameToOriginName[col.Name] = colNameOrigin
+	}
+
+	// DESCRIBE tbl col_name is MySQL's shortcut for SHOW COLUMNS FROM tbl
+	// LIKE 'col_name': reuse the LIKE filter returnByLikeAndSQL composes.
+	// An exact column keeps its stored case via the origin-name map, so
+	// `desc tbl mixcase` still finds `MixCase`; anything else preserves the
+	// argument's original spelling so %/_ patterns match exactly like the
+	// equivalent public SHOW COLUMNS ... LIKE, and a missing name yields
+	// the empty set. The literal is the parser's own value-level string
+	// literal (NumVal/P_char), never spliced SQL text.
+	// DESCRIBE tbl col_name keeps the physical catalog map as the authority
+	// for ordinary targets. User views are excluded here: their rows come
+	// from the live logical description resolved (and subscription-bound)
+	// further below, which must also own the filter's exact-name spelling
+	// even when the physical map still hits with a stale stored origin
+	// (#32197 review F1/F2).
+	if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil &&
+		!isUserViewMetadata(dbName, tableDef) {
+		pattern := stmt.ColName.ColNameOrigin()
+		if origin, ok := colNameToOriginName[stmt.ColName.ColName()]; ok {
+			pattern = origin
+		} else if origin, ok := colNameToOriginName[pattern]; ok {
+			pattern = origin
+		}
+		defer descColumnLikeInstaller(stmt, pattern)()
 	}
 
 	var sub *SubscriptionMeta
@@ -691,7 +741,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			for _, name := range tableDef.Pkey.Names {
 				name = colNameToOriginName[name]
 				keyStr += " when col.attname = "
-				keyStr += "'" + name + "'"
+				keyStr += sqlquote.String(name)
 				keyStr += " then 'PRI'"
 			}
 		}
@@ -700,7 +750,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			for _, fk := range tableDef.Fkeys {
 				for _, colId := range fk.Cols {
 					keyStr += " when col.attname = "
-					keyStr += "'" + colIdToOriginName[colId] + "'"
+					keyStr += sqlquote.String(colIdToOriginName[colId])
 					keyStr += " then 'MUL'"
 				}
 			}
@@ -716,21 +766,21 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 						for _, name = range indexDef.Parts {
 							name = colNameToOriginName[name]
 							keyStr += " when col.attname = "
-							keyStr += "'" + name + "'"
+							keyStr += sqlquote.String(name)
 							keyStr += " then 'PRI'"
 						}
 					} else if isMultiplePriKey(indexDef) {
 						keyStr += " when col.attname = "
-						keyStr += "'" + name + "'"
+						keyStr += sqlquote.String(name)
 						keyStr += " then 'MUL'"
 					} else {
 						keyStr += " when col.attname = "
-						keyStr += "'" + name + "'"
+						keyStr += sqlquote.String(name)
 						keyStr += " then 'UNI'"
 					}
 				} else {
 					keyStr += " when col.attname = "
-					keyStr += "'" + name + "'"
+					keyStr += sqlquote.String(name)
 					keyStr += " then 'MUL'"
 				}
 			}
@@ -757,28 +807,48 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		mustShowTable := "col.att_relname = 'mo_database' or col.att_relname = 'mo_tables' or col.att_relname = 'mo_columns'"
 		clusterTable := ""
 		if util.TableIsClusterTable(tableDef.GetTableType()) {
-			clusterTable = fmt.Sprintf(" or col.att_relname = '%s'", tblName)
+			clusterTable = fmt.Sprintf(" or col.att_relname = %s", sqlquote.String(catalogTblName))
 		}
 		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
-		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(catalogTblName), accountClause)
 	} else {
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
-		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(catalogTblName))
 	}
 
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
-		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
+		columns, liveCols, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
+		}
+		// F1: this live description owns the DESCRIBE filter's exact-name
+		// spelling even when the physical column map hits with a stale stored
+		// origin. F2: it is the same resolved, subscription-bound description
+		// instance that produced the row source, so a published view derives
+		// from the publisher-side binding exactly like its rows; a live miss
+		// keeps the authored spelling (unknown-name semantics unchanged).
+		if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil {
+			descPattern := stmt.ColName.ColNameOrigin()
+			for _, col := range liveCols {
+				if col.Hidden {
+					continue
+				}
+				if strings.EqualFold(col.Name, stmt.ColName.ColName()) ||
+					strings.EqualFold(col.GetOriginCaseName(), descPattern) {
+					descPattern = col.GetOriginCaseName()
+					break
+				}
+			}
+			defer descColumnLikeInstaller(stmt, descPattern)()
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
 		viewDependencies = dependencies
@@ -786,7 +856,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	var result *Plan
 	if stmt.Where != nil {
-		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		result, err = returnByWhereAndBaseSQLWithPrepare(ctx, sql, stmt.Where, ddlType, isPrepareStmt)
 	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
@@ -865,10 +935,12 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				reldatabase = '%s'
 				and relkind != '%s'
 				and relname != '%s'
-				and relname not like '%s'
+				and not startswith(relname, '%s')
+				and %s
 				and relname != '%s'
-				and (%s)`
-	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+				and (%s)
+				and %s`
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause, catalog.NonTemporaryTableSQLPredicate(""))
 	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
 		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
 	}
@@ -1006,7 +1078,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1035,13 +1107,16 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	// indexes. SHOW INDEX follows MySQL and exposes those rows as BTREE rather
 	// than leaking the internal empty metadata representation.
 	sql := "select " +
-		"'%s' as `Table`, " +
+		"%s as `Table`, " +
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
-		"'NULL' as `Sub_part`, " +
+		// Retained prefix lengths come from the canonical index metadata:
+		// the number of indexed characters when the part carries a prefix,
+		// actual SQL NULL for whole-column index parts (#30935).
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
 		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +
@@ -1052,9 +1127,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, mo_show_visible_bin(`tcl`.`attr_generated`, 5), `idx`.`column_name`) as `Expression` " +
 		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +
 		"on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) " +
-		"where `tcl`.`att_database` = '%s' AND " +
-		"`tcl`.`att_relname` = '%s' AND " +
-		"`idx`.`column_name` NOT LIKE '%s' " +
+		"where `tcl`.`att_database` = %s AND " +
+		"`tcl`.`att_relname` = %s AND " +
+		"`idx`.`column_name` NOT LIKE %s " +
 		// Below `GROUP BY` is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes scenarios.
 		// NOTE: We need to add all the table column names to the GROUP BY clause
 		//
@@ -1090,7 +1165,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef.IsTemporary {
 		tblName = tableDef.Name
 	}
-	showIndexSql := fmt.Sprintf(sql, displayTblName, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
+	showIndexSql := fmt.Sprintf(sql, sqlquote.String(displayTblName), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(tblName), sqlquote.String(catalog.AliasPrefix+"%"))
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
@@ -1098,26 +1173,86 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	return returnByRewriteSQL(ctx, showIndexSql, ddlType)
 }
 
-// TODO: Improve SQL. Currently, Lack of the mata of grants
+// buildShowGrants rewrites SHOW GRANTS into a single query over
+// mo_role_privs. The stored privilege_level is only the level token
+// written at grant time (`d`, `t`, `d.*`, `d.t`, `*`, `*.*`); the durable
+// object identity of a grant lives in obj_id (the relation's logical id
+// for table/view grants, the database id for db-bound grants). The query
+// joins the granted id back to the live catalog of the same account so the
+// output names the real db/table a grant applies to, still identifying the
+// same object after rename or physical table rewrites. A grant whose
+// object no longer exists keeps the historical token instead of inventing
+// a name.
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
-
 	ddlType := plan.DataDefinition_SHOW_TARGET
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	if stmt.ShowGrantType == tree.GrantForRole {
 		role_name := stmt.Roles[0].UserName
-		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  %s.mo_role_privs as p where p.role_name = '%s';"
-		sql = fmt.Sprintf(sql, role_name, role_name, MO_CATALOG_DB_NAME, role_name)
-		return returnByRewriteSQL(ctx, sql, ddlType)
-	} else {
-		if stmt.Hostname == "" {
-			stmt.Hostname = MO_DEFUALT_HOSTNAME
-		}
-		if stmt.Username == "" {
-			stmt.Username = ctx.GetUserName()
-		}
-		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
-		return returnByRewriteSQL(ctx, sql, ddlType)
+		return returnByRewriteSQL(ctx, buildShowGrantsRoleSQL(accountId, role_name), ddlType)
 	}
+	if stmt.Hostname == "" {
+		stmt.Hostname = MO_DEFUALT_HOSTNAME
+	}
+	if stmt.Username == "" {
+		stmt.Username = ctx.GetUserName()
+	}
+	return returnByRewriteSQL(ctx, buildShowGrantsUserSQL(accountId, stmt.Username, stmt.Hostname), ddlType)
+}
+
+// showGrantsObjectScope replaces the stored privilege_level token of a
+// mo_role_privs row with the real scope of its granted object: the exact
+// database.table (or table) for table/view grants, the database for
+// database grants, and db.* for db-bound wildcards (`d.*` and the
+// current-db `*`). Identifiers are backtick-quoted with existing backticks
+// doubled. Everything else keeps the stored token: account grants have no
+// scope at all, and global levels (`*.*`, database `*`) never join.
+const showGrantsObjectScope = "case" +
+	" when rt.relname is not null then concat('`', replace(rt.reldatabase, '`', '``'), '`.`', replace(rt.relname, '`', '``'), '`')" +
+	" when dbt.datname is not null and p.obj_type = 'database' then concat('`', replace(dbt.datname, '`', '``'), '`')" +
+	" when dbt.datname is not null then concat('`', replace(dbt.datname, '`', '``'), '`.*')" +
+	" else p.privilege_level" +
+	" end"
+
+// showGrantsObjectScopeJoins resolves the granted object identity within
+// the current account only. The object-type and privilege-level gates keep
+// the two id domains (logical relation id, database id) separate so a
+// granted id can never resolve across its domain, tenant, or catalog rows.
+func showGrantsObjectScopeJoins(accountId uint32) string {
+	return fmt.Sprintf(
+		"left join %s.mo_tables as rt on rt.account_id = %d and rt.rel_logical_id = p.obj_id and p.obj_type in ('table','view') and p.privilege_level in ('d.t','t') "+
+			"left join %s.mo_database as dbt on dbt.account_id = %d and dbt.dat_id = p.obj_id and ((p.obj_type in ('table','view') and p.privilege_level in ('d.*','*')) or (p.obj_type = 'database' and p.privilege_level = 'd'))",
+		MO_CATALOG_DB_NAME, accountId, MO_CATALOG_DB_NAME, accountId)
+}
+
+// buildShowGrantsRoleSQL renders the rewritten query of SHOW GRANTS FOR
+// ROLE: one bounded query resolving every scope by join. The statement
+// argument is rendered only through quoted contexts: creation routes
+// reject quote/backtick/space role names (getSqlForRoleIdOfRole ->
+// inputNameIsInvalid), but SHOW GRANTS itself applies no name admission, so
+// display, alias and equality all use the canonical sqlquote helpers.
+func buildShowGrantsRoleSQL(accountId uint32, roleName string) string {
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else " +
+		showGrantsObjectScope + " end,   %s)  as %s from  %s.mo_role_privs as p %s where p.role_name = %s order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;"
+	return fmt.Sprintf(sql, sqlquote.String(" `"+roleName+"`"), sqlquote.Ident("Grants for "+roleName),
+		MO_CATALOG_DB_NAME, showGrantsObjectScopeJoins(accountId), sqlquote.String(roleName))
+}
+
+// buildShowGrantsUserSQL renders the rewritten query of SHOW GRANTS FOR a
+// user, restricted to that user's roles and expanded with the same object
+// scope resolution. User names of existing rows passed creation admission
+// (quote/backtick/space are rejected by getSqlForPasswordOfUser ->
+// inputNameIsInvalid), but the SHOW statement argument itself and stored
+// hostnames carry no name admission, so every interpolation uses the
+// canonical sqlquote helpers.
+func buildShowGrantsUserSQL(accountId uint32, username, hostname string) string {
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else " +
+		showGrantsObjectScope + " end,   %s, '@', %s)  as %s from %s.mo_user as u join %s.mo_user_grant as g on g.user_id = u.user_id join %s.mo_role_privs as p on p.role_id = g.role_id %s where u.user_name = %s and u.user_host = %s order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;"
+	return fmt.Sprintf(sql, sqlquote.String(" `"+username+"`"), sqlquote.String("`"+hostname+"`"),
+		sqlquote.Ident("Grants for "+username+"@localhost"), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME,
+		showGrantsObjectScopeJoins(accountId), sqlquote.String(username), sqlquote.String(hostname))
 }
 
 func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error) {
@@ -1227,23 +1362,6 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 	// builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	// binder := NewWhereBinder(builder, &BindContext{})
 
-	// if stmt.Like != nil {
-	//  // here will error because stmt.Like.Left is nil, you need add left expr like : stmt.Like.Left = tree.SetUnresolvedName("column_name")
-	//  // but we have no column name, because Variables is save in a hashmap in frontend, not a table.
-	// 	expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	showVariables.Where = append(showVariables.Where, expr)
-	// }
-	// if stmt.Where != nil {
-	// 	exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	showVariables.Where = append(showVariables.Where, exprs...)
-	// }
-
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1309,16 +1427,21 @@ func showSnapshotSpec(atTsExpr *tree.AtTimeStamp, snapshot *Snapshot) string {
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+	return returnByWhereAndBaseSQLWithPrepare(ctx, baseSQL, where, ddlType, false)
+}
+
+func returnByWhereAndBaseSQLWithPrepare(ctx CompilerContext, baseSQL string,
+	where *tree.Where, ddlType plan.DataDefinition_DdlType, isPrepareStmt bool) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
-	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	// set show statement's where clause to new statement
+	defer newStmt.Free()
+	// The predicate belongs to the authored SHOW. Preserve its prepare mode
+	// when binding it as part of the rewritten SELECT.
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
-	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
+	return BuildPlan(ctx, newStmt, isPrepareStmt, nil)
 }
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
@@ -1367,17 +1490,9 @@ func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tre
 
 func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	queryPlan, err := BuildPlan(ctx, stmt, false)
+	queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
 	return queryPlan, nil
-	// return &Plan{
-	// 	Plan: &plan.Plan_Ddl{
-	// 		Ddl: &plan.DataDefinition{
-	// 			DdlType: ddlType,
-	// 			Query:   queryPlan.GetQuery(),
-	// 		},
-	// 	},
-	// }, nil
 }

@@ -40,13 +40,16 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	//ts1 := scanNode.ScanTS
 	for i, filterExp := range scanNode.FilterList {
 		// TODO: node should hold snapshot info and account info
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(scanNode.ObjRef, indexDef.IndexTableName, nil)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(scanNode.ObjRef, indexDef.IndexTableName, nil, nil)
 		if err != nil {
 			panic(err)
 		}
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
 		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
+		if currScanId < 0 {
+			return nodeID
+		}
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 		//    	INNER JOIN
@@ -183,12 +186,20 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		// a. varchar vector ("value1", "value2", "value3")
 		arg1AsColValuesVec := vector.NewVec(inVecType)
-		_ = arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData())
+		if err := arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData()); err != nil {
+			return -1, -1
+		}
 		inExprListLen := arg1AsColValuesVec.Length()
 
 		// b. const vector "0"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(nameVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
+		defer mpool.DeleteMPool(mp)
+		defer arg1AsColValuesVec.Free(mp)
+		arg0AsColNameVec, err := vector.NewConstBytes(nameVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
+		if err != nil {
+			return -1, -1
+		}
+		defer arg0AsColNameVec.Free(mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		ps := types.NewPackerArray(inExprListLen)
@@ -204,8 +215,11 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		function.PhysicalSerialHelper(arg0AsColNameVec, nil, ps, true)
 		function.PhysicalSerialHelper(arg1AsColValuesVec, nil, ps, true)
 		arg1ForPrefixInVec := vector.NewVec(nameVecType)
+		defer arg1ForPrefixInVec.Free(mp)
 		for i := 0; i < inExprListLen; i++ {
-			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
+			if err := vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp); err != nil {
+				return -1, -1
+			}
 		}
 
 		// d. convert result vector to LiteralVec. Sorted first: zone-map pruning
@@ -213,8 +227,13 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		// and an IN list arrives in whatever order it was written, so an unsorted
 		// one is refused for pruning and scans every block. Compaction can shrink
 		// it, which is why Len below is read from the vector afterwards.
-		arg1ForPrefixInVec.InplaceSortAndCompact()
-		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
+		if err := arg1ForPrefixInVec.InplaceSortAndCompact(mp); err != nil {
+			return -1, -1
+		}
+		arg1ForPrefixInBytes, err := arg1ForPrefixInVec.MarshalBinary()
+		if err != nil {
+			return -1, -1
+		}
 		arg1ForPrefixInLitVec := &plan.Expr{
 			Typ: makePlan2Type(&varcharType),
 			Expr: &plan.Expr_Vec{
@@ -227,8 +246,6 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		}
 
 		// e. free memory for arg0, arg1 vector. Packer's memory is freed in defer.
-		arg1ForPrefixInVec.Free(mp)
-		arg0AsColNameVec.Free(mp)
 
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
 			indexKeyCol,           // __mo_index_idx_col

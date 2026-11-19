@@ -1,0 +1,46 @@
+/*!99999 select 42 */;
+/*!80030 select 6 as matched_statement */;
+➤ matched_statement[-5,64,0]  𝄀
+6
+select /*!99999 6 */;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near ";";
+select /*!80031 6 */;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near ";";
+select 7 as after_error;
+➤ after_error[-5,64,0]  𝄀
+7
+select /*!80030 6 */ as current_version;
+➤ current_version[-5,64,0]  𝄀
+6
+select /*!80029 6 */ as lower_version;
+➤ lower_version[-5,64,0]  𝄀
+6
+select /*!50000 6 */ as old_version;
+➤ old_version[-5,64,0]  𝄀
+6
+select /*! 6 */ as unversioned;
+➤ unversioned[-5,64,0]  𝄀
+6
+select 2 /*!999999999 */ as long_guard;
+➤ long_guard[-5,64,0]  𝄀
+2
+select 2 /*!800300 + 1 */ as full_guard;
+➤ full_guard[-5,64,0]  𝄀
+2
+select /*!00080030 6 */ as leading_zero_match;
+➤ leading_zero_match[-5,64,0]  𝄀
+6
+select 2 /*!00080031 + 1 */ as leading_zero_future;
+➤ leading_zero_future[-5,64,0]  𝄀
+2
+set @executable_comment_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+/*!99999 set sql_mode='ANSI_QUOTES' */;
+select @@sql_mode as mode_after_future_comment;
+➤ mode_after_future_comment[-1,16383,0]  𝄀
+NO_BACKSLASH_ESCAPES
+set sql_mode = @executable_comment_saved_mode;
+select @@sql_mode = @executable_comment_saved_mode as mode_restored;
+➤ mode_restored[-6,8,0]  𝄀
+1
+set @executable_comment_saved_mode = null;

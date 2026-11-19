@@ -101,11 +101,6 @@ type CbitmapFilter struct {
 	memoryRelease func()
 }
 
-// cbitmapSerialize serializes a C bitset handle to bytes (no tag prefix).
-func cbitmapSerialize(f unsafe.Pointer) ([]byte, error) {
-	return cbitmapSerializeMode(f, false)
-}
-
 func cbitmapSerializeMode(f unsafe.Pointer, tagged bool) ([]byte, error) {
 	clen := C.mo_cbitmap_serialized_size(f)
 	if clen == 0 || uint64(clen) > uint64(^uint(0)>>1) {

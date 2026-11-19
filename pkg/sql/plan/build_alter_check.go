@@ -15,12 +15,16 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -47,6 +51,20 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	checks := make(map[string]bool, len(current.Checks))
 	for _, check := range current.Checks {
 		checks[check.Name] = true
+	}
+	// MySQL frees the name of a CHECK that follows a dropped column before
+	// admitting new constraints (prepare_check_constraints_for_alter consults
+	// dropped_cc_names), so a same-statement replacement succeeds in either
+	// clause order. The replay resolves each DROP against the column identity
+	// present at that clause, matching execution. The checks map itself stays
+	// untouched: a generic DROP CONSTRAINT below must still resolve the
+	// original CHECK identity in either clause order.
+	releasedChecks, err := releasedCheckNamesForDroppedColumns(ctx.GetContext(), current.Checks, options)
+	if err != nil {
+		return nil, err
+	}
+	checkNameTaken := func(name string) bool {
+		return checks[name] && !releasedChecks[name]
 	}
 	// Generic DROP does not yet carry its algorithm intent. CHECK/PRIMARY
 	// require COPY; the other generic drops have the index/FK INPLACE intent.
@@ -237,15 +255,18 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				if copy.ConstraintSymbol == "" {
 					for ordinal := len(checks) + 1; ; ordinal++ {
 						name := fmt.Sprintf("%s_chk_%d", source.Name, ordinal)
-						if !checks[name] {
+						if !checkNameTaken(name) {
 							copy.ConstraintSymbol = name
 							break
 						}
 					}
 				}
-				if checks[copy.ConstraintSymbol] {
+				if checkNameTaken(copy.ConstraintSymbol) {
 					return nil, moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", copy.ConstraintSymbol)
 				}
+				// The first replacement consumes the released name; further
+				// adds collide with that replacement as usual.
+				delete(releasedChecks, copy.ConstraintSymbol)
 				checks[copy.ConstraintSymbol] = true
 				add := *opt
 				add.Def = &copy
@@ -414,4 +435,166 @@ func prepareAlterCopyChecks(ctx CompilerContext, target *TableDef, options tree.
 	// CHECK when the structured list becomes empty. All checks are now decoded.
 	target.Createsql = ""
 	return pending, nil
+}
+
+// checkColumnReferenceVisitor collects distinct unqualified column references,
+// the only spelling the persisted CHECK binder admits.
+type checkColumnReferenceVisitor struct {
+	references map[string]bool
+}
+
+func (v *checkColumnReferenceVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	name, ok := expr.(*tree.UnresolvedName)
+	if !ok {
+		return expr, false
+	}
+	if name.NumParts == 1 {
+		v.references[strings.ToLower(name.ColName())] = true
+	}
+	return expr, true
+}
+
+func (v *checkColumnReferenceVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+// checkConstraintReferencedColumns returns the distinct case-folded column
+// names a persisted CHECK expression references. OriginSql is the authoritative
+// text the temporary COPY CREATE replans against the final schema; the stored
+// positional expression can alias column mutations made by earlier clauses of
+// the same ALTER.
+func checkConstraintReferencedColumns(ctx context.Context, check *planpb.CheckDef) (map[string]bool, error) {
+	if check == nil || check.OriginSql == "" {
+		return nil, nil
+	}
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+check.OriginSql, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 {
+		return nil, moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+	}
+	visitor := &checkColumnReferenceVisitor{references: make(map[string]bool)}
+	if _, ok := clause.Exprs[0].Expr.Accept(visitor); !ok {
+		return nil, moerr.NewInternalError(ctx, "failed to inspect CHECK constraint expression")
+	}
+	return visitor.references, nil
+}
+
+// checkFollowsDroppedColumn mirrors the MySQL
+// check_constraint_expr_refers_to_only_column predicate: a CHECK is
+// auto-dropped with the column only when its expression references exactly one
+// distinct column and that column is being dropped.
+func checkFollowsDroppedColumn(references map[string]bool, dropped string) bool {
+	return len(references) == 1 && references[dropped]
+}
+
+// handleDropColumnWithCheck applies the MySQL DROP COLUMN dependency rule at
+// the moment the column clause executes: a CHECK is removed with the column
+// only when its expression references that column alone, and the ALTER is
+// rejected when any other surviving CHECK still references it
+// (ER_DEPENDENT_BY_CHECK_CONSTRAINT). Earlier rename/change clauses have
+// already rewritten the stored expressions, so the decision resolves the
+// column identity this clause actually drops. Pending ADDs are intentionally
+// not inspected; a same-statement replacement keeps its name while the old
+// constraint follows the column.
+func handleDropColumnWithCheck(ctx CompilerContext, colName string, tableDef *TableDef) error {
+	if len(tableDef.Checks) == 0 && !strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
+		return nil
+	}
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return err
+	}
+	dropped := strings.ToLower(colName)
+	references := make(map[*planpb.CheckDef]map[string]bool, len(tableDef.Checks))
+	remaining := make([]*planpb.CheckDef, 0, len(tableDef.Checks))
+	removed := false
+	for _, check := range tableDef.Checks {
+		refs, err := checkConstraintReferencedColumns(ctx.GetContext(), check)
+		if err != nil {
+			return err
+		}
+		if checkFollowsDroppedColumn(refs, dropped) {
+			removed = true
+			continue
+		}
+		references[check] = refs
+		remaining = append(remaining, check)
+	}
+	for _, check := range remaining {
+		if references[check][dropped] {
+			return moerr.NewErrDependentByCheckConstraint(ctx.GetContext(), check.Name, colName)
+		}
+	}
+	if !removed {
+		return nil
+	}
+	tableDef.Checks = remaining
+	// The legacy SHOW/rename fallback must not resurrect a removed CHECK when
+	// the structured list becomes empty, matching prepareAlterCopyChecks.
+	if len(tableDef.Checks) == 0 {
+		tableDef.Createsql = ""
+	}
+	return nil
+}
+
+// releasedCheckNamesForDroppedColumns replays the rename/change/drop-column
+// clause sequence against the recovered CHECK definitions and returns the
+// names execution will auto-drop. The replay calls the same helpers the
+// option loop does, so each DROP resolves against the column identity present
+// at that clause: a CHECK redirected by an earlier rename is judged by its
+// rewritten expression. Only auto-drops release a name; constraints the
+// replay would reject with ER_DEPENDENT_BY_CHECK_CONSTRAINT abort the ALTER
+// during execution and never reach admission.
+func releasedCheckNamesForDroppedColumns(ctx context.Context, source []*planpb.CheckDef, options tree.AlterTableOptions) (map[string]bool, error) {
+	released := make(map[string]bool)
+	if len(source) == 0 {
+		return released, nil
+	}
+	// Clone the definitions: the replay rewrites stored expressions, and those
+	// edits must not leak into the admission view of the source constraints.
+	simulated := make([]*planpb.CheckDef, len(source))
+	for i, check := range source {
+		dup := *check
+		simulated[i] = &dup
+	}
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *tree.AlterTableRenameColumnClause:
+			if err := renameColumnInCheckConstraints(ctx, simulated, opt.OldColumnName.ColName(), opt.NewColumnName.ColNameOrigin()); err != nil {
+				return nil, err
+			}
+		case *tree.AlterTableChangeColumnClause:
+			if opt.OldColumnName.ColName() != opt.NewColumn.Name.ColName() {
+				if err := renameColumnInCheckConstraints(ctx, simulated, opt.OldColumnName.ColName(), opt.NewColumn.Name.ColNameOrigin()); err != nil {
+					return nil, err
+				}
+			}
+		case *tree.AlterOptionDrop:
+			if opt.Typ != tree.AlterTableDropColumn {
+				continue
+			}
+			dropped := strings.ToLower(string(opt.Name))
+			kept := make([]*planpb.CheckDef, 0, len(simulated))
+			for _, check := range simulated {
+				refs, err := checkConstraintReferencedColumns(ctx, check)
+				if err != nil {
+					return nil, err
+				}
+				if checkFollowsDroppedColumn(refs, dropped) {
+					released[check.Name] = true
+					continue
+				}
+				kept = append(kept, check)
+			}
+			simulated = kept
+		}
+	}
+	return released, nil
 }

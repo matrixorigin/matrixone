@@ -17,15 +17,10 @@ package util
 // CloneBytesIf conditionally copies a byte slice.
 // If clone is true, it returns a new copy of the slice.
 // If clone is false, it returns the original slice without copying.
-// If the source slice is empty, it returns an empty slice.
+// When cloning an empty or nil slice, it returns a non-nil empty slice.
 func CloneBytesIf(src []byte, clone bool) []byte {
 	if clone {
-		if len(src) > 0 {
-			dst := make([]byte, len(src))
-			copy(dst, src)
-			return dst
-		}
-		return []byte{}
+		return CloneBytes(src)
 	}
 	return src
 }

@@ -1,0 +1,72 @@
+drop database if exists decimal_bool_context;
+create database decimal_bool_context;
+use decimal_bool_context;
+select 0.5 and 1 as dec_and, 0.0 and 1 as zero_and, 0.5 or 0 as dec_or, 0.0 or 0 as zero_or;
+➤ dec_and[-6,8,0]  ¦  zero_and[-6,8,0]  ¦  dec_or[-6,8,0]  ¦  zero_or[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  0
+select not 0.5 as not_dec, not 0.0 as not_zero, not -0.001 as not_neg, not cast(null as decimal(10,2)) as not_null;
+➤ not_dec[-6,8,0]  ¦  not_zero[-6,8,0]  ¦  not_neg[-6,8,0]  ¦  not_null[-6,8,0]  𝄀
+0  ¦  1  ¦  0  ¦  null
+select 0.5 xor 0 as dec_xor_false, 0.5 xor 1 as dec_xor_true, 0.0 xor 0.0 as zero_xor_zero;
+➤ dec_xor_false[-6,8,0]  ¦  dec_xor_true[-6,8,0]  ¦  zero_xor_zero[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+select case when 0.5 then 'y' else 'n' end as case_dec, case when 0.0 then 'y' else 'n' end as case_zero;
+➤ case_dec[12,1,0]  ¦  case_zero[12,1,0]  𝄀
+y  ¦  n
+select 1 as where_dec from dual where 0.5;
+➤ where_dec[-5,64,0]  𝄀
+1
+select 1 as where_zero from dual where 0.0;
+➤ where_zero[-5,64,0]
+select 0.5 is true as dec_is_true, 0.0 is false as zero_is_false, -2.25 is not false as neg_is_not_false;
+➤ dec_is_true[-6,8,0]  ¦  zero_is_false[-6,8,0]  ¦  neg_is_not_false[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select cast(0.001 as decimal(38,10)) and 1 as d128_and, cast(0 as decimal(38,10)) or 0 as d128_zero_or;
+➤ d128_and[-6,8,0]  ¦  d128_zero_or[-6,8,0]  𝄀
+1  ¦  0
+select cast(-12345678901234567890.123456789 as decimal(38,9)) and 1 as d128_big_neg;
+➤ d128_big_neg[-6,8,0]  𝄀
+1
+drop table if exists t_dec_bool;
+create table t_dec_bool(id int, a decimal(10,3), b decimal(38,20));
+insert into t_dec_bool values
+(1, 0.5, 0.00000000000000000001),
+(2, 0, 0),
+(3, -2.25, -1),
+(4, null, null),
+(5, 0.001, 0);
+select id, a and 1, a or 0, not a, a xor 1, b and 1, not b from t_dec_bool order by id;
+➤ id[4,32,0]  ¦  a and 1[-6,8,0]  ¦  a or 0[-6,8,0]  ¦  not a[-6,8,0]  ¦  a xor 1[-6,8,0]  ¦  b and 1[-6,8,0]  ¦  not b[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  0  ¦  1  ¦  1  ¦  0  ¦  1  𝄀
+3  ¦  1  ¦  1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  1
+select id from t_dec_bool where a order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+5
+select id from t_dec_bool where not a order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from t_dec_bool where b order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from t_dec_bool where a and b order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id, case when a then 'true' when a is null then 'null' else 'false' end from t_dec_bool order by id;
+➤ id[4,32,0]  ¦  case when a then true when a is null then null else false end[12,5,0]  𝄀
+1  ¦  true  𝄀
+2  ¦  false  𝄀
+3  ¦  true  𝄀
+4  ¦  null  𝄀
+5  ¦  true
+select count(*) from t_dec_bool where b or a;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop table t_dec_bool;
+drop database decimal_bool_context;

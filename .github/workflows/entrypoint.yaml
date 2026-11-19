@@ -3,7 +3,8 @@ name: MatrixOne ALL CI
 on:
   pull_request_target:
     types: [ opened, synchronize, reopened, ready_for_review ]
-    branches: [ main, 4.2-dev, '[0-9]+.[0-9]+*' ]
+    # pull_request_target reads this entrypoint from the default branch.
+    branches: [ main, 4.2-dev, v4.2.8-hotfix, '[0-9]+.[0-9]+*' ]
 
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
@@ -51,6 +52,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && github.base_ref != '3.0-dev' }}
         with:
+          fetch-depth: 1
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
@@ -226,6 +228,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 1
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
           persist-credentials: false

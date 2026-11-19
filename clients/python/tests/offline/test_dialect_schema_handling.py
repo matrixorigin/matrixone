@@ -196,15 +196,9 @@ class TestMatrixOneTypeCompiler:
         # Test the method directly - it should work without mocking
         result = self.type_compiler.visit_numeric(Numeric(10, 2))
 
-        # Verify it returns a valid SQL type
-        # SQLAlchemy 2.0.x delegates to MySQL and returns NUMERIC
-        # SQLAlchemy 1.4.x has explicit implementation that returns DECIMAL
-        if sqlalchemy.__version__.startswith('2.'):
-            expected = "NUMERIC(10, 2)"
-        else:
-            expected = "DECIMAL(10, 2)"
+        from sqlalchemy.dialects.mysql import dialect
 
-        assert result == expected
+        assert result == dialect().type_compiler.process(Numeric(10, 2))
 
     def test_visit_date_type(self):
         """Test visit_date method delegation to MySQL compiler."""
@@ -241,7 +235,7 @@ class TestMatrixOneTypeCompiler:
         from sqlalchemy import TIMESTAMP
 
         # Test the method directly - it should work without mocking
-        result = self.type_compiler.visit_timestamp(TIMESTAMP())
+        result = self.type_compiler.process(TIMESTAMP())
 
         # Verify it returns a valid SQL type
         assert result == "TIMESTAMP"
@@ -267,12 +261,12 @@ class TestMatrixOneTypeCompiler:
         # Test NUMERIC with precision and scale
         numeric_type = NUMERIC(15, 3)
         result = self.type_compiler.visit_NUMERIC(numeric_type)
-        assert result == "DECIMAL(15, 3)"
+        assert result == "NUMERIC(15, 3)"
 
         # Test NUMERIC without precision and scale
         numeric_type = NUMERIC()
         result = self.type_compiler.visit_NUMERIC(numeric_type)
-        assert result == "DECIMAL"
+        assert result == "NUMERIC"
 
     def test_visit_bigint_type(self):
         """Test visit_BIGINT method for SQLAlchemy 2.0 compatibility."""
@@ -355,7 +349,7 @@ class TestMatrixOneTypeCompiler:
         """Test visit_binary method delegation to MySQL compiler."""
         from sqlalchemy import BINARY
 
-        result = self.type_compiler.visit_binary(BINARY(100))
+        result = self.type_compiler.process(BINARY(100))
         assert result == "BINARY(100)"
 
     def test_visit_blob_type(self):
@@ -475,15 +469,15 @@ class TestMatrixOneTypeCompiler:
         test_cases = [
             (
                 Numeric(5, 2),
-                "DECIMAL(5, 2)" if sqlalchemy.__version__.startswith('1.') else "NUMERIC(5, 2)",
+                "NUMERIC(5, 2)",
             ),
             (
                 Numeric(10, 0),
-                "DECIMAL(10, 0)" if sqlalchemy.__version__.startswith('1.') else "NUMERIC(10, 0)",
+                "NUMERIC(10, 0)",
             ),
             (
                 Numeric(18, 4),
-                "DECIMAL(18, 4)" if sqlalchemy.__version__.startswith('1.') else "NUMERIC(18, 4)",
+                "NUMERIC(18, 4)",
             ),
         ]
 
@@ -506,7 +500,9 @@ class TestMatrixOneTypeCompiler:
         for sql_type, expected in test_cases:
             # Use the process method which handles all types correctly
             result = self.type_compiler.process(sql_type)
-            assert result == expected, f"String type {sql_type.__class__.__name__} failed: expected {expected}, got {result}"
+            assert (
+                result == expected
+            ), f"String type {sql_type.__class__.__name__} failed: expected {expected}, got {result}"
 
     def test_datetime_precision_compatibility(self):
         """Test datetime types with different precision specifications."""
@@ -520,8 +516,7 @@ class TestMatrixOneTypeCompiler:
 
         for sql_type, expected in test_cases:
             type_name = sql_type.__class__.__name__.lower()
-            visit_method = getattr(self.type_compiler, f"visit_{type_name}")
-            result = visit_method(sql_type)
+            result = self.type_compiler.process(sql_type)
             assert result == expected, f"DateTime type {type_name} failed: expected {expected}, got {result}"
 
 
@@ -600,3 +595,19 @@ class TestMatrixOneDialectIntegration:
             # Verify that the parent method was called
             mock_parent_get_columns.assert_called_once_with(mock_connection, "test_table", "test", **{})
             assert result == [{"name": "id", "type": "INT"}]
+
+
+@pytest.mark.parametrize('kind', ['vecf16', 'vecbf16', 'vecint8', 'vecuint8', 'vecf32', 'vecf64'])
+@pytest.mark.parametrize('uppercase', [False, True])
+def test_native_vector_show_create_uses_registered_type(kind, uppercase):
+    from sqlalchemy.dialects.mysql.reflection import MySQLTableDefinitionParser
+
+    dialect = MatrixOneDialect()
+    parser = MySQLTableDefinitionParser(dialect, dialect.identifier_preparer)
+    emitted = kind.upper() if uppercase else kind
+    state = parser.parse(
+        'CREATE TABLE `docs` (\n  `id` int NOT NULL,\n  `v` ' + emitted + '(4) DEFAULT NULL\n)', 'utf8mb4'
+    )
+    assert [column['name'] for column in state.columns] == ['id', 'v']
+    dtype = state.columns[1]['type']
+    assert dtype.dimension == 4 and dtype.precision == kind[3:]

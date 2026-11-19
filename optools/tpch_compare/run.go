@@ -60,6 +60,10 @@ func runRequest(t Trial, warm bool) WorkerRequest {
 	return WorkerRequest{Version: formatVersion, Operation: "queries", Queries: t.Queries, Repetitions: 1, Clients: t.Clients, Warmup: warm, QueryDeadlineNS: int64(30 * time.Minute)}
 }
 
+func pilotTrial(c Campaign, scale, engine string) Trial {
+	return Trial{ID: "pilot-sf" + scale + "-" + engine, Experiment: "pilot", Scale: scale, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Queries: allQueries()}
+}
+
 // scoredRequest describes the frozen workload for both execution and reporting.
 // runArm fills the deployment, resource limits and artifact paths.
 func scoredRequest(c Campaign, f Frozen, t Trial) WorkerRequest {
@@ -139,7 +143,7 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 				_ = record
 			}
 			// This pilot sizes deadlines; correctness testing is a separate task.
-			t := Trial{ID: "pilot-sf" + sf + "-" + engine, Experiment: "pilot", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Queries: allQueries()}
+			t := pilotTrial(c, sf, engine)
 			root := filepath.Join(c.Root, "preparation", t.ID)
 			request := runRequest(t, true)
 			record, err := runArm(ctx, c, p, manager, kept.Deployment, t, root, request)
@@ -337,6 +341,11 @@ func campaignRun(ctx context.Context, config, phase, id string) error {
 	if err := campaignPin(c, p); err != nil {
 		return err
 	}
+	lease, err := campaignLease(c.Root)
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
 	manager, err := setupCgroups(c)
 	if err != nil {
 		return err

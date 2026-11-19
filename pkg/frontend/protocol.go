@@ -292,9 +292,10 @@ func queryErrorIdentity(err error) (*moerr.Error, bool) {
 func (mp *MysqlProtocolImpl) sendErrorResponse(resp *Response) error {
 	err := resp.data.(error)
 	if err == nil {
+		status := mp.responseStatus(uint16(resp.status))
 		mp.m.Lock()
 		defer mp.m.Unlock()
-		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+		return mp.sendOKPacket(0, 0, status, 0, "")
 	}
 
 	// Snapshot the session without holding the protocol lock while consulting
@@ -344,26 +345,27 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		return mp.sendErrorResponse(resp)
 	}
 
+	status := mp.responseStatus(uint16(resp.status))
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	switch resp.category {
 	case OkResponse:
 		s, ok := resp.data.(string)
 		if !ok {
-			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, "")
+			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, "")
 		}
-		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, s)
+		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, s)
 	case EoFResponse:
-		return mp.sendEOFPacket(0, uint16(resp.status))
+		return mp.sendEOFPacket(0, status)
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+			return mp.sendOKPacket(0, 0, status, 0, "")
 		}
 		if mer.Mrs() == nil {
-			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
+			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), status, mer.Warnings(), "")
 		}
-		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), status)
 	case LocalInfileRequest:
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)

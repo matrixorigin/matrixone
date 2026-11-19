@@ -51,6 +51,17 @@ func handleCtlReader(
 	parameter = strings.ToLower(parameter)
 	args := strings.Split(parameter, ":")
 
+	// a reader command always carries at least cmd, cfg and table ids; anything
+	// shorter cannot select a reader setting at all. Reject it before any CN is
+	// enumerated or touched, so a malformed parameter reports an explicit
+	// invalid input error instead of indexing args out of range when the command
+	// is forwarded to another CN.
+	if len(args) < 3 {
+		return Result{}, moerr.NewInvalidInputNoCtxf(
+			"invalid reader ctl parameter %q, expect cmd:cfg:tid1,tid2[:blk_cnt], e.g. enable:force_build_remote_ds:1,2",
+			parameter)
+	}
+
 	cns := make([]string, 0)
 	clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 		cns = append(cns, cn.ServiceID)

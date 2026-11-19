@@ -1,0 +1,20 @@
+-- Classic full-text population and maintenance must preserve atomic identifiers.
+drop database if exists ft_identifier_escape;
+create database ft_identifier_escape;
+use ft_identifier_escape;
+create table docs (id bigint primary key, `tick``col` text, `order` text, body text);
+insert into docs values (1, 'alpha beta', 'alpha', 'alpha'), (2, 'gamma', 'gamma', 'gamma');
+create fulltext index ft_tick on docs (`tick``col`);
+create fulltext index ft_order on docs (`order`);
+create fulltext index ft_body on docs (body);
+select id from docs where match(`tick``col`) against('alpha' in boolean mode) order by id;
+select id from docs where match(`order`) against('alpha' in boolean mode) order by id;
+select id from docs where match(body) against('alpha' in boolean mode) order by id;
+insert into docs values (3, 'alpha delta', 'delta', 'delta');
+select id from docs where match(`tick``col`) against('alpha' in boolean mode) order by id;
+update docs set `tick``col`='gamma' where id=1;
+select id from docs where match(`tick``col`) against('alpha' in boolean mode) order by id;
+delete from docs where id=3;
+select id from docs where match(`tick``col`) against('alpha' in boolean mode) order by id;
+select id from docs order by id;
+drop database ft_identifier_escape;

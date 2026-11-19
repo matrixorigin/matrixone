@@ -84,6 +84,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 	if n.NodeType == plan.Node_FUNCTION_SCAN {
 		return func(proc *process.Process, ports []*dependent.DemandInput) (vm.Operator, error) {
 			op := constructTableFunction(n, nil)
+			c.attachIndexMaintenance(n, op)
 			op.SetAnalyzeControl(int(n.NodeId), false)
 			for _, port := range ports {
 				port.SetIdx(int(n.NodeId))
@@ -102,6 +103,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 				kind = apply.OUTER
 			}
 			op := constructApply(n, children[1], kind, proc)
+			c.attachIndexMaintenance(children[1], op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			op.SetAnalyzeControl(int(n.NodeId), false)
 			op.AppendChild(ports[0])
@@ -137,9 +139,10 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			}
 			if len(n.PhysicalEqualityKeyList) > 0 {
 				visibleCount := len(distinct.GroupBy)
-				for i, key := range n.PhysicalEqualityKeyList {
-					distinct.GroupBy = append(distinct.GroupBy, key)
-					distinct.GroupByHashKey = append(distinct.GroupByHashKey, int32(visibleCount+i))
+				var err error
+				distinct.GroupBy, distinct.GroupByHashKey, err = plan2.CompactPhysicalGroupKeys(distinct.GroupBy, n.PhysicalEqualityKeyList)
+				if err != nil {
+					return nil, err
 				}
 				distinct.ProjectList = make([]*plan.Expr, visibleCount)
 				for i, e := range n.ProjectList {
@@ -450,7 +453,7 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	}
 	if !needsPairEvaluation {
 		if n.JoinType == plan.Node_MARK {
-			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) {
+			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) || canUseHashExistenceJoinWithInputs(n, children[0], children[1]) {
 				return c.compileDependentHashJoin(n, children)
 			}
 		} else if c.broadcastJoinUsesHash(n) {
@@ -544,7 +547,7 @@ func (c *Compile) compileDependentHashJoin(n *plan.Node, children []*plan.Node) 
 		} else {
 			var hashJoin *hashjoin.HashJoin
 			if n.JoinType == plan.Node_MARK {
-				hashJoin = constructBroadcastHashMarkJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
+				hashJoin = constructBroadcastHashMarkJoin(n, children[0], children[1], inputTypes[0], inputTypes[1], proc)
 			} else {
 				hashJoin = constructHashJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
 			}

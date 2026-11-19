@@ -52,7 +52,7 @@ class TestCreateTableBranch:
 
     def test_with_snapshot(self):
         sql = create_table_branch('tgt').from_table('src', snapshot='snap1').compile()
-        assert sql == 'data branch create table tgt from src{snapshot="snap1"}'
+        assert sql == "data branch create table tgt from src{snapshot='snap1'}"
 
     def test_with_account(self):
         sql = create_table_branch('tgt').from_table('src').to_account('tenant1').compile()
@@ -60,7 +60,7 @@ class TestCreateTableBranch:
 
     def test_all_params(self):
         sql = create_table_branch('tgt').from_table('src', snapshot='snap1').to_account('tenant1').compile()
-        assert sql == 'data branch create table tgt from src{snapshot="snap1"} to account tenant1'
+        assert sql == "data branch create table tgt from src{snapshot='snap1'} to account tenant1"
 
     def test_qualified_names(self):
         sql = create_table_branch('db1.tgt').from_table('db2.src').compile()
@@ -126,7 +126,7 @@ class TestCreateDatabaseBranch:
 
     def test_with_snapshot(self):
         sql = create_database_branch('dev').from_database('prod', snapshot='snap1').compile()
-        assert sql == 'data branch create database dev from prod{snapshot="snap1"}'
+        assert sql == "data branch create database dev from prod{snapshot='snap1'}"
 
     def test_with_account(self):
         sql = create_database_branch('dev').from_database('prod').to_account('t1').compile()
@@ -197,15 +197,15 @@ class TestDiffTableBranch:
 
     def test_target_snapshot(self):
         sql = diff_table_branch('t1').snapshot('s1').against('t2').compile()
-        assert sql == 'data branch diff t1{snapshot="s1"} against t2'
+        assert sql == "data branch diff t1{snapshot='s1'} against t2"
 
     def test_base_snapshot(self):
         sql = diff_table_branch('t1').against('t2', snapshot='s2').compile()
-        assert sql == 'data branch diff t1 against t2{snapshot="s2"}'
+        assert sql == "data branch diff t1 against t2{snapshot='s2'}"
 
     def test_both_snapshots(self):
         sql = diff_table_branch('t1').snapshot('s1').against('t2', snapshot='s2').compile()
-        assert sql == 'data branch diff t1{snapshot="s1"} against t2{snapshot="s2"}'
+        assert sql == "data branch diff t1{snapshot='s1'} against t2{snapshot='s2'}"
 
     def test_output_count(self):
         sql = diff_table_branch('t1').against('t2').output_count().compile()
@@ -245,8 +245,8 @@ class TestDiffTableBranch:
 
     def test_all_params_combined(self):
         sql = diff_table_branch('t1').snapshot('s1').against('t2', snapshot='s2').output_limit(50).compile()
-        assert 'snapshot="s1"' in sql
-        assert 'snapshot="s2"' in sql
+        assert "snapshot='s1'" in sql
+        assert "snapshot='s2'" in sql
         assert 'output limit 50' in sql
 
     # --- Output override: last one wins ---

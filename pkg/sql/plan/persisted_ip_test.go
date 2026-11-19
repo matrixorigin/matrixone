@@ -115,6 +115,9 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 			}},
 		}},
 	}
+	mediumIntVersion, err := RequiredPersistedExpressionProtocolVersion(mediumIntCast)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion110), mediumIntVersion)
 	for _, exprs := range [][]*planpb.Expr{{mediumIntCast, jsonConcat}, {jsonConcat, mediumIntCast}} {
 		owner := &planpb.TableDef{Cols: []*planpb.ColDef{
 			{Default: &planpb.Default{Expr: exprs[0]}},
@@ -124,9 +127,10 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, features.MediumIntAssignmentBounds)
 		require.True(t, features.JSONInputContracts)
+		require.True(t, features.JSONOpaqueTextContracts)
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion110), version)
+		require.Equal(t, int64(defines.MORPCVersion129), version)
 	}
 }
 
@@ -168,7 +172,7 @@ func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 	_, err := build(defines.MORPCVersion96)
 	require.ErrorContains(t, err, "protocol version 97")
@@ -445,7 +449,7 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				if version < defines.MORPCVersion72 {
 					require.ErrorContains(t, err, "protocol version 72")
 				} else {
@@ -686,12 +690,12 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
-				"inet_ntoa(1)", columns...)
+				"inet_ntoa(1)", "col", columns...)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
-				"inet_ntoa(1.6)", columns...)
+				"inet_ntoa(1.6)", "col", columns...)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 		})
 	}
@@ -759,7 +763,7 @@ func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -802,7 +806,7 @@ func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T)
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -854,7 +858,7 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 					return nil, err
 				}
 				defer stmt.Free()
-				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 			}
 
 			_, err := build(0)
@@ -1209,6 +1213,67 @@ func mustBindPersistedFollowupExpr(t *testing.T, ctx context.Context, name strin
 	expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	require.NoError(t, err)
 	return expr
+}
+
+func TestPersistedCRC32JSONRetainsExistingAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		old, exists := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if exists {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	jsonCol := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	legacy := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, 0), ObjName: "crc32"},
+		Args: []*planpb.Expr{jsonCol},
+	}}}
+	text := mustBindPersistedFollowupExpr(t, proc.Ctx, "crc32", []*planpb.Expr{jsonCol})
+	for _, tc := range []struct {
+		expr *planpb.Expr
+		want int64
+	}{{legacy, defines.MORPCVersion80}, {text, defines.MORPCVersion129}} {
+		required, err := RequiredPersistedExpressionProtocolVersion(tc.expr)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, required)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.want)
+		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr))
+		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want-1)
+		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.want))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.want)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.want-1)
+		require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.want))
+	}
+}
+
+func TestPersistedCRC32MixedOwnerKeepsExistingHighestFloor(t *testing.T) {
+	crc := mustBindPersistedFollowupExpr(t, context.Background(), "crc32", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+	})
+	concat := mustBindPersistedFollowupExpr(t, context.Background(), "concat", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		MakePlan2StringConstExprWithType("suffix"),
+	})
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: crc}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: concat}},
+	}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONInputContracts)
+	require.True(t, features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion129), required)
 }
 
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {

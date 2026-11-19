@@ -60,22 +60,22 @@ func BuildDMLManifestPaths(ctx context.Context, req DMLManifestPathRequest) (DML
 	if err != nil {
 		return DMLManifestPaths{}, err
 	}
-	idempotencyKey := firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
+	idempotencyKey := api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
 	if idempotencyKey == "" {
 		return DMLManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML manifest paths require statement id or idempotency key", map[string]string{
 			"table": req.Stream.Base.Table,
 		}))
 	}
-	base := joinDMLObjectPath(tableLocation, "metadata", "mo-dml", operation, "stmt-"+api.PathHash(idempotencyKey))
+	base := api.JoinObjectPath(tableLocation, "metadata", "mo-dml", operation, "stmt-"+api.PathHash(idempotencyKey))
 	paths := DMLManifestPaths{
-		ManifestListPath: joinDMLObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(req.SnapshotID, 10)+".avro"),
+		ManifestListPath: api.JoinObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(req.SnapshotID, 10)+".avro"),
 	}
 	needsData, needsDelete := dmlManifestKinds(req.Stream.Actions)
 	if needsData {
-		paths.DataManifestPath = joinDMLObjectPath(base, "data-manifest.avro")
+		paths.DataManifestPath = api.JoinObjectPath(base, "data-manifest.avro")
 	}
 	if needsDelete {
-		paths.DeleteManifestPath = joinDMLObjectPath(base, "delete-manifest.avro")
+		paths.DeleteManifestPath = api.JoinObjectPath(base, "delete-manifest.avro")
 	}
 	return paths, nil
 }
@@ -111,7 +111,7 @@ func BuildDMLDeleteFilePath(ctx context.Context, req DMLDeleteFilePathRequest) (
 	if err != nil {
 		return "", err
 	}
-	idempotencyKey := firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
+	idempotencyKey := api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
 	if idempotencyKey == "" {
 		return "", api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete file path requires statement id or idempotency key", map[string]string{
 			"table": req.Stream.Base.Table,
@@ -120,7 +120,7 @@ func BuildDMLDeleteFilePath(ctx context.Context, req DMLDeleteFilePathRequest) (
 	fileName := "delete-snap-" + strconv.FormatInt(req.SnapshotID, 10) +
 		"-seq-" + strconv.Itoa(req.FileSequence) +
 		"-df-" + dataPathHash + ".parquet"
-	return joinDMLObjectPath(tableLocation, "data", "mo-dml", operation, "stmt-"+api.PathHash(idempotencyKey), "delete", kind, fileName), nil
+	return api.JoinObjectPath(tableLocation, "data", "mo-dml", operation, "stmt-"+api.PathHash(idempotencyKey), "delete", kind, fileName), nil
 }
 
 func normalizedDMLOperation(ctx context.Context, operation dml.Operation, table string) (string, error) {
@@ -159,20 +159,4 @@ func dmlManifestKinds(actions []dml.Action) (needsData, needsDelete bool) {
 		}
 	}
 	return needsData, needsDelete
-}
-
-func joinDMLObjectPath(base string, parts ...string) string {
-	out := strings.TrimRight(strings.TrimSpace(base), "/")
-	for _, part := range parts {
-		part = strings.Trim(strings.TrimSpace(part), "/")
-		if part == "" {
-			continue
-		}
-		if out == "" {
-			out = part
-		} else {
-			out += "/" + part
-		}
-	}
-	return out
 }

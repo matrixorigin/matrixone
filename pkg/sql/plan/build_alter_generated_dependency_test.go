@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -761,19 +762,148 @@ func TestAlterAddThenModifyDoesNotSeedOriginalGeneratedDependencies(t *testing.T
 }
 
 func TestAlterSourceAffectingGeneratedPrimaryKeyRebuildsAllIndexes(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	configureMockGeneratedPrimaryKey(t, mock)
-	base := mock.ctxt.tables["t_on_update_gen"]
-	addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)
+	for _, clause := range []string{"modify column val bigint", "modify column val bigint, add column extra int"} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			configureMockGeneratedPrimaryKey(t, mock)
+			base := mock.ctxt.tables["t_on_update_gen"]
+			addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)
 
-	logicPlan, err := runOneStmt(mock, t,
-		"alter table constraint_test.t_on_update_gen modify column val bigint")
-	require.NoError(t, err)
+			logicPlan, err := runOneStmt(mock, t,
+				"alter table constraint_test.t_on_update_gen "+clause)
+			require.NoError(t, err)
 
-	alter := logicPlan.GetDdl().GetAlterTable()
-	require.NotNil(t, alter)
-	require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
-		"the generated primary-key expression must survive temporary-table serialization")
-	require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
-		"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
+				"the generated primary-key expression must survive temporary-table serialization")
+			require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
+				"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
+		})
+	}
+}
+
+func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
+	for _, clause := range []string{
+		"modify column id bigint, add column extra int",
+		"add column extra int, modify column id bigint",
+		"modify column id bigint, modify column updated_at timestamp",
+		"modify column id bigint, change column updated_at renamed timestamp",
+		"modify column id bigint, alter column updated_at set default null",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := newGeneratedIndexAlterMock(t)
+			p, err := runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen "+clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.NotEmpty(t, alter.CopyTableDef.Indexes)
+			for _, idx := range alter.CopyTableDef.Indexes {
+				require.False(t, alter.Options.SkipIndexesCopy[idx.IndexName], idx.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
+	for _, clause := range []string{
+		"modify column ps_partkey bigint",
+		"modify column ps_suppkey bigint",
+		"change column ps_suppkey renamed bigint",
+		"modify column ps_partkey bigint, add column extra int",
+		"drop column ps_partkey",
+		"drop column ps_suppkey",
+		"modify column ps_partkey bigint, rename column ps_suppkey to renamed",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			base := mock.ctxt.tables["partsupp"]
+			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
+			addAlterTestIndex(t, mock, base, "idx_qty", "ps_availqty", false)
+			addAlterTestIndex(t, mock, base, "idx_cost", "ps_supplycost", true)
+			p, err := runOneStmt(mock, t, "alter table tpch.partsupp "+clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.Len(t, alter.CopyTableDef.Indexes, 2)
+			for _, idx := range alter.CopyTableDef.Indexes {
+				require.False(t, alter.Options.SkipIndexesCopy[idx.IndexName], idx.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterCopyIndexControls(t *testing.T) {
+	for _, table := range []string{"single_idx_t", "fake_pk_t"} {
+		t.Run(table, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			base := mock.ctxt.tables[table]
+			// Add a distinct ordinary/unique index while retaining the fixture's index.
+			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
+			if table == "single_idx_t" {
+				idx = *mock.ctxt.tables["fake_pk_t"].Indexes[0]
+				idx.Parts = []string{"id"}
+			} else {
+				idx.Parts = []string{"a"}
+			}
+			base.Indexes = append(base.Indexes, &idx)
+			registerAlterIndexVisibilityRows(t, mock, base)
+			base.Cols = append(base.Cols, &ColDef{Name: "payload", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 10}, Default: &planpb.Default{NullAbility: true}})
+			p, err := runOneStmt(mock, t, "alter table constraint_test."+table+" modify column payload varchar(20), algorithm=copy")
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.Len(t, alter.CopyTableDef.Indexes, 2) {
+				return
+			}
+			for _, index := range alter.CopyTableDef.Indexes {
+				assert.True(t, alter.Options.SkipIndexesCopy[index.IndexName], index.IndexName)
+			}
+			if table == "fake_pk_t" {
+				assert.Equal(t, 2, strings.Count(alter.InsertTmpDataSql, "`"+catalog.FakePrimaryKeyColName+"`"))
+			}
+		})
+	}
+}
+
+func TestAlterPrimaryKeyDropControls(t *testing.T) {
+	for _, triple := range []bool{false, true} {
+		t.Run(fmt.Sprintf("triple=%v", triple), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			base := mock.ctxt.tables["partsupp"]
+			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Pkey.CompPkeyCol.Primary = true
+			base.Cols[0].Primary = false
+			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
+			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
+			idx.Parts = []string{"ps_availqty"}
+			base.Indexes = []*planpb.IndexDef{&idx}
+			registerAlterIndexVisibilityRows(t, mock, base)
+			clause := "modify column ps_partkey bigint, drop column ps_comment"
+			if triple {
+				base.Pkey.Names = append(base.Pkey.Names, "ps_supplycost")
+				base.Pkey.Cols = append(base.Pkey.Cols, base.Cols[3].ColId)
+				assert.False(t, base.Cols[3].Primary)
+				assert.Equal(t, []string{"ps_partkey", "ps_suppkey", "ps_supplycost"}, base.Pkey.Names)
+				clause = "drop column ps_supplycost"
+			}
+			p, err := runOneStmt(mock, t, "alter table tpch.partsupp "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.Len(t, alter.CopyTableDef.Indexes, 1) {
+				return
+			}
+			assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
+			if triple {
+				assert.Equal(t, []string{"ps_partkey", "ps_suppkey"}, alter.CopyTableDef.Pkey.Names)
+				assert.Equal(t, catalog.CPrimaryKeyColName, alter.CopyTableDef.Pkey.PkeyColName)
+			}
+		})
+	}
 }

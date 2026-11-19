@@ -69,6 +69,19 @@ select hex(d) as bytes
 from (values row(cast('a' as char(1)) collate utf8mb4_unicode_ci),
 row(cast(x'FF' as binary(1)))) as v(d);
 invalid input: invalid UTF-8 in collation key
+select hex(b) as bytes, length(b) as width
+from (select 'x' as b union all select cast('ab' as binary(100))) as u
+order by width;
+bytes    width
+78    1
+61620000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000    100
+create table bin_sink (v varbinary(200));
+insert into bin_sink
+select b from (select 'x' as b union all select cast('abcdefgh' as binary(100))) as u;
+select hex(v) as bytes, length(v) as width from bin_sink order by width;
+bytes    width
+78    1
+61626364656667680000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000    100
 create table nested_saved as
 select cast('' as char(1)) as v
 union all

@@ -137,6 +137,105 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	calls int
+}
+
+func (it *countedReplayRows) Next() bool {
+	it.calls++
+	return it.RowsIter.Next()
+}
+
+func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: stamp, id: 42},
+		{rowID: types.NewRowid(&block, 1), ts: stamp, id: 43},
+		{rowID: types.NewRowid(&block, 2), ts: stamp.Next(), id: 44},
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		calls  int
+	}{
+		{"first-row-denied", 7, 1},
+		{"growth-denied", 23, 2},
+		{"fits", 24, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			if tc.name == "fits" {
+				require.NoError(t, err)
+				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			}
+			require.Equal(t, tc.calls, it.calls)
+		})
+	}
+}
+
+func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	commitTS := types.BuildTS(12, 0)
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+		{rowID: buildTestMaterializedSnapshotRowID(t, 3), ts: commitTS, id: 7, payload: 42},
+	})
+	ls := &LocalDisttaeDataSource{
+		ctx:             context.Background(),
+		pState:          pState,
+		snapshotTS:      types.BuildTS(13, 0),
+		tombstonePolicy: engine.Policy_SkipAll,
+		memPKFilter:     &readutil.MemPKFilter{},
+	}
+	defer ls.Close()
+	out := batch.NewWithSize(2)
+	out.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer out.Clean(mp)
+
+	require.NoError(t, ls.filterInMemCommittedInserts(
+		context.Background(),
+		[]types.Type{types.T_int64.ToType(), types.T_TS.ToType()},
+		[]uint16{0, objectio.SEQNUM_COMMITTS}, mp, out,
+	))
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[0], 0))
+	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[1], 0))
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()
@@ -266,6 +365,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
+		proc: testutil.NewProc(t),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
@@ -286,7 +386,8 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	m := mpool.MustNewZero()
 	normalBat.SetRowCount(1)
 	vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m)
-	txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	_, err := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	require.NoError(t, err)
 
 	txnOp.AddWorkspace(txn)
 
@@ -306,7 +407,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
+	err = ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
@@ -1030,7 +1131,7 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
 	// but we should find created_at by name.
 	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
-	zms, err := ls.getBlockZMs(ctx)
+	zms, _, err := ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
@@ -1040,25 +1141,25 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// Test case 2: Test with simple column name (without table prefix)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Test case 3: Test fallback to ColPos when name lookup fails
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Test case 4: Report a plan error when both name lookup and ColPos fail
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.ErrorContains(t, err, "cannot find column for ORDER BY")
 
 	// Test case 5: Test with Name2ColIndex (O(1) lookup)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
-	_, err = ls.getBlockZMs(ctx)
+	_, _, err = ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 }
 
@@ -1114,7 +1215,7 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 	// Should extract "created_at" from "db.table.created_at"
 	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
-	zms, err := ls.getBlockZMs(ctx)
+	zms, _, err := ls.getBlockZMs(ctx)
 	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
@@ -1124,9 +1225,12 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 type filteredPrefetchFS struct {
 	fileservice.FileService
-	calls atomic.Int32
-	done  chan struct{}
+	calls   atomic.Int32
+	done    chan struct{}
+	evicted bool
 }
+
+func (fs *filteredPrefetchFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }
 
 func (fs *filteredPrefetchFS) PrefetchFile(context.Context, string) error {
 	fs.calls.Add(1)
@@ -1138,8 +1242,20 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 	table := &txnTable{db: &txnDatabase{}}
 	table.proc.Store(proc)
 	for _, count := range []int{3, 4} {
-		for _, skip := range []bool{false, true} {
-			t.Run(fmt.Sprintf("blocks=%d/skip=%v", count, skip), func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			skip           bool // the read policy skips whole-object preloads
+			narrow         bool // the read is narrow
+			evicted        bool // the disk cache reports the table thrashing
+			wantPrefetches bool
+		}{
+			{name: "scan", wantPrefetches: true},
+			{name: "skip", skip: true},
+			{name: "narrow-kept", narrow: true, wantPrefetches: true},
+			{name: "narrow-evicted", narrow: true, evicted: true},
+			{name: "scan-evicted", evicted: true, wantPrefetches: true},
+		} {
+			t.Run(fmt.Sprintf("blocks=%d/%s", count, tc.name), func(t *testing.T) {
 				data := readutil.NewBlockListRelationData(0)
 				for i := 0; i < count; i++ {
 					loc := objectio.NewRandomLocation(uint16(i), 1)
@@ -1147,17 +1263,21 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					block := objectio.BlockInfo{BlockID: types.NewBlockidWithObjectID(&oid, uint16(i)), MetaLoc: objectio.ObjectLocation(loc)}
 					data.AppendBlockInfo(&block)
 				}
-				fs := &filteredPrefetchFS{done: make(chan struct{}, 4)}
+				fs := &filteredPrefetchFS{done: make(chan struct{}, 4), evicted: tc.evicted}
 				ls := &LocalDisttaeDataSource{table: table, fs: fs, rangeSlice: data.GetBlockInfoSlice(), iteratePhase: engine.Persisted, memPKFilter: &readutil.MemPKFilter{}}
 				ls.rc.prefetchDisabled = count < 4
 				ctx := proc.Ctx
-				if skip {
+				if tc.skip {
 					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
 				}
+				if tc.narrow {
+					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.NarrowRead)
+				}
+				prefetches := count >= 4 && tc.wantPrefetches
 				rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
 				proc.Base.LockService = &prefetchTestLockService{id: t.Name()}
 				t.Cleanup(func() { proc.Base.LockService = nil })
-				if !skip {
+				if prefetches {
 					ioutil.Start(proc.GetService())
 					t.Cleanup(func() { ioutil.Stop(proc.GetService()) })
 				}
@@ -1167,7 +1287,7 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					require.Equal(t, engine.Persisted, state)
 					require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
 				}
-				if count >= 4 && !skip {
+				if prefetches {
 					for i := 0; i < count; i++ {
 						select {
 						case <-fs.done:
@@ -1175,16 +1295,14 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 							t.Fatal("data prefetch did not execute")
 						}
 					}
-				}
-				if !skip {
 					ioutil.Stop(proc.GetService())
 				}
 				expected := int32(0)
-				if count >= 4 && !skip {
+				if prefetches {
 					expected = int32(count)
 				}
 				require.Equal(t, expected, fs.calls.Load())
-				if !skip && count >= 4 {
+				if count >= 4 {
 					require.Equal(t, count, ls.rc.batchPrefetchCursor)
 				} else {
 					require.Zero(t, ls.rc.batchPrefetchCursor)

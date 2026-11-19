@@ -48,18 +48,13 @@ const (
 	rightDedupJoinAllocationSiteResultGrouping
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 	itr   hashmap.Iterator
 
 	exprExecs []colexec.ExpressionExecutor
 
-	evecs []evalVector
+	evecs []colexec.ExpressionExecutor
 	vecs  []*vector.Vector
 
 	mp *message.JoinMap
@@ -294,10 +289,9 @@ func (ctr *container) cleanResultBatch(proc *process.Process) {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+		if ctr.evecs[i] != nil {
+			ctr.evecs[i].Free()
 		}
-		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil

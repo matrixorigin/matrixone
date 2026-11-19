@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -224,6 +224,18 @@ func Test_BuiltIn_RegexpReplaceCaptureTemplate(t *testing.T) {
 	got, err := op.regMap.regularReplace("(a)", "a", "$9", 1, 2)
 	require.NoError(t, err, "an out-of-range occurrence does not evaluate the replacement")
 	require.Equal(t, "a", got)
+
+	// Issue #31175 design r4: capture-bearing duplicate alternatives are
+	// never deduplicated — group numbering is user-observable through
+	// replacement references. On the case-fold path the rewrite retains
+	// both (ss) branches, so $3 resolves and the unmatched group expands
+	// empty, exactly like the unrewritten engine verdict.
+	t.Run("dedup_retains_capture_numbering", func(t *testing.T) {
+		got, err := op.regMap.regularReplaceWithMatchType(
+			"((ss)|(ss))", "ss", "[$1][$2][$3]", 1, 1, false, "i")
+		require.NoError(t, err)
+		require.Equal(t, "[ss][ss][]", got)
+	})
 
 	binarySubject := string([]byte{0x00, 0xff, 0xc3, 0x28})
 	got, err = op.regMap.regularReplaceWithMatchType(
@@ -434,9 +446,9 @@ func TestRegexpMatchTypeParser(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "u", want: ""},
-		{input: "mu", want: "m"},
-		{input: "nu", want: "s"},
+		{input: "u", want: "u"},
+		{input: "mu", want: "mu"},
+		{input: "nu", want: "su"},
 		{input: "ic", want: ""},
 		{input: "ci", want: "i"},
 	} {
@@ -1871,6 +1883,30 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		})
 	}
 
+	for _, matchType := range []string{"m", "mu"} {
+		t.Run("binary_pattern_null_subject/"+matchType, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				nullText,
+				NewFunctionTestInput(text, []string{`^\x{100}`}, nil),
+				NewFunctionTestInput(text, []string{matchType}, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), newOpBuiltInRegexp().builtInRegexpLike)
+			defer tcc.Free()
+			require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "binary")
+		})
+	}
+	t.Run("valid_binary_pattern_null_subject", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+			nullText, NewFunctionTestInput(text, []string{`^a`}, nil),
+			NewFunctionTestInput(text, []string{"m"}, nil),
+		}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}), newOpBuiltInRegexp().builtInRegexpLike)
+		require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+		ok, info := tcc.RunAndFree()
+		require.True(t, ok, info)
+	})
+
 	nullMatchType := NewFunctionTestInput(text, []string{""}, []bool{true})
 	for _, tc := range []struct {
 		name       string
@@ -2104,6 +2140,9 @@ func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
 			)
 			defer tcc.Free()
 
+			// 先经生产入口建立惰性缓存，再设置原有的借用键碰撞反例。
+			_, err := op.regMap.getRegularMatcher("sentinel")
+			require.NoError(t, err)
 			pattern, _ := vector.GenerateFunctionStrParameter(tcc.parameters[1]).GetStrValue(0)
 			collision := findRegexpCacheHashCollision(t, op.regMap.mp, pattern)
 			copy(pattern, "aaaa")
@@ -2403,20 +2442,22 @@ func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 	op := newOpBuiltInRegexp()
 
 	testCases := []struct {
-		name            string
-		pattern         string
-		value           string
-		escape          rune
-		escapeEnabled   bool
-		caseInsensitive bool
-		expected        bool
+		name          string
+		pattern       string
+		value         string
+		escape        rune
+		escapeEnabled bool
+		fold          likeFoldMode
+		expected      bool
 	}{
 		{name: "custom escape underscore", pattern: "a!_b", value: "a_b", escape: '!', escapeEnabled: true, expected: true},
 		{name: "custom escape percent", pattern: "a!%b", value: "a%b", escape: '!', escapeEnabled: true, expected: true},
 		{name: "empty escape", pattern: `a\_b`, value: `a\xb`, escapeEnabled: false, expected: true},
 		{name: "unicode escape", pattern: "a界_b", value: "a_b", escape: '界', escapeEnabled: true, expected: true},
-		{name: "ilike recognizes escape before folding", pattern: "aX_b", value: "A_B", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
-		{name: "ilike lowercase escape spelling remains literal", pattern: "axb", value: "AXB", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
+		{name: "ilike recognizes escape before folding", pattern: "aX_b", value: "A_B", escape: 'X', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "ilike lowercase escape spelling remains literal", pattern: "axb", value: "AXB", escape: 'X', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "ilike folds kelvin sign", pattern: "k_b", value: "K_B", escape: '!', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "general ci folds accent weight", pattern: "a_b", value: "Á_B", escape: '!', escapeEnabled: true, fold: likeFoldGeneralCI, expected: true},
 	}
 
 	for _, tc := range testCases {
@@ -2426,7 +2467,7 @@ func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 				[]byte(tc.value),
 				tc.escape,
 				tc.escapeEnabled,
-				tc.caseInsensitive,
+				tc.fold,
 			)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, match)
@@ -2682,4 +2723,644 @@ func Test_BuiltIn_RegularSubstr(t *testing.T) {
 		require.True(t, match, i)
 		require.Equal(t, c.expected, val, i)
 	}
+}
+
+// TestRegexpWideMultilineReviewFindings pins the mo-bot review on PR #30646:
+// (P2) no caret match at end-of-input after a trailing CR/NEL/LS/PS, and
+// (P1/P2) anchored multiline predicates short-circuit on the first line and
+// large TEXT inputs run without an admission budget, so constant multiline
+// predicates and oversized subjects are not regressed by the wide-anchor
+// compatibility path (#30210).
+func TestRegexpWideMultilineReviewFindings(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	like := func(pat, str, mt string, binary bool) bool {
+		m, err := op.regMap.regularLikeWithMode(pat, str, mt, binary)
+		require.NoError(t, err)
+		return m
+	}
+
+	// P2 terminal anchor: no caret match at end-of-input after a trailing CR.
+	require.False(t, like("^$", "a\r", "m", false), "caret at end after trailing CR")
+	// Nor after the other MySQL line terminators.
+	require.False(t, like("^$", "a\u0085", "m", false), "caret at end after NEL")
+	require.False(t, like("^$", "a\u2028", "m", false), "caret at end after LS")
+	require.False(t, like("^$", "a\u2029", "m", false), "caret at end after PS")
+	// Trailing LF keeps Go RE2's native multiline contract (unchanged).
+	require.True(t, like("^$", "a\n", "m", false), "trailing LF unchanged")
+	require.True(t, like("^$", "a\r\n", "m", false), "trailing CRLF unchanged")
+	// Interior boundaries and the empty input are preserved.
+	require.True(t, like("^$", "a\n\n", "m", false), "interior empty line")
+	require.True(t, like("^$", "", "m", false), "empty input")
+	require.True(t, like("^b$", "a\rb", "m", false), "interior CR line")
+	require.True(t, like("^b$", "a\r\nb", "m", false), "interior CRLF line")
+	// Binary domain: the same terminal-anchor exclusion on the byte path.
+	require.False(t, like("^$", "a\r", "m", true), "binary trailing CR")
+	require.False(t, like("^$", "a\x85", "m", true), "binary trailing NEL")
+	require.True(t, like("^b$", "a\rb", "m", true), "binary interior CR line")
+
+	// REGEXP_INSTR('a\r', '^', 1, 2, 0, 'm'): only the initial caret exists,
+	// so the second occurrence must be 0 (was 3 before the anchor fix).
+	got, err := op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "instr occurrence 2 on trailing CR")
+	got, err = op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, true, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "binary instr occurrence 2 on trailing CR")
+
+	// Every regular syntax remains in the regular engine, independent of size.
+	require.False(t, op.regMap.requiresRegexp2(`^a\s`, "m", false))
+	require.True(t, op.regMap.requiresRegexp2(`^(a)\1`, "m", false))
+	// Oversized subjects stay supported: regular evaluation has no subject admission cap.
+	big := strings.Repeat("a", regexp2MaxSubjectBytes+1)
+	require.True(t, like("^a", big, "m", false), "oversized MEDIUMTEXT subject")
+	require.True(t, like("^a", big+"\r", "m", false), "oversized wide-terminator subject")
+
+	// mo-bot review: ordinary anchors on wide subjects must not hit regexp2's
+	// admission memory budget (P1), and the >1MiB path must preserve the
+	// multiline contract instead of degrading to LF-only semantics (P2).
+	require.True(t, like("^a", strings.Repeat("a", 16384)+"\r", "m", false), "ordinary anchor + CR: no regexp2 admission")
+	require.True(t, like("^b$", strings.Repeat("a", 1048575)+"\r"+"b", "m", false), "oversized wide multiline parity with ICU")
+
+	// Per-line positional functions keep byte-accurate results on wide
+	// subjects, including terminator preservation in REPLACE.
+	got, err = op.regMap.regularInstrWithMatchType("^cd", "ab\rcd", 1, 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(4), got, "instr wide CR: caret after interior terminator")
+
+	found, sub, err := op.regMap.regularSubstrWithMatchType("^b$", "a\nb\rc", 1, 1, false, "m")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "b", sub, "substr wide CR line")
+
+	rep, err := op.regMap.regularReplaceWithMatchType("^b$", "a\r\nb\rc", "Q", 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, "a\r\nQ\rc", rep, "replace preserves CRLF bytes")
+
+	// Wide-terminator interior lines in the text alphabet.
+	require.True(t, like("^b$", "a\u0085b", "m", false), "NEL interior line")
+	require.True(t, like("^b$", "a\vb", "m", false), "VT interior line")
+	require.True(t, like("^b$", "a\fb", "m", false), "FF interior line")
+	require.False(t, like("^b$", "a\x85", "m", true), "binary trailing NEL")
+	// Binary lines break only on the ASCII controls CR, VT and FF; byte
+	// 0x85 never terminates a line in the binary alphabet (#30210).
+	require.False(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
+	require.True(t, like("^b$", "a\vb", "m", true), "binary VT interior line")
+	require.True(t, like("^b$", "a\fb", "m", true), "binary FF interior line")
+
+	// A terminator-matching pattern over the size cap fails explicitly when a
+	// wide terminator is genuinely present in the subject.
+	require.True(t, like("^a.", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false), "plain dot oversized: regular engine, no admission cap")
+	// A subject proven free of line terminators takes the exact RE2 path even
+	// for terminator-matching patterns (they cannot match a single-line
+	// subject), so an oversized MEDIUMTEXT subject still gets the MySQL
+	// verdict instead of an admission error.
+	require.False(t, like("^a\rb", big, "m", false), "terminator-matching pattern cannot match a single-line subject")
+	// A wide terminator cannot introduce a size restriction for regular syntax.
+	require.False(t, like("^a\rb", big+"\r", "m", false))
+	require.True(t, like("^a+\rb$", big+"\rb", "m", false))
+	// A constant (anchor/operator-free) pattern never needs the wide route:
+	// literal matching is multiline-insensitive, so the exact RE2 path
+	// answers it on any subject size, with or without terminators.
+	require.True(t, like("a\rb", big+"\rb", "m", false), "constant pattern has no multiline-sensitive operators")
+}
+
+// Issue #31175: LIKE takes its default case sensitivity from the resolved
+// text collation of its subject operand, exactly as LOCATE/INSTR/POSITION
+// already do. Case-insensitive collations fold; the legacy byte identity and
+// binary string domains keep the byte matcher. ILIKE keeps its historical
+// fold-on-every-domain behavior.
+func Test_BuiltIn_LikeHonorsCollationCaseFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	binary := types.T_varbinary.ToType()
+
+	run := func(t *testing.T, fn executeLogicOfOverload, inputs []FunctionTestInput, want []bool, wantNulls []bool) {
+		t.Helper()
+		tcc := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
+		succeed, errInfo := tcc.RunAndFree()
+		require.True(t, succeed, errInfo)
+	}
+
+	t.Run("row patterns fold", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a", "ABC", "ab", "aB_c"}, nil),
+				NewFunctionTestInput(text, []string{"A", "abc", "a%", "a__c"}, nil),
+			},
+			[]bool{true, true, true, true}, nil)
+	})
+
+	t.Run("constant pattern folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Alice", "BOB", "alice", "al"}, nil),
+				NewFunctionTestConstInput(text, []string{"ALICE%", "ALICE%", "ALICE%", "ALICE%"}, nil),
+			},
+			[]bool{true, false, true, false}, nil)
+	})
+
+	t.Run("escape folds only literal runes", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a_b", "AXB"}, nil),
+				NewFunctionTestConstInput(text, []string{"A!_b", "A!_b"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("unicode ci charset folds", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"Apple", "BOB"}, nil),
+				NewFunctionTestInput(ucaText, []string{"apple", "bo_"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	// MySQL's utf8mb4_general_ci wildcard matcher folds every supplementary
+	// character to the 0xFFFD replacement weight (my_tosort_unicode with
+	// maxchar 0xFFFF), so distinct supplementary characters compare equal
+	// there, while the UCA matcher keeps their code-point identity
+	// (my_uca_charcmp). Pin the general_ci parity as the control for the
+	// unicode_ci identity repair below (issue #31175 review).
+	t.Run("general ci like folds supplementary characters to one weight", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"\U0001F600", "\U0001F600", "x\U0001F600y", "\U0001F600", "\U0001F600\U0001F600", "\U0001F600"}, nil),
+				NewFunctionTestInput(text, []string{"\U0001F601", "_", "%\U0001F601%", "__", "_", "\uFFFD"}, nil),
+			},
+			[]bool{true, true, true, false, false, true}, nil)
+	})
+
+	// MySQL's my_uca_charcmp falls back to code-point identity when a
+	// character has no collation table weight (wc > maxchar or a weightless
+	// page): distinct supplementary characters never match, identical ones
+	// still do (issue #31175 review).
+	t.Run("unicode ci supplementary characters keep identity constant pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"\U0001F600", "\U0001F601", "x\U0001F600y", "x\U0001F601y"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"%\U0001F600%", "%\U0001F600%", "%\U0001F600%", "%\U0001F600%"}, nil),
+			},
+			[]bool{true, false, true, false}, nil)
+	})
+
+	t.Run("unicode ci supplementary characters keep identity", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"\U0001F600", "\U0001F600", "x\U0001F600y", "x\U0001F600y", "\U0001F600", "\U0001F600", "\U00010400"}, nil),
+				NewFunctionTestInput(ucaText, []string{"\U0001F601", "_", "%\U0001F600%", "%\U0001F601%", "\uFFFD", "\U0001F600", "\U00010428"}, nil),
+			},
+			[]bool{false, true, true, false, false, true, false}, nil)
+	})
+
+	t.Run("legacy byte identity stays case sensitive", func(t *testing.T) {
+		legacy := types.T_varchar.ToType()
+		legacy.Charset = types.CharsetLegacy
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(legacy, []string{"a", "ABC"}, nil),
+				NewFunctionTestInput(legacy, []string{"A", "abc"}, nil),
+			},
+			[]bool{false, false}, nil)
+	})
+
+	t.Run("binary domain stays case sensitive", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"a", "ABC"}, nil),
+				NewFunctionTestInput(binary, []string{"A", "abc"}, nil),
+			},
+			[]bool{false, false}, nil)
+	})
+
+	t.Run("per row binary domain stays byte ordered", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a", "a"}, nil),
+				NewFunctionTestConstInput(text, []string{"A", "A"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, nil),
+			newOpBuiltInRegexp().likeFn)
+		require.NoError(t, tcc.parameters[0].SetRuntimeStringDomainAtWithMP(
+			0, types.RuntimeStringBinary, proc.Mp()))
+		succeed, errInfo := tcc.RunAndFree()
+		require.True(t, succeed, errInfo)
+	})
+
+	t.Run("constant multi percent pattern folds subject", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"David!", "xDyVz", "Da!"}, nil),
+				NewFunctionTestConstInput(text, []string{"%D%v%", "%D%v%", "%D%v%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	// U+03A3/U+03C3/U+03C2 share one fold orbit: folding upward reaches
+	// U+03A3 from all three, matching LOCATE/INSTR/POSITION and the
+	// utf8mb4_general_ci weight 0x03A3, while lowercasing keeps the final
+	// sigma distinct (issue #31175 review).
+	t.Run("sigma family folds row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ", "Σ"}, nil),
+				NewFunctionTestInput(text, []string{"Σ", "ς", "σ"}, nil),
+			},
+			[]bool{true, true, true}, nil)
+	})
+
+	t.Run("sigma family folds constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σx", "Σ", "xσ"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ%", "Σ%", "Σ%", "Σ%"}, nil),
+			},
+			[]bool{true, true, true, false}, nil)
+	})
+
+	t.Run("sigma family folds constant multi percent", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "xςy"}, nil),
+				NewFunctionTestConstInput(text, []string{"%Σ%", "%Σ%"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	t.Run("sigma family folds escaped literal", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"σ_ς", "σxς"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ!_Σ", "Σ!_Σ"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("binary pattern operand forces byte match", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Ab", "ab"}, nil),
+				NewFunctionTestInput(binary, []string{"a%", "a%"}, nil),
+			},
+			[]bool{false, true}, nil)
+	})
+
+	// Issue #31175 review: utf8mb4_general_ci LIKE compares per-character
+	// collation weights, folding accented and dotless-i pairs (á=a, ı=I,
+	// ß=s) without multi-character expansions.
+	t.Run("general ci folds collation weights row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"á", "ı", "ß", "ß", "œ", "æ"}, nil),
+				NewFunctionTestInput(text, []string{"a", "I", "s", "ss", "o", "a"}, nil),
+			},
+			[]bool{true, true, true, false, false, false}, nil)
+	})
+
+	t.Run("general ci folds collation weights constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ax", "Áx", "bx"}, nil),
+				NewFunctionTestConstInput(text, []string{"á%", "á%", "á%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	// Issue #31175 review: utf8mb4_unicode_ci LIKE compares one pattern
+	// character against one value character by UCA 4.0.0 primary weights
+	// (my_wildcmp_uca), so á=a while ı keeps its own weight and æ is not ae.
+	// LIKE never spans an expansion across characters: ß matches neither s
+	// nor ss, unlike the whole-key comparison in = and FIND_IN_SET.
+	t.Run("unicode ci compares per character weights row pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"á", "ı", "ß", "ß", "œ", "æ", "ss"}, nil),
+				NewFunctionTestInput(ucaText, []string{"a", "I", "ss", "s", "oe", "ae", "ß"}, nil),
+			},
+			[]bool{true, false, false, false, false, false, false}, nil)
+	})
+
+	t.Run("unicode ci compares per character weights constant pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"ß", "ss", "xss", "s"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"ss", "ss", "ss", "ss"}, nil),
+			},
+			[]bool{false, true, false, false}, nil)
+	})
+
+	t.Run("unicode ci underscore consumes one character", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"ß", "ss"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"_", "_"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("unicode ci percent never splits an expansion", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"xßy", "xssy", "xsy"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"%ss%", "%ss%", "%ss%"}, nil),
+			},
+			[]bool{false, true, false}, nil)
+	})
+
+	t.Run("unicode ci escape folds per character weights", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"á_b", "aXb"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"A!_b", "A!_b"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	// Issue #31175 review: ILIKE keeps its complete Unicode simple-fold
+	// equivalence on every domain. The Kelvin and Angstrom signs fold with
+	// their letters through the constant, varying-pattern and ESCAPE paths,
+	// and the sigma orbit stays together.
+	t.Run("ilike folds kelvin angstrom sigma row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K", "K", "Å", "Å", "ς", "Σ", "ı"}, nil),
+				NewFunctionTestInput(text, []string{"k", "K", "å", "Å", "Σ", "ς", "I"}, nil),
+			},
+			[]bool{true, true, true, true, true, true, false}, nil)
+	})
+
+	t.Run("ilike folds kelvin constant single character", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K", "K", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"k", "k", "k"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike folds angstrom constant prefix", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Ång", "ång", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"Å%", "Å%", "Å%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike folds kelvin escaped literal", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K_k", "kXk"}, nil),
+				NewFunctionTestConstInput(text, []string{"K!_K", "K!_K"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("ilike folds sigma constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ", "Σ", "Σ"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike still folds binary domains", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+				NewFunctionTestInput(binary, []string{"a_c"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+}
+
+// Issue #31175: REGEXP/RLIKE and REGEXP_LIKE take their default case
+// sensitivity from the resolved text collation of the subject operand. An
+// explicit match_type case flag and a binary match domain still override
+// that default.
+func Test_BuiltIn_RegexpHonorsCollationCaseFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	binary := types.T_varbinary.ToType()
+
+	run := func(t *testing.T, fn executeLogicOfOverload, inputs []FunctionTestInput, want []bool, wantNulls []bool) {
+		t.Helper()
+		tcc := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
+		succeed, errInfo := tcc.RunAndFree()
+		require.True(t, succeed, errInfo)
+	}
+
+	t.Run("reg match uniform path folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", "abc", "ABC"}, nil),
+				NewFunctionTestInput(text, []string{"ABC", "[A-Z]+", "^a"}, nil),
+			},
+			[]bool{true, true, true}, nil)
+	})
+
+	t.Run("reg match row path folds and preserves null", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", ""}, []bool{false, true}),
+				NewFunctionTestInput(text, []string{"ABC", "ABC"}, nil),
+			},
+			[]bool{true, false}, []bool{false, true})
+	})
+
+	t.Run("reg match binary domain stays case sensitive", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"abc"}, nil),
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	// The sigma fold orbit (U+03A3/U+03C3/U+03C2) collapses under the
+	// engine's case-insensitive flag, matching MySQL's shared 0x03A3 weight.
+	t.Run("reg match sigma family folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ"}, nil),
+				NewFunctionTestInput(text, []string{"Σ", "ς"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	t.Run("not reg match folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInNotRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", "zzz"}, nil),
+				NewFunctionTestInput(text, []string{"ABC", "ABC"}, nil),
+			},
+			[]bool{false, true}, nil)
+	})
+
+	t.Run("regexp like two args folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like explicit c overrides collation", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(text, []string{"c"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	t.Run("regexp like explicit i still folds binary domain", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"abc"}, nil),
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(binary, []string{"i"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like non case flags keep collation default", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestInput(text, []string{"^abc"}, nil),
+				NewFunctionTestConstInput(text, []string{"m"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like multiline fold follows icu start ladder", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a\r\nxb", "ABC"}, nil),
+				NewFunctionTestInput(text, []string{"^\nx", "^abc"}, nil),
+				NewFunctionTestConstInput(text, []string{"m", "m"}, nil),
+			},
+			[]bool{false, true}, nil)
+		// An explicit i compiles identically to the ci-collation default
+		// under m: the folded initial run leaves the CRLF-interior
+		// exemption ladder in both modes (issues #30210 and #31175).
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a\r\nxb"}, nil),
+				NewFunctionTestInput(text, []string{"^\nx"}, nil),
+				NewFunctionTestConstInput(text, []string{"im"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	t.Run("regexp like null match type stays null", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(text, []string{""}, []bool{true}),
+			},
+			[]bool{false}, []bool{true})
+	})
+}
+
+// Test_BuiltIn_UnicodeLikeResourceLimit pins the function-layer conversion
+// of the collation package's typed anchor-search work-bound error (issue
+// #31175 design, invariant 7): pkg/common/collation is stdlib-only and
+// reports *collation.LikeResourceLimitError, and unicodeLikeMatchFn
+// converts it to a moerr internal error whose message keeps the stable
+// SQL-visible prefix "LIKE pattern resource limit exceeded: ". The
+// fragmented pattern forces the over-mask-budget anchor fallback with a
+// one-character anchor against an all-'a' subject, crossing the
+// 4 x words x subjectChars total-work bound.
+func Test_BuiltIn_UnicodeLikeResourceLimit(t *testing.T) {
+	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789" +
+		"αβγδεζηθικλμνξοπρστυφχψω" +
+		"абвгдежзийклмнопрстуфхцчшщъыьэюя"
+	var sb strings.Builder
+	sb.WriteByte('%')
+	sb.WriteString(strings.Repeat("a_", 15000))
+	for _, r := range alphabet {
+		sb.WriteRune(r)
+		sb.WriteByte('_')
+	}
+	sb.WriteByte('%')
+	matchFn := unicodeLikeMatchFn(context.Background(), false, '\\', true)
+	_, err := matchFn([]byte(strings.Repeat("a", 60000)), []byte(sb.String()))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal),
+		"the resource-limit error must surface as a moerr internal error, got %v", err)
+	require.Contains(t, err.Error(),
+		"LIKE pattern resource limit exceeded: total anchor-search work bound")
+	// Below the bound the same matcher answers exactly: the pattern's exact
+	// occurrence matches and an anchor-free subject does not.
+	var middle strings.Builder
+	middle.WriteString(strings.Repeat("aX", 15000))
+	for _, r := range alphabet {
+		middle.WriteRune(r)
+		middle.WriteByte('X')
+	}
+	matched, err := matchFn([]byte("q"+middle.String()+"z"), []byte(sb.String()))
+	require.NoError(t, err)
+	require.True(t, matched)
+	matched, err = matchFn([]byte(strings.Repeat("b", 60000)), []byte(sb.String()))
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
+// Test_BuiltIn_LikeAllocationMeasurement records the representative
+// per-row allocations of the ci LIKE paths on constant patterns (the
+// independent r4 design review's P3 action): constant-pattern preparation
+// is cached per batch, and each row allocates O(subject length) storage —
+// the general_ci path's folded subject buffer and the unicode_ci path's
+// per-character subject weight slices. Informational: the figures back the
+// hot-path-cost contract in the design and carry no fixed byte bound.
+func Test_BuiltIn_LikeAllocationMeasurement(t *testing.T) {
+	subject := []byte("Die Strassenfestlichkeit")
+	asciiAllocs := testing.AllocsPerRun(200, func() {
+		if got := generalCILikeFold(subject); len(got) != len(subject) {
+			t.Fatalf("ASCII general_ci fold length drifted: %d", len(got))
+		}
+	})
+	t.Logf("general_ci LIKE subject fold: %.1f allocations/row for a %d-byte subject", asciiAllocs, len(subject))
+	unicodeSubject := []byte("Die Straßenfeste")
+	matchFn := unicodeLikeMatchFn(context.Background(), true, '\\', true)
+	if _, err := matchFn(unicodeSubject, []byte("%straßen%fest_")); err != nil {
+		t.Fatal(err)
+	}
+	unicodeAllocs := testing.AllocsPerRun(200, func() {
+		matched, err := matchFn(unicodeSubject, []byte("%straßen%fest_"))
+		if err != nil || !matched {
+			t.Fatalf("constant-pattern unicode_ci match must succeed: %v %v", matched, err)
+		}
+	})
+	t.Logf("unicode_ci LIKE constant-pattern match: %.1f allocations/row for a %d-byte subject", unicodeAllocs, len(unicodeSubject))
 }

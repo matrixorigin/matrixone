@@ -46,6 +46,7 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 					ctrl := gomock.NewController(t)
 					defer ctrl.Finish()
 					proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+					proc.Base.Lim.SpillSize = 64 << 20
 					op := mock_frontend.NewMockTxnOperator(ctrl)
 					op.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode}).AnyTimes()
 					proc.Base.TxnOperator = op

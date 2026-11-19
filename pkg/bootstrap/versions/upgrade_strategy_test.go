@@ -130,22 +130,38 @@ func TestUpgradeProbesFilterHiddenObjectsByPrefixNotLike(t *testing.T) {
 		}
 	}
 
-	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table"), nil), 0, "db", "tbl")
-	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment"), nil), 0, "db", "tbl")
-	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column"), nil), 0, "db", "tbl", "col")
+	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table"), nil), 42, "db", "tbl")
+	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment"), nil), 42, "db", "tbl")
+	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column"), nil), 42, "db", "tbl", "col")
+	_, _, _ = CheckViewDefinition(executor.NewMemTxnExecutor(record("view"), nil), 42, "db", "view")
+	_, _ = CheckIndexDefinition(executor.NewMemTxnExecutor(record("index"), nil), 42, "db", "tbl", "idx")
 	// The System_Account variants are separate statements and need the same filter.
 	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table-sys"), nil), catalog.System_Account, "db", "tbl")
 	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment-sys"), nil), catalog.System_Account, "db", "tbl")
 	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column-sys"), nil), catalog.System_Account, "db", "tbl", "col")
+	_, _, _ = CheckViewDefinition(executor.NewMemTxnExecutor(record("view-sys"), nil), catalog.System_Account, "db", "view")
+	_, _ = CheckIndexDefinition(executor.NewMemTxnExecutor(record("index-sys"), nil), catalog.System_Account, "db", "tbl", "idx")
 
-	require.Len(t, seen, 6, "every probe must have run and been captured")
+	require.Len(t, seen, 10, "every probe must have run and been captured")
 	for name, sql := range seen {
 		require.NotContains(t, sql, "LIKE", "%s still filters with a wildcard pattern", name)
 	}
 	for _, name := range []string{"table", "table-sys", "comment", "comment-sys"} {
 		require.Contains(t, seen[name], "NOT prefix_eq(tbl.relname, '__mo_index_')", name)
 	}
+	for _, name := range []string{"table", "comment"} {
+		require.NotContains(t, seen[name], "AND account_id = 0", name)
+	}
+	for _, name := range []string{"table-sys", "comment-sys"} {
+		require.Contains(t, seen[name], "AND account_id = 0", name)
+	}
 	for _, name := range []string{"column", "column-sys"} {
 		require.Contains(t, seen[name], "NOT prefix_eq(att_relname, '__mo_cpkey_')", name)
 	}
+	require.NotContains(t, seen["column"], "AND account_id = 0")
+	require.Contains(t, seen["column-sys"], "AND account_id = 0")
+	require.NotContains(t, seen["view"], "account_id = 0")
+	require.Contains(t, seen["view-sys"], "account_id = 0")
+	require.NotContains(t, seen["index"], "`tbl`.`account_id`")
+	require.Contains(t, seen["index-sys"], "`tbl`.`account_id` = 0")
 }

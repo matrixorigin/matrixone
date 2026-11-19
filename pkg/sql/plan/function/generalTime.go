@@ -35,18 +35,6 @@ func NewGeneralTime() *GeneralTime {
 	return &GeneralTime{}
 }
 
-func FromDate(year int, month int, day int, hour int, minute int, second int, microsecond int) GeneralTime {
-	return GeneralTime{
-		year:        uint16(year),
-		month:       uint8(month),
-		day:         uint8(day),
-		hour:        uint8(hour),
-		minute:      uint8(minute),
-		second:      uint8(second),
-		microsecond: uint32(microsecond),
-	}
-}
-
 // Reset GeneralTime to initialization state
 func (t *GeneralTime) ResetTime() {
 	*t = GeneralTime{}
@@ -646,15 +634,6 @@ func monthNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool)
 	}
 	t.setMonth(uint8(v))
 	return input[step:], true
-}
-
-// DateFSP gets fsp from date string.
-func DateFSP(date string) (fsp int) {
-	i := strings.LastIndex(date, ".")
-	if i != -1 {
-		fsp = len(date) - i - 1
-	}
-	return
 }
 
 // Skip all numbers

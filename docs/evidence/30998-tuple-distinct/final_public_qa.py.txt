@@ -1,0 +1,18 @@
+import runpy
+import harness
+from pathlib import Path
+root=Path(__file__).parent
+OriginalService=harness.Service
+with OriginalService('candidate','final-public-qa') as owned:
+ class BorrowedService:
+  def __init__(self,variant,label=None):assert variant=='candidate'
+  def __enter__(self):
+   owned.s.execute('SET SESSION agg_spill_mem=0');owned.s.execute('SET SESSION max_dop=8');return owned
+  def __exit__(self,*args):return False
+ harness.Service=BorrowedService
+ try:
+  # Remote exit is last: no queries after a peer exits (independent30993).
+  for script in ['public_qa.py','string_qa.py','axis_qa.py','cancel_qa.py','outer_join_qa.py','remote_qa.py']:
+   print('FINAL_SCRIPT_START',script,flush=True);runpy.run_path(str(root/script),run_name='__main__')
+ finally:harness.Service=OriginalService
+print('FINAL_PUBLIC_QA_PASS',flush=True)

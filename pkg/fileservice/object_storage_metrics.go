@@ -94,18 +94,7 @@ func (o *objectStorageMetrics) List(ctx context.Context, prefix string) iter.Seq
 func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	o.numRead.Inc()
 	o.numActiveRead.Inc()
-	r, err := o.upstream.Read(ctx, key, min, max)
-	if err != nil {
-		o.numActiveRead.Dec()
-		return nil, err
-	}
-	return &readCloser{
-		r: r,
-		closeFunc: func() error {
-			o.numActiveRead.Dec()
-			return r.Close()
-		},
-	}, nil
+	return o.wrapReadResult(o.upstream.Read(ctx, key, min, max))
 }
 
 func (o *objectStorageMetrics) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
@@ -130,15 +119,19 @@ func (o *objectStorageMetrics) ReadObjectWithIdentity(
 	}
 	o.numRead.Inc()
 	o.numActiveRead.Inc()
-	r, err := upstream.ReadObjectWithIdentity(ctx, key, min, max, expected)
+	return o.wrapReadResult(upstream.ReadObjectWithIdentity(ctx, key, min, max, expected))
+}
+
+// Unlike the semaphore permit, active-read accounting lasts until Close.
+func (o *objectStorageMetrics) wrapReadResult(r io.ReadCloser, err error) (io.ReadCloser, error) {
 	if err != nil {
 		o.numActiveRead.Dec()
 		return nil, err
 	}
-	return &readCloser{r: r, closeFunc: func() error {
+	return &onceReadCloser{readCloser: readCloser{r: r, closeFunc: func() error {
 		o.numActiveRead.Dec()
 		return r.Close()
-	}}, nil
+	}}}, nil
 }
 
 func (o *objectStorageMetrics) Stat(ctx context.Context, key string) (size int64, err error) {

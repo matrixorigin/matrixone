@@ -77,7 +77,7 @@ func BuildS3ObjectStorageArguments(ctx context.Context, scope ObjectScope, crede
 	if scope.Bucket != "" && location.bucket != "" && !strings.EqualFold(scope.Bucket, location.bucket) {
 		return fileservice.ObjectStorageArguments{}, "", moerr.NewInvalidInput(ctx, "iceberg S3 object scope bucket does not match storage location")
 	}
-	bucket := firstNonEmpty(scope.Bucket, location.bucket)
+	bucket := api.FirstNonEmptyTrimmed(scope.Bucket, location.bucket)
 	if bucket == "" {
 		return fileservice.ObjectStorageArguments{}, "", moerr.NewInvalidInput(ctx, "iceberg S3 FileService requires bucket")
 	}
@@ -113,12 +113,12 @@ func BuildS3ObjectStorageArguments(ctx context.Context, scope ObjectScope, crede
 	args := fileservice.ObjectStorageArguments{
 		Name:                 "iceberg-s3-" + api.PathHash(scope.StorageLocation),
 		Bucket:               bucket,
-		Endpoint:             firstNonEmpty(cfg["s3.endpoint"], scope.Endpoint),
-		Region:               firstNonEmpty(cfg["s3.region"], cfg["client.region"], scope.Region),
-		KeyID:                firstNonEmpty(cfg["s3.access-key-id"], cfg["s3.access_key_id"], cfg["aws.access-key-id"]),
-		KeySecret:            firstNonEmpty(cfg["s3.secret-access-key"], cfg["s3.secret_access_key"], cfg["aws.secret-access-key"]),
-		SessionToken:         firstNonEmpty(cfg["s3.session-token"], cfg["s3.session_token"], cfg["aws.session-token"]),
-		SecurityToken:        firstNonEmpty(cfg["s3.security-token"], cfg["s3.security_token"]),
+		Endpoint:             api.FirstNonEmptyTrimmed(cfg["s3.endpoint"], scope.Endpoint),
+		Region:               api.FirstNonEmptyTrimmed(cfg["s3.region"], cfg["client.region"], scope.Region),
+		KeyID:                api.FirstNonEmptyTrimmed(cfg["s3.access-key-id"], cfg["s3.access_key_id"], cfg["aws.access-key-id"]),
+		KeySecret:            api.FirstNonEmptyTrimmed(cfg["s3.secret-access-key"], cfg["s3.secret_access_key"], cfg["aws.secret-access-key"]),
+		SessionToken:         api.FirstNonEmptyTrimmed(cfg["s3.session-token"], cfg["s3.session_token"], cfg["aws.session-token"]),
+		SecurityToken:        api.FirstNonEmptyTrimmed(cfg["s3.security-token"], cfg["s3.security_token"]),
 		KeyPrefix:            keyPrefix,
 		NoDefaultCredentials: true,
 		NoBucketValidation:   true,
@@ -149,8 +149,8 @@ func S3ObjectScopeForLocation(base ObjectScope, credentials []api.StorageCredent
 			return scope
 		}
 		cfg := normalizedCredentialConfig(credential.Config)
-		scope.Endpoint = firstNonEmpty(objectScopeEndpointFromS3Endpoint(cfg["s3.endpoint"]), scope.Endpoint)
-		scope.Region = firstNonEmpty(cfg["s3.region"], cfg["client.region"], scope.Region)
+		scope.Endpoint = api.FirstNonEmptyTrimmed(objectScopeEndpointFromS3Endpoint(cfg["s3.endpoint"]), scope.Endpoint)
+		scope.Region = api.FirstNonEmptyTrimmed(cfg["s3.region"], cfg["client.region"], scope.Region)
 		scope.CredentialExpiresAt = credential.ExpiresAt
 		scope.CredentialID = api.PathHash(storageCredentialIdentity(credential))
 		return scope
@@ -165,8 +165,8 @@ func S3ObjectScopeForConfig(base ObjectScope, config map[string]string) ObjectSc
 		if parsed, err := parseS3Location(context.Background(), location); err == nil && parsed.bucket != "" {
 			scope.Bucket = parsed.bucket
 		}
-		scope.Endpoint = firstNonEmpty(objectScopeEndpointFromS3Endpoint(cfg["s3.endpoint"]), scope.Endpoint)
-		scope.Region = firstNonEmpty(cfg["s3.region"], cfg["client.region"], scope.Region)
+		scope.Endpoint = api.FirstNonEmptyTrimmed(objectScopeEndpointFromS3Endpoint(cfg["s3.endpoint"]), scope.Endpoint)
+		scope.Region = api.FirstNonEmptyTrimmed(cfg["s3.region"], cfg["client.region"], scope.Region)
 		scope.CredentialID = api.PathHash(remoteSigningConfigIdentity(cfg))
 		return scope
 	}
@@ -181,8 +181,8 @@ func BuildS3RemoteSigningRequestURI(ctx context.Context, location string, config
 		return "", "", moerr.NewInvalidInput(ctx, "iceberg S3 remote signing requires bucket and object key")
 	}
 	cfg := normalizedCredentialConfig(config)
-	endpoint := firstNonEmpty(cfg["s3.endpoint"])
-	region := firstNonEmpty(cfg["s3.region"], cfg["client.region"])
+	endpoint := api.FirstNonEmptyTrimmed(cfg["s3.endpoint"])
+	region := api.FirstNonEmptyTrimmed(cfg["s3.region"], cfg["client.region"])
 	if endpoint == "" || region == "" {
 		return "", "", moerr.NewInvalidInput(ctx, "iceberg S3 remote signing requires endpoint and region")
 	}
@@ -382,15 +382,6 @@ func writeCredentialIdentityPart(out *strings.Builder, value string) {
 	out.WriteString(strconv.Itoa(len(value)))
 	out.WriteByte(':')
 	out.WriteString(value)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 var _ ScopedFileServiceBuilder = NewS3VendedFileServiceBuilder().Build

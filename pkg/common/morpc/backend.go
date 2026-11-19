@@ -201,7 +201,6 @@ type remoteBackend struct {
 	cancel          context.CancelFunc
 	cancelOnce      sync.Once
 	pingTimer       *time.Timer
-	lastPingTime    time.Time
 	livenessEpoch   time.Time
 
 	options struct {
@@ -904,7 +903,6 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	messages = messages[:0]
 
 	doHeartbeat := func() {
-		rb.lastPingTime = time.Now()
 		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
 		// no need wait response, close immediately
 		f.Close()

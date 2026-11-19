@@ -27,6 +27,7 @@ Features:
 """
 
 import functools
+import inspect
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -137,7 +138,9 @@ class VersionManager:
 
         match = self.VERSION_PATTERN.match(version_string.strip())
         if not match:
-            raise ValueError(f"Invalid version format: '{version_string}'. Expected format: major.minor.patch (e.g., 3.0.1)")
+            raise ValueError(
+                f"Invalid version format: '{version_string}'. Expected format: major.minor.patch (e.g., 3.0.1)"
+            )
 
         major, minor, patch = map(int, match.groups())
 
@@ -148,7 +151,9 @@ class VersionManager:
 
         return VersionInfo(major, minor, patch)
 
-    def compare_versions(self, version1: Union[str, VersionInfo], version2: Union[str, VersionInfo]) -> VersionComparison:
+    def compare_versions(
+        self, version1: Union[str, VersionInfo], version2: Union[str, VersionInfo]
+    ) -> VersionComparison:
         """
         Compare two versions
 
@@ -206,6 +211,9 @@ class VersionManager:
 
             True if compatible, False otherwise
         """
+        if operator not in (">=", ">", "<=", "<", "==", "!="):
+            raise ValueError(f"Unsupported operator: {operator}")
+
         if current_version is None:
             current_version = self._current_backend_version
 
@@ -455,6 +463,16 @@ def get_version_manager() -> VersionManager:
     return _version_manager
 
 
+def new_version_manager():
+    """Copy declarations, never another client's observed server version."""
+    from copy import deepcopy
+
+    manager = VersionManager()
+    manager._feature_requirements = deepcopy(_version_manager._feature_requirements)
+    manager._version_hints = dict(_version_manager._version_hints)
+    return manager
+
+
 def requires_version(
     min_version: Optional[str] = None,
     max_version: Optional[str] = None,
@@ -481,15 +499,20 @@ def requires_version(
     """
 
     def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def check_version(args) -> bool:
+            owner = args[0] if args else None
+            manager = getattr(owner, '_version_manager', None)
+            if not isinstance(manager, VersionManager):
+                manager = getattr(getattr(owner, 'client', None), '_version_manager', None)
+            if not isinstance(manager, VersionManager):
+                manager = _version_manager
             # Get feature name
             feature = feature_name or func.__name__
 
             # Register feature requirement if not already registered
-            if feature not in _version_manager._feature_requirements:
-                min_ver = _version_manager.parse_version(min_version) if min_version else None
-                max_ver = _version_manager.parse_version(max_version) if max_version else None
+            if feature not in manager._feature_requirements:
+                min_ver = manager.parse_version(min_version) if min_version else None
+                max_ver = manager.parse_version(max_version) if max_version else None
 
                 requirement = FeatureRequirement(
                     feature_name=feature,
@@ -498,19 +521,33 @@ def requires_version(
                     description=description,
                     alternative=alternative,
                 )
-                _version_manager.register_feature_requirement(requirement)
+                manager.register_feature_requirement(requirement)
 
             # Check if feature is available
-            if not _version_manager.is_feature_available(feature):
+            if not manager.is_feature_available(feature):
                 if raise_error:
-                    hint = _version_manager.get_version_hint(feature, f"Method: {func.__name__}")
+                    hint = manager.get_version_hint(feature, f"Method: {func.__name__}")
                     raise VersionError(f"Feature '{feature}' is not available in current backend version.\n{hint}")
                 else:
                     # Log warning and return None or default value
                     print(f"Warning: Feature '{feature}' is not available in current backend version")
-                    return None
+                    return False
 
-            return func(*args, **kwargs)
+            return True
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                if not check_version(args):
+                    return None
+                return await func(*args, **kwargs)
+
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                if not check_version(args):
+                    return None
+                return func(*args, **kwargs)
 
         # Add metadata to the function
         wrapper._version_requirement = {

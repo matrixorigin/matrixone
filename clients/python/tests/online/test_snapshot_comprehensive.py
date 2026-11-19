@@ -527,59 +527,29 @@ class TestSnapshotComprehensive:
     # ==================== SNAPSHOT RESTORE OPERATIONS ====================
 
     def test_snapshot_restore_operations(self, test_client):
-        """Test snapshot restore operations - from test_snapshot_restore.py"""
-        # Create test data in the correct database
+        """A successful table restore must actually roll back the rows."""
+        import uuid
+
         test_db = online_config.get_test_database()
-        test_client.execute(
-            f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
-        )
-        test_client.execute(f"DELETE FROM {test_db}.snapshot_test")
-        test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (1, 'restore_test1', 100)")
-        test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (2, 'restore_test2', 200)")
-
-        # Create snapshot
-        snapshot_name = f"restoresnapshot{int(time.time())}"
+        suffix = uuid.uuid4().hex[:12]
+        table, snapshot_name = 'restore_table_' + suffix, 'restore_snapshot_' + suffix
+        test_client.execute(f"CREATE TABLE {test_db}.{table} (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
         try:
-            snapshot = test_client.snapshots.create(
-                name=snapshot_name,
-                level="table",
-                database=test_db,
-                table="snapshot_test",
-                description="Test snapshot for restore operations",
+            test_client.execute(
+                f"INSERT INTO {test_db}.{table} VALUES (1, 'restore_test1', 100), (2, 'restore_test2', 200)"
             )
-        except Exception as e:
-            pytest.skip(f"Snapshot creation not supported: {e}")
-
-        # Add more data after snapshot
-        test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (3, 'restore_test3', 300)")
-        test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (4, 'restore_test4', 400)")
-
-        result = test_client.execute(f"SELECT COUNT(*) FROM {test_db}.snapshot_test")
-        assert result.rows[0][0] == 4
-
-        # Restore from snapshot
-        try:
-            test_client.restore.restore_table(snapshot_name, "sys", test_db, "snapshot_test")
-
-            # Verify data after restore
-            result = test_client.execute(f"SELECT COUNT(*) FROM {test_db}.snapshot_test")
-            assert result.rows[0][0] == 2  # Should be back to original 2 records
-
-            # Verify specific data
-            result = test_client.execute(f"SELECT * FROM {test_db}.snapshot_test ORDER BY id")
-            assert len(result.rows) == 2
-            assert result.rows[0][0] == 1  # ID: 1
-            assert result.rows[1][0] == 2  # ID: 2
-        except Exception as e:
-            pytest.skip(f"Snapshot restore not supported: {e}")
-
-        # Cleanup
-        try:
-            test_client.snapshots.delete(snapshot_name)
-        except Exception:
-            pass  # Ignore cleanup errors
-
-        test_client.execute(f"DROP TABLE IF EXISTS {test_db}.snapshot_test")
+            test_client.snapshots.create(name=snapshot_name, level='table', database=test_db, table=table)
+            test_client.execute(
+                f"INSERT INTO {test_db}.{table} VALUES (3, 'restore_test3', 300), (4, 'restore_test4', 400)"
+            )
+            assert test_client.execute(f"SELECT COUNT(*) FROM {test_db}.{table}").rows[0][0] == 4
+            assert test_client.restore.restore_table(snapshot_name, 'sys', test_db, table)
+            assert test_client.execute(f"SELECT id FROM {test_db}.{table} ORDER BY id").rows == [(1,), (2,)]
+        finally:
+            try:
+                test_client.execute(f'DROP SNAPSHOT IF EXISTS {snapshot_name}')
+            finally:
+                test_client.execute(f'DROP TABLE IF EXISTS {test_db}.{table}')
 
     # ==================== ERROR HANDLING ====================
 

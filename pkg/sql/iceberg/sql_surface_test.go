@@ -16,11 +16,83 @@ package iceberg
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestIsBuiltinProcedure(t *testing.T) {
+	if IsBuiltinProcedure(nil) || IsBuiltinProcedure(&tree.CallStmt{}) {
+		t.Fatal("nil call or name must not be recognized")
+	}
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"call iceberg_run('a')", true},
+		{"call ICEBERG_run('a')", true},
+		{"call other_run('a')", false},
+		{"call app.iceberg_run('a')", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stmt.Free()
+			call, ok := stmt.(*tree.CallStmt)
+			if !ok {
+				t.Fatalf("expected CALL, got %T", stmt)
+			}
+			if got := IsBuiltinProcedure(call); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuiltinProcedureArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, target, options, wantErr string
+	}{
+		{"target", "call iceberg_run('  cat.db.tbl  ')", "cat.db.tbl", "", ""},
+		{"options", "call iceberg_run('cat.db.tbl', ' ref=main ')", "cat.db.tbl", "ref=main", ""},
+		{"missing", "call iceberg_run()", "", "", "requires target and optional options string arguments"},
+		{"extra", "call iceberg_run('a', 'b', 'c')", "", "", "requires target and optional options string arguments"},
+		{"numeric target", "call iceberg_run(42)", "", "", "requires target as a string literal"},
+		{"empty target", "call iceberg_run('  ')", "", "", "requires target as a string literal"},
+		{"numeric options", "call iceberg_run('a', 42)", "", "", "requires options as a string literal"},
+		{"empty options", "call iceberg_run('a', '')", "", "", "requires options as a string literal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stmt.Free()
+			call, ok := stmt.(*tree.CallStmt)
+			if !ok {
+				t.Fatalf("expected CALL, got %T", stmt)
+			}
+			name, target, options, err := BuiltinProcedureArgs(context.Background(), call)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name != "iceberg_run" || target != tc.target || options != tc.options {
+				t.Fatalf("unexpected arguments: %q %q %q", name, target, options)
+			}
+		})
+	}
+}
 
 func TestParseTableMappingSpec(t *testing.T) {
 	spec, err := ParseTableMappingSpec(context.Background(), tree.NewIcebergTableParam(tree.IcebergOptions{

@@ -31,7 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,33 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
-
-func GetBindings(expr *plan.Expr) []int32 {
-	bindingSet := doGetBindings(expr)
-	bindings := make([]int32, 0, len(bindingSet))
-	for id := range bindingSet {
-		bindings = append(bindings, id)
-	}
-	return bindings
-}
-
-func doGetBindings(expr *plan.Expr) map[int32]bool {
-	res := make(map[int32]bool)
-
-	switch expr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = true
-
-	case *plan.Expr_F:
-		for _, child := range expr.F.Args {
-			for id := range doGetBindings(child) {
-				res[id] = true
-			}
-		}
-	}
-
-	return res
-}
 
 func hasCorrCol(expr *plan.Expr) bool {
 	if expr == nil {
@@ -469,6 +442,20 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil && needCast {
+			// A GROUP BY can flatten a bare HAVING ENUM/SET condition into its
+			// display reference. Restore the stored ordinal/bitmap before the
+			// BOOL cast so truth follows MySQL numeric semantics. Ungrouped
+			// display wrappers and unrelated operands stay untouched for the
+			// cast-time display rewrite below.
+			if b, ok := ctx.binder.(interface {
+				mysqlSpecialBooleanPredicateOperand(context.Context, *plan.Expr) (*plan.Expr, error)
+			}); ok {
+				recovered, recoveredErr := b.mysqlSpecialBooleanPredicateOperand(ctx.binder.GetContext(), expr)
+				if recoveredErr != nil {
+					return nil, recoveredErr
+				}
+				expr = recovered
+			}
 			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
@@ -1117,6 +1104,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				nestedFn := nested.GetF()
+				if nestedFn != nil && nestedFn.Func != nil &&
+					strings.EqualFold(nestedFn.Func.GetObjName(), "bit_count") &&
+					len(nestedFn.Args) == 1 && isPreparedNumericFallbackExpr(nestedFn.Args[0]) {
+					// BIT_COUNT's dedicated collector owns this fallback marker.
+					// Other consumers of the marker are still visited separately.
+					return nil
+				}
 				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
 						query, int32(nodeID), source, positions,
@@ -1663,10 +1658,16 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
+		if leaf, ok := leafByTag[exprImpl.Col.RelPos]; ok {
+			hyperEdge[leaf] = true
+		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
@@ -1802,68 +1803,6 @@ func GetColumnsByExpr(
 	return
 }
 
-func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
-	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc, false, true)
-		if err != nil {
-			return false, err
-		}
-
-		if cExpr, ok := e.Expr.(*plan.Expr_Lit); ok {
-			if bVal, bOk := cExpr.Lit.Value.(*plan.Literal_Bval); bOk {
-				return bVal.Bval, nil
-			}
-		}
-		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
-	} else {
-		executor, err := colexec.NewExpressionExecutor(proc, expr)
-		if err != nil {
-			return false, err
-		}
-		defer executor.Free()
-
-		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return false, err
-		}
-		if vec.GetType().Oid != types.T_bool {
-			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
-		}
-		cols := vector.MustFixedColWithTypeCheck[bool](vec)
-		for _, isNeed := range cols {
-			if isNeed {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-}
-
-func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
-	for i := 0; i < len(datas[depth]); i++ {
-		tmpResult[depth] = datas[depth][i]
-		if depth != len(datas)-1 {
-			exchangeVectors(datas, depth+1, tmpResult, result, mp)
-		} else {
-			for j, val := range tmpResult {
-				vector.AppendAny((*result)[j], val, false, mp)
-			}
-		}
-	}
-}
-
-func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
-	vectors := make([]*vector.Vector, len(dataTypes))
-	for i, typ := range dataTypes {
-		vectors[i] = vector.NewVec(types.T(typ).ToType())
-	}
-
-	tmpResult := make([]any, len(datas))
-	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
-
-	return vectors
-}
-
 func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -1977,7 +1916,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	return constantFoldWithPreparedExactSource(
-		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false)
+		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false)
 }
 
 func constantFoldWithPreparedExactSource(
@@ -1988,7 +1927,11 @@ func constantFoldWithPreparedExactSource(
 	foldInExpr bool,
 	preservePreparedExactSource bool,
 	spatialChecked bool,
+	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr, nil
+	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
 		// constant-fold representation. Keep it unchanged so callers can fold an
@@ -2003,7 +1946,7 @@ func constantFoldWithPreparedExactSource(
 		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := constantFoldWithPreparedExactSource(
-				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 			if err != nil {
 				return nil, err
 			}
@@ -2043,7 +1986,9 @@ func constantFoldWithPreparedExactSource(
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
@@ -2078,16 +2023,23 @@ func constantFoldWithPreparedExactSource(
 	if err != nil {
 		return nil, err
 	}
-	// Keep spatial provenance visible to persisted-expression admission. Once
-	// the whole subtree is known to be spatial-free, its children need no scan:
-	// folding constants cannot introduce a spatial function. Rechecking every
-	// descendant would make folding a deep expression quadratic.
-	if !spatialChecked {
-		if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+	// One feature walk preserves spatial and JSON admission identities. A
+	// negative result covers every descendant: folding cannot introduce either
+	// contract, and JSON ELT's selected subtree remains owned by its executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
+		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts && !historicalFloatDefaultFolding(proc.Ctx))) {
 			return expr, nil
 		}
-		spatialChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
+	// Preserve lazy ELT evaluation instead of folding unselected arguments.
+	if functionID == function.ELT && int32(overloadID) == 1 {
+		return expr, nil
+	}
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
 	if f.IsVolatile() {
 		return expr, nil
 	}
@@ -2106,7 +2058,7 @@ func constantFoldWithPreparedExactSource(
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
-			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 		if errFold != nil {
 			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for
@@ -2132,9 +2084,18 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
+	if rule.ContainsTruncatedFloatTextConversion(expr) {
+		return expr, nil
+	}
+
 	// Preserve diagnostic-bearing division subtrees through their parents;
 	// a later execution may use a different sql_mode or statement policy.
 	if rule.ContainsSqlModeDependentDivision(expr) {
+		return expr, nil
+	}
+	// Catalog proof can pre-fold independent children once while retaining
+	// session-dependent islands for a later, private witness evaluation.
+	if preserved, _ := proc.Ctx.Value(legacyFloatSessionFoldKey{}).(map[*plan.Expr]bool); preserved[expr] {
 		return expr, nil
 	}
 
@@ -2552,6 +2513,35 @@ func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) b
 		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
 }
 
+// integerConstantFitsDeclaredDecimalDomain reports whether an integer
+// constant magnitude stays inside the declared domain of a DECIMAL column.
+// Converting an integer to DECIMAL(w,s) multiplies it by 10^s, and the
+// strict integer->decimal conversion rejects scaled magnitudes that reach
+// 10^w. The col-vs-const comparison rewrite replaces the constant with
+// cast(const AS DECIMAL(w,s)); that replacement is only valid while the
+// cast cannot raise the range error. A non-positive column width marks a
+// synthesized decimal type whose conversion skips the declared-range check,
+// so the rewrite remains valid there.
+func integerConstantFitsDeclaredDecimalDomain(columnT types.Type, magnitude uint64) bool {
+	if columnT.Width <= 0 {
+		return true
+	}
+	intDigits := columnT.Width - columnT.Scale
+	if intDigits < 0 {
+		intDigits = 0
+	}
+	if intDigits > 18 {
+		// Declared integer digits beyond the int64 range impose no extra
+		// constraint on a 64-bit constant.
+		return true
+	}
+	bound := uint64(1)
+	for i := int32(0); i < intDigits; i++ {
+		bound *= 10
+	}
+	return magnitude < bound
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
 		return exactDecimalIntegerFits(constExpr, columnT.Oid)
@@ -2567,7 +2557,7 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 	// casts. When their domain already equals the IN left side, they are safe to
 	// keep in the typed list just like a direct literal. Do not extend this to
 	// row-dependent expressions merely because their declared types match.
-	if constT.Eq(columnT) && (rule.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
+	if constT.Eq(columnT) && (function.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
 		return true
 	}
 
@@ -2620,11 +2610,10 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := lit.Value.(*plan.Literal_I64Val)
+		constVal, valOk := literalSignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val.I64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal >= 0 && uint64(constVal) <= uint64(1<<columnT.Width-1)
@@ -2655,17 +2644,21 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxInt32 as conservative limit for practical purposes
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
-			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+			magnitude := uint64(constVal)
+			if constVal < 0 {
+				magnitude = -magnitude
+			}
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32) &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, magnitude)
 		default:
 			return false
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
+		constVal, valOk := literalUnsignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val_u.U64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal <= uint64(1<<columnT.Width-1)
@@ -2693,7 +2686,8 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxUint32 as conservative limit
 			return constVal <= math.MaxUint32
 		case types.T_decimal64:
-			return constVal <= math.MaxInt32
+			return constVal <= math.MaxInt32 &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, constVal)
 		default:
 			return false
 		}
@@ -2752,7 +2746,7 @@ func isCastOfConstant(expr *plan.Expr) bool {
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
 		return false
 	}
-	return rule.IsConstant(fn.Args[0], false) || isCastOfConstant(fn.Args[0])
+	return function.IsConstant(fn.Args[0], false) || isCastOfConstant(fn.Args[0])
 }
 
 // parseHiveOptionKV handles hive_partitioning / hive_partition_columns keys in
@@ -2838,6 +2832,8 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2860,7 +2856,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
-	return nil
+	return initJSONBinaryOption(param)
 }
 
 func InitS3Param(param *tree.ExternParam) error {
@@ -2913,6 +2909,8 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2932,6 +2930,45 @@ func InitS3Param(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
+	return initJSONBinaryOption(param)
+}
+
+// JSONBinaryOptionKey explicitly identifies pre-wrapper MatrixOne JSONLINE
+// archives. Bare strings are otherwise ambiguous and must remain plain text.
+const JSONBinaryOptionKey = "json_binary"
+
+const JSONBinaryLegacyBase64 = "legacy_base64"
+
+func initJSONBinaryOption(param *tree.ExternParam) error {
+	mode, format := param.JsonBinary, param.Format
+	seen := false
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format = strings.ToLower(param.Option[i+1])
+		case "jsondata":
+			format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			if seen {
+				return moerr.NewBadConfig(param.Ctx, "duplicate json_binary option")
+			}
+			seen = true
+			mode = strings.ToLower(strings.TrimSpace(param.Option[i+1]))
+		}
+	}
+	if !seen && mode == "" {
+		return nil
+	}
+	if mode != JSONBinaryLegacyBase64 {
+		return moerr.NewBadConfigf(param.Ctx, "unsupported json_binary '%s'; use 'legacy_base64' for old MatrixOne JSONLINE archives", mode)
+	}
+	if format != tree.JSONLINE {
+		return moerr.NewBadConfig(param.Ctx, "json_binary requires format='jsonline'")
+	}
+	if _, writable := GetWriteFilePattern(param); writable {
+		return moerr.NewBadConfig(param.Ctx, "json_binary is only supported on read-only JSONLINE inputs")
+	}
+	param.JsonBinary = mode
 	return nil
 }
 
@@ -3091,6 +3128,8 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -3112,8 +3151,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		return err
 	}
 
-	return nil
-
+	return initJSONBinaryOption(param)
 }
 
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
@@ -3330,115 +3368,6 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) ([]map[string]int, map[s
 	return uniqueCols, uniqueColNames
 }
 
-// GenUniqueColJoinExpr
-// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
-// uniqueCols is: []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-// we will get expr like: 'leftTag.a = rightTag.a or (leftTag.b = rightTag.b and leftTag.c = rightTag. c)
-func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, leftTag int32, rightTag int32) (*Expr, error) {
-	var checkExpr *Expr
-	var err error
-
-	for i, uniqueColMap := range uniqueCols {
-		var condExpr *Expr
-		condIdx := int(0)
-		for _, colIdx := range uniqueColMap {
-			col := tableDef.Cols[colIdx]
-			leftExpr := &Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: leftTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			rightExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: rightTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
-			if err != nil {
-				return nil, err
-			}
-			if condIdx == 0 {
-				condExpr = eqExpr
-			} else {
-				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
-			condIdx++
-		}
-
-		if i == 0 {
-			checkExpr = condExpr
-		} else {
-			checkExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return checkExpr, nil
-}
-
-// GenUniqueColCheckExpr   like GenUniqueColJoinExpr. but use for on duplicate key clause to check conflict
-// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
-// we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
-// we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
-	checkExpr := make([]*Expr, len(uniqueCols))
-
-	for i, uniqueColMap := range uniqueCols {
-		var condExpr *Expr
-		condIdx := int(0)
-		for _, colIdx := range uniqueColMap {
-			col := tableDef.Cols[colIdx]
-			// insert values
-			leftExpr := &Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			rightExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(colIdx + colCount),
-					},
-				},
-			}
-			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
-			if err != nil {
-				return nil, err
-			}
-			if condIdx == 0 {
-				condExpr = eqExpr
-			} else {
-				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
-			condIdx++
-		}
-		checkExpr[i] = condExpr
-	}
-
-	return checkExpr, nil
-}
 func onlyContainsTag(filter *Expr, tag int32) bool {
 	switch ex := filter.Expr.(type) {
 	case *plan.Expr_Col:
@@ -3467,44 +3396,6 @@ func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
 
 	return vertexCnt
 }
-
-func ResetAuxIdForExpr(expr *plan.Expr) {
-	expr.AuxId = 0
-
-	if f, ok := expr.Expr.(*plan.Expr_F); ok {
-		for _, child := range f.F.Args {
-			ResetAuxIdForExpr(child)
-		}
-	}
-}
-
-// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
-// 	switch t := expr.Expr.(type) {
-// 	case *plan.Expr_F:
-// 		for _, arg := range t.F.Args {
-// 			SubstitueParam(arg, proc)
-// 		}
-// 	case *plan.Expr_P:
-// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	case *plan.Expr_V:
-// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	}
-// 	return expr
-// }
 
 func ExprType2Type(typ *plan.Type) types.Type {
 	return types.MustTypeFromPlan(*typ)
@@ -3770,7 +3661,7 @@ func resetPreparePlan(
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -4130,34 +4021,6 @@ func MakeFalseExpr() *Expr {
 	}
 }
 
-func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef, notOnPk bool) *plan.RuntimeFilterSpec {
-	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
-	if !ok {
-		panic("fail to convert runtime filter to composite primary key!")
-	}
-	col := expr.GetCol()
-	col.ColPos = cpkeyIdx
-	expr.Typ = tableDef.Cols[cpkeyIdx].Typ
-	return &plan.RuntimeFilterSpec{
-		Tag:         tag,
-		UpperLimit:  upperlimit,
-		Expr:        expr,
-		MatchPrefix: true,
-		NotOnPk:     notOnPk,
-	}
-}
-
-func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
-	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
-	return &plan.RuntimeFilterSpec{
-		Tag:         tag,
-		UpperLimit:  upperlimit,
-		Expr:        serialExpr,
-		MatchPrefix: matchPrefix,
-		NotOnPk:     notOnPk,
-	}
-}
-
 func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
@@ -4406,14 +4269,20 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
-func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
-	writeExprs := make(map[*plan.Expr]struct{})
+// Nonzero types identify destination row images; zero types mark intermediate
+// projections whose generated temporal consumer casts may be re-inferred.
+func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]plan.Type {
+	writeExprs := make(map[*plan.Expr]plan.Type)
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
 		return writeExprs
 	}
-	add := func(expr *plan.Expr) {
+	add := func(expr *plan.Expr, target bool) {
 		if preparedExprContainsParam(expr) {
-			writeExprs[expr] = struct{}{}
+			if target {
+				writeExprs[expr] = expr.Typ
+			} else if _, exists := writeExprs[expr]; !exists {
+				writeExprs[expr] = plan.Type{}
+			}
 		}
 	}
 
@@ -4423,31 +4292,34 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	// outside the preservation set so their marker comparisons can be rebound.
 	// The final row-image projection and any unary projections below it are the
 	// positional roots consumed by the writer.
-	visited := make(map[int32]struct{})
-	var visitWritePath func(int32)
-	visitWritePath = func(nodeID int32) {
+	visited := make(map[int32]bool)
+	var visitWritePath func(int32, bool)
+	visitWritePath = func(nodeID int32, target bool) {
 		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 			return
 		}
-		if _, ok := visited[nodeID]; ok {
+		if wasTarget, ok := visited[nodeID]; ok && (wasTarget || !target) {
 			return
 		}
-		visited[nodeID] = struct{}{}
+		// A shared source can later be another writer's final row image.
+		// Revisit once to promote its destination contract, never downgrade it.
+		visited[nodeID] = target
 		node := query.Nodes[nodeID]
 		if node == nil {
 			return
 		}
 		if node.NodeType == plan.Node_PROJECT {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(expr, target)
 			}
+			target = false
 		}
 		if len(node.Children) > 0 {
 			// A DML input can fan out through joins/applies. The final
 			// positional projection is above that fan-out; once below it,
 			// follow only the primary (left) path and leave secondary
 			// subquery/derived-table projections to normal specialization.
-			visitWritePath(node.Children[0])
+			visitWritePath(node.Children[0], target)
 		}
 	}
 	for _, node := range query.Nodes {
@@ -4464,7 +4336,7 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 				input := query.Nodes[childID]
 				if input != nil {
 					for _, expr := range input.ProjectList {
-						add(expr)
+						add(expr, true)
 					}
 				}
 			}
@@ -4474,25 +4346,25 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		// filter expressions and must remain eligible for specialization.
 		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(expr, true)
 			}
 			for _, childID := range node.Children {
-				visitWritePath(childID)
+				visitWritePath(childID, true)
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
-			add(expr)
+			add(expr, true)
 		}
 		if node.DedupJoinCtx != nil {
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
-				add(expr)
+				add(expr, true)
 			}
 		}
 		if node.RowsetData != nil {
 			for _, col := range node.RowsetData.Cols {
 				for _, row := range col.Data {
 					if row != nil {
-						add(row.Expr)
+						add(row.Expr, true)
 					}
 				}
 			}
@@ -4955,6 +4827,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 			if err != nil {
 				return nil, false, err
 			}
+			refreshIntegerPrecisionParameters(pp.Ddl.Query, effectiveParamVals, selected)
 			return copied, specialized || numericPrefixSpecialization, nil
 		}
 
@@ -4964,6 +4837,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if err != nil {
 			return nil, false, err
 		}
+		refreshIntegerPrecisionParameters(copied.GetQuery(), effectiveParamVals, selected)
 		return copied, specialized || runtimeDecimalPrefix, nil
 	}
 	return copied, false, nil
@@ -5154,12 +5028,133 @@ func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
 			}
 			seen[expr] = struct{}{}
 			fn := expr.GetF()
-			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			if strings.EqualFold(fn.Func.ObjName, NameQuantileExactWeighted) {
+				// quantileExactWeighted keeps [value, weight, level]; only
+				// the level is value-bound configuration.
+				if len(fn.Args) == 3 {
+					found = preparedExprContainsParam(fn.Args[2])
+				}
+				return nil
+			}
+			if len(fn.Args) != 2 {
 				return nil
 			}
 			switch strings.ToLower(fn.Func.ObjName) {
 			case NameApproxPercentile, NamePercentileCont, NamePercentileDisc:
 				found = preparedExprContainsParam(fn.Args[1])
+			}
+			return nil
+		})
+	})
+	return found
+}
+
+// preparedEwmConfigIsExecutionDependent reports whether one ewm decay or
+// policy argument depends on the EXECUTING statement rather than on the
+// prepare-time plan alone: a prepared marker, a user variable, or a
+// real-time function subtree (CURRENT_TIMESTAMP and kin) that the window
+// binder admits as a per-execution constant. constructEwmConfig evaluates
+// such a position with the executing process (its statement clock) while
+// the aggregate configuration bytes stay immutable, so every prepared
+// cache must treat the statement as execution-dependent: excluding it
+// makes each EXECUTE rebuild the configuration from a fresh evaluation.
+func preparedEwmConfigIsExecutionDependent(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false
+		}
+		if exprImpl.F.Func != nil {
+			if overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.GetObj()); ok && overload.IsRealTimeRelated() {
+				return true
+			}
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedEwmConfigIsExecutionDependent(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return false
+		}
+		if preparedEwmConfigIsExecutionDependent(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, part := range exprImpl.W.PartitionBy {
+			if preparedEwmConfigIsExecutionDependent(part) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil && preparedEwmConfigIsExecutionDependent(order.Expr) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false
+		}
+		for _, item := range exprImpl.List.List {
+			if preparedEwmConfigIsExecutionDependent(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PreparedPlanHasEwmParams reports whether an ewm window statistic's decay
+// or policy positions are execution-dependent: a prepared marker, a user
+// variable, or a real-time function subtree the binder admits as a
+// per-execution constant. Those values are compiled into
+// the immutable window-arg configuration at construction time (constructEwmConfig),
+// so a plan with such a position must rebuild the physical configuration for every
+// EXECUTE value: both the prepare-compile cache and the diagnostic-free
+// runtime-specialization cache must exclude such statements.
+func PreparedPlanHasEwmParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	found := false
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(root *plan.Expr) error {
+		if found {
+			return nil
+		}
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if found || expr == nil {
+				return nil
+			}
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			switch strings.ToLower(fn.Func.ObjName) {
+			case NameEwmMean, NameEwmVar, NameEwmStd, NameEwmCov, NameEwmCorr:
+				valueArgs := 1
+				if strings.ToLower(fn.Func.ObjName) == NameEwmCov ||
+					strings.ToLower(fn.Func.ObjName) == NameEwmCorr {
+					valueArgs = 2
+				}
+				for i := valueArgs; i < len(fn.Args); i++ {
+					if preparedEwmConfigIsExecutionDependent(fn.Args[i]) {
+						found = true
+						return nil
+					}
+				}
 			}
 			return nil
 		})
@@ -6532,9 +6527,19 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		return &Expr{Typ: paramType, Expr: &plan.Expr_Lit{Lit: lit}}
 	}
 	castText := func() (*Expr, error) {
+		textExpr := makePlan2StringConstExprWithType(rawText, isBin)
+		if isBin && textExpr.GetLit() != nil {
+			// A prepared runtime parameter is a string value that arrived over
+			// the binary protocol, not a parsed bit/hex literal. Rebadge the
+			// isBin container's default HEX form to the binary-introducer form
+			// so the pending cast keeps ordinary string truthiness (the same
+			// contract _binary'..' text has) instead of being folded by the
+			// bit/hex literal BOOL rule.
+			textExpr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		}
 		return makePlan2CastExpr(
 			ctx,
-			makePlan2StringConstExprWithType(rawText, isBin),
+			textExpr,
 			paramType,
 		)
 	}
@@ -8575,19 +8580,7 @@ func (set UnorderedSet[T]) Find(val T) bool {
 
 // RemoveIf removes the elements that pred is true.
 func RemoveIf[T any](data []T, pred func(t T) bool) []T {
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
+	return commonutil.RemoveIf(data, pred)
 }
 
 func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
@@ -8675,9 +8668,13 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
 					continue
 				}
-				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				original := fn.Args[i]
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, original, proc, false, true)
 				if foldErr != nil {
 					return false, foldErr
+				}
+				if original.GetCandidateFilter() {
+					folded.CandidateFilter = true
 				}
 				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
@@ -8698,9 +8695,10 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 							Id: int32(newID),
 						},
 					},
-					AuxId:       fn.Args[i].AuxId,
-					Ndv:         fn.Args[i].Ndv,
-					Selectivity: fn.Args[i].Selectivity,
+					AuxId:           fn.Args[i].AuxId,
+					CandidateFilter: fn.Args[i].CandidateFilter,
+					Ndv:             fn.Args[i].Ndv,
+					Selectivity:     fn.Args[i].Selectivity,
 				}
 
 			}
@@ -8728,7 +8726,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			// Nullable folded lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return err
+				}
 			}
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -8739,6 +8739,12 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
+			}
+			// Timestamp functions can choose their result precision at execution
+			// time (for example NOW(?) uses the bound FSP). Storage comparisons
+			// must use the same precision as the row executor for this value.
+			if types.T(expr.Typ.Id) == types.T_timestamp && vec.GetType().Oid == types.T_timestamp {
+				expr.Typ.Scale = vec.GetType().Scale
 			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
@@ -8835,6 +8841,15 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		ret = types.EncodeFloat64(&val)
 
+	case types.T_bf16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.BF16](vec)[row])
+	case types.T_float16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float16](vec)[row])
+	case types.T_float8:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float8](vec)[row])
+	case types.T_float4:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float4](vec)[row])
+
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		ret = []byte(vec.GetStringAt(int(row)))
@@ -8888,31 +8903,6 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 
 	return
 }
-
-//func getOffsetFromUTC() string {
-//	now := time.Now()
-//	_, localOffset := now.Zone()
-//	return offsetToString(localOffset)
-//}
-//
-//func offsetToString(offset int) string {
-//	hours := offset / 3600
-//	minutes := (offset % 3600) / 60
-//	if hours < 0 {
-//		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
-//	}
-//	return fmt.Sprintf("+%02d:%02d", hours, minutes)
-//}
-
-// do not lock table if lock no rows now.
-// if need to lock table, uncomment these codes
-// func getLockTableAtTheEnd(tableDef *TableDef) bool {
-// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-// 	tableDef.Partition != nil { // unsupport partition table
-// 	return false
-// }
-// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
-// }
 
 // DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
 func DbNameOfObjRef(objRef *ObjectRef) string {

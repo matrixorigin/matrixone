@@ -137,6 +137,7 @@ func (c *viewSchemaCompiler) SetContext(ctx context.Context) {
 // resolution. The bool-only legacy probe can both lose storage errors and
 // switch back to the subscriber before binding a qualified nested View.
 func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	c.state.request.benchmark.resolveDatabase()
 	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return false, nil
@@ -144,14 +145,22 @@ func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) 
 	return err == nil, err
 }
 
-func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
+func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
 	if c.state.planning && c.state.depth == 0 {
 		return c.resolveRoot(database, name, snapshot)
 	}
-	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+	c.state.request.benchmark.resolve()
+	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,11 +170,12 @@ func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) 
 // resolveRoot distinguishes the subscriber entry-point name from names inside
 // persisted publisher SQL. Both paths retain the same admission and capture.
 func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	c.state.request.benchmark.resolve()
 	root, ok := c.CompilerContext.(interface {
 		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
 	})
 	if !ok {
-		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -184,6 +194,7 @@ func (c *viewSchemaCompiler) ResolveById(id uint64, snapshot *Snapshot) (*Object
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.ResolveById(id, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -377,6 +388,7 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	}
 	s.lower = parsed.ctx.lowerCaseTableNames
 	s.memoEligible = transparentViewProjection(parsed.selectStmt) && obj.PubInfo == nil && s.compiler.GetQueryingSubscription() == nil
+	s.request.benchmark.bind()
 	inferred, err := inferViewColumns(parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {
 		return nil, &viewSchemaDefinitionError{err}
@@ -476,11 +488,13 @@ func (c *viewSchemaCompiler) ResolveViewUdf(name string, args []*Expr, database 
 	}
 	return c.CompilerContext.ResolveUdf(name, args)
 }
-func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
-	obj, def, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
+	c.state.request.benchmark.resolve()
+	obj, def, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -493,6 +507,7 @@ func (c *viewSchemaCompiler) ResolveSubscriptionTableById(id uint64, sub *Subscr
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.ResolveSubscriptionTableById(id, sub)
 	if err != nil {
 		return nil, nil, err

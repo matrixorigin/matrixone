@@ -87,17 +87,19 @@ create table timeout_rollback(a int primary key, b varchar(64));
 insert into timeout_rollback values (1, 'original-1'), (2, 'original-2');
 set session innodb_lock_wait_timeout = 1;
 begin;
-update timeout_rollback set b = 'must-be-rolled-back' where a = 1;
+update timeout_rollback set b = 'must-be-kept' where a = 1;
 begin;
 update timeout_rollback set b = 'holder' where a = 2;
 update timeout_rollback set b = 'waiter' where a = 2;
 Lock wait timeout exceeded; try restarting transaction
-begin;
+select b as txn_still_open from timeout_rollback where a = 1;
+txn_still_open
+must-be-kept
 commit;
 rollback;
 select * from timeout_rollback order by a;
 a    b
-1    original-1
+1    must-be-kept
 2    original-2
 set @@sql_mode = default;
 drop database lock_wait_timeout_remote_db;

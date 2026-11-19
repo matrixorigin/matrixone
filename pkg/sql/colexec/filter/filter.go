@@ -48,15 +48,16 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		if filter.OwnsConstantCastWarnings {
 			filter.ctr.executors, err = colexec.NewOwnedConstantFilterExecutors(proc, filter.FilterExprs)
 		} else {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.FilterExprs)
+			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, filter.FilterExprs, filter.ctr.outputAllocation)
 		}
 		if err != nil {
 			return
 		}
+		filter.ctr.subjectReuseAdmissionDone = false
 	}
 
 	if len(filter.RuntimeFilterExprs) > 0 {
-		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.RuntimeFilterExprs)
+		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, filter.RuntimeFilterExprs, filter.ctr.outputAllocation)
 		if err != nil {
 			return
 		}
@@ -75,6 +76,11 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
+	filter.ctr.dictionaryBoundary.BeginCall()
+	if filter.ctr.viewOutput != nil {
+		filter.ctr.viewOutput.Clean(proc.Mp())
+		filter.ctr.viewOutput = nil
+	}
 	analyzer := filter.OpAnalyzer
 
 	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, analyzer)
@@ -86,6 +92,19 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
+	if filter.ctr.dictionaryBoundary.AllowsDictionaryOutput() &&
+		(!filter.ctr.dictionaryBoundary.PrefersOwnedOutput() || inputResult.Batch.HasDictionary()) && len(inputResult.Batch.ExtraBuf) == 0 {
+		output, err := filter.selectedCall(proc, inputResult.Batch)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		if filter.IsEnd {
+			output = nil
+		}
+		result := vm.NewCallResult()
+		result.Batch = output
+		return result, nil
+	}
 	filterBat := inputResult.Batch
 	var sels []int64
 	defer func() {
@@ -93,9 +112,17 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			vector.PutSels(sels)
 		}
 	}()
+	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
+	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
+		}
+		if firstInvocation && !filter.OwnsConstantCastWarnings && i >= len(filter.ctr.runtimeExecutors) {
+			staticIndex := i - len(filter.ctr.runtimeExecutors)
+			executor := colexec.ReuseFilterExpressionExecutor(filter.FilterExprs[staticIndex], filter.ctr.executors[staticIndex], filterBat.RowCount())
+			filter.ctr.executors[staticIndex] = executor
+			filter.ctr.allExecutors[i] = executor
 		}
 
 		var vec *vector.Vector
@@ -184,15 +211,24 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 		return batch.EmptyBatch, nil
 	}
 	if bat == ctr.buf {
-		ctr.buf.Shrink(sels, false)
+		if err := ctr.buf.Shrink(sels, false, proc.Mp()); err != nil {
+			return nil, err
+		}
 	} else {
 		if ctr.buf == nil {
-			ctr.buf = batch.NewWithSize(len(bat.Vecs))
+			ctr.buf = batch.NewOffHeapWithSize(len(bat.Vecs))
+			if err := ctr.buf.SetAllocationAccount(ctr.outputAllocation); err != nil {
+				return nil, err
+			}
 			ctr.buf.SetAttributes(bat.Attrs)
 			ctr.buf.Recursive = bat.Recursive
 			for j, vec := range bat.Vecs {
 				typ := *bat.GetVector(int32(j)).GetType()
-				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
+				destination, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, ctr.outputAllocation)
+				if err != nil {
+					return nil, err
+				}
+				ctr.buf.Vecs[j] = destination
 				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
 			}
 			ctr.buf.SetRowCount(bat.RowCount())

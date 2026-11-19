@@ -1,0 +1,132 @@
+drop database if exists decimal_intermediate_precision;
+create database decimal_intermediate_precision;
+use decimal_intermediate_precision;
+create table source_values(price decimal(15,2), discount decimal(15,2));
+insert into source_values values (100.00, 0.01), (null, 0.01);
+create table revenue as select price * (1 - discount) as amount, price * discount as direct_product from source_values;
+select column_name, numeric_precision, numeric_scale from information_schema.columns where table_schema = 'decimal_intermediate_precision' and table_name = 'revenue' order by ordinal_position;
+column_name	numeric_precision	numeric_scale
+amount	37	4
+direct_product	30	4
+select amount, direct_product from revenue order by amount;
+amount	direct_product
+NULL	NULL
+99.0000	1.0000
+select cast('99999999999999999999' as decimal(20,0)) * cast('99999999999999999999' as decimal(20,0)) as wide_product;
+wide_product
+9999999999999999999800000000000000000001
+create table aggregate_precision as select sum(price * discount) as sum_amount, avg(price * discount) as avg_amount from source_values;
+select column_name, numeric_precision, numeric_scale from information_schema.columns where table_schema = 'decimal_intermediate_precision' and table_name = 'aggregate_precision' order by ordinal_position;
+column_name	numeric_precision	numeric_scale
+sum_amount	52	4
+avg_amount	34	8
+select sum_amount, avg_amount from aggregate_precision;
+➤ sum_amount[3,52,4]  ¦  avg_amount[3,34,8]  𝄀
+1.0000  ¦  1.00000000
+prepare precision_plus from 'select price + ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+execute precision_plus using @decimal_precision_runtime;
+➤ amount[3,22,2]  𝄀
+NULL  𝄀
+101.00
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+execute precision_plus using @decimal_precision_runtime;
+➤ amount[3,21,2]  𝄀
+NULL  𝄀
+101.25
+deallocate prepare precision_plus;
+prepare precision_minus from 'select price - ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+execute precision_minus using @decimal_precision_runtime;
+➤ amount[3,22,2]  𝄀
+NULL  𝄀
+99.00
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+execute precision_minus using @decimal_precision_runtime;
+➤ amount[3,21,2]  𝄀
+NULL  𝄀
+98.75
+deallocate prepare precision_minus;
+prepare precision_multiply from 'select price * ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+execute precision_multiply using @decimal_precision_runtime;
+➤ amount[3,34,2]  𝄀
+NULL  𝄀
+100.00
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+execute precision_multiply using @decimal_precision_runtime;
+➤ amount[3,35,4]  𝄀
+NULL  𝄀
+125.0000
+deallocate prepare precision_multiply;
+create table legacy_coefficients(i bigint);
+insert into legacy_coefficients values (9223372036854775807), (-9223372036854775808), (null);
+select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3 as carried_product from legacy_coefficients order by i;
+➤ carried_product[3,41,0]  𝄀
+NULL  𝄀
+255211775190703847597530955573826158592  𝄀
+255211775190703847542190723352697503747
+create table round_coefficients(a decimal(15,0), d bigint);
+insert into round_coefficients values (999999999999999, -30), (-999999999999999, -30), (null, -30);
+select round(a*a,-30)*round(a*a,-30) as rounded_product from round_coefficients order by a;
+➤ rounded_product[3,62,0]  𝄀
+NULL  𝄀
+1000000000000000000000000000000000000000000000000000000000000  𝄀
+1000000000000000000000000000000000000000000000000000000000000
+select round(a*a,d)*round(a*a,d) as dynamic_product from round_coefficients order by a;
+➤ dynamic_product[3,62,0]  𝄀
+NULL  𝄀
+1000000000000000000000000000000000000000000000000000000000000  𝄀
+1000000000000000000000000000000000000000000000000000000000000
+select truncate(a*a,-30)*truncate(a*a,-30) as truncated_product from round_coefficients order by a;
+➤ truncated_product[3,60,0]  𝄀
+NULL  𝄀
+0  𝄀
+0
+create table directed_coefficients(a decimal(15,0), b decimal(10,0));
+insert into directed_coefficients values (999999999999999,1000000000),(null,1000000000);
+select ceil(a*a,-35)*b as ceiling_product, ceiling(a*a,-35)*b as alias_product, floor(-(a*a),-35)*b as floor_product from directed_coefficients order by a;
+➤ ceiling_product[3,46,0]  ¦  alias_product[3,46,0]  ¦  floor_product[3,46,0]  𝄀
+NULL  ¦  NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+prepare directed_precision from 'select ceil(a*a,?)*b as ceiling_product, floor(-(a*a),?)*b as floor_product from directed_coefficients order by a';
+set @rounding_position=-35;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
+NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+set @rounding_position=-30;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
+NULL  ¦  NULL  𝄀
+1000000000000000000000000000000000000000  ¦  -1000000000000000000000000000000000000000
+set @rounding_position=-35;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
+NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+deallocate prepare directed_precision;
+create table checked_carriers(c decimal(20,0), i bigint, z decimal(17,0));
+insert into checked_carriers values (18000000000000000000,9223372036854775807,99999999999999999),(18000000000000000000,-9223372036854775808,99999999999999999),(18000000000000000000,null,99999999999999999);
+select (c*(cast('00:00:00' as time(0))+i))*z as chained_product from checked_carriers order by i;
+➤ chained_product[3,57,0]  𝄀
+NULL  𝄀
+-16602069666338596288379303336614035456000000000000000000  𝄀
+16602069666338596286579303336614035474000000000000000000
+select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c as decimal(38,0))-null as null_difference from checked_carriers;
+➤ null_product[0,2147483647,0]  ¦  null_sum[0,2147483647,0]  ¦  null_difference[0,2147483647,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null
+select c*cast(null as decimal(20,0)) as typed_null_product from checked_carriers order by i;
+➤ typed_null_product[3,40,0]  𝄀
+NULL  𝄀
+NULL  𝄀
+NULL
+create table legacy_decimal_sums(a decimal(18,0), b decimal(18,0));
+insert into legacy_decimal_sums values (999999999999999999,999999999999999999),(null,999999999999999999);
+select ((a+b)*(a+b))*99 as legacy_sum_product from legacy_decimal_sums order by a;
+➤ legacy_sum_product[3,41,0]  𝄀
+NULL  𝄀
+395999999999999999208000000000000000396
+drop database decimal_intermediate_precision;

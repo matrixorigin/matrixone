@@ -60,7 +60,9 @@ func TestCatalogDDLOwnsInternalExecutionContext(t *testing.T) {
 					ctx, tenant, pu)
 				require.NoError(t, err)
 			} else {
-				require.NoError(t, restoreUserDefinedFunctionCatalogWithCurrentSchema(ctx, capture, " {MO_TS = 123}", 42, 42))
+				modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 123} where account_id = 42 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
+				bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
+				require.NoError(t, restoreRoutineCatalogWithCurrentSchema(ctx, capture, "mo_user_defined_function", " {MO_TS = 123}", 42, 42))
 				require.Equal(t, []string{MoCatalogMoUserDefinedFunctionDDL}, capture.internal)
 			}
 			require.Contains(t, capture.internal, MoCatalogMoUserDefinedFunctionDDL)

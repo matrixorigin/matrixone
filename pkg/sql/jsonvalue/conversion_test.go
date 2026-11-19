@@ -99,7 +99,7 @@ func decimalReferenceForTarget(input string, target types.Type) (*big.Int, bool,
 		return nil, false, true
 	}
 	width := target.Width
-	if limit := decimalWidthLimit(target.Oid); width > limit {
+	if limit := types.DecimalMaxPrecision(target.Oid); width > limit {
 		width = limit
 	}
 	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(width)), nil)
@@ -1111,4 +1111,27 @@ func TestJSONValueConversionAndAppendBoundaryStates(t *testing.T) {
 	require.NoError(t, AppendResult(bytesVec, Result{Status: StatusTruncated, Value: []byte("x")}, mp))
 	require.Equal(t, 1, bytesVec.Length())
 	require.False(t, appendValueCompatible(types.T_any, nil))
+}
+
+func TestConvertTableOpaqueVisibleWidthBoundary(t *testing.T) {
+	for _, size := range []int{57, 58} {
+		value, err := bytejson.NewMySQLOpaque(52, 252, []byte(strings.Repeat("a", size)))
+		require.NoError(t, err)
+		expected := "base64:type252:" + strings.Repeat("YWFh", 19)
+		if size == 58 {
+			expected += "\nYQ=="
+		}
+		for _, width := range []int32{95, 96} {
+			t.Run(strconv.Itoa(size)+"/"+strconv.Itoa(int(width)), func(t *testing.T) {
+				result := ConvertTableScalarWithContext(context.Background(), value, types.New(types.T_varchar, width, 0), ConversionOptions{})
+				if size == 58 && width == 95 {
+					require.Equal(t, StatusStatementError, result.Status)
+					require.ErrorContains(t, result.Err, "lossy character conversion")
+					return
+				}
+				require.Equal(t, StatusSuccess, result.Status)
+				require.Equal(t, []byte(expected), result.Value)
+			})
+		}
+	}
 }

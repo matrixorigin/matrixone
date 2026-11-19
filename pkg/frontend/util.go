@@ -37,7 +37,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type CloseFlag struct {
@@ -628,6 +628,8 @@ func getPreparedPlanExprValueWithMeta(
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
+	restore := bindFrontendExpressionContext(execCtx.proc, execCtx.reqCtx)
+	defer restore()
 	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
 	if err != nil {
 		return nil, plan.Type{}, err
@@ -695,7 +697,16 @@ func bindSetVariableResultExpr(
 	return binder.BindExpr(e, 0, false)
 }
 
-// only support single value and unary minus
+// bindFrontendExpressionContext borrows only the pipeline context field for
+// synchronous frontend evaluation. The caller must restore it after consuming
+// and freeing the result; query cancellation and compiler state stay untouched.
+func bindFrontendExpressionContext(proc *process.Process, ctx context.Context) func() {
+	previous := proc.Ctx
+	proc.Ctx = ctx
+	return func() { proc.Ctx = previous }
+}
+
+// GetSimpleExprValue supports single values and unary minus.
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
 	return getSimpleExprValue(ctx, e, feSes, nil)
 }
@@ -735,21 +746,19 @@ func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targe
 		}
 	}
 
-	txnCompileCtx := feSes.GetTxnCompileCtx()
-	// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-	// Here the evalExpr may execute some function that needs engine.Engine.
-	txnCompileCtx.GetProcess().ReplaceTopCtx(
-		attachValue(txnCompileCtx.GetProcess().GetTopContext(),
-			defines.EngineKey{},
-			feSes.GetTxnHandler().GetStorage()))
-
-	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
+	proc := feSes.GetTxnCompileCtx().GetProcess()
+	// Runtime expressions need the current request, including its values and
+	// cancellation, without resetting compiler-owned query state.
+	evalCtx := attachValue(ctx, defines.EngineKey{}, feSes.GetTxnHandler().GetStorage())
+	restore := bindFrontendExpressionContext(proc, evalCtx)
+	defer restore()
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, planExpr)
 	if err != nil {
 		return nil, err
 	}
 
+	defer free()
 	value, err := getValueFromVector(ctx, vec, feSes, planExpr)
-	free()
 	return value, err
 }
 
@@ -798,6 +807,14 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.MustFixedColNoTypeCheck[uint64](vec)[0], nil
 	case types.T_float32:
 		return vector.MustFixedColNoTypeCheck[float32](vec)[0], nil
+	case types.T_bf16:
+		return vector.MustFixedColNoTypeCheck[types.BF16](vec)[0].ToFloat32(), nil
+	case types.T_float16:
+		return vector.MustFixedColNoTypeCheck[types.Float16](vec)[0].ToFloat32(), nil
+	case types.T_float8:
+		return vector.MustFixedColNoTypeCheck[types.Float8](vec)[0].ToFloat32(), nil
+	case types.T_float4:
+		return vector.MustFixedColNoTypeCheck[types.Float4](vec)[0].ToFloat32(), nil
 	case types.T_float64:
 		return vector.MustFixedColNoTypeCheck[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
@@ -806,6 +823,8 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return slices.Clone(vector.GetArrayAt[float32](vec, 0)), nil
 	case types.T_array_float64:
 		return slices.Clone(vector.GetArrayAt[float64](vec, 0)), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledValue{Oid: vec.GetType().Oid, Cell: bytes.Clone(vec.GetBytesAt(0))}, nil
 	case types.T_array_bf16:
 		return slices.Clone(vector.GetArrayAt[types.BF16](vec, 0)), nil
 	case types.T_array_float16:
@@ -891,6 +910,19 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
+	logStatementStringStatusWithLog(ctx, ses, stmtStr, status, err, true)
+}
+
+// logStatementStringStatusWithLog always performs statement accounting, even
+// when a caller has suppressed a repetitive statement failure log.
+func logStatementStringStatusWithLog(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+	writeLog bool,
+) {
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -910,7 +942,7 @@ func logStatementStringStatus(
 			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		}
 		err = nil // make sure: it is nil for EndStatement
-	} else {
+	} else if writeLog {
 		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
@@ -1481,7 +1513,13 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") {
+		return finish()
+	}
+	// Only scan the saved SQL when its diagnostic can be retained. Redact
+	// before clipping so a later privacy marker cannot expose an earlier prefix.
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {
@@ -1554,6 +1592,16 @@ func isTextExecuteParam(value string) bool {
 }
 
 func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	return convertRowsIntoBatchInLocation(pool, cols, rows, time.Local)
+}
+
+// convertRowsIntoBatchInLocation converts frontend result rows into a batch.
+// Some producers, such as DATA BRANCH DIFF, render temporal values as text in
+// the session time zone; loc is the zone used to read TIMESTAMP text back.
+func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (*batch.Batch, *plan.ResultColDef, error) {
+	if loc == nil {
+		loc = time.Local
+	}
 	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
 	if err != nil {
 		return nil, nil, err
@@ -1567,45 +1615,25 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex] = vector.NewVec(typ)
 		nsp := nulls.NewWithSize(cnt)
 
+		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
-		case types.T_varchar:
+		case types.T_varchar, types.T_text, types.T_varbinary:
+			// Byte-valued and vector-valued cells must save the exact bytes
+			// the client-visible result presents (issue #31535): fmt.Sprintf
+			// renders []byte and vector values as numeric lists.
 			for rowIdx, row := range rows {
-				var val string
+				var val []byte
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
 				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
+					val = textRowValueBytes(row[colIndex])
 				}
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
+				err := vector.AppendBytes(bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 
-		case types.T_text:
-			for rowIdx, row := range rows {
-				var val string
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
-				}
-
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
 		case types.T_int8:
 			for rowIdx, row := range rows {
 				var val int8
@@ -1675,6 +1703,83 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_uint8:
+			for rowIdx, row := range rows {
+				var val uint8
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint8 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint8 type", unchecked)
+					}
+					val = uint8(unchecked)
+				}
+
+				err := vector.AppendFixed[uint8](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint16:
+			for rowIdx, row := range rows {
+				var val uint16
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint16 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint16 type", unchecked)
+					}
+					val = uint16(unchecked)
+				}
+
+				err := vector.AppendFixed[uint16](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint32:
+			for rowIdx, row := range rows {
+				var val uint32
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint32 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint32 type", unchecked)
+					}
+					val = uint32(unchecked)
+				}
+
+				err := vector.AppendFixed[uint32](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint64:
+			for rowIdx, row := range rows {
+				var val uint64
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getUnsignedRowValue(row[colIndex]); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[uint64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_float64:
 			for rowIdx, row := range rows {
 				var val float64
@@ -1708,8 +1813,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Date
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Date)
+				} else if val, err = getDateFromRowValue(row[colIndex]); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
@@ -1722,8 +1827,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Time
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Time)
+				} else if val, err = getTimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
@@ -1736,8 +1841,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Datetime
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Datetime)
+				} else if val, err = getDatetimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
@@ -1756,7 +1861,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					case types.Timestamp:
 						val = v
 					case string:
-						val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+						val, err = types.ParseTimestamp(loc, v, typ.Scale)
 						if err != nil {
 							return nil, nil, err
 						}
@@ -1834,6 +1939,38 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 	return bat, planColDefs, nil
 }
 
+// textRowValueBytes renders a hand-built result row value as the exact bytes
+// the client-visible result presents. []byte cells (VARCHAR/VARBINARY engine
+// values) carry their raw bytes, and vector cells render with the same
+// ArrayToString text the protocol shows; other scalar types keep their
+// existing fmt.Sprintf presentation (issue #31535).
+func textRowValueBytes(value any) []byte {
+	switch v := value.(type) {
+	case string:
+		return []byte(v)
+	case []byte:
+		return v
+	case []float32:
+		return []byte(types.ArrayToString[float32](v))
+	case []float64:
+		return []byte(types.ArrayToString[float64](v))
+	case []types.BF16:
+		return []byte(types.ArrayToString[types.BF16](v))
+	case []types.Float16:
+		return []byte(types.ArrayToString[types.Float16](v))
+	case []int8:
+		return []byte(types.ArrayToString[int8](v))
+	case types.BlockScaledValue:
+		text, berr := types.BlockScaledToString(v.Cell)
+		if berr != nil {
+			return []byte(fmt.Sprintf("%v", value))
+		}
+		return []byte(text)
+	default:
+		return []byte(fmt.Sprintf("%v", value))
+	}
+}
+
 func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
 	switch val := v.(type) {
 	case types.Decimal64:
@@ -1873,6 +2010,25 @@ func getDecimal256FromRowValue(v any, typ types.Type) (types.Decimal256, error) 
 	}
 }
 
+// getUnsignedRowValue resolves a hand-built result row value into its exact
+// unsigned integer form. Values that cannot be represented without sign
+// wraparound fail instead of being coerced or truncated: unsigned counts,
+// including values above MaxInt64, must never cross into a signed
+// destination type (issue #31498).
+func getUnsignedRowValue(v any) (uint64, error) {
+	switch val := v.(type) {
+	case uint64:
+		return val, nil
+	case int64:
+		if val < 0 {
+			return 0, moerr.NewInternalErrorNoCtxf("%d can't convert to unsigned type", val)
+		}
+		return uint64(val), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to unsigned integer type", v)
+	}
+}
+
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
 	for _, item := range data {
 		if item != nil {
@@ -1908,25 +2064,54 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 		}
 		switch columnType {
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-			pType = plan.Type{
-				Id: int32(types.T_varchar),
+			// A VAR_STRING/VARCHAR column carrying the binary charset is a
+			// VARBINARY engine value: its cells hold raw bytes, and the saved
+			// result must keep the binary type instead of coercing them into
+			// text (issue #31535).
+			if mysqlColumn, ok := col.(*MysqlColumn); ok && mysqlColumn.Charset() == charsetBinary {
+				pType = plan.Type{
+					Id: int32(types.T_varbinary),
+				}
+				tType = types.New(types.T_varbinary, types.MaxVarBinaryLen, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_varchar),
+				}
+				tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 			}
-			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_TEXT:
 			pType = plan.Type{
 				Id: int32(types.T_text),
 			}
 			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_TINY:
-			pType = plan.Type{
-				Id: int32(types.T_int8),
+			// Wire integer columns must round-trip their signedness into the
+			// saved result metadata: an unsigned count published by SHOW COUNT(*)
+			// belongs in an unsigned destination vector, where values above
+			// MaxInt64 survive without truncation (issue #31498).
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int8),
+				}
+				tType = types.New(types.T_int8, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint8),
+				}
+				tType = types.New(types.T_uint8, 0, 0)
 			}
-			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
-			pType = plan.Type{
-				Id: int32(types.T_int16),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int16),
+				}
+				tType = types.New(types.T_int16, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint16),
+				}
+				tType = types.New(types.T_uint16, 0, 0)
 			}
-			tType = types.New(types.T_int16, 0, 0)
 		case defines.MYSQL_TYPE_YEAR:
 			pType = plan.Type{
 				Id:    int32(types.T_year),
@@ -1934,15 +2119,29 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.T_year.ToType()
 		case defines.MYSQL_TYPE_LONG:
-			pType = plan.Type{
-				Id: int32(types.T_int32),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int32),
+				}
+				tType = types.New(types.T_int32, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint32),
+				}
+				tType = types.New(types.T_uint32, 0, 0)
 			}
-			tType = types.New(types.T_int32, 0, 0)
 		case defines.MYSQL_TYPE_LONGLONG:
-			pType = plan.Type{
-				Id: int32(types.T_int64),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int64),
+				}
+				tType = types.New(types.T_int64, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint64),
+				}
+				tType = types.New(types.T_uint64, 0, 0)
 			}
-			tType = types.New(types.T_int64, 0, 0)
 		case defines.MYSQL_TYPE_DOUBLE:
 			pType = plan.Type{
 				Id: int32(types.T_float64),
@@ -1959,20 +2158,26 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_time),
+				Id:    int32(types.T_time),
+				Scale: scale,
 			}
-			tType = types.New(types.T_time, 0, 0)
+			tType = types.New(types.T_time, 0, scale)
 		case defines.MYSQL_TYPE_DATETIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_datetime),
+				Id:    int32(types.T_datetime),
+				Scale: scale,
 			}
-			tType = types.New(types.T_datetime, 0, 0)
+			tType = types.New(types.T_datetime, 0, scale)
 		case defines.MYSQL_TYPE_TIMESTAMP:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_timestamp),
+				Id:    int32(types.T_timestamp),
+				Scale: scale,
 			}
-			tType = types.New(types.T_timestamp, 0, 0)
+			tType = types.New(types.T_timestamp, 0, scale)
 		case defines.MYSQL_TYPE_ENUM:
 			pType = plan.Type{
 				Id: int32(types.T_enum),
@@ -2001,6 +2206,55 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 }
 
 const mysqlDecimalExtraLength uint32 = 1
+
+// mysqlTemporalColScale returns the fractional-second precision a
+// TIME/DATETIME/TIMESTAMP result column declares, so saved results keep it.
+func mysqlTemporalColScale(col Column) int32 {
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return 0
+	}
+	scale := int32(decimalCol.Decimal())
+	if scale < 0 || scale > 6 {
+		return 0
+	}
+	return scale
+}
+
+// Saved result rows carry temporal values either as MatrixOne values or, for
+// producers that render rows as text (DATA BRANCH DIFF), as strings.
+func getDateFromRowValue(value any) (types.Date, error) {
+	switch v := value.(type) {
+	case types.Date:
+		return v, nil
+	case string:
+		return types.ParseDateCast(v)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to date type", v)
+	}
+}
+
+func getTimeFromRowValue(value any, scale int32) (types.Time, error) {
+	switch v := value.(type) {
+	case types.Time:
+		return v, nil
+	case string:
+		return types.ParseTime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to time type", v)
+	}
+}
+
+func getDatetimeFromRowValue(value any, scale int32) (types.Datetime, error) {
+	switch v := value.(type) {
+	case types.Datetime:
+		return v, nil
+	case string:
+		return types.ParseDatetime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to datetime type", v)
+	}
+}
 
 type mysqlDecimalColumn interface {
 	Column
@@ -2064,6 +2318,28 @@ func mysqlDecimalDisplayLength(precision, scale int32, signed bool) uint32 {
 		return 1
 	}
 	return length
+}
+
+// padZerofillDecimalText left-pads the integer part of a formatted DECIMAL
+// cell with zeros to intDigits, matching MySQL's ZEROFILL rendering
+// (field.cc pads the pre-point digits when the column is declared ZEROFILL).
+// Callers gate on the result column's ZEROFILL flag, so derived expressions
+// (mask zero) and plain decimals always pass intDigits 0. NULLs are handled
+// by every caller before this point. Empty or negative text passes through
+// unchanged: the unsigned domain admission already keeps attributed values
+// non-negative, and a defensive pass-through can never corrupt such cells.
+func padZerofillDecimalText(text string, intDigits int) string {
+	if intDigits <= 0 || len(text) == 0 || text[0] == '-' {
+		return text
+	}
+	intLen := len(text)
+	if dot := strings.IndexByte(text, '.'); dot >= 0 {
+		intLen = dot
+	}
+	if intLen >= intDigits {
+		return text
+	}
+	return strings.Repeat("0", intDigits-intLen) + text
 }
 
 func mysqlDecimalType(precision, scale int32) types.Type {
@@ -2221,8 +2497,9 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	}
 	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
 	// without an explicit display scale. Clients use this metadata when
-	// converting binary floating-point results to text.
-	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+	// converting binary floating-point results to text. bf16, float16,
+	// float8 and float4 are sent as FLOAT.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64 || typ.Oid.IsLowPrecisionFloat()) &&
 		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
 		col.SetDecimal(mysqlDecimalNotSpecified)
 		return
@@ -2333,8 +2610,13 @@ type UserInput struct {
 	sameStatementAuthorization bool
 	preparePlan                *plan.Plan // binary protocol execute
 	sqlSourceType              []string
-	isRestore                  bool
-	isBinaryProtExecute        bool
+	// Fragments belong only to this input's successful scheduling parse. They
+	// can be reused by statement recording while the SQL and parser mode match.
+	recordFragments     []mysql.SQLFragment
+	recordSQL           string
+	recordSQLMode       string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string
@@ -2366,6 +2648,21 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) clearRecordFragments() {
+	ui.recordFragments = nil
+	ui.recordSQL = ""
+	ui.recordSQLMode = ""
+}
+
+func (ui *UserInput) setRecordFragments(fragments []mysql.SQLFragment, sqlMode string) {
+	if fragments == nil {
+		return
+	}
+	ui.recordFragments = fragments
+	ui.recordSQL = ui.sql
+	ui.recordSQLMode = sqlMode
 }
 
 func (ui *UserInput) genHash() {
@@ -2816,8 +3113,28 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err != nil {
 		return nil, err
 	}
+	// Result columns of an attributed DECIMAL carry the catalog numeric
+	// attribute mask in the plan type (#30940). The UNSIGNED flag must be
+	// installed before setMysqlColumnTypeInfo so the DECIMAL display length
+	// follows MySQL's unsigned form (mysqlDecimalDisplayLength signed=false);
+	// ZEROFILL additionally sets the protocol flag and the render pad digits.
+	// Derived expressions carry mask zero and keep the plain signed metadata.
+	if mask := col.Typ.GetNumericAttributes(); mask != 0 && typ.IsDecimal() {
+		c.SetSigned(false)
+		if mask&types.NumericAttributeZerofill != 0 {
+			c.SetFlag(c.Flag() | uint16(defines.ZEROFILL_FLAG))
+			if digits := typ.Width - typ.Scale; digits > 0 {
+				c.zerofillPadIntDigits = digits
+			}
+		}
+	}
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
+	}
+	if col.EnumSetResultType != nil && typ.Oid.IsMySQLString() {
+		if err = setEnumSetResultMetadata(ctx, col.EnumSetResultType, typ.Charset, c); err != nil {
+			return nil, err
+		}
 	}
 	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.
@@ -2826,6 +3143,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
+	if presentation := col.IntegerResultPresentation; presentation != nil && (typ.Oid == types.T_int64 || typ.Oid == types.T_uint64) {
+		c.SetLength(presentation.DisplayLength)
+		c.SetDecimal(0)
+	}
+
 	// MySQL represents predicate results as numeric 0/1 values. Keep native
 	// BOOLEAN columns on the dedicated BOOL path, but advertise a computed BOOL
 	// result as a regular TINYINT so JDBC clients do not reinterpret the
@@ -2912,70 +3234,6 @@ func accountNameIsLegal(name string) bool {
 	}
 	return isLegal(name, createAccountSqls)
 }
-
-/*
-dbNameIsLegal checks the database name legal or not.
-rule:
-
-	if create database name or create database `name` can succeed,
-	it is legal.
-
-	it means all most all string can be legal.
-*/
-func dbNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createDBSqls := []string{
-		"create database " + name,
-		"create database `" + name + "`",
-	}
-	return isLegal(name, createDBSqls)
-}
-
-/*
-tableNameIsLegal checks the table name legal or not.
-rule:
-
-	if create table name or create table `name` can succeed,
-	it is legal.
-
-	it means all most all string can be legal.
-*/
-func tableNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createTableSqls := []string{
-		"create table " + name + "(a int)",
-		"create table `" + name + "`(a int)",
-	}
-	return isLegal(name, createTableSqls)
-}
-
-//func tableNameIsRegexpr(s string) bool {
-//	if len(s) < 2 {
-//		return false
-//	}
-//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
-//		_, err := regexp.Compile(s)
-//		if err != nil {
-//			return false
-//		}
-//		return true
-//	}
-//	return false
-//}
 
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {

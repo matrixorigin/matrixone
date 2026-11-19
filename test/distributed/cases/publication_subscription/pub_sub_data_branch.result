@@ -1,0 +1,504 @@
+drop account if exists tenant_a;
+drop account if exists tenant_b;
+drop account if exists vw02;
+drop account if exists vw03;
+create account tenant_a admin_name = 'test_account' identified by '111';
+create account tenant_b admin_name = 'test_account' identified by '111';
+create account vw02 admin_name = 'test_account' identified by '111';
+create account vw03 admin_name = 'test_account' identified by '111';
+drop database if exists tdb;
+create database tdb;
+use tdb;
+create table t1(a int primary key, b varchar(10));
+insert into t1 values (1,'1'),(2,'2'),(3,'3');
+create table t2(a int primary key, b varchar(10));
+insert into t2 values (1,'1'),(2,'2');
+create snapshot pub_owned_sp for table tdb t2;
+create publication pub1 database tdb account tenant_b;
+drop database if exists sub3;
+create database sub3 from tenant_a publication pub1;
+select count(*) from sub3.t1;
+➤ count(*)[-5,64,0]  𝄀
+3
+show tables from sub3;
+➤ Tables_in_sub3[12,5000,0]  𝄀
+t1  𝄀
+t2
+select table_name from information_schema.tables where table_schema='sub3' order by table_name;
+➤ table_name[12,5000,0]  𝄀
+t1  𝄀
+t2
+create snapshot sp_sub_t1 for table sub3 t1;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_sub_t1';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+data branch diff sub3.t1 against sub3.t1;
+➤ diff t1 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_sub_t1';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_sub_t1  ¦  table  ¦  tenant_a  ¦  tdb  ¦  t1
+insert into tdb.t1 values (4,'4');
+data branch diff tdb.t1{snapshot="sp_sub_t1"} against tdb.t1;
+➤ diff t1 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+t1  ¦  INSERT  ¦  4  ¦  4
+data branch diff sub3.t1 against sub3.t1;
+➤ diff t1 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+create snapshot sp_explicit_t1 for table tdb t1 from tenant_a publication pub1;
+drop snapshot sp_sub_t1 from tenant_a publication pub1;
+drop snapshot sp_explicit_t1 from tenant_a publication pub1;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+pub_owned_sp  ¦  table  ¦  tenant_a  ¦  tdb  ¦  t2
+drop database if exists ldb;
+create database ldb;
+use ldb;
+create table localt(a int primary key, b varchar(10));
+insert into localt values (1,'1'),(2,'2'),(3,'3'),(4,'4');
+data branch diff sub3.t1 against ldb.localt;
+➤ diff t1 against localt[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+insert into localt values (5,'5');
+data branch diff ldb.localt against sub3.t1;
+➤ diff localt against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+localt  ¦  INSERT  ¦  5  ¦  5
+insert into tdb.t1 values (6,'6');
+data branch merge sub3.t1 into ldb.localt;
+select * from ldb.localt order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6
+data branch merge ldb.localt into sub3.t1;
+-- @regex("cannot perform DATA BRANCH MERGE into subscription database", true)
+internal error: cannot perform DATA BRANCH MERGE into subscription database sub3.t1
+data branch pick ldb.localt into sub3.t1 keys(1);
+-- @regex("cannot perform DATA BRANCH PICK into subscription database", true)
+internal error: cannot perform DATA BRANCH PICK into subscription database sub3.t1
+select * from ldb.localt order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6
+select * from tdb.t1 order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+6  ¦  6
+create database scdb;
+create table scdb.s1(a int primary key, b varchar(10));
+insert into scdb.s1 values (1,'1');
+create table scdb.s2(a int primary key, b varchar(10));
+insert into scdb.s2 values (1,'1');
+create publication pubsc database scdb table s1 account tenant_b;
+drop database if exists subsc;
+create database subsc from tenant_a publication pubsc;
+data branch diff subsc.s1 against subsc.s1;
+➤ diff s1 against s1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+create snapshot sp_sc for table subsc s1;
+data branch diff subsc.s2 against subsc.s2;
+-- @regex("outside the publication's scope", true)
+internal error: table subsc.s2 is outside the publication's scope
+create snapshot sp_sc2 for table subsc s2;
+-- @regex("outside the publication's scope", true)
+internal error: table subsc.s2 is outside the publication's scope
+drop snapshot sp_sc from tenant_a publication pubsc;
+drop publication pubsc;
+data branch diff subsc.s1 against subsc.s1;
+-- @regex("there is no publication", true)
+internal error: there is no publication pubsc
+create snapshot sp_sc3 for table subsc s1;
+-- @regex("there is no publication", true)
+internal error: there is no publication pubsc
+drop database subsc;
+data branch diff ldb.nope against ldb.localt;
+-- @regex("does not exist", true)
+SQL parser error: table "nope" does not exist
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_sc','sp_sc2','sp_sc3');
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+drop database if exists fsrc_db;
+create database fsrc_db;
+create table fsrc_db.base(id int primary key, w int);
+insert into fsrc_db.base values (5, 50);
+create snapshot sp_src_base for table fsrc_db base;
+drop publication if exists p_fsrc;
+create publication p_fsrc database fsrc_db table base account vw02,vw03;
+drop database if exists fsrc_db;
+create database fsrc_db;
+create table fsrc_db.base(id int, w int);
+insert into fsrc_db.base values (500, 5000);
+create table fsrc_db.decoy_only(id int primary key);
+insert into fsrc_db.decoy_only values (1);
+create snapshot sp_decoy_base for table fsrc_db base;
+drop database if exists s_fsrc;
+create database s_fsrc from sys publication p_fsrc;
+select id, w from s_fsrc.base;
+➤ id[4,32,0]  ¦  w[4,32,0]  𝄀
+5  ¦  50
+data branch diff s_fsrc.base against s_fsrc.base;
+➤ diff base against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]
+create snapshot sp_fsrc_base for table s_fsrc base;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_fsrc_base';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_decoy_base','sp_fsrc_base','sp_src_base','sp_fsrc_decoy') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_fsrc_base  ¦  table  ¦  vw02  ¦  fsrc_db  ¦  base  𝄀
+sp_src_base  ¦  table  ¦  vw02  ¦  fsrc_db  ¦  base
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_decoy_base','sp_fsrc_base','sp_src_base','sp_fsrc_decoy') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_decoy_base  ¦  table  ¦  sys  ¦  fsrc_db  ¦  base
+data branch diff s_fsrc.decoy_only against s_fsrc.decoy_only;
+-- @regex("outside the publication's scope", true)
+internal error: table s_fsrc.decoy_only is outside the publication's scope
+create snapshot sp_fsrc_decoy for table s_fsrc decoy_only;
+-- @regex("outside the publication's scope", true)
+internal error: table s_fsrc.decoy_only is outside the publication's scope
+drop snapshot sp_fsrc_base from sys publication p_fsrc;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_decoy_base','sp_fsrc_base','sp_src_base','sp_fsrc_decoy') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_src_base  ¦  table  ¦  vw02  ¦  fsrc_db  ¦  base
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_decoy_base','sp_fsrc_base','sp_src_base','sp_fsrc_decoy') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_decoy_base  ¦  table  ¦  sys  ¦  fsrc_db  ¦  base
+drop snapshot sp_decoy_base;
+drop snapshot sp_src_base;
+create publication pubsc2 database scdb table s1 account tenant_b;
+drop database if exists subsc2;
+create database subsc2 from tenant_a publication pubsc2;
+drop user if exists branch_ro;
+drop user if exists branch_np;
+drop role if exists branch_ro_role;
+drop role if exists branch_np_role;
+create role branch_ro_role, branch_np_role;
+create user branch_ro identified by '111' default role branch_ro_role;
+create user branch_np identified by '111' default role branch_np_role;
+grant connect on account * to branch_ro_role;
+grant connect on account * to branch_np_role;
+grant select on table sub3.* to branch_ro_role;
+grant select on table ldb.* to branch_ro_role;
+grant select on table subsc2.* to branch_ro_role;
+data branch diff sub3.t1 against sub3.t1;
+➤ diff t1 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+data branch diff subsc2.s2 against subsc2.s2;
+-- @regex("outside the publication's scope", true)
+internal error: table subsc2.s2 is outside the publication's scope
+data branch diff ldb.nope against ldb.localt;
+-- @regex("does not exist", true)
+SQL parser error: table "nope" does not exist
+data branch diff sub3.t1 against sub3.t1;
+-- @regex("do not have privilege to execute the statement", true)
+internal error: do not have privilege to execute the statement
+data branch create table c1 from sub3.t1;
+data branch create table c2 from sub3.t1;
+data branch diff c2 against c1;
+➤ diff c2 against c1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+data branch diff c1 against c2;
+➤ diff c1 against c2[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+insert into c1 values (7,'7');
+data branch diff c1 against c2;
+➤ diff c1 against c2[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+c1  ¦  INSERT  ¦  7  ¦  7
+update tdb.t1 set b='1a' where a=1;
+delete from tdb.t1 where a=2;
+insert into tdb.t1 values (8,'8');
+update c2 set b='3c' where a=3;
+update c2 set b='4c' where a=4;
+data branch diff c2 against sub3.t1;
+➤ diff c2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+t1  ¦  UPDATE  ¦  1  ¦  1a  𝄀
+t1  ¦  DELETE  ¦  2  ¦  2  𝄀
+c2  ¦  UPDATE  ¦  3  ¦  3c  𝄀
+c2  ¦  UPDATE  ¦  4  ¦  4c  𝄀
+t1  ¦  INSERT  ¦  8  ¦  8
+data branch diff sub3.t1 against c2;
+➤ diff t1 against c2[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+t1  ¦  UPDATE  ¦  1  ¦  1a  𝄀
+t1  ¦  DELETE  ¦  2  ¦  2  𝄀
+c2  ¦  UPDATE  ¦  3  ¦  3c  𝄀
+c2  ¦  UPDATE  ¦  4  ¦  4c  𝄀
+t1  ¦  INSERT  ¦  8  ¦  8
+data branch merge sub3.t1 into c2;
+select * from c2 order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  1a  𝄀
+3  ¦  3c  𝄀
+4  ¦  4c  𝄀
+6  ¦  6  𝄀
+8  ¦  8
+data branch merge c2 into sub3.t1;
+-- @regex("cannot perform DATA BRANCH MERGE into subscription database", true)
+internal error: cannot perform DATA BRANCH MERGE into subscription database sub3.t1
+select * from tdb.t1 order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  1a  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+6  ¦  6  𝄀
+8  ¦  8
+drop database if exists sysdb;
+create database sysdb;
+create table sysdb.st1(a int primary key, b varchar(10));
+insert into sysdb.st1 values (1,'1');
+drop publication if exists puball;
+create publication puball database * account tenant_b;
+create snapshot sp_ta_acc for account;
+create snapshot sp_star_tab for table sysdb st1 from sys publication puball;
+create snapshot sp_star_db for database sysdb from sys publication puball;
+create snapshot sp_star_acc for account from sys publication puball;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_star_tab','sp_star_db','sp_star_acc');
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_star_tab','sp_star_db','sp_star_acc') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_star_acc  ¦  account  ¦  sys  ¦    ¦    𝄀
+sp_star_db  ¦  database  ¦  sys  ¦  sysdb  ¦    𝄀
+sp_star_tab  ¦  table  ¦  sys  ¦  sysdb  ¦  st1
+drop snapshot sp_ta_acc from sys publication puball;
+-- @regex("does not exist", true)
+internal error: snapshot sp_ta_acc does not exist
+create snapshot sp_sys_b_acc for account tenant_b;
+drop snapshot sp_sys_b_acc from sys publication puball;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_sys_b_acc is outside the publication's scope
+drop snapshot sp_star_tab from sys publication puball;
+drop snapshot sp_star_db from sys publication puball;
+drop snapshot sp_star_acc from sys publication puball;
+drop snapshot not_here from sys publication puball;
+-- @regex("does not exist", true)
+internal error: snapshot not_here does not exist
+drop snapshot if exists not_here from sys publication puball;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_star_tab','sp_star_db','sp_star_acc','sp_ta_acc','sp_sys_b_acc') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_sys_b_acc  ¦  account  ¦  tenant_b  ¦    ¦  
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_ta_acc';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_ta_acc  ¦  account  ¦  tenant_a  ¦    ¦  
+drop snapshot sp_ta_acc;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_sys_b_acc';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_sys_b_acc  ¦  account  ¦  tenant_b  ¦    ¦  
+drop snapshot sp_sys_b_acc;
+drop database if exists rdb;
+create database rdb;
+create table rdb.t(a int primary key, b varchar(10));
+insert into rdb.t values (1,'1');
+create snapshot sp_rdb for database rdb;
+create snapshot sp_rdb_t for table rdb t;
+drop database rdb;
+create database rdb;
+create table rdb.t(a int primary key, b varchar(10));
+insert into rdb.t values (9,'9');
+create publication pubrdb database rdb account tenant_b;
+drop snapshot sp_rdb from tenant_a publication pubrdb;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_rdb is outside the publication's scope
+drop snapshot sp_rdb_t from tenant_a publication pubrdb;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_rdb_t is outside the publication's scope
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_rdb','sp_rdb_t') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_rdb  ¦  database  ¦  tenant_a  ¦  rdb  ¦    𝄀
+sp_rdb_t  ¦  table  ¦  tenant_a  ¦  rdb  ¦  t
+drop snapshot sp_rdb;
+drop snapshot sp_rdb_t;
+drop database if exists hdb;
+create database hdb;
+create table hdb.t1(a int primary key, b varchar(10));
+insert into hdb.t1 values (1,'1');
+create snapshot sp_hdb_t1 for table hdb t1;
+create publication pubhdb database hdb account tenant_b;
+drop table hdb.t1;
+drop snapshot sp_hdb_t1 from tenant_a publication pubhdb;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_hdb_t1';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+create table hdb.t2(a int primary key, b varchar(10));
+insert into hdb.t2 values (1,'1');
+create publication pubhdb2 database hdb table t2 account tenant_b;
+create snapshot sp_hdb_t2 for table hdb t2;
+drop table hdb.t2;
+drop snapshot sp_hdb_t2 from tenant_a publication pubhdb2;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_hdb_t2 is outside the publication's scope
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_hdb_t2';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_hdb_t2  ¦  table  ¦  tenant_a  ¦  hdb  ¦  t2
+drop snapshot sp_hdb_t2;
+drop database if exists lidb;
+create database lidb;
+create table lidb.t(a int primary key, b varchar(10));
+insert into lidb.t values (1,'1');
+create snapshot sp_li_old for table lidb t;
+drop table lidb.t;
+create table lidb.t(a int primary key, b varchar(10));
+insert into lidb.t values (2,'2');
+create publication publi database lidb table t account tenant_b;
+create snapshot sp_li_new for table lidb t;
+drop snapshot sp_li_old from tenant_a publication publi;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_li_old is outside the publication's scope
+drop snapshot sp_li_new from tenant_a publication publi;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_li_old','sp_li_new') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_li_old  ¦  table  ¦  tenant_a  ¦  lidb  ¦  t
+drop table lidb.t;
+create publication publi_all database lidb account tenant_b;
+drop snapshot sp_li_old from tenant_a publication publi_all;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_li_old','sp_li_new') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+drop database if exists cadb;
+create database cadb;
+create table cadb.t(a int primary key, b varchar(10));
+insert into cadb.t values (1,'1');
+create publication pubca database cadb account tenant_b;
+create snapshot sp_ca_pre for table cadb t;
+create database sub_ca from tenant_a publication pubca;
+alter table cadb.t modify column b varchar(20), algorithm=copy;
+select rel_id <> rel_logical_id as physical_replaced_logical_kept from mo_catalog.mo_tables where reldatabase = 'cadb' and relname = 't';
+➤ physical_replaced_logical_kept[-6,8,0]  𝄀
+1
+create snapshot sp_ca_alias for table sub_ca t;
+create snapshot sp_ca_expl for table cadb t from tenant_a publication pubca;
+drop snapshot sp_ca_pre from tenant_a publication pubca;
+drop snapshot sp_ca_alias from tenant_a publication pubca;
+drop snapshot sp_ca_expl from tenant_a publication pubca;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_ca_pre','sp_ca_alias','sp_ca_expl');
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+drop database if exists fsdb;
+create database fsdb;
+create table fsdb.t(a int primary key, b varchar(10));
+insert into fsdb.t values (1,'1');
+create snapshot sp_fs_old for table fsdb t;
+drop table fsdb.t;
+create table fsdb.t(a int primary key, b varchar(10));
+insert into fsdb.t values (2,'2');
+create snapshot sp_fs_new for table fsdb t;
+drop publication if exists pubsfs;
+create publication pubsfs database fsdb table t account tenant_a,tenant_b;
+drop database if exists subfs;
+create database subfs from sys publication pubsfs;
+select count(*) from subfs.t;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table fsdb.t;
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where pub_name = 'pubsfs';
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+pubsfs  ¦  fsdb  ¦  t
+drop snapshot sp_fs_old from sys publication pubsfs;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_fs_old is outside the publication's scope
+drop snapshot sp_fs_new from sys publication pubsfs;
+-- @regex("outside the publication's scope", true)
+internal error: snapshot sp_fs_new is outside the publication's scope
+drop database subfs;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_fs_old','sp_fs_new') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_fs_new  ¦  table  ¦  tenant_a  ¦  fsdb  ¦  t  𝄀
+sp_fs_old  ¦  table  ¦  tenant_a  ¦  fsdb  ¦  t
+create publication pubsfs_all database fsdb account tenant_a,tenant_b;
+drop snapshot sp_fs_old from sys publication pubsfs_all;
+drop snapshot sp_fs_new from sys publication pubsfs_all;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname in ('sp_fs_old','sp_fs_new') order by sname;
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]
+drop database if exists rcedb;
+create database rcedb;
+create table rcedb.t(a int primary key, b varchar(10));
+insert into rcedb.t values (1,'1');
+create publication pubrc database rcedb account tenant_b;
+create database subrc from tenant_a publication pubrc;
+create snapshot sp_rc for table subrc t;
+drop publication pubrc;
+drop snapshot sp_rc from tenant_a publication pubrc;
+-- @regex("does not exist", true)
+internal error: publication tenant_a.pubrc does not exist
+drop database subrc;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where sname = 'sp_rc';
+➤ sname[12,64,0]  ¦  level[12,65535,0]  ¦  account_name[12,300,0]  ¦  database_name[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sp_rc  ¦  table  ¦  tenant_a  ¦  rcedb  ¦  t
+drop snapshot sp_rc;
+drop database if exists tsdb;
+create database tsdb;
+create table tsdb.tt(a int primary key, b varchar(10));
+insert into tsdb.tt values (1,'pub1');
+create publication pubts database tsdb account tenant_b;
+drop database if exists rpl;
+create database rpl;
+create table rpl.ct(a int primary key, b varchar(10));
+insert into rpl.ct values (1,'l1'),(2,'l2');
+create snapshot sp_rpl_local for table rpl ct;
+insert into rpl.ct values (3,'l3');
+create snapshot sp_rpl_local2 for table rpl ct;
+drop database rpl;
+create database rpl from tenant_a publication pubts;
+data branch diff rpl.ct{snapshot="sp_rpl_local"} against rpl.ct{snapshot="sp_rpl_local2"};
+➤ diff ct against ct[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]  𝄀
+ct  ¦  INSERT  ¦  3  ¦  l3
+data branch diff rpl.ct{snapshot="sp_rpl_local"} against rpl.ct{snapshot="sp_rpl_local"};
+➤ diff ct against ct[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+data branch diff rpl.tt {MO_TS = '9223372036854775807-0'} against rpl.tt {MO_TS = '9223372036854775807-0'};
+➤ diff tt against tt[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,32,0]  ¦  b[12,10,0]
+select count(*) from rpl.tt {MO_TS = '9223372036854775807-0'};
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from rpl.tt;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch diff rpl.tt{timestamp = 9223372036854775807} against rpl.tt{timestamp = 9223372036854775807};
+-- @regex("invalid timestamp value", true)
+invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807
+select count(*) from rpl.tt {timestamp = 9223372036854775807};
+-- @regex("invalid timestamp value", true)
+invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807
+data branch diff rpl.nope {MO_TS = '9223372036854775807-0'} against rpl.nope {MO_TS = '9223372036854775807-0'};
+-- @regex("table \"nope\" does not exist", true)
+SQL parser error: table "nope" does not exist
+select count(*) from rpl.nope {MO_TS = '9223372036854775807-0'};
+-- @regex("table \"nope\" does not exist", true)
+SQL parser error: table "nope" does not exist
+drop publication if exists puball;
+drop publication if exists pubsfs;
+drop publication if exists pubsfs_all;
+drop publication if exists p_fsrc;
+drop database if exists sysdb;
+drop database if exists fsrc_db;
+drop publication if exists pub1;
+drop publication if exists pubsc2;
+drop publication if exists pubhdb;
+drop publication if exists pubhdb2;
+drop publication if exists publi;
+drop publication if exists publi_all;
+drop publication if exists pubca;
+drop publication if exists pubrdb;
+drop publication if exists pubts;
+drop database if exists tsdb;
+drop database if exists tdb;
+drop database if exists scdb;
+drop database if exists rdb;
+drop database if exists hdb;
+drop database if exists lidb;
+drop database if exists cadb;
+drop database if exists fsdb;
+drop database if exists fsrc_db;
+drop database if exists rcedb;
+drop database if exists sub3;
+drop database if exists subsc2;
+drop database if exists sub_ca;
+drop database if exists ldb;
+drop snapshot sp_rpl_local;
+drop snapshot sp_rpl_local2;
+drop database if exists rpl;
+drop user if exists branch_ro;
+drop user if exists branch_np;
+drop role if exists branch_ro_role;
+drop role if exists branch_np_role;
+drop database if exists fsrc_db;
+drop database if exists s_fsrc;
+drop account if exists tenant_a;
+drop account if exists tenant_b;
+drop account if exists vw02;
+drop account if exists vw03;

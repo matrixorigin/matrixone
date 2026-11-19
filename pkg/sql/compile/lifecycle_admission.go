@@ -46,6 +46,12 @@ type lifecycleDatabaseName struct {
 func (c *Compile) admitBroadTableLifecycleRC(
 	database, table string, expectedID uint64, privatePreparationLockTables ...uint64,
 ) (engine.Database, engine.Relation, error) {
+	return c.admitTableLifecycleRC(database, table, expectedID, true, privatePreparationLockTables...)
+}
+
+func (c *Compile) admitTableLifecycleRC(
+	database, table string, expectedID uint64, exclusive bool, privatePreparationLockTables ...uint64,
+) (engine.Database, engine.Relation, error) {
 	ctx := c.proc.Ctx
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -53,7 +59,7 @@ func (c *Compile) admitBroadTableLifecycleRC(
 	}
 	if err = c.admitLifecycleRC(
 		[]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}},
-		true, privatePreparationLockTables...,
+		exclusive, privatePreparationLockTables...,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -110,10 +116,7 @@ func (c *Compile) admitLifecycleRC(
 	if err != nil {
 		return err
 	}
-	waitPolicy := []lock.WaitPolicy{lock.WaitPolicy_Wait}
-	if len(retained.LockTables) > 0 && !allRetainedLockTablesAllowed(retained.LockTables, allowedRetainedLockTables) {
-		waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
-	}
+	waitPolicy := []lock.WaitPolicy{lifecycleAdmissionWaitPolicy(retained.LockTables, allowedRetainedLockTables...)}
 	systemCtx := context.WithValue(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
@@ -192,6 +195,13 @@ func (c *Compile) admitLifecycleRC(
 		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 	}
 	return c.verifyLifecycleRegistryRow()
+}
+
+func lifecycleAdmissionWaitPolicy(retained []lock.LockTable, allowed ...uint64) lock.WaitPolicy {
+	if len(retained) > 0 && !allRetainedLockTablesAllowed(retained, allowed) {
+		return lock.WaitPolicy_FastFail
+	}
+	return lock.WaitPolicy_Wait
 }
 
 func allRetainedLockTablesAllowed(

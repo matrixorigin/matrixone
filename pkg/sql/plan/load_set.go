@@ -23,21 +23,21 @@ import (
 // consumes expressions. Otherwise a later error can leave a partially consumed
 // AST whose first nil expression makes InitNullMap skip validation on retry.
 // Keep this LOAD-only: external tables also use InitNullMap.
-func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext) error {
-	if param == nil || param.Tail == nil {
+func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, tableDef *TableDef) error {
+	if param == nil || param.Tail == nil || len(param.Tail.Assignments) == 0 {
 		return nil
 	}
+	unsupported := func() error {
+		return moerr.NewNotSupported(ctx.GetContext(),
+			"LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)")
+	}
 	for _, assignment := range param.Tail.Assignments {
-		if assignment != nil && assignment.Expr == nil {
-			// A nil expression marks an already normalized assignment.
-			continue
-		}
-		unsupported := func() error {
-			return moerr.NewNotSupported(ctx.GetContext(),
-				"LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)")
-		}
 		if assignment == nil {
 			return unsupported()
+		}
+		if assignment.Expr == nil {
+			// Normalization consumes the expression, but retains its target.
+			continue
 		}
 		expr, collated := loadNullIfFunction(assignment.Expr)
 		if expr == nil {
@@ -66,6 +66,24 @@ func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext) er
 			}
 		default:
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
+		}
+	}
+	// Preserve the existing expression diagnostic priority across the whole
+	// SET list, then validate targets before InitNullMap consumes expressions.
+	// Normalized assignments still retain their targets and must be checked.
+	columns := make(map[string]*ColDef, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		columns[column.Name] = column
+	}
+	for _, assignment := range param.Tail.Assignments {
+		for _, target := range assignment.Names {
+			if target == nil {
+				return unsupported()
+			}
+			column := columns[target.ColName()]
+			if column == nil || column.Hidden {
+				return moerr.NewBadFieldError(ctx.GetContext(), target.ColName(), tableDef.Name)
+			}
 		}
 	}
 	return nil

@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -146,9 +147,25 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := requiredRemotePipelineExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
+	}
+	// Scope cloning/folding preserves this Process, and the sender serializes
+	// this exact owner's ProcessInfo. The capability/root Process cannot lend
+	// a baseline to an unrelated scope with a missing state owner.
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		if s.Proc == nil || s.Proc.Base == nil || s.Proc.Base.LastInsertID == nil {
+			return nil, moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline owner is missing")
+		}
+	}
+	if features.FloatConversionSemantics && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
+	}
+	// The Query RPC probe and the execution stream can reach different worker
+	// generations. Fence affected payloads on the bound stream as well.
+	if features.IncompleteTemporalStrings && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
 	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
@@ -161,6 +178,28 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
+	}
+	// Reconfirm these contracts on the very stream that carries the scope,
+	// not only at an earlier inventory/capability observation.
+	if requiredProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion134)
+	}
+	if requiredProtocol != nil && features.JSONMinMaxTypedComparison {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion133)
+	}
+	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
+	}
+	// Decision D10 of the exact weighted percentile design: the encoded
+	// aggregate travels by encoded ID, so every destination receiving this
+	// pipeline must advertise the aggregate's dispatch capability version;
+	// the destination confirms the raised floor on the live stream before the
+	// pipeline is delivered. The aggregate's capability slot is MORPCVersion131:
+	// upstream main claimed MORPCVersion130 for the incomplete temporal string
+	// overloads (#30311, 5a813a324d) before this gate was merged, so the
+	// aggregate's floor is raised to the version minted for it in const.go.
+	if requiredProtocol != nil && pipelineContainsQuantileExactWeighted(p) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion131)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -289,6 +328,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteODKUBaselinePresence(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -358,6 +400,7 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
+	odkuOrdinalBase ...uint64,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
@@ -366,6 +409,9 @@ func encodeProcessInfo(
 	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
 	if remoteExecutionID != uuid.Nil {
 		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
+	}
+	if len(odkuOrdinalBase) > 0 {
+		v.OdkuOrdinalBase = odkuOrdinalBase[0]
 	}
 	return v.Marshal()
 }
@@ -474,7 +520,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		CnCnt:   s.NodeInfo.CNCNT,
 		CnIdx:   s.NodeInfo.CNIDX,
 	}
-	ctx.pipe = p
 	ctx.scope = s
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
@@ -648,6 +693,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if isRemote {
 				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
 			}
+			s.DataSource.OrderBy = dsc.Node.OrderBy
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -829,6 +875,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
+		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
+		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
 			TableDef:                     t.TableDef,
@@ -842,6 +892,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColOffset:                    t.ColOffset,
 			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
 			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			TrackOdkuResult:              t.TrackODKUResult,
+			OdkuOrdinalColumn:            t.ODKUOrdinalColumn,
+			OdkuAutoIncrementColumn:      t.ODKUAutoIncrementColumn,
 			RejectZeroTemporal:           t.RejectZeroTemporal,
 			HasTargetSelector:            t.HasTargetSelector,
 			TargetRowNumberCol:           t.TargetRowNumberCol,
@@ -873,6 +926,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if len(t.ShuffleKeyColumns) > 0 {
+			return ctxId, nil, moerr.NewInternalErrorNoCtx("complete-key shuffle is coordinator-local")
+		}
 		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
 			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
 			// This appended wire opcode is deliberately unknown to pre-v33
@@ -922,6 +978,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if t.SortRollup {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"sort rollup cannot be serialized for remote execution")
+		}
 		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
 			return ctxId, nil, err
 		}
@@ -946,6 +1006,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
+			ExistenceOnly:          t.ExistenceOnly,
 			JoinType:               t.JoinType,
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
@@ -981,6 +1042,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+		if t.ScanCutoffLimit > 0 && t.ScanCutoffTag > 0 {
+			// For Order, Limit is an optional witness-count hint, not an
+			// output limit. Only the executing scan scope may enable it.
+			in.Limit = plan2.MakePlan2Uint64ConstExprWithType(t.ScanCutoffLimit)
+			in.TopValueTag = t.ScanCutoffTag
+		}
 	case *partition.Partition:
 		in.OrderBy = t.OrderBySpecs
 		in.Limit = t.Limit
@@ -999,12 +1066,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
+		ignored, err := productl2.EncodeIgnored(t.Ignored)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
 			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
+			Ignored:      ignored,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
@@ -1023,6 +1095,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopValueTag = t.TopValueTag
 		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1069,13 +1142,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ConnectorIndex: idx,
 		}
 	case *table_function.TableFunction:
+		maintenance, err := encodeIndexMaintenanceSpec(t.IndexMaintenance)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:            t.Attrs,
+			Rets:             t.Rets,
+			Args:             t.Args,
+			Params:           t.Params,
+			Name:             t.FuncName,
+			IsSingle:         t.IsSingle,
+			IndexMaintenance: maintenance,
 		}
 		in.Limit = t.Limit
 
@@ -1159,6 +1237,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
 			DedupKeyExprs:             t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:      t.AuxiliaryRowIdColIdx,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1175,6 +1254,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
 			return ctxId, nil, err
 		}
+		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -1190,6 +1273,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
 			DedupKeyExprs:                   t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:            t.AuxiliaryRowIdColIdx,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1206,6 +1290,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			CountFoundRows:                  t.CountFoundRows,
 			EmitActionRows:                  t.EmitActionRows,
 			ActionFinalResultPos:            t.ActionFinalResultPos,
+			OdkuResultTracking:              t.ODKUResultTracking,
+			OdkuTargetAutoIncrementCol:      t.ODKUTargetAutoIncrementCol,
+			OdkuGeneratedCol:                t.ODKUGeneratedCol,
+			OdkuOrdinalCol:                  t.ODKUOrdinalCol,
+			OdkuGeneratedAutoIncrementCol:   t.ODKUGeneratedAutoIncrementCol,
 		}
 		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
@@ -1257,13 +1346,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
+			maintenance, err := encodeIndexMaintenanceSpec(t.TableFunction.IndexMaintenance)
+			if err != nil {
+				return ctxId, nil, err
+			}
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:    t.TableFunction.Attrs,
-				Rets:     t.TableFunction.Rets,
-				Args:     t.TableFunction.Args,
-				Params:   t.TableFunction.Params,
-				Name:     t.TableFunction.FuncName,
-				IsSingle: t.TableFunction.IsSingle,
+				Attrs:            t.TableFunction.Attrs,
+				Rets:             t.TableFunction.Rets,
+				Args:             t.TableFunction.Args,
+				Params:           t.TableFunction.Params,
+				Name:             t.TableFunction.FuncName,
+				IsSingle:         t.TableFunction.IsSingle,
+				IndexMaintenance: maintenance,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1441,6 +1535,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ColOffset = t.ColOffset
 		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
 		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
+		arg.TrackODKUResult = t.GetTrackOdkuResult()
+		arg.ODKUOrdinalColumn = t.GetOdkuOrdinalColumn()
+		arg.ODKUAutoIncrementColumn = t.GetOdkuAutoIncrementColumn()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1581,6 +1678,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.HashJoin:
 		t := opr.GetHashJoin()
 		arg := hashjoin.NewArgument()
+		arg.ExistenceOnly = t.ExistenceOnly
 		arg.JoinType = t.JoinType
 		arg.IsRightJoin = t.IsRightJoin
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
@@ -1622,6 +1720,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
+		if value, ok := remoteOrderScanCutoffBound(opr.Limit); ok && opr.TopValueTag > 0 {
+			arg.ScanCutoffLimit = value
+			arg.ScanCutoffTag = opr.TopValueTag
+		}
 		op = arg
 	case vm.Partition:
 		arg := partition.NewArgument()
@@ -1647,6 +1749,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
 		arg.VectorOpType = t.VectorOpType
+		ignored, err := productl2.DecodeIgnored(t.Ignored)
+		if err != nil {
+			return nil, err
+		}
+		arg.Ignored = ignored
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1664,6 +1771,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		topArg.TopValueTag = opr.TopValueTag
 		if opr.TopOrderedOutput {
 			topArg.WithOrderedOutput()
 		}
@@ -1736,6 +1844,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.TableFunction:
+		maintenance, err := decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+		if err != nil {
+			return nil, err
+		}
 		arg := table_function.NewArgument()
 		arg.Attrs = opr.TableFunction.Attrs
 		arg.Rets = opr.TableFunction.Rets
@@ -1743,6 +1855,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.IndexMaintenance = maintenance
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1832,6 +1945,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1857,6 +1971,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1869,6 +1984,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CountFoundRows = t.CountFoundRows
 		arg.EmitActionRows = t.EmitActionRows
 		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		arg.ODKUResultTracking = t.GetOdkuResultTracking()
+		arg.ODKUTargetAutoIncrementCol = t.GetOdkuTargetAutoIncrementCol()
+		arg.ODKUGeneratedCol = t.GetOdkuGeneratedCol()
+		arg.ODKUOrdinalCol = t.GetOdkuOrdinalCol()
+		arg.ODKUGeneratedAutoIncrementCol = t.GetOdkuGeneratedAutoIncrementCol()
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -1902,6 +2022,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
+		var maintenance *executor.IndexMaintenanceSpec
+		if opr.TableFunction != nil {
+			var err error
+			maintenance, err = decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+			if err != nil {
+				return nil, err
+			}
+		}
 		arg := apply.NewArgument()
 		t := opr.GetApply()
 		arg.ApplyType = int(t.ApplyType)
@@ -1918,6 +2046,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+			arg.TableFunction.IndexMaintenance = maintenance
 		}
 		op = arg
 	case vm.MultiUpdate:
@@ -2043,6 +2172,11 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isJSONOpaqueGroupConcatAggregate(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONOpaqueTextContracts: true}); err != nil {
+				return err
+			}
+		}
 		if isDecimalStatisticalAggregate(agg) {
 			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
 				return err
@@ -2073,6 +2207,16 @@ func validateRemoteAggregateProtocol(
 			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
 				"approx_percentile remote execution requires MORPC protocol version 76",
+			)
+		}
+		// The service-local self-gate gives the coherent coordinator-side
+		// message; destination verification for this aggregate is layered at
+		// compile time (AllCNsSupportProtocol), on the requiredProtocol floor
+		// above, and on the pre-dispatch stream confirmation.
+		if agg.GetAggID() == aggexec.AggIdOfQuantileExactWeighted &&
+			(proc == nil || !supportsRemoteQuantileExactWeighted(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"quantileExactWeighted remote execution requires MORPC protocol version 131",
 			)
 		}
 		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
@@ -2115,6 +2259,11 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+		if aggregateUsesJSONMinMax(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2151,11 +2300,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	collectAggregateDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2168,6 +2317,7 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 				continue
 			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueGroupConcatAggregate(agg)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
 				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
@@ -2176,8 +2326,20 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 		}
 	}
 	for _, child := range p.Children {
-		collectDecimalStatisticalDescriptorFeatures(child, features)
+		collectAggregateDescriptorFeatures(child, features)
 	}
+}
+
+func isJSONOpaqueGroupConcatAggregate(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfGroupConcat {
+		return false
+	}
+	for _, arg := range agg.GetArgExpressions() {
+		if arg != nil && types.T(arg.Typ.Id) == types.T_json {
+			return true
+		}
+	}
+	return false
 }
 
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2202,6 +2364,33 @@ func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
 	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
 		aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
 		return true
+	}
+	return false
+}
+
+// pipelineContainsQuantileExactWeighted reports whether an encoded remote
+// pipeline carries the exact weighted percentile aggregate in any group or
+// merge-group stage, so encodeRemoteScopeWithProtocol can raise the
+// destination capability floor before the pipeline is delivered.
+func pipelineContainsQuantileExactWeighted(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	for _, in := range p.InstructionList {
+		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) ||
+			in.Agg == nil {
+			continue
+		}
+		for _, wire := range in.Agg.Aggs {
+			if wire != nil && wire.Op == aggexec.AggIdOfQuantileExactWeighted {
+				return true
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if pipelineContainsQuantileExactWeighted(child) {
+			return true
+		}
 	}
 	return false
 }
@@ -2329,11 +2518,20 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := requiredRemotePipelineExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeatures(proc, features)
+	if err := validateRemoteExpressionFeatures(proc, features); err != nil {
+		return err
+	}
+	// Decoding must prove wire presence even for expression-only consumers;
+	// a receiver-local default pointer or resolver is not sender provenance.
+	if features.SessionLastInsertIDBaseline && (proc == nil || proc.Base == nil ||
+		proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+		return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID requires an explicit session baseline")
+	}
+	return nil
 }
 
 // The sender reuses analysis of its current pipeline; the receiver computes
@@ -2358,6 +2556,20 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 134")
+	}
+	if features.SessionLastInsertIDBaseline {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion134 {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 134")
+		}
+	}
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 133")
+	}
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		return moerr.NewNotSupportedNoCtx("JSON string consumer execution requires MORPC protocol version 129")
 	}
 	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
@@ -2391,6 +2603,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
+	}
+	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
+		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 130")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
@@ -2452,6 +2667,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		return moerr.NewNotSupportedNoCtx(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
+	}
+	if features.FloatConversionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion132) {
+		return moerr.NewNotSupportedNoCtx("corrected float conversions require MORPC protocol version 132")
 	}
 	if features.StringNumericResultContracts &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
@@ -2624,6 +2842,27 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	return nil
 }
 
+// A zero session baseline is authoritative only when explicitly transported.
+// Keep this at the remote decode boundary, before scope/operator construction.
+func validateRemoteODKUBaselinePresence(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		tracked := instruction.GetPreInsert() != nil && instruction.GetPreInsert().TrackOdkuResult ||
+			instruction.GetDedupJoin() != nil && instruction.GetDedupJoin().OdkuResultTracking
+		if tracked && (proc == nil || proc.Base == nil || proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+			return moerr.NewNotSupportedNoCtx("remote ODKU result tracking requires an explicit session LAST_INSERT_ID baseline")
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteODKUBaselinePresence(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteStatementLastInsertIDPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2637,6 +2876,15 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
 				return err
 			}
+			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"remote ODKU result tracking requires MORPC protocol version 134")
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
+			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -3032,6 +3280,10 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	default:
 		return false
 	}
+}
+
+func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
+	return plan.IsJSONMinMaxAggregate(agg.GetAggID(), agg.GetArgExpressions())
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -26,6 +27,14 @@ import (
 // Exercise the vector entry point, including pattern preparation and the
 // existing constant-pattern fast paths, rather than timing only a matcher.
 func BenchmarkLikePatterns(b *testing.B) {
+	benchmarkLikePatterns(b, false)
+}
+
+func BenchmarkLikePatternsCancelableContext(b *testing.B) {
+	benchmarkLikePatterns(b, true)
+}
+
+func benchmarkLikePatterns(b *testing.B, cancelable bool) {
 	const rows = 256
 	for _, tc := range []struct{ name, pattern, value string }{
 		{"exact", "catalog", "catalog"},
@@ -45,6 +54,13 @@ func BenchmarkLikePatterns(b *testing.B) {
 			}
 			b.Run(tc.name+"/"+mode, func(b *testing.B) {
 				proc := newLikeTestProcess(b)
+				if cancelable {
+					ctx, cancel := context.WithCancel(proc.Ctx)
+					defer cancel()
+					proc.Ctx = ctx
+					// Allocate Done before timing, as a running pipeline does.
+					require.NotNil(b, ctx.Done())
+				}
 				values := vector.NewVec(types.T_varchar.ToType())
 				defer values.Free(proc.Mp())
 				var patterns *vector.Vector

@@ -20,10 +20,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -525,6 +527,25 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionOptimizerHintsChangeInvalidatesPlans(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", "applyIndices=1"))
+	prepared := &PrepareStmt{}
+	ses.prepareStmts["hinted"] = prepared
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-hint", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", "applyIndices=1"))
+	require.True(t, ses.isCached("cached-hint"))
+	require.Zero(t, stmt.freed)
+	require.False(t, prepared.needsRebuild)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", ""))
+	require.False(t, ses.isCached("cached-hint"))
+	require.Equal(t, 1, stmt.freed)
+	require.True(t, prepared.needsRebuild)
+}
+
 func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -533,10 +554,26 @@ func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 		a, b interface{}
 	}{
 		{"lc_time_names", "en_US", "fr_FR"},
+		{"time_zone", "+00:00", "+08:00"},
 		{"mo_pk_check_by_cn", int8(0), int8(1)},
 		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
 		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
 		{"sql_mode", "", "STRICT_TRANS_TABLES"},
+		{"fulltext2_search_df_cutoff", float64(0), float64(0.7)},
+		{"fulltext2_search_df_cutoff", float64(0.7), float64(0)},
+		{"fulltext2_threads_search", int64(0), int64(4)},
+		{"fulltext_bloom_filter_pushdown", int8(0), int8(1)},
+		{"fulltext_bloom_filter_pushdown", int8(1), int8(0)},
+		// Spill thresholds are resolved while building the plan and copied
+		// into Node.SpillMem, which join/aggregate/sort operators consume as
+		// their run-time SpillThreshold. A changed SESSION value must evict
+		// cached plans and prepared generations; the row/byte boundary at
+		// 100000 is exercised on both sides.
+		{"join_spill_mem", int64(1048576), int64(2)},
+		{"join_spill_mem", int64(2), int64(1073741824)},
+		{"agg_spill_mem", int64(0), int64(100000)},
+		{"agg_spill_mem", int64(100000), int64(100001)},
+		{"sort_spill_mem", int64(0), int64(1)},
 	} {
 		t.Run(fmt.Sprintf("%s/%v", tc.name, tc.b), func(t *testing.T) {
 			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -585,6 +622,51 @@ func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(10)))
 	require.False(t, ses.isCached("select decimal_a / decimal_b"))
 	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionRollupAlgorithmChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-rollup"))
+
+	// Re-setting COST does not change the physical-plan contract.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "COST"))
+	require.True(t, ses.isCached("cached-rollup"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "ROLLUP_ALGORITHM", "HASH"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionRollupAlgorithmChangeInvalidatesPreparedPlanGeneration(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	prepared := &PrepareStmt{Name: "rollup-prepared"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepared.Name, prepared))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, prepared.needsRebuild)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "HASH"))
+	require.True(t, prepared.needsRebuild)
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
 }
 
 func TestSessionWindowPartitionAlgorithmChangeClearsPlanCache(t *testing.T) {
@@ -759,4 +841,80 @@ func TestSessionVectorModeChangeClearsPlanCache(t *testing.T) {
 			require.Equal(t, 1, off.freed)
 		})
 	}
+}
+
+func TestPlanCacheMalformedGenerationRejected(t *testing.T) {
+	pc := newPlanCache(1)
+	defer pc.clean()
+	old := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{}}}
+	pc.cache("q", []tree.Statement{&trackedStatement{}}, []*pbplan.Plan{old})
+	malformed := &pbplan.Plan{Plan: (*pbplan.Plan_Query)(nil)}
+	require.False(t, pc.updatePlanGeneration("q", 0, old, malformed, timestamp.Timestamp{}, nil))
+	require.Same(t, old, pc.get("q").plans[0])
+	require.False(t, pc.get("q").invalid)
+}
+
+func TestPlanCacheRejectsExecutionDependentAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     *pbplan.Query
+		cacheable bool
+	}{
+		{"ordinary", &pbplan.Query{StmtType: pbplan.Query_SELECT}, true},
+		{"temporal base", &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "events"}}}}, false},
+		{"temporal index", &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "__mo_index_secondary_events"}}}}, false},
+		{"missing query", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pc := newPlanCache(1)
+			stmt := &trackedStatement{}
+			p := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: tc.query}}
+			pc.cache("query", []tree.Statement{stmt}, []*pbplan.Plan{p})
+			require.Equal(t, tc.cacheable, pc.isCached("query"))
+			if tc.cacheable {
+				require.Zero(t, stmt.freed)
+			} else {
+				require.Equal(t, 1, stmt.freed)
+			}
+			pc.clean()
+			require.Equal(t, 1, stmt.freed, "the LRU owns each transferred AST exactly once")
+		})
+	}
+}
+
+func TestPlanCacheRejectsExecutionDependentReplacement(t *testing.T) {
+	pc := newPlanCache(1)
+	stmt := &trackedStatement{}
+	old := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{StmtType: pbplan.Query_SELECT}}}
+	pc.cache("query", []tree.Statement{stmt}, []*pbplan.Plan{old})
+	cached := pc.get("query")
+	snapshot := cached.planSnapshotTS[0]
+	marked := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true}}}
+	require.False(t, pc.updatePlanGeneration("query", 0, old, marked, timestamp.Timestamp{PhysicalTime: 42}, nil))
+	require.True(t, cached.invalid)
+	require.Same(t, old, cached.plans[0])
+	require.Equal(t, snapshot, cached.planSnapshotTS[0])
+	require.Zero(t, stmt.freed, "an executing wrapper may still borrow the invalidated AST")
+	pc.clean()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestCachedLookupCancellationPreservesGeneration(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetCmd(COM_QUERY)
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	stmt := &trackedStatement{}
+	p := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{StmtType: pbplan.Query_SELECT}}}
+	ses.cachePlan(input.getHash(), []tree.Statement{stmt}, []*pbplan.Plan{p})
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cause := fmt.Errorf("cancelled before cached lookup")
+	cancel(cause)
+	ec := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.GetProc(), input: input}
+	cws, err := GetComputationWrapper(ec, "", "root", nil, ses.GetProc(), ses)
+	require.Same(t, cause, err)
+	require.Empty(t, cws)
+	require.True(t, ses.isCached(input.getHash()))
+	require.Zero(t, stmt.freed)
 }

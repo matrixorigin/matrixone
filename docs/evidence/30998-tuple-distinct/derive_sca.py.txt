@@ -1,0 +1,35 @@
+import subprocess,json,pathlib,collections
+w=pathlib.Path('/private/tmp/mo-issue30995');p=pathlib.Path(__file__).parent
+raw=subprocess.check_output(['go','list','-mod=readonly','-deps','-test','-json=ImportPath,Dir,ForTest,Module,Imports,TestImports,XTestImports','./...'],cwd=w,text=True)
+dec=json.JSONDecoder();i=0;records=[]
+while i<len(raw):
+ while i<len(raw) and raw[i].isspace():i+=1
+ if i==len(raw):break
+ r,n=dec.raw_decode(raw,i);records.append(r);i=n
+owners={}
+for r in records:
+ try:d=pathlib.Path(r['Dir']).relative_to(w)
+ except (KeyError,ValueError):continue
+ owners[r['ImportPath']]='./'+str(d)
+reverse=collections.defaultdict(set)
+for r in records:
+ if r['ImportPath'] not in owners:continue
+ for dependency in r.get('Imports',[])+r.get('TestImports',[])+r.get('XTestImports',[]):
+  if dependency in owners:reverse[owners[dependency]].add(owners[r['ImportPath']])
+files=subprocess.check_output(['git','diff','--name-only','94faf0209b9ac3254d31906f92e34405f1988203...HEAD'],cwd=w,text=True).splitlines()
+files+=subprocess.check_output(['git','ls-files','--others','--exclude-standard'],cwd=w,text=True).splitlines()
+selected=set();q=[]
+for f in files:
+ if not f.endswith('.go'):continue
+ owner='./'+str(pathlib.Path(f).parent);assert owner in owners.values(),f
+ selected.add(owner)
+ if not f.endswith('_test.go'):q.append(owner)
+seen=set(q)
+while q:
+ owner=q.pop()
+ for consumer in reverse[owner]:
+  selected.add(consumer)
+  if consumer not in seen:seen.add(consumer);q.append(consumer)
+assert selected and './.' not in selected
+(p/'sca-scope.json').write_text(json.dumps({'base':'94faf0209b9ac3254d31906f92e34405f1988203','files':files,'packages':sorted(selected),'method':'Go-provided Dir/ForTest and exact ImportPath graph; includes test variants whose Module metadata is absent'},indent=2))
+print(len(selected),*sorted(selected),sep='\n')

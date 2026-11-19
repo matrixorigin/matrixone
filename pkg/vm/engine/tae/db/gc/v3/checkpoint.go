@@ -1015,8 +1015,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	sourcer := window.MakeFilesReader(ctx, c.fs)
 	bf, err := BuildBloomfilter(
 		ctx,
-		Default_Coarse_EstimateRows,
-		Default_Coarse_Probility,
+		c.config.estimateRows,
+		c.config.probility,
 		0,
 		sourcer.Read,
 		memoryBuffer,

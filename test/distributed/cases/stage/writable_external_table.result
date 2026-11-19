@@ -141,6 +141,21 @@ insert into ext_jl select a+10, b, c from src;
 select count(*) from ext_jl;
 ➤ count(*)[-5,64,0]  𝄀
 6
+drop table if exists sentinel_src;
+create table sentinel_src(id int, value varchar(20));
+insert into sentinel_src values (1, cast(x'5C4E' as char)), (2, null), (3, 'plain');
+drop table if exists ext_jl_sentinel;
+create external table ext_jl_sentinel(id int, value varchar(20))
+infile{'filepath'='stage://wstage/wext_jl_sentinel_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_sentinel_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_jl_sentinel select * from sentinel_src;
+select id, value is null as is_null, coalesce(hex(value), 'NULL') as value_hex from ext_jl_sentinel order by id;
+➤ id[4,32,0]  ¦  is_null[-6,8,0]  ¦  value_hex[12,160,0]  𝄀
+1  ¦  0  ¦  5C4E  𝄀
+2  ¦  1  ¦  NULL  𝄀
+3  ¦  0  ¦  706C61696E
+drop table if exists ext_jl_sentinel;
+drop table if exists sentinel_src;
 drop table if exists wide_src;
 create table wide_src(
 c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
@@ -386,6 +401,8 @@ invalid input: cannot insert/update/delete from external table
 drop table if exists ext_rep;
 drop table if exists ext_csv;
 drop table if exists ext_jl;
+drop table if exists ext_jl_sentinel;
+drop table if exists sentinel_src;
 drop table if exists ext_tricky;
 drop table if exists tricky_src;
 drop table if exists ext_big;

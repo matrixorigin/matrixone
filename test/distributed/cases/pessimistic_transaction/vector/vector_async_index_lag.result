@@ -1,0 +1,60 @@
+set experimental_ivf_index = 1;
+drop database if exists vector_async_index_lag;
+create database vector_async_index_lag;
+use vector_async_index_lag;
+create table ta (id bigint primary key, v vecf32(2));
+insert into ta select result, concat('[', result, ',', result, ']') from generate_series(1, 20) g;
+create index ia using ivfflat on ta(v) lists = 2 op_type 'vector_l2_ops' ASYNC;
+select id from ta order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+begin;
+insert into ta values (100, '[0,0]');
+delete from ta where id = 1;
+update ta set v = '[100,100]' where id = 2;
+explain select id from ta order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+-- @regex("Vector Index Scan on ia", true)
+-- @regex("Sort Key: l2_distance", false)
+➤ AP QUERY PLAN ON ONE CN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on ia [l2_distance]  𝄀
+              Vector Index: ia, Metric: l2_distance, Candidate Limit: 2, NProbe: 5
+select id, v, l2_distance(v, '[0,0]') as d from ta order by d limit 2 by rank with option 'mode=post';
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,9,0]  𝄀
+2  ¦  [100, 100]  ¦  2.8284270763397217
+select id, v, l2_distance(v, '[0,0]') as d from ta order by d limit 2 by rank with option 'mode=force';
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,53,31]  𝄀
+100  ¦  [0, 0]  ¦  0.0  𝄀
+3  ¦  [3, 3]  ¦  4.242640495300293
+rollback;
+create table ts (id bigint primary key, v vecf32(2));
+insert into ts select result, concat('[', result, ',', result, ']') from generate_series(1, 20) g;
+create index iss using ivfflat on ts(v) lists = 2 op_type 'vector_l2_ops';
+begin;
+insert into ts values (100, '[0,0]');
+delete from ts where id = 1;
+update ts set v = '[100,100]' where id = 2;
+explain select id from ts order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+-- @regex("Vector Index Scan on iss", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on iss [l2_distance]  𝄀
+              Vector Index: iss, Metric: l2_distance, Candidate Limit: 2, NProbe: 5
+select id, v, l2_distance(v, '[0,0]') as d from ts order by d limit 2 by rank with option 'mode=post';
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,9,0]  𝄀
+100  ¦  [0, 0]  ¦  0.0  𝄀
+3  ¦  [3, 3]  ¦  4.242640495300293
+select id, v, l2_distance(v, '[0,0]') as d from ts order by d limit 2 by rank with option 'mode=force';
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,53,31]  𝄀
+100  ¦  [0, 0]  ¦  0.0  𝄀
+3  ¦  [3, 3]  ¦  4.242640495300293
+rollback;
+drop database vector_async_index_lag;
+set experimental_ivf_index = 0;

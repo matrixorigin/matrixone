@@ -225,6 +225,34 @@ func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
 	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, diffs, nil, vec))
 }
 
+func TestPartitionForOrderGeneralCIPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "b", "C", "c"}, nil, mp))
+
+	sels := []int64{0, 1, 2, 3, 4}
+	orderDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, orderDiffs, nil, vec),
+		"utf8mb4_general_ci folds case for ORDER BY peers")
+
+	// GROUP BY value identity keeps byte semantics; case-insensitive equality
+	// is tracked separately from #31174.
+	identityDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 1, 2, 3, 4}, Partition(sels, identityDiffs, nil, vec))
+}
+
+func TestPartitionForOrderKeepsBytePeersForBinaryCollation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a"}, nil, mp))
+
+	sels := []int64{0, 1}
+	diffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 1}, PartitionForOrder(sels, diffs, nil, vec))
+}
+
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())
@@ -362,4 +390,51 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 		ps = Partition(sels, ds, ps, k2)
 		require.Equal(t, []int64{0, 1, 2}, ps)
 	})
+}
+
+func TestPartitionJSONValueIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	jsonVec := func(values ...any) *vector.Vector {
+		vec := vector.NewVec(types.T_json.ToType())
+		for _, v := range values {
+			if s, ok := v.(string); ok {
+				bj, err := types.ParseStringToByteJson(s)
+				require.NoError(t, err)
+				data, err := bj.Marshal()
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(vec, data, false, mp))
+			} else {
+				require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+			}
+		}
+		return vec
+	}
+
+	run := func(vec *vector.Vector, n int) []int64 {
+		sels := make([]int64, n)
+		for i := range sels {
+			sels[i] = int64(i)
+		}
+		diffs := make([]bool, n)
+		partitions := make([]int64, 0, n)
+		return Partition(sels, diffs, partitions, vec)
+	}
+
+	// JSON value identity: 1, 1.0 and a repeated 1 are one partition;
+	// 2, 2.0 one partition; NULL forms its own trailing group.
+	vec := jsonVec("1", "1.0", "1", "2", "2.0", nil)
+	require.Equal(t, []int64{0, 3, 5}, run(vec, 6))
+
+	// Objects compare by member semantics, arrays by element semantics:
+	// {"a":1} equals {"a":1.0} and [1] equals [1.0], but an object never
+	// equals an array.
+	vec2 := jsonVec(`{"a":1}`, `{"a":1.0}`, `[1]`, `[1.0]`)
+	require.Equal(t, []int64{0, 2}, run(vec2, 4))
+
+	// Scoped change: non-JSON strings keep byte-identity partitioning.
+	sv := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(sv, []byte("1"), false, mp))
+	require.NoError(t, vector.AppendBytes(sv, []byte("1.0"), false, mp))
+	require.Equal(t, []int64{0, 1}, run(sv, 2))
 }

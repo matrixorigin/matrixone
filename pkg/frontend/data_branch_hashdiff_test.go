@@ -2399,7 +2399,7 @@ func TestHashDiffConflictReportsExpandedUpdatesWithoutValueClaim(t *testing.T) {
 		nil,
 	)
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataBranchConflict), err)
 	require.ErrorContains(t, err, "target UPDATE and base UPDATE on pk(7)")
 	require.NotContains(t, err.Error(), "different values")
 	require.Empty(t, emitted)
@@ -2741,6 +2741,303 @@ func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
 	require.Equal(t, diffUpdate, got[0].kind)
 	require.Equal(t, diffSideTarget, got[0].side)
 	require.Equal(t, [][]any{{int64(1), "bob", "h1"}}, got[0].rows)
+}
+
+// newTestBranchTableStuffDecimal256PK builds a tableStuff whose primary key is
+// DECIMAL(40,0), the smallest precision that MatrixOne stores as Decimal256.
+// A Decimal256 key is encoded into the branch hashmaps via EncodeStringType,
+// so it decodes back as a raw byte slice; every consumer must convert it to
+// the physical column type before touching a typed vector.
+func newTestBranchTableStuffDecimal256PK(ctrl *gomock.Controller, pkType types.Type) tableStuff {
+	decimalPK := func(tableName string) *plan.TableDef {
+		def := newTestBranchTableDef(tableName, "name")
+		def.Cols[0].Typ = plan.Type{Id: int32(types.T_decimal256), Width: pkType.Width, Scale: pkType.Scale}
+		return def
+	}
+
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel.EXPECT().GetTableName().Return("target").AnyTimes()
+	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(decimalPK("target")).AnyTimes()
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(decimalPK("base")).AnyTimes()
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(decimalPK("lca_tbl")).AnyTimes()
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+
+	var tblStuff tableStuff
+	tblStuff.tarRel = tarRel
+	tblStuff.baseRel = baseRel
+	tblStuff.lcaRel = lcaRel
+	tblStuff.def.colNames = []string{"id", "name", "hidden"}
+	tblStuff.def.colTypes = []types.Type{pkType, types.T_varchar.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.commonWritableIdxes = []int{0, 1}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.retPool = &retBatchList{}
+	return tblStuff
+}
+
+// buildLCAProbeResultSetDecimal256PK mimics the LCA SQL probe answer for the
+// Decimal256 primary key: the ordinal column plus the row as it exists at the
+// LCA snapshot. DECIMAL columns travel through the wire as NEWDECIMAL, so the
+// result-set column must carry the same precision and scale to convert back
+// exactly. MySQL's display length adds one byte for a sign and one for the
+// decimal point when a scale is present.
+func buildLCAProbeResultSetDecimal256PK(precision, scale int32, row []interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	displayLength := uint32(precision)
+	if scale > 0 {
+		displayLength += mysqlDecimalExtraLength
+	}
+	displayLength += mysqlDecimalExtraLength
+
+	cols := []struct {
+		name     string
+		typ      defines.MysqlType
+		length   uint32
+		decimal  int32
+		decimalP bool
+	}{
+		{name: "__mo_data_branch_ordinal", typ: defines.MYSQL_TYPE_LONGLONG},
+		{name: "id", typ: defines.MYSQL_TYPE_NEWDECIMAL, length: displayLength, decimal: scale, decimalP: true},
+		{name: "name", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "hidden", typ: defines.MYSQL_TYPE_VARCHAR},
+	}
+	for _, col := range cols {
+		mysqlCol := &MysqlColumn{}
+		mysqlCol.SetName(col.name)
+		mysqlCol.SetColumnType(col.typ)
+		if col.decimalP {
+			mysqlCol.SetLength(col.length)
+			mysqlCol.SetDecimal(col.decimal)
+		}
+		mrs.AddColumn(mysqlCol)
+	}
+	mrs.AddRow(row)
+	return mrs
+}
+
+// TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified reproduces the issue
+// #28589 update path: one existing Decimal256-PK row is updated on the branch.
+// The tombstone pipeline must classify the delete+insert pair as a single
+// UPDATE, and the surviving live row must be consumed by that pairing instead
+// of leaking into the plain-insert comparison.
+func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	pkType := types.New(types.T_decimal256, 40, 0)
+	kVal, err := types.ParseDecimal256("9999999999999999999999999999999999999999", 40, 0)
+	require.NoError(t, err)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{
+		txnOp: txnOp,
+	}
+
+	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	// The LCA probe must embed the exact Decimal256 literal; scientific or
+	// rounded literals would silently miss the LCA row.
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			require.Contains(t, sql, "values row(0,9999999999999999999999999999999999999999)")
+			require.Contains(t, sql, "cast(pks.`__mo_data_branch_pk_0` as DECIMAL(40,0))")
+			return nil
+		},
+	).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetDecimal256PK(40, 0, []interface{}{
+			int64(0), "9999999999999999999999999999999999999999", "before", "hb0",
+		}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	newRowID := buildHashDiffRowID(t, 1)
+
+	mp := ses.proc.Mp()
+	tarData := batch.NewWithSize(5)
+	tarData.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
+	tarData.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tarData.Vecs[1] = vector.NewVec(pkType)
+	tarData.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	tarData.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	tarData.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(tarData.Vecs[0], newRowID, false, mp))
+	require.NoError(t, vector.AppendFixed(tarData.Vecs[1], kVal, false, mp))
+	require.NoError(t, vector.AppendBytes(tarData.Vecs[2], []byte("after"), false, mp))
+	require.NoError(t, vector.AppendBytes(tarData.Vecs[3], []byte("target-only"), false, mp))
+	require.NoError(t, vector.AppendBytes(tarData.Vecs[4], commitTSBytes(types.BuildTS(15, 0)), false, mp))
+	tarData.SetRowCount(1)
+
+	tarTombstone := batch.NewWithSize(3)
+	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
+	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tarTombstone.Vecs[1] = vector.NewVec(pkType)
+	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[0], oldRowID, false, mp))
+	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[1], kVal, false, mp))
+	require.NoError(t, vector.AppendBytes(tarTombstone.Vecs[2], commitTSBytes(types.BuildTS(12, 0)), false, mp))
+	tarTombstone.SetRowCount(1)
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77},
+		pathFromLCAToBaseTS: []types.TS{{}},
+	}
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		dagInfo,
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				data:      tarData,
+				tombstone: tarTombstone,
+			}},
+		}},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, diffUpdate, got[0].kind)
+	require.Equal(t, diffSideTarget, got[0].side)
+	require.Equal(t, [][]any{{kVal, "after", "target-only"}}, got[0].rows)
+}
+
+// TestHashDiff_HasLCADecimal256PKDeleteIsReported covers the second reported
+// face of issue #28589: a branch DELETE of a Decimal256 key was silently
+// dropped, so DIFF was empty and MERGE reported success while the base kept
+// the deleted row. The deletion must be classified against the LCA snapshot
+// and emitted as a DELETE.
+func TestHashDiff_HasLCADecimal256PKDeleteIsReported(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	pkType := types.New(types.T_decimal256, 65, 30)
+	kVal, err := types.ParseDecimal256(
+		"9007199254740993.000000000000000000000000000001", 65, 30,
+	)
+	require.NoError(t, err)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{
+		txnOp: txnOp,
+	}
+
+	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetDecimal256PK(65, 30, []interface{}{
+			int64(0), "9007199254740993.000000000000000000000000000001", "before", "hb0",
+		}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	tarTombstone := batch.NewWithSize(3)
+	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
+	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tarTombstone.Vecs[1] = vector.NewVec(pkType)
+	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[0], oldRowID, false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[1], kVal, false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(tarTombstone.Vecs[2], commitTSBytes(types.BuildTS(12, 0)), false, ses.proc.Mp()))
+	tarTombstone.SetRowCount(1)
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77},
+		pathFromLCAToBaseTS: []types.TS{{}},
+	}
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		dagInfo,
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				tombstone: tarTombstone,
+			}},
+		}},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, diffDelete, got[0].kind)
+	require.Equal(t, diffSideTarget, got[0].side)
+	require.Equal(t, [][]any{{kVal, "before", "hb0"}}, got[0].rows)
 }
 
 func TestHashDiff_FakePKClosesMigratedHashmaps(t *testing.T) {

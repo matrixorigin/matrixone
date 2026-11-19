@@ -1,0 +1,73 @@
+drop database if exists ft2_ignored;
+create database ft2_ignored;
+use ft2_ignored;
+set experimental_fulltext2_index = 1;
+create table j(id bigint primary key, body varchar(200));
+insert into j values (1,'{"a":"red"}'),(2,'{not json'),(3,'{"a":"blue"}');
+create fulltext2 index fj on j(body) with parser json;
+the index cannot store more than max_bad_records = 0 rows; row 2: the text the index parses as JSON is not valid JSON: invalid input: json text {not json
+show index ignored from j;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+create fulltext2 index fj on j(body) with parser json max_bad_records 2;
+show index ignored from j;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fj  ¦  2  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {not json  ¦  2026-11-03 11:39:05
+create table z(id bigint primary key, body varchar(200));
+insert into z values (1,'{x'),(2,'[y');
+create fulltext2 index fz on z(body) with parser json max_bad_records 10;
+the index cannot store any of the 2 rows; row 1: the text the index parses as JSON is not valid JSON: invalid input: json text {x
+insert into j values (4,'[broken'),(5,'{"a":"green"}');
+show index ignored from j;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fj  ¦  2  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {not json  ¦  2026-11-03 11:39:05  𝄀
+fj  ¦  4  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text [broken  ¦  2026-11-03 11:39:05
+update j set body = '{"a":"gray"}' where id = 2;
+update j set body = '{bad' where id = 1;
+delete from j where id = 4;
+show index ignored from j;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fj  ¦  1  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {bad  ¦  2026-11-03 11:40:05
+insert into j values (6,'{six'),(7,'{seven');
+show index status from j;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,117,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+fj  ¦  j  ¦  stopped  ¦  the index cannot store more than max_bad_records = 2 rows; row 6: the text the index parses as JSON is not valid JSON  ¦  1  ¦  2  ¦  2026-11-03 11:40:58
+alter table j alter reindex fj fulltext2 max_bad_records 5;
+show index ignored from j;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fj  ¦  1  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {bad  ¦  2026-11-03 11:42:05  𝄀
+fj  ¦  6  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {six  ¦  2026-11-03 11:42:05  𝄀
+fj  ¦  7  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {seven  ¦  2026-11-03 11:42:05
+show index status from j;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+fj  ¦  j  ¦  running  ¦  null  ¦  3  ¦  5  ¦  2026-11-03 11:42:58
+show create table j;
+➤ Table[12,1,0]  ¦  Create Table[12,164,0]  𝄀
+j  ¦  CREATE TABLE `j` (
+  `id` bigint NOT NULL,
+  `body` varchar(200) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `fj`(`body`) WITH PARSER json max_bad_records = 5 
+)
+create table big(id bigint primary key, body text);
+insert into big values (1,'{"a":"red"}'),(2,concat('{', repeat('x', 65534)));
+create fulltext2 index fbig on big(body) with parser json max_bad_records 2;
+show index ignored from big where length(`Reason`) <= 1024;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fbig  ¦  2  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...  ¦  2026-11-05 20:42:01
+insert into big values (3,concat('[', repeat('y', 65534)));
+show index ignored from big where length(`Reason`) <= 1024;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+fbig  ¦  2  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text {xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...  ¦  2026-11-05 20:42:01  𝄀
+fbig  ¦  3  ¦  20351  ¦  the text the index parses as JSON is not valid JSON: invalid input: json text [yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy...  ¦  2026-11-05 20:42:01
+show index status from big;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+fbig  ¦  big  ¦  running  ¦  null  ¦  2  ¦  2  ¦  2026-11-05 20:43:53
+create table p(id bigint primary key, body varchar(200));
+insert into p values (1,'{not json but plain text}');
+create fulltext2 index fp on p(body);
+show index ignored from p;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+select id from p where match(body) against('plain');
+➤ id[-5,64,0]  𝄀
+1
+drop database ft2_ignored;

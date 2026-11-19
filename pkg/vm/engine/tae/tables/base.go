@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type BlockT[T common.IRef] interface {
@@ -70,6 +71,20 @@ func newBaseObject(
 	obj.meta.Store(meta)
 	obj.appendMVCC.SetAppendListener(
 		obj.OnApplyAppend)
+	obj.appendMVCC.SetAppendMaxListener(func(max types.TS) {
+		meta.UpdateAppendMaxCommit(max)
+	})
+	obj.appendMVCC.SetAppendMaxStateListener(func(finalized bool) {
+		if !finalized {
+			meta.MarkAppendMaxSealedWaiting()
+		}
+	})
+	if rt != nil && rt.Scheduler != nil {
+		meta.SetAppendMaxBookmarkScheduler(func(fn func() error) error {
+			_, err := rt.Scheduler.ScheduleScopedFn(nil, tasks.IOTask, meta.AsCommonID(), fn)
+			return err
+		})
+	}
 	obj.RWMutex = obj.appendMVCC.RWMutex
 	return obj
 }
@@ -164,6 +179,58 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
 	return x.GT(&startts)
 }
+
+func (obj *baseObject) WaitAppendCommittingBefore(
+	ts types.TS,
+	reader txnif.TxnReader,
+	keys containers.Vector,
+	keysZM index.ZM,
+) bool {
+	// Pin the memory node before touching append MVCC. Once the object is
+	// upgraded, the persisted node owns visibility and closing the old memory
+	// node releases all in-memory AppendNodes.
+	node := obj.PinNode()
+	defer node.Unref()
+	if node.IsPersisted() {
+		return false
+	}
+
+	var txns map[string]txnif.TxnReader
+	obj.RLock()
+	err := node.MustMNode().pkIndex.ForeachRowsByKeys(
+		keys.GetDownstreamVector(), keysZM,
+		func(row uint32) {
+			appendNode := obj.appendMVCC.GetAppendNodeByRowLocked(row)
+			if appendNode == nil || appendNode.IsAborted() {
+				return
+			}
+			needWait, txn := appendNode.NeedWaitCommitting(ts)
+			if !needWait || txn == nil {
+				return
+			}
+			// A transaction must never wait for an AppendNode it created itself.
+			if reader != nil && txn.GetID() == reader.GetID() {
+				return
+			}
+			if txns == nil {
+				txns = make(map[string]txnif.TxnReader)
+			}
+			txns[txn.GetID()] = txn
+		},
+	)
+	obj.RUnlock()
+	if err != nil {
+		panic(err)
+	}
+
+	// Applying commit or rollback needs the object lock. Never wait while
+	// holding it, otherwise this reader can block the transaction it waits for.
+	for _, txn := range txns {
+		txn.GetTxnState(true)
+	}
+	return len(txns) != 0
+}
+
 func (obj *baseObject) GetFs() fileservice.FileService { return obj.rt.Fs }
 func (obj *baseObject) GetID() *common.ID              { return obj.meta.Load().AsCommonID() }
 
@@ -261,26 +328,6 @@ func validatePersistedCommitTSVectors(
 		objectID,
 	)
 }
-
-// func (obj *baseObject) LoadPersistedColumnData(
-// 	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
-// ) (vec containers.Vector, err error) {
-// 	def := schema.ColDefs[colIdx]
-// 	location, err := obj.buildMetalocation(blkID)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	id := obj.meta.Load().AsCommonID()
-// 	id.SetBlockOffset(blkID)
-// 	return LoadPersistedColumnData(
-// 		ctx,
-// 		obj.rt,
-// 		id,
-// 		def,
-// 		location,
-// 		mp,
-// 	)
-// }
 
 func (obj *baseObject) Prefetch(blkID uint16) error {
 	node := obj.PinNode()
@@ -531,7 +578,7 @@ func (obj *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
 	panic("not supported")
 }
 
-func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
+func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch, _ uint32) (err error) {
 	panic("not supported")
 }
 
@@ -636,10 +683,18 @@ func (obj *baseObject) GetValue(
 ) (v any, isNull bool, err error) {
 	if !obj.meta.Load().IsTombstone && !skipCheckDelete {
 		var bat *containers.Batch
+		// Row is a physical RowID offset. HybridScanByBlock may compact
+		// aborted rows for ordinary scans, but doing that here would shift the
+		// vector and make the physical offset invalid.
+		ctx = WithPreservePhysicalRows(ctx)
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 		err = HybridScanByBlock(
 			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, &blkID, mp)
 		if err != nil {
+			return
+		}
+		if bat == nil {
+			err = moerr.NewNotFoundNoCtx()
 			return
 		}
 		defer bat.Close()
@@ -662,6 +717,10 @@ func (obj *baseObject) GetValue(
 	err = obj.Scan(
 		ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	if err != nil {
+		return
+	}
+	if bat == nil {
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	isNull = bat.Vecs[0].IsNull(row)

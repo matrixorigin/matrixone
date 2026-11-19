@@ -422,7 +422,7 @@ func TestBuildSQLJSONPlanResolvesUpdateExpressionInputs(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	require.Equal(t, []sqlJSONAssignment{
 		{Target: "db.t.id", Value: "1"},
-		{Target: "db.t.v", Value: "(2 + 2)"},
+		{Target: "db.t.v", Value: "(cast(2 AS BIGINT) + cast(2 AS BIGINT))"},
 		{Target: "db.t.w", Value: "left.v"},
 	}, decoded.MatrixOne.Nodes[0].Assignments)
 	after, err := json.Marshal(query)
@@ -501,6 +501,13 @@ func TestResolveUpdateProducerOutputs(t *testing.T) {
 		{name: "aggregate_slot", kind: plan.Node_AGG, rel: -2, col: 1, want: "any_value(7)"},
 		{name: "aggregate_out_of_range", kind: plan.Node_AGG, rel: -2, col: 2},
 		{name: "window_slot", kind: plan.Node_WINDOW, rel: -1, col: 2, want: "row_number(); Partition By: 7; Order By: 8"},
+		{name: "second_window_slot", kind: plan.Node_WINDOW, rel: -1, col: 3, want: "rank(); Partition By: 7; Order By: 8", change: func(n *plan.Node, _ *plan.Query) {
+			second := planpkg.DeepCopyExpr(n.WinSpecList[0])
+			function, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "rank", nil)
+			require.NoError(t, err)
+			second.GetW().WindowFunc = function
+			n.WinSpecList = append(n.WinSpecList, second)
+		}},
 		{name: "window_input_slot", kind: plan.Node_WINDOW, rel: -1, col: 1},
 		{name: "window_out_of_range", kind: plan.Node_WINDOW, rel: -1, col: 3},
 		{name: "missing_window", kind: plan.Node_WINDOW, rel: -1, col: 2, change: func(n *plan.Node, _ *plan.Query) { n.WinSpecList = nil }},
@@ -900,7 +907,7 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 	t.Helper()
 	stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 	require.NoError(t, err)
-	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 	require.NoError(t, err)
 	data, err := BuildSQLJSONPlan(t.Context(), query)
 	require.NoError(t, err)

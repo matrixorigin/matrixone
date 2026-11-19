@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -151,6 +152,42 @@ func (w *spillRecordWriter) WriteSelectedFixedRows(
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedVarlenaRows(
+	values []types.Varlena,
+	area []byte,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if fast, ok := w.target.(interface {
+		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int32) (int, error)
+	}); ok {
+		n, err := fast.WriteSelectedVarlenaRows(values, area, rows)
+		w.written += int64(n)
+		return n, err
+	}
+	start := w.written
+	var encoded [4]byte
+	for _, row := range rows {
+		if row < 0 || int(row) >= len(values) {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("invalid varlena group spill row")
+		}
+		value := values[row].GetByteSlice(area)
+		if len(value) > math.MaxInt32 {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("group spill value exceeds wire format")
+		}
+		binary.LittleEndian.PutUint32(encoded[:], uint32(len(value)))
+		if err := types.WriteFull(w, encoded[:]); err != nil {
+			return int(w.written - start), err
+		}
+		if err := types.WriteFull(w, value); err != nil {
+			return int(w.written - start), err
+		}
+	}
+	return int(w.written - start), nil
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,
@@ -199,16 +236,20 @@ func unmarshalSpillGroupByRows(
 }
 
 type ResHashRelated struct {
-	mp         *mpool.MPool
-	Hash       hashmap.HashMap
-	TxnItr     hashmap.TransactionalIterator
-	insertPlan hashmap.InsertPlan
+	mp              *mpool.MPool
+	Hash            hashmap.HashMap
+	TxnItr          hashmap.TransactionalIterator
+	insertPlan      hashmap.InsertPlan
+	compact         *compactGroupLookup
+	compactRows     int
+	compactDisabled bool
 }
 
 type groupInsertPreview struct {
-	values    []uint64
-	inserted  []uint8
-	newGroups int
+	values       []uint64
+	inserted     []uint8
+	newGroups    int
+	existingOnly bool
 }
 
 type groupKeySourcePublication struct {
@@ -248,6 +289,9 @@ func (ctr *container) commitGroupByChunk(
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	if preview.existingOnly {
+		return preview.values, 0, nil
+	}
 	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
 	if !hasStringSourceMetadata {
 		for _, vec := range vectors {
@@ -271,13 +315,10 @@ func (ctr *container) commitGroupByChunk(
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
+	err = ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
-	}
-	if more != preview.newGroups {
-		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
 	if hasStringSourceMetadata {
 		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
@@ -285,7 +326,7 @@ func (ctr *container) commitGroupByChunk(
 		}
 		ctr.groupKeyStringSourceMetadata = true
 	}
-	return values, more, nil
+	return values, preview.newGroups, nil
 }
 
 func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
@@ -505,6 +546,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		return moerr.NewInternalError(ctx, "hr.map mpool reset to different mpool")
 	}
 	if rebuild {
+		hr.freeCompactGroups()
 		if hr.Hash != nil {
 			hr.Hash.Free()
 			hr.Hash = nil
@@ -574,6 +616,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 func (hr *ResHashRelated) Free0() {
+	hr.freeCompactGroups()
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
@@ -585,43 +628,17 @@ func (hr *ResHashRelated) Free0() {
 	hr.mp = nil
 }
 
-// countNonZeroAndFindKth is a helper function to count the number of non-zero values
-// and find index of values, that is the kth non-zero, -1 if there are less than k
-// non-zero values.
-func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
-	count = 0
-	kth = -1
-	if len(values) < k {
-		for _, v := range values {
-			if v == 0 {
-				continue
+// findKthNonZero returns the row of the kth selected value, or -1 if absent.
+func findKthNonZero(values []uint8, k int) int {
+	for row, flag := range values {
+		if flag != 0 {
+			k--
+			if k == 0 {
+				return row
 			}
-			count++
-		}
-		return count, kth
-	}
-
-	for i, v := range values {
-		if v == 0 {
-			continue
-		}
-
-		count++
-		if count == k {
-			kth = i
-			break
 		}
 	}
-
-	if kth != -1 {
-		for i := kth + 1; i < len(values); i++ {
-			if values[i] == 0 {
-				continue
-			}
-			count++
-		}
-	}
-	return count, kth
+	return -1
 }
 
 func resizeGroupScratch[T any](
@@ -890,6 +907,11 @@ func (ctr *container) writeSpillRecord(
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	return ctr.spillDataToDiskWithInput(proc, opAnalyzer, parentBkt, false)
+}
+
+// retainInput is used only when retrying a partially consumed input batch.
+func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket, retainInput bool) (int64, int64, error) {
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
@@ -1129,7 +1151,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	// reset ctr for next spill
-	ctr.resetForSpill()
+	ctr.resetSpillState(retainInput)
 	return totalBytes, totalRows, nil
 }
 
@@ -1849,6 +1871,18 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
+// makeSingleGroupAggList constructs the bounded aggregate state used by an
+// ordered ROLLUP prefix.  The ordinary GROUP BY path chooses the aggregate
+// representation from ctr.mtyp; that representation is intentionally not
+// reused here because every live ROLLUP prefix owns exactly one group even
+// when the input relation has an unbounded number of groups.
+func (ctr *container) makeSingleGroupAggList(
+	aggExprs []aggexec.AggFuncExecExpression,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, ctr.aggregateAllocation, true)
+}
+
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
@@ -1895,6 +1929,15 @@ func (ctr *container) buildSpillReloadHashTable(
 }
 
 func (ctr *container) makeAggListWithAllocation(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, allocation, singleGroup)
+}
+
+func (ctr *container) makeAggListWithAllocationMode(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
 	singleGroup bool,
@@ -2007,7 +2050,7 @@ func hllVectorStateSupported(
 	}
 	switch types.T(args[0].Typ.Id) {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

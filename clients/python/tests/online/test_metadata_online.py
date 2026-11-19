@@ -237,7 +237,7 @@ class TestMetadataOnline(unittest.TestCase):
 
         # Verify reasonable values
         self.assertGreater(table_stats['total_objects'], 0)
-        self.assertGreater(table_stats['row_cnt'], 0)
+        self.assertEqual(table_stats['row_cnt'], 50)
         self.assertGreaterEqual(table_stats['null_cnt'], 0)
 
     def test_table_detail_stats(self):
@@ -510,6 +510,7 @@ class TestAsyncMetadataOnline(unittest.TestCase):
             required_fields = ['total_objects', 'row_cnt', 'null_cnt', 'original_size', 'compress_size']
             for field in required_fields:
                 self.assertIn(field, table_stats, f"Should have {field}")
+            self.assertEqual(table_stats['row_cnt'], 50)
 
         asyncio.run(_test())
 
@@ -616,7 +617,7 @@ class TestMetadataSession(unittest.TestCase):
         with self.client.session() as session:
             stats = session.metadata.get_table_brief_stats("test_metadata_db", "test_users")
             self.assertIn("test_users", stats)
-            self.assertIn("row_cnt", stats["test_users"])
+            self.assertEqual(stats["test_users"]["row_cnt"], 50)
 
     def test_session_detail_stats(self):
         """Test get_table_detail_stats in session"""
@@ -720,7 +721,7 @@ class TestAsyncMetadataSession(unittest.TestCase):
             async with self.async_client.session() as session:
                 stats = await session.metadata.get_table_brief_stats("test_metadata_db", "test_users")
                 self.assertIn("test_users", stats)
-                self.assertIn("row_cnt", stats["test_users"])
+                self.assertEqual(stats["test_users"]["row_cnt"], 50)
 
             await self.async_client.disconnect()
 

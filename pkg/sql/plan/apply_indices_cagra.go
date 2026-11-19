@@ -82,7 +82,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos, nodeBindingTag(vecCtx.scanNode))
 	if !found {
 		return nil, nil
 	}
@@ -177,49 +177,3 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagraWithColRefCnt(nodeID i
 		},
 	})
 }
-
-/*
-func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
-
-	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-		return
-	}
-
-	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
-		return
-	}
-
-	if distFnArgs[1].GetCol() != nil {
-		if distFnArgs[0].GetCol() != nil {
-			return
-		}
-
-		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
-	}
-
-	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
-	if vecColArg != nil {
-		distFnArgs[0] = vecColArg
-	}
-	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
-	if vecLitArg != nil {
-		distFnArgs[1] = vecLitArg
-	}
-
-	if vecColArg.GetCol() == nil {
-		return
-	}
-	if !rule.IsConstant(vecLitArg, true) {
-		return
-	}
-
-	vecLitArg.Typ = vecColArg.Typ
-
-	if vecColArg.GetCol().ColPos != partPos {
-		return
-	}
-
-	return vecColArg, vecLitArg, true
-}
-*/

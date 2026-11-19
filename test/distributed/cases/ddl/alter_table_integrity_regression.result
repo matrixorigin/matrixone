@@ -150,7 +150,7 @@ character_maximum_length
 insert into self_modify values (3,999,'must reject');
 Cannot add or update a child row: a foreign key constraint fails
 delete from self_modify where id = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 alter table self_modify drop foreign key fk_self_modify;
 alter table self_modify modify column url varchar(150);
 alter table self_modify add constraint fk_self_modify
@@ -162,7 +162,7 @@ id    parent_id    url
 insert into self_modify values (3,999,'must reject');
 Cannot add or update a child row: a foreign key constraint fails
 delete from self_modify where id = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 create table add_then_rename (id int primary key);
 insert into add_then_rename values (1), (2);
 alter table add_then_rename

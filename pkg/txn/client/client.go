@@ -88,13 +88,6 @@ func waitTxnRateLimit(limiter *rate.Limiter, ctx context.Context) error {
 	return err
 }
 
-// WithTxnIDGenerator setup txn id generator
-func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.generator = generator
-	}
-}
-
 // WithLockService setup lock service
 func WithLockService(lockService lockservice.LockService) TxnClientCreateOption {
 	return func(tc *txnClient) {
@@ -1086,6 +1079,18 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 		}
 	}
 	client.atomic.forceSyncCommitTimes.Add(1)
+}
+
+// SyncLatestCommitTSContext advances the observed commit watermark and waits
+// for its logtail using the caller's budget. Unlike SyncLatestCommitTS, it
+// returns a wait failure to the caller and never terminates the process.
+func (client *txnClient) SyncLatestCommitTSContext(ctx context.Context, ts timestamp.Timestamp) error {
+	client.updateLastCommitTS(ctx, nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
+	if _, err := client.WaitLogTailAppliedAt(ctx, ts); err != nil {
+		return err
+	}
+	client.atomic.forceSyncCommitTimes.Add(1)
+	return nil
 }
 
 func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {

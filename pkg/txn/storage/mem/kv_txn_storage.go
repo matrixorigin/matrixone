@@ -31,13 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
-// MustParseGetPayload must parse get payload
-func MustParseGetPayload(payload []byte) [][]byte {
-	r := &message{}
-	r.mustUnmarshal(payload)
-	return r.Values
-}
-
 // NewSetTxnRequest returns a kv set txn request
 func NewSetTxnRequest(ks, vs [][]byte) txn.TxnRequest {
 	r := &message{Keys: ks, Values: vs}

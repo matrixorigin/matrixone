@@ -519,7 +519,7 @@ func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
 			statements, err := mysql.Parse(context.Background(), test.sql, 1)
 			require.NoError(t, err)
 			defer statements[0].Free()
-			built, err := plan2.BuildPlan(ctx, statements[0], false)
+			built, err := plan2.BuildPlan(ctx, statements[0], false, nil)
 			require.NoError(t, err)
 			if test.wantRetainedFilter {
 				// These optimizer outputs retain the abandoned original filter.

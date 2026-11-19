@@ -809,19 +809,6 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByStateSQL(
 	)
 }
 
-func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
-	accountId uint64,
-	taskId string,
-	state string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdSQL_Idx].SQL,
-		state,
-		accountId,
-		taskId,
-	)
-}
-
 func (b cdcSQLBuilder) UpdateTaskStateByTaskIdAndStateSQL(
 	accountId uint64,
 	taskId string,
@@ -896,15 +883,6 @@ func (b cdcSQLBuilder) InsertWatermarkSQL(
 		watermark,
 		"",
 	)
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
-		values,
-	)
-}
-
-func (b cdcSQLBuilder) InsertWatermarkWithValuesSQL(
-	values string,
-) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
 		values,
@@ -1014,11 +992,7 @@ func (b cdcSQLBuilder) GetTaskWatermarksSQL(
 	accountId uint64,
 	taskId string,
 ) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].SQL,
-		accountId,
-		taskId,
-	)
+	return b.GetWatermarkSQL(accountId, taskId)
 }
 
 func (b cdcSQLBuilder) GetWatermarkWhereSQL(
@@ -1029,21 +1003,6 @@ func (b cdcSQLBuilder) GetWatermarkWhereSQL(
 		CDCSQLTemplates[CDCGetWatermarkWhereSqlTemplate_Idx].SQL,
 		projectionStr,
 		whereStr,
-	)
-}
-
-func (b cdcSQLBuilder) GetTableWatermarkSQL(
-	accountId uint64,
-	taskId string,
-	dbName string,
-	tableName string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCGetTableWatermarkSQL_Idx].SQL,
-		accountId,
-		taskId,
-		dbName,
-		tableName,
 	)
 }
 
@@ -1070,64 +1029,6 @@ func (b cdcSQLBuilder) GetDataKeySQL(
 		CDCSQLTemplates[CDCGetDataKeySQL_Idx].SQL,
 		accountId,
 		keyId,
-	)
-}
-
-func (b cdcSQLBuilder) UpdateWatermarkErrMsgSQL(
-	accountId uint64,
-	taskId string,
-	dbName string,
-	tableName string,
-	errMsg string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCUpdateWatermarkErrMsgSQL_Idx].SQL,
-		errMsg,
-		accountId,
-		taskId,
-		dbName,
-		tableName,
-	)
-}
-
-func (b cdcSQLBuilder) DeleteWatermarkByTableSQL(
-	accountId uint64,
-	taskId string,
-	dbName string,
-	tableName string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCDeleteWatermarkByTableSqlTemplate_Idx].SQL,
-		accountId,
-		taskId,
-		dbName,
-		tableName,
-	)
-}
-
-func (b cdcSQLBuilder) UpdateWatermarkSQL(
-	accountId uint64,
-	taskId string,
-	dbName string,
-	tableName string,
-	watermark string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCUpdateWatermarkSQL_Idx].SQL,
-		watermark,
-		accountId,
-		taskId,
-		dbName,
-		tableName,
-	)
-}
-
-func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkSQL(
-	values string,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkTemplate_Idx].SQL,
-		values,
 	)
 }
 

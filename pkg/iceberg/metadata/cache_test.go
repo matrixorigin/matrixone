@@ -312,3 +312,12 @@ func TestCacheConcurrentGetPutInvalidate(t *testing.T) {
 		t.Fatalf("LRU len=%d entries=%d", cache.lru.Len(), len(cache.entries))
 	}
 }
+
+func TestCloneTableMetadataIsolatesSnapshotRefs(t *testing.T) {
+	original := &api.TableMetadata{Refs: map[string]api.SnapshotRef{"main": {SnapshotID: 1}}}
+	cloned := cloneTableMetadata(original)
+	cloned.Refs["main"] = api.SnapshotRef{SnapshotID: 2}
+	if original.Refs["main"].SnapshotID != 1 {
+		t.Fatal("mutating cloned references changed the original metadata")
+	}
+}

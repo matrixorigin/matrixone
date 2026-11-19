@@ -17,12 +17,14 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -244,7 +246,7 @@ func TestCoverage_buildShowCreatePublications(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			// May fail due to mock limitations but should not panic
 			t.Logf("BuildPlan for show create publication: %v", err)
@@ -261,7 +263,7 @@ func TestCoverage_buildShowPublicationCoverage(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			t.Logf("BuildPlan for show publication coverage: %v", err)
 		}
@@ -316,12 +318,13 @@ type showTablesBootstrapContext struct {
 	privilegeLookups int
 }
 
-func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
 		c.privilegeLookups++
 		return nil, nil, nil
 	}
-	return c.CompilerContext.Resolve(database, table, snapshot)
+	return c.CompilerContext.Resolve(database, table, snapshot, nil)
 }
 
 func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
@@ -342,7 +345,7 @@ func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
 				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				built, err := BuildPlan(ctx, stmt, false)
+				built, err := BuildPlan(ctx, stmt, false, nil)
 				if mode == "internal" {
 					require.NoError(t, err)
 					require.NotNil(t, built.GetQuery())
@@ -366,7 +369,7 @@ func TestShowTablesUserVisibilityPlan(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			filtered := false
 			for _, node := range built.GetQuery().GetNodes() {
@@ -386,8 +389,86 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 		"show columns from nation",
 		"show full columns from nation",
 		"show columns from nation from tpch",
+		// issue #30890: DESCRIBE tbl col_name is the documented shortcut for
+		// SHOW COLUMNS ... LIKE. Each statement below must build a real plan
+		// through the comparison/function binders: the literal is the
+		// parser's own NumVal/P_char form (the legacy *tree.StrVal operand
+		// bound straight into the rewritten Select AST reached the binder's
+		// NotYetImplemented case). n_regionkey exercises the case-fold exact
+		// name, nosuch keeps the empty set, and `n_na%` preserves the pattern.
+		"desc nation n_name",
+		"describe nation N_Name",
+		"explain nation n_name",
+		"desc nation nosuch",
+		"desc nation `n_na%`",
+		"desc tpch.nation n_name",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowColumnsPreparePreservesWhereParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		paramCount int
+		full       bool
+		view       bool
+	}{
+		{"table", "show columns from nation where Field = ?", 1, false, false},
+		{"full fields", "show full fields from nation where Field = ? or Field = ?", 2, true, false},
+		{"view fields", "show fields from v1 where Field = ?", 1, false, true},
+		{"full view", "show full columns from v1 where Field = ?", 1, true, true},
+	} {
+		for _, entry := range []string{"SQL", "AST"} {
+			t.Run(tc.name+"/"+entry, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				mock.ctxt.tables["v1"].ViewSql.View = `{"Stmt":"create view v1 as select n_name from nation","DefaultDatabase":"tpch"}`
+				var stmt tree.Statement
+				if entry == "SQL" {
+					stmt = tree.NewPrepareString("show_params", tc.sql)
+				} else {
+					inner, err := mysql.ParseOne(mock.ctxt.GetContext(), tc.sql, 1)
+					require.NoError(t, err)
+					stmt = tree.NewPrepareStmt("show_params", inner)
+				}
+				defer stmt.Free()
+
+				// Rebuilding the saved AST must not lose or consume its predicate.
+				for range 2 {
+					built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+					require.NoError(t, err)
+					prepared := built.GetDcl().GetPrepare()
+					require.NotNil(t, prepared)
+					require.Len(t, prepared.GetParamTypes(), tc.paramCount)
+					require.True(t, prepared.GetPlan().GetIsPrepare())
+					wantHeadings := []string{"Field", "Type", "Null", "Key", "Default", "Extra", "Comment"}
+					if tc.full {
+						wantHeadings = []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+					}
+					require.Equal(t, wantHeadings, prepared.GetPlan().GetQuery().GetHeadings())
+					var dependencies []string
+					for _, schema := range prepared.GetSchemas() {
+						dependencies = append(dependencies, schema.GetObjName())
+					}
+					require.Contains(t, dependencies, "nation")
+					if tc.view {
+						require.Contains(t, dependencies, "v1")
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("unprepared marker remains invalid", func(t *testing.T) {
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show columns from nation where Field = ?", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
+		require.ErrorContains(t, err, "only prepare statement can use ? expr")
+		_, err = runOneStmt(mock, t, "show columns from nation where Field = 'n_name'")
+		require.NoError(t, err)
+	})
 }
 
 func TestShowColumnsTracksTargetDependency(t *testing.T) {
@@ -466,6 +547,68 @@ func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
 	require.True(t, queryContainsStringLiteral(got.GetQuery(), "MUL"))
 }
 
+func addMockShowTable(t *testing.T, mock *MockOptimizer, alias, physical string, temporary bool, indexedColumn string) {
+	t.Helper()
+	tableDef := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+	tableDef.Name = physical
+	tableDef.IsTemporary = temporary
+	if indexedColumn != "" {
+		tableDef.Cols[1].Name = indexedColumn
+		tableDef.Cols[1].OriginName = indexedColumn
+		tableDef.Indexes = []*plan.IndexDef{{
+			IndexName: "ix_quoted",
+			Parts:     []string{indexedColumn},
+		}}
+	}
+	objRef := &ObjectRef{SchemaName: "tpch", ObjName: alias, Obj: int64(tableDef.TblId)}
+	qualifiedName := mockQualifiedTableName("tpch", alias)
+	mock.ctxt.tables[alias] = tableDef
+	mock.ctxt.objects[alias] = objRef
+	mock.ctxt.tablesByQualifiedName[qualifiedName] = tableDef
+	mock.ctxt.objectsByQualifiedName[qualifiedName] = objRef
+	mock.ctxt.legacyTableOwners[alias] = qualifiedName
+	mock.ctxt.legacyObjectOwners[alias] = qualifiedName
+}
+
+func TestShowMetadataEscapesQuotedIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "a'b", "a'b", false, "")
+	addMockShowTable(t, mock, "quote_col", "quote_col", false, "x'y")
+
+	for _, sql := range []string{
+		"show columns from `a'b`",
+		"show full columns from `a'b`",
+		"show index from `a'b`",
+		"show columns from quote_col",
+		"show index from quote_col",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestShowColumnsUsesTemporaryPhysicalName(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "temp_alias", "__mo_tmp_physical_temp_alias", true, "")
+
+	for _, sql := range []string{
+		"desc temp_alias",
+		"describe temp_alias",
+		"show columns from temp_alias",
+		"show fields from temp_alias",
+		"show full columns from temp_alias",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "__mo_tmp_physical_temp_alias"),
+				"temporary SHOW metadata must query the physical catalog relation")
+		})
+	}
+}
+
 func TestCoverage_buildShowTableStatus(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
@@ -512,4 +655,131 @@ func TestCoverage_buildShowColumnNumber(t *testing.T) {
 		"show column_number from nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
+			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
+		})
+	}
+}
+
+func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := opt.CurrentContext()
+
+	build := func(sql string) (*tree.ShowColumns, func()) {
+		t.Helper()
+		stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(stmts))
+		stmt := stmts[0]
+		sc, ok := stmt.(*tree.ShowColumns)
+		require.True(t, ok, sql)
+		_, err = BuildPlan(ctx, stmt, false, nil)
+		require.NoError(t, err, sql)
+		return sc, func() { stmt.Free() }
+	}
+
+	// The frontend replans the SAME saved AST (computation_wrapper.go,
+	// mysql_cmd_executor.go), so after stored column spellings change only a
+	// per-plan re-derivation keeps a reused DESC correct while a fresh DESC
+	// matches. The derived predicate must never persist into the authored
+	// statement (#32197 review).
+	sc, free := build("desc nation n_name")
+	require.Nil(t, sc.Like, "saved prepared AST must stay pristine: the derived LIKE must not persist past the first build")
+	replan, err := BuildPlan(ctx, sc, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, replan)
+	require.Nil(t, sc.Like, "a replan of the saved AST must regenerate the derived predicate, not retain it")
+	free()
+
+	authSC, freeAuth := build("show columns from nation like 'n_na%'")
+	require.NotNil(t, authSC.Like, "an authored SHOW COLUMNS ... LIKE keeps its own predicate")
+	freeAuth()
+	wildSC, freeWild := build("desc nation `n_na%`")
+	require.Nil(t, wildSC.Like, "the wildcard shortcut derives per plan and stays pristine")
+	freeWild()
+	missSC, freeMiss := build("desc nation nosuch")
+	require.Nil(t, missSC.Like, "the unknown-name shortcut derives per plan and stays pristine")
+	freeMiss()
+}
+
+// The status projection invokes a privileged relation helper. Its input must
+// first pass the physical-index filter, including after planner rewrites.
+func TestShowMetadataFiltersPhysicalIndexesBeforeProjection(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+		"show table status from tpch like 'n%'",
+		"show table status from tpch where Name = 'nation'",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			query := built.GetQuery()
+			require.NotNil(t, query)
+
+			// The optimizer can leave dead nodes in Query.Nodes. The filter
+			// must be in the projection's reachable input subtree.
+			var subtreeContainsFilter func(int32) bool
+			subtreeContainsFilter = func(id int32) bool {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					if exprContainsFuncName(expr, "mo_is_physical_index") {
+						return true
+					}
+				}
+				for _, child := range node.Children {
+					if subtreeContainsFilter(child) {
+						return true
+					}
+				}
+				return false
+			}
+			foundFilter, foundProjection := false, false
+			var inspect func(int32)
+			inspect = func(id int32) {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					foundFilter = foundFilter || exprContainsFuncName(expr, "mo_is_physical_index")
+				}
+				for _, expr := range node.ProjectList {
+					if exprContainsFuncName(expr, "internal_auto_increment") {
+						foundProjection = true
+						require.True(t, subtreeContainsFilter(id), "the classifier must run before the auto-increment projection")
+					}
+				}
+				for _, child := range node.Children {
+					inspect(child)
+				}
+			}
+			for _, root := range query.Steps {
+				inspect(root)
+			}
+			require.True(t, foundFilter)
+			if strings.HasPrefix(statement, "show table status") {
+				require.True(t, foundProjection)
+			}
+		})
+	}
 }

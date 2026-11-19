@@ -117,11 +117,29 @@ class TestMetadataManager(unittest.TestCase):
             ),
             Mock(
                 _mapping={
+                    'object_name': 'obj1',
+                    'rows_cnt': 100,
+                    'null_cnt': 3,
+                    'origin_size': 1048576,
+                    'compress_size': 524288,
+                }
+            ),
+            Mock(
+                _mapping={
                     'object_name': 'obj2',
                     'rows_cnt': 50,
                     'null_cnt': 2,
                     'origin_size': 2097152,  # 2 MB
                     'compress_size': 1048576,  # 1 MB
+                }
+            ),
+            Mock(
+                _mapping={
+                    'object_name': 'obj2',
+                    'rows_cnt': 50,
+                    'null_cnt': 4,
+                    'origin_size': 2097152,
+                    'compress_size': 1048576,
                 }
             ),
         ]
@@ -136,7 +154,7 @@ class TestMetadataManager(unittest.TestCase):
         self.assertEqual(table_stats["original_size"], "3 MB")
         self.assertEqual(table_stats["compress_size"], "1.50 MB")
         self.assertEqual(table_stats["row_cnt"], 150)
-        self.assertEqual(table_stats["null_cnt"], 7)
+        self.assertEqual(table_stats["null_cnt"], 14)
 
     def test_get_table_brief_stats_with_tombstone(self):
         """Test get_table_brief_stats with tombstone"""
@@ -424,7 +442,16 @@ class TestAsyncMetadataManager(unittest.TestCase):
                         'origin_size': 1048576,
                         'compress_size': 524288,
                     }
-                )
+                ),
+                Mock(
+                    _mapping={
+                        'object_name': 'obj1',
+                        'rows_cnt': 100,
+                        'null_cnt': 3,
+                        'origin_size': 1048576,
+                        'compress_size': 524288,
+                    }
+                ),
             ]
             self.mock_client.execute.return_value = mock_result
 
@@ -435,6 +462,8 @@ class TestAsyncMetadataManager(unittest.TestCase):
             self.assertEqual(table_stats["total_objects"], 1)
             self.assertEqual(table_stats["original_size"], "1 MB")
             self.assertEqual(table_stats["compress_size"], "512 KB")
+            self.assertEqual(table_stats["row_cnt"], 100)
+            self.assertEqual(table_stats["null_cnt"], 8)
 
         asyncio.run(_test())
 
@@ -712,7 +741,7 @@ class TestMetadataSQLConsistency(unittest.TestCase):
         async_sql = mock_async_client.execute.call_args[0][0]
         async_session_sql = mock_async_session.execute.call_args[0][0]
 
-        expected_sql = "SELECT DISTINCT(object_name) as object_name, * FROM metadata_scan('test_db.test_table', '*') g"
+        expected_sql = "SELECT DISTINCT object_name FROM metadata_scan('test_db.test_table', '*') g"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
         self.assertEqual(async_sql, expected_sql)

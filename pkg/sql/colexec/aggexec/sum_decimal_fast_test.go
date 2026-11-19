@@ -1052,3 +1052,84 @@ func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	require.True(t, math.Abs(types.Decimal128ToFloat64(got, vecs[0].GetType().Scale)-2.0) < 1e-9)
 	exec.Free()
 }
+
+// The first three hashes collide at bucket 254 and wrap through 255 to 0.
+// Filling 255 local slots then tests the direct fallback on a repeated group.
+func TestSumDecimal64Fast_BatchFillSlotInitialization(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int64
+	}{{"sum", AggIdOfSum}, {"avg", AggIdOfAvg}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+			param := types.New(types.T_decimal64, 15, 2)
+			exec, err := MakeAgg(mp, tc.id, false, param)
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			actual, ok := exec.(*sumDecimal64FastExec)
+			require.True(t, ok)
+			require.NoError(t, actual.GroupGrow(765))
+
+			input := vector.NewVec(param)
+			t.Cleanup(func() { input.Free(mp) })
+			const offset, rows = 2, 256
+			for row := range offset + rows {
+				require.NoError(t, vector.AppendFixed(input, types.Decimal64(int64(row%17)-8), false, mp))
+			}
+			groups := []uint64{255, 512, 765}
+			for group := uint64(1); group <= 252; group++ {
+				groups = append(groups, group)
+			}
+			groups = append(groups, groups[0])
+			require.Len(t, groups, rows)
+			want, counts := make(map[uint64]int64), make(map[uint64]int64)
+			for row, group := range groups {
+				want[group] += int64((row+offset)%17) - 8
+				counts[group]++
+			}
+			require.NoError(t, actual.BatchFill(offset, groups, []*vector.Vector{input}))
+			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](actual.state[0].vecs[0])
+			cnts := vector.MustFixedColNoTypeCheck[int64](actual.state[0].vecs[1])
+			for group, value := range want {
+				index := group - 1
+				expected := types.Decimal128{B0_63: uint64(value), B64_127: uint64(value >> 63)}
+				require.Equal(t, expected, sums[index], "group %d", group)
+				require.Equal(t, counts[group], cnts[index], "group %d", group)
+			}
+		})
+	}
+}
+
+func TestSumDecimal64Fast_BatchFillMultiChunkInitialization(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int64
+	}{{"sum", AggIdOfSum}, {"avg", AggIdOfAvg}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+			param := types.New(types.T_decimal64, 15, 2)
+			exec, err := MakeAgg(mp, tc.id, false, param)
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			actual, ok := exec.(*sumDecimal64FastExec)
+			require.True(t, ok)
+			require.NoError(t, actual.GroupGrow(AggBatchSize+1))
+			input := vector.NewVec(param)
+			t.Cleanup(func() { input.Free(mp) })
+			for _, value := range []int64{-2, 3, 4, 5, -6} {
+				require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))
+			}
+			groups := []uint64{1, AggBatchSize + 1, 1, GroupNotMatched, AggBatchSize + 1}
+			require.NoError(t, actual.BatchFill(0, groups, []*vector.Vector{input}))
+			for chunk, value := range []int64{2, -3} {
+				sums := vector.MustFixedColNoTypeCheck[types.Decimal128](actual.state[chunk].vecs[0])
+				cnts := vector.MustFixedColNoTypeCheck[int64](actual.state[chunk].vecs[1])
+				want := types.Decimal128{B0_63: uint64(value), B64_127: uint64(value >> 63)}
+				require.Equal(t, want, sums[0])
+				require.Equal(t, int64(2), cnts[0])
+			}
+		})
+	}
+}

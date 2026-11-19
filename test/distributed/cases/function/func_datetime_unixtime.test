@@ -213,5 +213,12 @@ INSERT INTO temporal_ctas VALUES
 SELECT * FROM temporal_ctas ORDER BY id;
 DROP DATABASE pr28316_temporal;
 
+-- DATETIME arguments to UNIX_TIMESTAMP normalize DST gaps like string inputs.
+SET time_zone = 'America/New_York';
+SELECT UNIX_TIMESTAMP('2024-03-10 02:30:00') AS string_gap,
+       UNIX_TIMESTAMP(CAST('2024-03-10 02:30:00' AS DATETIME)) AS datetime_gap,
+       UNIX_TIMESTAMP(DATE_ADD(CAST('2024-03-10 01:30:00' AS DATETIME), INTERVAL 1 HOUR)) AS arithmetic_gap;
+SELECT UNIX_TIMESTAMP(CAST('2024-03-10 03:30:00' AS DATETIME)) AS valid_datetime;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

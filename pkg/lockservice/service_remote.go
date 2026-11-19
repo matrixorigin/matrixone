@@ -1422,6 +1422,17 @@ func getLockTableBindWithContext(
 	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
+	return requestLockTableBind(parent, c, pb.GetBindRequest{
+		Group: group, Table: tableID, OriginTable: originTableID,
+		ServiceID: serviceID, Sharding: sharding,
+	})
+}
+
+func requestLockTableBind(
+	parent context.Context,
+	c Client,
+	bindRequest pb.GetBindRequest,
+) (pb.LockTable, allocatorState, error) {
 	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
@@ -1429,11 +1440,7 @@ func getLockTableBindWithContext(
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_GetBind
-	req.GetBind.ServiceID = serviceID
-	req.GetBind.Table = tableID
-	req.GetBind.OriginTable = originTableID
-	req.GetBind.Sharding = sharding
-	req.GetBind.Group = group
+	req.GetBind = bindRequest
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {
@@ -1443,7 +1450,10 @@ func getLockTableBindWithContext(
 	v := resp.GetBind.LockTable
 	// An older allocator or a drain racing admission can return an empty bind.
 	// Do not publish it as a lock-table owner, even if the RPC itself succeeded.
-	if !v.Valid || v.ServiceID == "" || v.Group != group || v.Table != tableID {
+	observation := bindRequest.LookupOnly && resp.GetBind.LookupOnly
+	if (!observation && (!v.Valid || v.ServiceID == "")) ||
+		(v.Valid && v.ServiceID == "") ||
+		v.Group != bindRequest.Group || v.Table != bindRequest.Table {
 		return pb.LockTable{}, allocatorState{}, ErrLockTableBindChanged
 	}
 	return v, allocatorState{

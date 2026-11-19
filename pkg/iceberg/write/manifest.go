@@ -106,7 +106,7 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 		ManifestPathRedacted:  api.RedactPath(req.ManifestPath),
 		ManifestPathHash:      api.PathHash(req.ManifestPath),
 	}
-	manifestList := append(cloneManifestFiles(req.PreservedManifests), manifest)
+	manifestList := append(append([]api.ManifestFile(nil), req.PreservedManifests...), manifest)
 	if err := budget.reserve(metadata.ManifestListMemoryWeight(0, manifestList)); err != nil {
 		return nil, err
 	}
@@ -150,15 +150,6 @@ func appendTimestampMS(timestampMS int64) int64 {
 		return timestampMS
 	}
 	return time.Now().UnixMilli()
-}
-
-func cloneManifestFiles(in []api.ManifestFile) []api.ManifestFile {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]api.ManifestFile, len(in))
-	copy(out, in)
-	return out
 }
 
 func manifestPartitionSpecID(req api.AppendRequest) int {

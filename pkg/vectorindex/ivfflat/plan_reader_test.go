@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -53,7 +54,6 @@ import (
 )
 
 type scriptedRelationScanner struct {
-	t        *testing.T
 	requests []sqlexec.RelationScanRequest
 	run      func(sqlexec.RelationScanRequest) executor.Result
 }
@@ -78,7 +78,7 @@ func (s *scriptedRelationScanner) ScanRelation(req sqlexec.RelationScanRequest) 
 func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "db1", req.Schema)
 		require.Equal(t, "meta1", req.Table)
@@ -124,9 +124,9 @@ func TestValidateIvfQueryDimensions(t *testing.T) {
 func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.Zero(t, req.ReadPolicy)
+		require.Equal(t, fileservice.Policy(fileservice.NarrowRead), req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
@@ -215,7 +215,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 func TestScanEntriesOversizedLimitKeepsStorageTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.NotNil(t, req.IndexParam)
 		require.Equal(t, uint64(math.MaxInt), req.IndexParam.GetLimit().GetLit().GetU64Val())
@@ -265,7 +265,7 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.OrderBy[0].Expr)
@@ -315,7 +315,7 @@ func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.False(t, req.PostFilterTopOnly)
 		require.True(t, req.FilterBeforeTopK)
@@ -508,7 +508,7 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.False(t, req.PostFilterTopOnly)
 				require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
@@ -635,7 +635,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.True(t, req.PostFilterTopOnly)
 				require.Nil(t, req.IndexParam.DistRange)
@@ -688,7 +688,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.DistRange)
@@ -745,12 +745,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	query := []float32{0, 0}
 
 	t.Run("malformed membership", func(t *testing.T) {
-		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.IvfHasMembershipFilter = true
-		sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
-		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
-			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
-		require.Error(t, err)
+		testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 	})
 
 	t.Run("unknown storage metric", func(t *testing.T) {
@@ -763,7 +758,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	})
 
 	t.Run("storage omits distance", func(t *testing.T) {
-		scanner := &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(len(req.Columns))
 			for i := range bat.Vecs {
 				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
@@ -782,7 +777,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	t.Run("local distance evaluation fails", func(t *testing.T) {
 		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 		require.NoError(t, err)
-		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -819,7 +814,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.NoError(t, err)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
-	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, data,
+	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, data),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
 
 	require.NoError(t, err)
@@ -829,16 +824,14 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.Equal(t, data, expr.GetF().Args[1].GetVec().Data)
 	_, err = ivfRuntimeMembershipExpr(proc.Ctx, nil, nil)
 	require.ErrorContains(t, err, "runtime membership filter is empty")
-	_, err = ivfRuntimeMembershipExpr(proc.Ctx, []byte("not-a-vector"),
-		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
-	require.Error(t, err)
+	testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 
 	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
 	defer bitKeys.Free(mp)
 	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
 	bitData, err := bitKeys.MarshalBinary()
 	require.NoError(t, err)
-	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, bitData,
+	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, bitData),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_bit)}))
 	require.NoError(t, err)
 	require.Equal(t, function.InFunctionName, bitExpr.GetF().Func.ObjName)
@@ -959,7 +952,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	}
 
 	require.NoError(t, idx.filterEntryDistanceRange(
-		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil))
+		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil, mp))
 	require.NoError(t, compactRelationTop(&res, 2, false))
 
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
@@ -1050,9 +1043,9 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 	emptyKeyData, err := emptyKeys.MarshalBinary()
 	require.NoError(t, err)
 	emptyKeys.Free(mp)
-	_, err = ivfRuntimeMembershipExpr(proc.Ctx, emptyKeyData,
+	_, err = ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, emptyKeyData),
 		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}))
-	require.ErrorContains(t, err, "runtime membership key set is empty")
+	require.ErrorContains(t, err, "runtime membership filter is empty")
 
 	_, hasBound, _, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
 	require.NoError(t, err)
@@ -1082,15 +1075,15 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	}
 	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	unbounded := &plan.DistRange{LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_UNBOUNDED}
 	all := newResult(1, 2)
-	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Equal(t, 2, all.Batches[0].RowCount())
 	all.Close()
 	all = newResult(1, 2)
 	noneRange := &plan.DistRange{LowerBoundType: plan.BoundType_INCLUSIVE, LowerBound: floatLiteral(3), UpperBoundType: plan.BoundType_UNBOUNDED}
-	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Zero(t, all.Batches[0].RowCount())
 	all.Close()
 
@@ -1399,7 +1392,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	out *batch.Batch,
 ) (bool, error) {
@@ -1436,7 +1429,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	}
 	out.SetRowCount(len(rows))
 	r.wideWasDeferred = out.Vecs[3].Length() == 0
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, err
 	}
@@ -1480,7 +1473,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	out *batch.Batch,
@@ -1502,7 +1495,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 		}
 	}
 	out.SetRowCount(2)
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, false, err
 	}
@@ -1535,6 +1528,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
 	checkPolicy := func(ctx context.Context) {
 		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
+		require.Equal(t, uint64(9), fileservice.GetPreloadGroup(ctx), "reads are grouped by the entries table")
 	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -1542,7 +1536,8 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = eng
 
 	tableDef := &plan.TableDef{
-		Name: "entries",
+		TblId: 9,
+		Name:  "entries",
 		Cols: []*plan.ColDef{
 			{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -1636,7 +1631,39 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
-	require.Same(t, clone, proc.GetCloneTxnOperator())
+	require.Nil(t, proc.GetCloneTxnOperator(), "历史读取点不能发布到共享 Process")
+	require.Same(t, original, proc.GetTxnOperator())
+}
+
+func TestRelationScannerDoesNotBorrowAnotherSnapshotsTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 30}}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	openErr := errors.New("历史关系打开失败")
+	times := []timestamp.Timestamp{{PhysicalTime: 10, LogicalTime: 1}, {PhysicalTime: 10, LogicalTime: 2}}
+	scanners := make([]*relationScanner, len(times))
+	clones := make([]*mock_frontend.MockTxnOperator, len(times))
+	for i := range times {
+		clones[i] = mock_frontend.NewMockTxnOperator(ctrl)
+		clones[i].EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: times[i]}).AnyTimes()
+		original.EXPECT().CloneSnapshotOp(times[i]).Return(clones[i]).Times(1)
+		scanners[i] = &relationScanner{proc: proc, snapshot: &plan.Snapshot{TS: &times[i]}}
+	}
+	for _, i := range []int{0, 1, 0} {
+		eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ string, op client.TxnOperator) (engine.Database, error) {
+				require.Equal(t, times[i], op.Txn().SnapshotTS)
+				return nil, openErr
+			})
+		res, err := scanners[i].ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+		res.Close()
+		require.ErrorIs(t, err, openErr)
+	}
+	require.Same(t, original, proc.GetTxnOperator())
 }
 
 func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
@@ -2143,7 +2170,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {
@@ -2257,7 +2284,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 				req: searchplugin.Request{
 					ResultLimit:         2,
 					CandidateBudget:     12,
-					MembershipFilter:    membership,
+					MembershipFilter:    testutil.RuntimeKeyPayload(t, membership),
 					HasMembershipFilter: true,
 					DistanceRange: &plan.DistRange{
 						LowerBoundType: plan.BoundType_UNBOUNDED,
@@ -2543,7 +2570,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		require.NoError(t, vector.AppendFixedList(keys, []int64{1, 2}, nil, proc.Mp()))
 		payload, err := keys.MarshalBinary()
 		require.NoError(t, err)
-		r.req.MembershipFilter, r.req.HasMembershipFilter, r.req.MembershipFilterRequired = payload, true, true
+		r.req.MembershipFilter, r.req.HasMembershipFilter, r.req.MembershipFilterRequired = testutil.RuntimeKeyPayload(t, payload), true, true
 		r.req.CollectExplainDiagnostics = true
 		if parallelism > 1 {
 			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
@@ -2573,7 +2600,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 				require.Equal(t, i == 0, rr.scanner.ownsInMemory)
 				require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
 			}
-			require.Same(t, &payload[0], &rr.req.MembershipFilter[0])
+			require.Same(t, r.req.MembershipFilter, rr.req.MembershipFilter)
 			require.Same(t, generation.membership, rr.newSearchProcess().IvfMembershipFilterObject)
 		}
 	}

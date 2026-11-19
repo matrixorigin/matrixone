@@ -1,0 +1,31 @@
+select cast(json_extract('{"n":9007199254740993}', '$.n') as decimal(38,0));
+➤ cast(json_extract({"n":9007199254740993}, $.n) as decimal(38))[3,38,0]  𝄀
+9007199254740993
+select cast(json_extract('{"n":9007199254740995}', '$.n') as decimal(38,0)), cast(json_extract('{"n":-9007199254740993}', '$.n') as decimal(38,0));
+➤ cast(json_extract({"n":9007199254740995}, $.n) as decimal(38))[3,38,0]  ¦  cast(json_extract({"n":-9007199254740993}, $.n) as decimal(38))[3,38,0]  𝄀
+9007199254740995  ¦  -9007199254740993
+select cast(json_extract('{"n":9223372036854775807}', '$.n') as decimal(38,0)), cast(json_extract('{"n":18446744073709551615}', '$.n') as decimal(38,2));
+➤ cast(json_extract({"n":9223372036854775807}, $.n) as decimal(38))[3,38,0]  ¦  cast(json_extract({"n":18446744073709551615}, $.n) as decimal(38, 2))[3,38,2]  𝄀
+9223372036854775807  ¦  18446744073709551615.00
+select cast(json_extract('{"n":9007199254740993}', '$.n') as decimal(18,0)), cast(json_extract('{"n":12}', '$.n') as decimal(10,2));
+➤ cast(json_extract({"n":9007199254740993}, $.n) as decimal(18))[3,18,0]  ¦  cast(json_extract({"n":12}, $.n) as decimal(10, 2))[3,10,2]  𝄀
+9007199254740993  ¦  12.00
+select cast(json_extract('{"n":1.25}', '$.n') as decimal(10,2)), cast(json_extract('{"n":null}', '$.n') as decimal(10,2));
+➤ cast(json_extract({"n":1.25}, $.n) as decimal(10, 2))[3,10,2]  ¦  cast(json_extract({"n":null}, $.n) as decimal(10, 2))[3,10,2]  𝄀
+1.25  ¦  null
+select cast(json_extract('{"n":123456}', '$.n') as decimal(5,0));
+invalid input: Can't convert Float64 To Decimal64: 123456.000000(5,0)
+drop database if exists json_int_dec;
+create database json_int_dec;
+use json_int_dec;
+create table json_numbers(id int primary key, doc json);
+insert into json_numbers values (1,'{"n":9007199254740992}'), (2,'{"n":9007199254740993}');
+select id, json_unquote(json_extract(doc,'$.n')) as original_value, cast(json_extract(doc,'$.n') as decimal(38,0)) as direct_cast from json_numbers order by id;
+➤ id[4,32,0]  ¦  original_value[12,65535,0]  ¦  direct_cast[3,38,0]  𝄀
+1  ¦  9007199254740992  ¦  9007199254740992  𝄀
+2  ¦  9007199254740993  ¦  9007199254740993
+select cast(json_extract(doc,'$.n') as decimal(38,0)) as k, count(*) from json_numbers group by k order by k;
+➤ k[3,38,0]  ¦  count(*)[-5,64,0]  𝄀
+9007199254740992  ¦  1  𝄀
+9007199254740993  ¦  1
+drop database json_int_dec;

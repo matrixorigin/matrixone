@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -192,6 +193,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
+	case "desc_file":
+		tblArg.ctr.state, err = descFilePrepare(proc, tblArg)
 	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	case "hnsw_create":
@@ -210,6 +213,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":
 		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
+	case indexfile.FuncName:
+		tblArg.ctr.state, err = indexFileChunksPrepare(proc, tblArg)
 	case "cagra_create":
 		tblArg.ctr.state, err = cagraCreatePrepare(proc, tblArg)
 	case "ivfpq_create":

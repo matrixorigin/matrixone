@@ -76,6 +76,29 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	require.NotEqual(t, 0, CompareStringValues(unicode, []byte("A"), rawKey))
 }
 
+func TestCompareStringOrderValuesGeneralCI(t *testing.T) {
+	general := NewWithCharset(T_varchar, 64, 0, CharsetUTF8)
+
+	// Issue #31174: utf8mb4_general_ci ORDER BY folds case per character, so
+	// 'b' sorts before 'C' and case variants tie.
+	require.Less(t, CompareStringOrderValues(general, []byte("b"), []byte("C")), 0)
+	require.Less(t, CompareStringOrderValues(general, []byte("a"), []byte("Z")), 0)
+	require.Less(t, CompareStringOrderValues(general, []byte("aaa"), []byte("BBB")), 0)
+	require.Zero(t, CompareStringOrderValues(general, []byte("ABC"), []byte("abc")))
+	require.Zero(t, CompareStringOrderValues(general, []byte("a "), []byte("a")))
+
+	// Scalar equality keeps the historical byte domain; the case-insensitive
+	// equality defect is tracked separately from #31174.
+	require.Positive(t, CompareStringValues(general, []byte("b"), []byte("C")))
+	require.NotZero(t, CompareStringValues(general, []byte("ABC"), []byte("abc")))
+
+	// Binary and legacy identities keep raw byte order under ORDER BY.
+	for _, charset := range []uint8{CharsetLegacy, CharsetBinary, CharsetUTF8MB4Bin} {
+		typ := NewWithCharset(T_varchar, 64, 0, charset)
+		require.Positive(t, CompareStringOrderValues(typ, []byte("b"), []byte("C")))
+	}
+}
+
 func TestMergeStringCharsetKeepsSupplementaryRepertoire(t *testing.T) {
 	mb3 := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI)
 	mb4 := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB4UnicodeCI)

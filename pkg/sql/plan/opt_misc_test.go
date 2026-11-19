@@ -76,6 +76,29 @@ func TestDetermineHashOnPKAllowsUntaggedInternalScan(t *testing.T) {
 	})
 }
 
+func TestDetermineHashOnPKInvalidatesPriorProof(t *testing.T) {
+	for _, change := range []string{"predicate", "input", "primary-key", "nullable"} {
+		t.Run(change, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			join := builder.qry.Nodes[2]
+			determineHashOnPK(2, builder)
+			require.True(t, join.Stats.HashmapStats.HashOnPK)
+			switch change {
+			case "predicate":
+				join.OnList = nil
+			case "input":
+				builder.qry.Nodes[0].BindingTags = []int32{3}
+			case "primary-key":
+				builder.qry.Nodes[1].TableDef.Pkey = nil
+			case "nullable":
+				join.OnList[0].GetF().Args[1].Typ.NotNullable = false
+			}
+			determineHashOnPK(2, builder)
+			require.False(t, join.Stats.HashmapStats.HashOnPK, "proof belongs to the current join inputs and predicate")
+		})
+	}
+}
+
 func TestDetermineHashOnPKRequiresGroupingCompatiblePrimaryKey(t *testing.T) {
 	tests := []struct {
 		name         string

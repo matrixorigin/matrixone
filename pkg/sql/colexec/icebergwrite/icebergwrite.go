@@ -124,14 +124,12 @@ func (w *IcebergWrite) appendBatch(proc *process.Process, bat *batch.Batch) erro
 func (w *IcebergWrite) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	w.abortOpen(proc, err)
 	w.discardFactoryCoordinator()
-	w.input = vm.CallResult{}
 	w.ctr = container{}
 }
 
 func (w *IcebergWrite) Free(proc *process.Process, pipelineFailed bool, err error) {
 	w.abortOpen(proc, err)
 	w.ReleaseObjectIORef()
-	w.input = vm.CallResult{}
 	w.Coordinator = nil
 	w.coordinatorFromFactory = false
 }

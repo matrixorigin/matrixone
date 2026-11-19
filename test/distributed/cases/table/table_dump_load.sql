@@ -12,6 +12,8 @@ remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_reverse/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_position/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_nn/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_nn/objects/*';
 
 create table src (id int primary key, value varchar(32));
 insert into src values (1, 'one'), (2, 'two'), (3, 'three');
@@ -133,6 +135,54 @@ select q,r from binding_position_dst;
 insert into binding_position_dst(a,b) values (2,3);
 select a,q,r from binding_position_dst order by a;
 
+-- CREATE binds column references before catalog NOT NULL augmentation.
+-- Preserve the complete original bindings through a full DUMP/LOAD, including
+-- a generated expression subsequently authored by ALTER against the catalog.
+create table binding_nn_src (
+    id int primary key,
+    data json not null,
+    a bigint not null,
+    b bigint default (a+1),
+    j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+    g bigint generated always as (a+a) stored,
+    constraint ck check(a>=0)
+);
+alter table binding_nn_src add column h bigint generated always as (a+a) stored;
+insert into binding_nn_src(id,data,a) values
+    (1,'{"kind":"alpha"}',2), (2,'{}',0), (3,'{"kind":null}',4);
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_dump_load_bvt.binding_nn_src');
+dump table binding_nn_src to 'stage://table_dump_load_stage/binding_nn';
+
+create database table_dump_load_nn_restore_bvt;
+create table table_dump_load_nn_restore_bvt.binding_nn_dst (
+    id int primary key,
+    data json not null,
+    a bigint not null,
+    b bigint default (a+1),
+    j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+    g bigint generated always as (a+a) stored,
+    constraint ck check(a>=0)
+);
+alter table table_dump_load_nn_restore_bvt.binding_nn_dst add column h bigint generated always as (a+a) stored;
+load table table_dump_load_nn_restore_bvt.binding_nn_dst from 'stage://table_dump_load_stage/binding_nn';
+select id,data,a,b,j,g,h,j is null,hex(j) from table_dump_load_nn_restore_bvt.binding_nn_dst order by id;
+
+insert into table_dump_load_nn_restore_bvt.binding_nn_dst(id,data,a) values (4,'{"kind":"beta"}',5);
+select id,data,a,b,j,g,h,j is null,hex(j) from table_dump_load_nn_restore_bvt.binding_nn_dst order by id;
+begin;
+update table_dump_load_nn_restore_bvt.binding_nn_dst set a=3,data='{"kind":"gamma"}' where id=1;
+select id,data,a,b,j,g,h,j is null,hex(j) from table_dump_load_nn_restore_bvt.binding_nn_dst where id=1;
+rollback;
+select id,data,a,b,j,g,h,j is null,hex(j) from table_dump_load_nn_restore_bvt.binding_nn_dst order by id;
+
+begin;
+insert into table_dump_load_nn_restore_bvt.binding_nn_dst(id,data,a) values (99,'{}',-1);
+rollback;
+select id,data,a,b,j,g,h,j is null,hex(j) from table_dump_load_nn_restore_bvt.binding_nn_dst order by id;
+select id,data,a,b,j,g,h,j is null,hex(j) from binding_nn_src order by id;
+drop database table_dump_load_nn_restore_bvt;
+
 drop database table_dump_load_bvt;
 remove files from stage if exists 'stage://table_dump_load_stage/full/*';
 remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*';
@@ -143,4 +193,6 @@ remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_reverse/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_position/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_nn/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_nn/objects/*';
 drop stage table_dump_load_stage;

@@ -70,6 +70,7 @@ func (proc *Process) BuildProcessInfo(
 		// path as they do on the coordinating CN.
 		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
 		procInfo.StatementRuntimeSelect = proc.IsSelectStatement()
+		procInfo.StatementRuntimeDml = proc.IsDMLStatement()
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
@@ -159,11 +160,22 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, moerr.NewInvalidInputNoCtxf(
 				"invalid max_error_count %d", maxErrorCount)
 		}
-		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
-		if err != nil {
-			return procInfo, err
+		offset, fixed := types.FixedZoneOffset(loc)
+		zoneName := TimeZoneLocationName(loc)
+		var timeBytes []byte
+		if fixed {
+			if int64(offset) < math.MinInt32 || int64(offset) > math.MaxInt32 {
+				return procInfo, moerr.NewInvalidInputNoCtxf("invalid fixed time zone offset %d", offset)
+			}
+			zoneName = ""
+		} else {
+			offset = 0
+			var err error
+			timeBytes, err = time.Time{}.In(loc).MarshalBinary()
+			if err != nil {
+				return procInfo, err
+			}
 		}
-
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			Account:                proc.Base.SessionInfo.Account,
 			User:                   proc.Base.SessionInfo.GetUser(),
@@ -173,7 +185,9 @@ func (proc *Process) BuildProcessInfo(
 			Database:               proc.Base.SessionInfo.GetDatabase(),
 			Version:                proc.Base.SessionInfo.GetVersion(),
 			TimeZone:               timeBytes,
-			TimeZoneName:           TimeZoneLocationName(loc),
+			TimeZoneName:           zoneName,
+			FixedOffsetPresent:     fixed,
+			FixedOffsetSeconds:     int64(offset),
 			QueryId:                proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
@@ -181,6 +195,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			LastInsertId:           proc.GetLastInsertID(),
+			LastInsertIdSet:        proc.Base.LastInsertID != nil,
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
 		}
@@ -284,6 +300,9 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	if err := ValidateStatementRuntimeClassification(value.StatementRuntimeSelect, value.StatementRuntimeDml); err != nil {
+		return nil, err
+	}
 	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
 		value.StringShuffleHashAlgorithm,
 	)
@@ -366,6 +385,8 @@ func (c *codecService) Decode(
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
 	if value.StatementRuntimeSelect {
 		stmtProfile.SetStatementRuntimeProfile("Select", "DQL", value.StatementRuntimeIgnore)
+	} else if value.StatementRuntimeDml {
+		stmtProfile.SetStatementRuntimeProfile("", "DML", value.StatementRuntimeIgnore)
 	}
 	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
@@ -502,8 +523,25 @@ func ConvertToProcessSessionInfo(
 		LCTimeNames:                         sei.LcTimeNames,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		LastInsertID:                        sei.LastInsertId,
+		LastInsertIDSet:                     sei.LastInsertIdSet,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
 		MaxErrorCountSet:                    sei.MaxErrorCountSet,
+	}
+	if sei.FixedOffsetPresent {
+		if sei.TimeZoneName != "" || sei.FixedOffsetSeconds < math.MinInt32 ||
+			sei.FixedOffsetSeconds > math.MaxInt32 || int64(int(sei.FixedOffsetSeconds)) != sei.FixedOffsetSeconds {
+			return sessionInfo, moerr.NewInvalidInputNoCtx("invalid fixed time zone metadata")
+		}
+		if sei.FixedOffsetSeconds == 0 {
+			sessionInfo.TimeZone = time.UTC
+		} else {
+			sessionInfo.TimeZone = time.FixedZone("", int(sei.FixedOffsetSeconds))
+		}
+		return sessionInfo, nil
+	}
+	if sei.FixedOffsetSeconds != 0 {
+		return sessionInfo, moerr.NewInvalidInputNoCtx("fixed time zone offset without presence")
 	}
 	if sei.TimeZoneName != "" {
 		if sei.TimeZoneName == "Local" {
@@ -630,4 +668,13 @@ func lockWaitTimeoutSeconds(v any) int64 {
 		}
 	}
 	return 0
+}
+
+// ValidateStatementRuntimeClassification rejects contradictory wire intent
+// before a receiver allocates a process or takes ownership of parameters.
+func ValidateStatementRuntimeClassification(selectStatement, dml bool) error {
+	if selectStatement && dml {
+		return moerr.NewInvalidInputNoCtx("conflicting SELECT and DML statement classifications")
+	}
+	return nil
 }

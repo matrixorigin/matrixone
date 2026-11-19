@@ -607,8 +607,13 @@ n,
 (SELECT COUNT(*) FROM test_cte_rewrite.sales WHERE id <= n) AS cumulative_count
 FROM numbers
 )
-SELECT * FROM sales_with_numbers;
-non-equality correlated aggregate with outer composition cannot be safely decorrelated is not yet implemented
+SELECT * FROM sales_with_numbers ORDER BY n;
+➤ n[-5,64,0]  ¦  cumulative_count[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
 /*+ {
 "rewrites" : {
 "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"

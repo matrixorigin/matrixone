@@ -1,0 +1,109 @@
+# github.com/matrixorigin/matrixone/pkg/sql/compile.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+2026/10/24 08:43:22.949729 +0800 INFO system/system.go:586 call runtime.GOMAXPROCS(10): 10, keep: 10
+2026/10/24 08:43:22.964578 +0800 INFO tasks/cancelablejob.go:161 cancelablejob.start.cron.job {"name": "CronJob[streamReaderGC-01a16b5c-bfd4-788b-b564-373216bd83ce-2m0s]", "interval": "2m0s"}
+=== RUN   TestCompileLocalPreAggregationKeepsEveryInputScope
+--- PASS: TestCompileLocalPreAggregationKeepsEveryInputScope (0.00s)
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/packed_local_shuffle
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/parallel_local_sources
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/local_dispatch_fallback
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/distributed_targets
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/remote_source_to_local_target
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/single_owner
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/shuffle_reuse
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/metadata_partial_results
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/parent_coordinator_projection
+--- PASS: TestCompileLocalPreAggregationPhysicalSelection (0.01s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/packed_local_shuffle (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/parallel_local_sources (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/local_dispatch_fallback (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/distributed_targets (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/remote_source_to_local_target (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/single_owner (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/shuffle_reuse (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/metadata_partial_results (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/parent_coordinator_projection (0.00s)
+=== RUN   TestLocalPreAggregationOmissionGuards
+=== RUN   TestLocalPreAggregationOmissionGuards/inclusive_size_and_ratio
+=== RUN   TestLocalPreAggregationOmissionGuards/below_size
+=== RUN   TestLocalPreAggregationOmissionGuards/below_ratio
+=== RUN   TestLocalPreAggregationOmissionGuards/missing_input_stats
+=== RUN   TestLocalPreAggregationOmissionGuards/missing_group_stats
+=== RUN   TestLocalPreAggregationOmissionGuards/zero_input
+=== RUN   TestLocalPreAggregationOmissionGuards/unknown_groups
+=== RUN   TestLocalPreAggregationOmissionGuards/NaN_groups
+=== RUN   TestLocalPreAggregationOmissionGuards/infinite_input
+=== RUN   TestLocalPreAggregationOmissionGuards/inconsistent_cardinality
+=== RUN   TestLocalPreAggregationOmissionGuards/computed_key
+=== RUN   TestLocalPreAggregationOmissionGuards/PAD_SPACE_key
+=== RUN   TestLocalPreAggregationOmissionGuards/multiple_keys
+=== RUN   TestLocalPreAggregationOmissionGuards/physical_key_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/final_key_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/local_shuffle
+=== RUN   TestLocalPreAggregationOmissionGuards/transformed_output
+=== RUN   TestLocalPreAggregationOmissionGuards/order
+=== RUN   TestLocalPreAggregationOmissionGuards/limit
+=== RUN   TestLocalPreAggregationOmissionGuards/filter
+=== RUN   TestLocalPreAggregationOmissionGuards/runtime_filter
+=== RUN   TestLocalPreAggregationOmissionGuards/parent_filter
+=== RUN   TestLocalPreAggregationOmissionGuards/raw_grouping_expansion
+=== RUN   TestLocalPreAggregationOmissionGuards/physical_equality_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/grouping_option
+=== RUN   TestLocalPreAggregationOmissionGuards/invalid_input_key
+=== RUN   TestLocalPreAggregationOmissionGuards/input_type_mismatch
+=== RUN   TestLocalPreAggregationOmissionGuards/unsupported_key
+=== RUN   TestLocalPreAggregationOmissionGuards/unknown_placement
+--- PASS: TestLocalPreAggregationOmissionGuards (0.04s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/inclusive_size_and_ratio (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/below_size (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/below_ratio (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/missing_input_stats (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/missing_group_stats (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/zero_input (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unknown_groups (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/NaN_groups (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/infinite_input (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/inconsistent_cardinality (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/computed_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/PAD_SPACE_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/multiple_keys (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/physical_key_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/final_key_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/local_shuffle (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/transformed_output (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/order (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/limit (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/runtime_filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/parent_filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/raw_grouping_expansion (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/physical_equality_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/grouping_option (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/invalid_input_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/input_type_mismatch (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unsupported_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unknown_placement (0.00s)
+=== RUN   TestLocalPreAggregationOmissionProjectsRawKey
+--- PASS: TestLocalPreAggregationOmissionProjectsRawKey (0.00s)
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_fallback
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/large_global_key
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_tuple
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/global_tuple_spelling
+--- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL (0.01s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_fallback (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/large_global_key (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_tuple (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/global_tuple_spelling (0.00s)
+=== RUN   TestPadSpaceRemoteProtocolValidation
+=== RUN   TestPadSpaceRemoteProtocolValidation/comparison_cast_in_projection
+=== RUN   TestPadSpaceRemoteProtocolValidation/set_operation_physical_key
+--- PASS: TestPadSpaceRemoteProtocolValidation (0.00s)
+    --- PASS: TestPadSpaceRemoteProtocolValidation/comparison_cast_in_projection (0.00s)
+    --- PASS: TestPadSpaceRemoteProtocolValidation/set_operation_physical_key (0.00s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/compile	1.151s

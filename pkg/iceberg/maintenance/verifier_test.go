@@ -172,7 +172,7 @@ func TestCatalogFactoryCommitVerifierRecoversEmptyRewriteDataFilesCommitMetadata
 				MetadataLocation: metadataLocation,
 				MetadataJSON: []byte(strings.Replace(
 					string(appliedRewriteMetadataJSON()),
-					`"operation": "rewrite_manifests"`,
+					`"operation": "replace"`,
 					`"operation": "rewrite_data_files"`,
 					1,
 				)),
@@ -273,7 +273,7 @@ func appliedRewriteMetadataJSON() []byte {
 	return []byte(strings.Replace(
 		string(expireMetadataJSON()),
 		`"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767484800000, "manifest-list": "s3://warehouse/orders/metadata/snap-4.avro"`,
-		`"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767484800000, "manifest-list": "s3://warehouse/orders/metadata/rewrite-manifest.avro", "summary": {"operation": "rewrite_manifests"}`,
+		`"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767484800000, "manifest-list": "s3://warehouse/orders/metadata/rewrite-manifest.avro", "summary": {"operation": "replace"}`,
 		1,
 	))
 }

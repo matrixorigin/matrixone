@@ -3066,8 +3066,30 @@ func TestPartitionCompareUnsignedCoverageHack(t *testing.T) {
 	assert.Equal(t, MatchTrue, matchPartitionCompare("5", []string{"5"}, colType, PartOpGe))
 	assert.Equal(t, MatchFalse, matchPartitionCompare("4", []string{"5"}, colType, PartOpGt))
 	assert.Equal(t, MatchUnknown, matchPartitionCompare("4", []string{"5", "6"}, colType, PartOpGt))
-	assert.False(t, compareUnsigned(1, 1, PartOpBetween))
-	assert.False(t, compareSigned(1, 1, PartOpBetween))
+	assert.False(t, comparePartitionInteger(uint64(1), uint64(1), PartOpBetween))
+	assert.False(t, comparePartitionInteger(int64(1), int64(1), PartOpBetween))
+}
+
+func TestPartitionCompareIntegerBoundaries(t *testing.T) {
+	cases := []struct {
+		name, dir, predicate string
+		typ                  types.T
+		op                   PartitionOp
+		want                 MatchResult
+	}{
+		{"signed minimum", "-9223372036854775808", "-1", types.T_int64, PartOpLt, MatchTrue},
+		{"signed maximum", "9223372036854775807", "-1", types.T_int64, PartOpGt, MatchTrue},
+		{"unsigned maximum", "18446744073709551615", "9223372036854775808", types.T_uint64, PartOpGt, MatchTrue},
+		{"unsigned equality", "18446744073709551615", "18446744073709551615", types.T_uint64, PartOpLe, MatchTrue},
+		{"signed overflow", "128", "1", types.T_int8, PartOpGt, MatchUnknown},
+		{"unsigned overflow", "1", "256", types.T_uint8, PartOpLt, MatchUnknown},
+		{"negative unsigned", "-1", "1", types.T_uint64, PartOpLt, MatchUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, matchPartitionCompare(tc.dir, []string{tc.predicate}, tree.HivePartColType{Id: int32(tc.typ)}, tc.op))
+		})
+	}
 }
 
 func TestGetNegatedLiteralStringCoverageHack(t *testing.T) {

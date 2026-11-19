@@ -22,7 +22,7 @@ import (
 )
 
 func newProxyListener(address string) (net.Listener, error) {
-	network, listenAddress, err := parseProxyListenAddress(address)
+	network, listenAddress, err := parseProxyAddress(address)
 	if err != nil {
 		return nil, err
 	}
@@ -30,10 +30,10 @@ func newProxyListener(address string) (net.Listener, error) {
 	return listenConfig.Listen(context.Background(), network, listenAddress)
 }
 
-// parseProxyListenAddress mirrors the pinned Goetty application address
+// parseProxyAddress mirrors the pinned Goetty application address
 // contract so moving admission to the listener boundary does not change the
-// accepted tcp:// or unix:// configuration forms.
-func parseProxyListenAddress(address string) (string, string, error) {
+// accepted tcp:// or unix:// configuration forms for listeners and backends.
+func parseProxyAddress(address string) (string, string, error) {
 	if !strings.Contains(address, "//") {
 		return "tcp4", address, nil
 	}

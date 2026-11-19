@@ -651,7 +651,7 @@ information_schema.statistics where table_schema = 'db6' and table_name = 't12';
 table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
 db6    t12    0    db6    PRIMARY    1    a    
 drop index idx_1 on t12;
-internal error: not found index: idx_1
+Can't DROP 'idx_1'; check that column/key exists
 drop table t12;
 drop table if exists t13;
 create table t13(

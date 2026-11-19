@@ -147,9 +147,9 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 				return nil
 			}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()))
 		}
-		oldVersion := func(t *testing.T, value string) {
+		oldVersion := func(t *testing.T) {
 			t.Helper()
-			res, err := internal.Exec(ctx, fmt.Sprintf("update mo_catalog.mo_account set create_version='%s' where account_id=%d", value, accountID), executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
+			res, err := internal.Exec(ctx, fmt.Sprintf("update mo_catalog.mo_account set create_version='4.0.6' where account_id=%d", accountID), executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
 			require.NoError(t, err)
 			res.Close()
 		}
@@ -165,17 +165,17 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 		}
 
 		for _, tc := range []struct {
-			name, version, seed string
-			count               int
+			name, seed string
+			count      int
 		}{
-			{"historical six rows", "4.0.13", "DELETE FROM information_schema.COLLATIONS WHERE COLLATION_NAME IN ('utf8_unicode_ci','utf8mb4_unicode_ci')", 6},
-			{"empty legacy table", "4.0.15", "DELETE FROM information_schema.COLLATIONS", 0},
+			{"historical six rows", "DELETE FROM information_schema.COLLATIONS WHERE COLLATION_NAME IN ('utf8_unicode_ci','utf8mb4_unicode_ci')", 6},
+			{"empty legacy table", "DELETE FROM information_schema.COLLATIONS", 0},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				seed(t, tc.seed)
 				require.Len(t, query(t, tenantDB, selectCollations), tc.count)
 				require.Len(t, query(t, tenantDB, "SHOW COLLATION"), 8)
-				oldVersion(t, tc.version)
+				oldVersion(t)
 				upgrader, owner := newUpgrader(t)
 				upgraded, err := upgrade(upgrader)
 				require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 		t.Run("delete rolls back on insert failure then retries", func(t *testing.T) {
 			seed(t, "DELETE FROM information_schema.COLLATIONS WHERE COLLATION_NAME IN ('utf8_unicode_ci','utf8mb4_unicode_ci')")
 			before := query(t, tenantDB, selectCollations)
-			oldVersion(t, "4.0.15")
+			oldVersion(t)
 			upgrader, owner := newUpgrader(t)
 			injected := errors.New("collations insert failure")
 			owner.insertError = injected
@@ -203,7 +203,7 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 			require.Equal(t, 1, owner.deletes, "the real DELETE completed inside the failed transaction")
 			require.Equal(t, 0, owner.inserts)
 			require.ElementsMatch(t, before, query(t, tenantDB, selectCollations))
-			require.Equal(t, "4.0.15", version(), "failed transaction must not advance tenant version")
+			require.Equal(t, "4.0.6", version(), "failed transaction must not advance tenant version")
 			owner.insertError = nil
 			upgraded, err := upgrade(upgrader)
 			require.NoError(t, err)
@@ -213,25 +213,62 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 		})
 		// Preserve row count while falsifying each metadata field. The predicate
 		// must compare full rows rather than accepting a count-only completion.
-		for _, assignment := range []string{
+		for i, assignment := range []string{
 			"COLLATION_NAME='stale_name'", "CHARACTER_SET_NAME='stale_charset'", "ID=999",
 			"IS_DEFAULT=''", "IS_COMPILED='No'", "SORTLEN=99", "PAD_ATTRIBUTE='PAD SPACE'",
 		} {
-			t.Run(assignment, func(t *testing.T) {
+			if !t.Run(assignment, func(t *testing.T) {
+				if i > 0 {
+					// Exercise the exact upgrade predicate against each corruption in
+					// its own transaction. Roll back before the next field; the first
+					// field below still exercises the complete repair path.
+					rollback := errors.New("rollback collation predicate probe")
+					var before, matches bool
+					err := internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+						var err error
+						before, err = versions.CheckTableDataExist(tx, uint32(accountID), sysview.InformationSchemaCollationsCheckSQL())
+						if err != nil {
+							return err
+						}
+						res, err := tx.Exec("UPDATE information_schema.COLLATIONS SET "+assignment+" WHERE COLLATION_NAME='binary'", versions.UpgradeStatementOption(uint32(accountID)))
+						if err != nil {
+							return err
+						}
+						affected := res.AffectedRows
+						res.Close()
+						if affected != 1 {
+							return fmt.Errorf("expected one corrupted collation, got %d", affected)
+						}
+						matches, err = versions.CheckTableDataExist(tx, uint32(accountID), sysview.InformationSchemaCollationsCheckSQL())
+						if err != nil {
+							return err
+						}
+						return rollback
+					}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
+					joined, ok := err.(interface{ Unwrap() []error })
+					require.True(t, ok, "expected executor rollback result, got %v", err)
+					require.Equal(t, []error{rollback}, joined.Unwrap(), "rollback must succeed")
+					require.True(t, before, "original metadata must satisfy the upgrade predicate")
+					require.False(t, matches, "stale metadata must not satisfy the upgrade predicate")
+					assertMetadata(t, tenantDB)
+					return
+				}
 				seed(t, "UPDATE information_schema.COLLATIONS SET "+assignment+" WHERE COLLATION_NAME='binary'")
-				oldVersion(t, "4.0.15")
+				oldVersion(t)
 				upgrader, owner := newUpgrader(t)
 				upgraded, err := upgrade(upgrader)
 				require.NoError(t, err)
 				require.True(t, upgraded)
 				require.Equal(t, 1, owner.deletes)
 				assertMetadata(t, tenantDB)
-			})
+			}) {
+				return
+			}
 		}
 		t.Run("same count duplicate is repaired", func(t *testing.T) {
 			seed(t, "DELETE FROM information_schema.COLLATIONS WHERE COLLATION_NAME='utf8_unicode_ci'",
 				"INSERT INTO information_schema.COLLATIONS SELECT * FROM information_schema.COLLATIONS WHERE COLLATION_NAME='binary'")
-			oldVersion(t, "4.0.15")
+			oldVersion(t)
 			upgrader, owner := newUpgrader(t)
 			upgraded, err := upgrade(upgrader)
 			require.NoError(t, err)
@@ -240,7 +277,7 @@ func TestCollationsMetadataUpgrade(t *testing.T) {
 			assertMetadata(t, tenantDB)
 		})
 		t.Run("exact rows require no replacement", func(t *testing.T) {
-			oldVersion(t, "4.0.15")
+			oldVersion(t)
 			upgrader, owner := newUpgrader(t)
 			upgraded, err := upgrade(upgrader)
 			require.NoError(t, err)

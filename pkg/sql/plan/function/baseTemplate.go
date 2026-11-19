@@ -186,6 +186,31 @@ func opBinaryFixedFixedToFixed[
 			return nil
 		}
 	}
+	if parameters[0].IsDictionary() || parameters[1].IsDictionary() {
+		left, okLeft := vector.TryResolveFixedReadView[T1](parameters[0])
+		right, okRight := vector.TryResolveFixedReadView[T2](parameters[1])
+		if okLeft && okRight {
+			if left.AllNull || right.AllNull {
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			hasNull := left.Nulls.Any() || right.Nulls.Any() || rsAnyNull
+			if !hasNull {
+				for row := 0; row < length; row++ {
+					rss[row] = resultFn(left.Values[fixedReadIndex(left, row)], right.Values[fixedReadIndex(right, row)])
+				}
+			} else {
+				for row := 0; row < length; row++ {
+					if rsNull.Contains(uint64(row)) || left.Nulls.Contains(uint64(row)) || right.Nulls.Contains(uint64(row)) {
+						rsNull.Add(uint64(row))
+						continue
+					}
+					rss[row] = resultFn(left.Values[fixedReadIndex(left, row)], right.Values[fixedReadIndex(right, row)])
+				}
+			}
+			return nil
+		}
+	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -3367,6 +3392,78 @@ func opUnaryBytesToFixedWithErrorCheck[
 	return nil
 }
 
+// opUnaryBytesToFixedWithNullOnError evaluates a unary bytes-to-fixed function
+// and marks affected rows NULL when resultFn fails, instead of failing the
+// whole statement with resultFn's error.
+func opUnaryBytesToFixedWithNullOnError[
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) (Tr, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
+	if allMasked {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			r, err := resultFn(v1)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			rsNull.Add(i)
+			continue
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
 func opUnaryStrToFixedWithErrorCheck[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) (Tr, error), selectList *FunctionSelectList) error {
@@ -3454,4 +3551,14 @@ func opNoneParamToBytes(
 		}
 	}
 	return nil
+}
+
+func fixedReadIndex[T any](view vector.FixedReadView[T], row int) int {
+	if view.Constant {
+		return 0
+	}
+	if view.Selection != nil {
+		return int(view.Selection[row])
+	}
+	return row
 }

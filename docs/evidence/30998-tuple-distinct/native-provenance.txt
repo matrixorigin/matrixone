@@ -1,0 +1,14 @@
+format=7
+makefile=37d8f389b36d82bbd8468fea0766976e283ce7cb
+cgo=80e3f9b96b99a4c657656aa9e3e06bd5768eaf77
+thirdparties=4f6a37da80949d77cf902cc65ec4201fdefbaf5a
+goos=darwin
+goarch=arm64
+accelerator=cpu
+optimization=release
+simsimd=0
+common-environment=1e3fdc1be96823757d3967ace2c822f3c796cfd3
+accelerator-environment=9ad272c392b2d022ec76b99e27f0b62d74757517
+libmo-hash=dbdd1b192d4f318567e5d4368e58bfafa3d6678d
+thirdparty-hash=f45a6f5ab8d3d69a33629521e39090b00b747269
+cuda-fatbin-hash=none

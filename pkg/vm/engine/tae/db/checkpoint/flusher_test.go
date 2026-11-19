@@ -227,6 +227,32 @@ func TestCheckpointBoundedScanIncludesObjectsBeforeLastCheckpoint(t *testing.T) 
 	assert.Equal(t, []*catalog.ObjectEntry{afterCheckpoint}, cronObjects)
 }
 
+func TestForeachAobjBeforeReleasesGroupLockBeforeVisitor(t *testing.T) {
+	table := catalog.MockStaloneTableEntry(1, catalog.NewEmptySchema("test"))
+	data := catalog.NewStandaloneObject(table, types.BuildTS(1, 0), false)
+	tomb := catalog.NewStandaloneObject(table, types.BuildTS(1, 0), true)
+	table.AddEntryLocked(data)
+	table.AddEntryLocked(tomb)
+
+	visit := func(isTombstone bool, got *catalog.ObjectEntry, expected *catalog.ObjectEntry) {
+		assert.Same(t, expected, got)
+		finished := make(chan struct{})
+		go func() {
+			table.AddEntryLocked(catalog.NewStandaloneObject(table, types.BuildTS(2, 0), isTombstone))
+			close(finished)
+		}()
+		select {
+		case <-finished:
+		case <-time.After(3 * time.Second):
+			t.Error("ObjectList writer blocked behind checkpoint visitor's group read lock")
+		}
+	}
+	foreachAobjBefore(context.Background(), table, types.BuildTS(3, 0), types.TS{},
+		func(obj *catalog.ObjectEntry) { visit(false, obj, data) },
+		func(obj *catalog.ObjectEntry) { visit(true, obj, tomb) },
+	)
+}
+
 func TestCheckpointBoundedFlushDoesNotResetTableDeadline(t *testing.T) {
 	flusher := &flushImpl{flushInterval: time.Hour}
 	table := catalog.MockStaloneTableEntry(1, catalog.NewEmptySchema("test"))

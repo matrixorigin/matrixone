@@ -67,6 +67,12 @@ select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386)
 -- @separator:table
 explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
 -- @separator:table
+explain select * from t1 force index(t1i1) where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+-- Selective OR ranges should still select non-covering index backfill automatically.
+-- @separator:table
+explain select * from t1 where c3 between 100 and 101 or c3 between 1000 and 1001 or c3 between 1300 and 1301;
+select * from t1 where c3 between 100 and 101 or c3 between 1000 and 1001 or c3 between 1300 and 1301;
+-- @separator:table
 explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
 select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
 -- @separator:table
@@ -76,6 +82,11 @@ explain select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 
 select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
 -- @separator:table
 explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+-- @separator:table
+explain select * from t1 force index(t1i1) where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+-- @separator:table
+explain select * from t1 where c3 between 100 and 101 or c3 between 1000 and 1001 or c3 in (1300, 1400, 1500);
+select * from t1 where c3 between 100 and 101 or c3 between 1000 and 1001 or c3 in (1300, 1400, 1500);
 -- @separator:table
 explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
 select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);

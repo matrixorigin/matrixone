@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "source_database": "pr31069_compat",
+  "source_table": "src",
+  "create_sql": "CREATE TABLE src (id int primary key, v varchar(32) default 'd\\\\ef', c int comment 'C:\\\\dir\\\\new it''s', key idx_v(v) comment 'idx\\\\q''s') comment 'x\\\\ty''z'",
+  "schema_hash": "0357a0ede5ef359080f54e141cda3556a1dd789ae980566e6a2aa89146af87cd",
+  "metadata_only": false,
+  "relations": [
+    {
+      "role": "main",
+      "source_table": "src",
+      "schema_hash": "0357a0ede5ef359080f54e141cda3556a1dd789ae980566e6a2aa89146af87cd",
+      "logical_schema_hash": "0357a0ede5ef359080f54e141cda3556a1dd789ae980566e6a2aa89146af87cd",
+      "objects": [
+        {
+          "name": "01a172fd-f284-7e56-956b-ea36ab43e6a8_00000",
+          "stats": "AaFy/fKEflaVa+o2q0PmqAAAMDFhMTcyZmQtZjI4NC03ZTU2LTk1NmItZWEzNmFiNDNlNmE4XzAwMDAwAeABAACBAQAALwYAAAIAAAABAAAAAQAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAABAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAS/FqEDAAADCQAAAg==",
+          "tombstone": false,
+          "size": 929,
+          "sha256": "9d3083705e6fa418b7559325f2a6905c6f0b18641bd484b9e651e2cc534a79bf",
+          "fixture_path": "objects/01a172fd-f284-7e56-956b-ea36ab43e6a8_00000"
+        }
+      ]
+    },
+    {
+      "role": "index",
+      "index_name": "idx_v",
+      "source_table": "__mo_index_secondary_01a172fd-efec-782e-be99-6c1a2d050b70",
+      "schema_hash": "b523ede81af4cec0718a2935ca7894c9b95123510af5ab93e0a2d96025c60612",
+      "logical_schema_hash": "07df512a4b9282b355ca21dba69d1b503a89c9f38a3e55cc573d176bd98eedd7",
+      "objects": [
+        {
+          "name": "01a172fd-feb2-7821-924d-8a27ef5ecf89_00000",
+          "stats": "AaFy/f6yeCGSTYon717PiQAAMDFhMTcyZmQtZmViMi03ODIxLTkyNGQtOGEyN2VmNWVjZjg5XzAwMDAwAbEBAABcAQAANwUAAAIAAAABAAAARgFvbmUAOhUBAAAAAAAAAAAAAAAAAAAAAAAAAAAACUYBdHdvADoVAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAmAPU0DAACdBwAAAg==",
+          "tombstone": false,
+          "size": 845,
+          "sha256": "71f6addfc9344a76b317ae283ba694b631b7e578278eb4891787f544bf33155e",
+          "fixture_path": "objects/01a172fd-feb2-7821-924d-8a27ef5ecf89_00000"
+        }
+      ]
+    }
+  ]
+}

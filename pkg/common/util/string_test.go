@@ -17,6 +17,7 @@ package util
 import (
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/smartystreets/goconvey/convey"
@@ -132,5 +133,29 @@ func TestUTF8PrefixLen(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(100, func() { _ = Abbreviate("a你😀", 100); _ = UTF8PrefixLen("a你😀", 3) }); n != 0 {
 		t.Fatalf("boundary/unchanged path allocated: %v", n)
+	}
+}
+
+func TestEqualFoldKeyMatchesStringsEqualFold(t *testing.T) {
+	// Every ASCII rune must retain the same canonical representative as the
+	// Unicode simple-fold orbit, including K/k/Kelvin and S/s/long-s.
+	for r := rune(0); r < utf8.RuneSelf; r++ {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		if got := EqualFoldKey(string(r)); got != string(min) {
+			t.Errorf("ASCII %U: got %q, want %q", r, got, string(min))
+		}
+	}
+	values := []string{"", "K", "k", "K", "S", "s", "ſ", "Σ", "σ", "ς", "I", "i", "İ", "ı", "ß", "ss", "a ", "a", "\xff", "\xfe", "�"}
+	for _, left := range values {
+		for _, right := range values {
+			if got, want := EqualFoldKey(left) == EqualFoldKey(right), strings.EqualFold(left, right); got != want {
+				t.Errorf("%q and %q: key equality %v, EqualFold %v", left, right, got, want)
+			}
+		}
 	}
 }

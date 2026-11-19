@@ -71,20 +71,3 @@ func NewDataSinker(
 		opts...,
 	)
 }
-
-func NewMetaSinker(
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-	opts ...ioutil.SinkerOption,
-) *ioutil.Sinker {
-	opts = append(opts, ioutil.WithTailSizeCap(0))
-	return ioutil.NewSinker(
-		MetaAttr_Table_Idx,
-		MetaAttrs,
-		MetaTypes,
-		MetaSinkerFactory,
-		mp,
-		fs,
-		opts...,
-	)
-}

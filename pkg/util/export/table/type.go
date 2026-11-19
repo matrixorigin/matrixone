@@ -88,12 +88,8 @@ type ETLPath struct {
 	path string
 	// table parsed from path
 	table string
-	// filename
-	filename string
 	// timestamps parsed from filename in path
 	timestamps []string
-	// fileType, val in [log, merged]
-	fileType MergeLogType
 }
 
 const PathElems = 7
@@ -120,20 +116,17 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	if len(elems) != PathElems {
 		return moerr.NewInternalErrorf(ctx, "invalid etl path: %s", p.path)
 	}
-	p.filename = elems[PathIdxFilename]
+	filename := elems[PathIdxFilename]
 	p.table = elems[PathIdxTable]
 
-	// parse filename => fileType, timestamps
-	filename := strings.Trim(p.filename, CsvExtension)
-	fnElems := strings.Split(filename, FilenameSeparator)
+	// parse filename => timestamps
+	fnElems := strings.Split(strings.Trim(filename, CsvExtension), FilenameSeparator)
 	if len(fnElems) != FilenameElems && len(fnElems) != FilenameElemsV2 {
-		return moerr.NewInternalErrorf(ctx, "invalid etl filename: %s", p.filename)
+		return moerr.NewInternalErrorf(ctx, "invalid etl filename: %s", filename)
 	}
 	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
-		p.fileType = MergeLogTypeMerged
 		p.timestamps = fnElems[:2]
 	} else {
-		p.fileType = MergeLogTypeLogs
 		p.timestamps = fnElems[:1]
 	}
 

@@ -147,3 +147,27 @@ show create table seq_idx;
 Table    Create Table
 seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx_seq` (`b`)\n)
 drop table seq_idx;
+drop table if exists `tick``table`;
+create table `tick``table` (v1 int);
+insert into `tick``table` values (1),(2);
+alter table `tick``table` add index idx_v1(v1);
+show index from `tick``table`;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Index_params	Visible	Expression
+tick`table	1	idx_v1	1	v1	A	0	NULL	NULL	YES	BTREE				YES	v1
+insert into `tick``table` values (3);
+select v1 from `tick``table` force index (idx_v1);
+v1
+1
+2
+3
+alter table `tick``table` add index idx_c(v1), algorithm=copy;
+alter table `tick``table` drop index idx_c;
+drop table `tick``table`;
+drop table if exists `sp ace`;
+create table `sp ace` (v1 int);
+insert into `sp ace` values (7);
+alter table `sp ace` add index idx_s1(v1);
+show index from `sp ace`;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Index_params	Visible	Expression
+sp ace	1	idx_s1	1	v1	A	0	NULL	NULL	YES	BTREE				YES	v1
+drop table `sp ace`;

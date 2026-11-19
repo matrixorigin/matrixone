@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -182,7 +184,7 @@ func Test_formatOutputString(t *testing.T) {
 			mrs: &MysqlResultSet{},
 		}
 		buffer := &bytes.Buffer{}
-		convey.So(formatOutputString(ep, nil, nil, '\n', true, buffer), convey.ShouldBeNil)
+		convey.So(formatOutputString(ep, nil, nil, '\n', true, true, buffer), convey.ShouldBeNil)
 	})
 }
 
@@ -265,18 +267,71 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	})
 }
 
+func TestWriteExportBatchToFileRejectsAuditOverflow(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, tc := range []struct {
+		name      string
+		format    string
+		splitSize uint64
+		rows      uint64
+		fileBytes uint64
+		batch     BatchByte
+		wantError string
+	}{
+		{
+			name:      "csv unlimited row count",
+			format:    "csv",
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("x\n"), rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "csv split row count",
+			format:    "csv",
+			splitSize: 16,
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "jsonline file byte count",
+			format:    "jsonline",
+			fileBytes: maxUint64,
+			batch:     BatchByte{writeByte: []byte("{}\n"), rowCount: 1},
+			wantError: "outfile audit file byte count overflow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig:   &tree.ExportParam{ExportFormat: tc.format, SplitSize: tc.splitSize},
+				Rows:         tc.rows,
+				CurFileSize:  tc.fileBytes,
+				auditEnabled: true,
+			}
+			writes := 0
+			stub := gostub.Stub(&Write, func(_ *ExportConfig, output []byte) (int, error) {
+				writes++
+				return len(output), nil
+			})
+			defer stub.Reset()
+
+			err := writeExportBatchToFile(ep, &tc.batch)
+			require.ErrorContains(t, err, tc.wantError)
+			require.Zero(t, writes, "overflow must be detected before writing to the sink")
+			require.Equal(t, tc.rows, ep.Rows)
+			require.Equal(t, tc.fileBytes, ep.CurFileSize)
+			require.Zero(t, ep.auditBytesWritten)
+			require.Zero(t, ep.auditRowsWritten)
+		})
+	}
+}
+
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
-				Lines: &tree.Lines{
-					TerminatedBy: &tree.Terminated{},
-				},
-				Fields: &tree.Fields{
-					Terminated: &tree.Terminated{},
-					EnclosedBy: &tree.EnclosedBy{},
-					EscapedBy:  &tree.EscapedBy{},
-				},
+				Lines:    tree.NewLines("", "\n"),
+				Fields:   tree.NewFields(",", false, '"', '\\'),
 				Header:   true,
 				FilePath: "test/export.csv",
 			},
@@ -325,8 +380,9 @@ func Test_exportDataToCSVFile(t *testing.T) {
 
 		ep.mrs.AddRow(data)
 
-		ep.Symbol = make([][]byte, len(col))
-		ep.ColumnFlag = make([]bool, len(col))
+		// Exercise real field/record boundaries rather than fifteen fields
+		// concatenated without delimiters, which cannot round-trip NULLs.
+		initExportFileParam(ep, ep.mrs)
 
 		stubs := gostub.StubFunc(&Close, nil)
 		defer stubs.Reset()
@@ -970,6 +1026,163 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	bytesChan := make(chan *BatchByte, 2)
+
+	badBatch := batch.NewOffHeapWithSize(1)
+	badVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	badBatch.Vecs[0] = badVec
+	defer badBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(badVec, []byte("valid"), false, mp))
+	require.NoError(t, vector.AppendBytes(badVec, []byte("x\xffy"), false, mp))
+	badBatch.SetRowCount(2)
+	require.Positive(t, mp.CurrNB())
+	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
+	failed := <-bytesChan
+	require.Error(t, failed.err)
+	require.True(t, moerr.IsMoErrCode(failed.err, moerr.ErrNotSupported), "%v", failed.err)
+	require.Contains(t, failed.err.Error(), "invalid UTF-8")
+	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
+	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
+
+	goodBatch := batch.NewOffHeapWithSize(1)
+	goodVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	goodBatch.Vecs[0] = goodVec
+	defer goodBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
+	goodBatch.SetRowCount(1)
+	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
+	succeeded := <-bytesChan
+	require.NoError(t, succeeded.err)
+	require.Equal(t, []byte("{\"value\":\"next\"}\n"), succeeded.writeByte)
+	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
+}
+
+// encodeJSONForExportTest encodes JSON text the same way the storage layer
+// stores a JSON column value, for building export test vectors.
+func encodeJSONForExportTest(t *testing.T, text string) []byte {
+	t.Helper()
+	var bj bytejson.ByteJson
+	require.NoError(t, bj.UnmarshalJSON([]byte(text)))
+	data, err := types.EncodeJson(bj)
+	require.NoError(t, err)
+	return data
+}
+
+// TestVectorValueToJSONTopLevelJSONNull pins the #31277 contract: a top-level
+// JSON literal null has no JSONLINE encoding that loads back as a JSON value,
+// so the converter must reject it instead of colliding with SQL NULL, while
+// nested nulls, the JSON string "null" and every other JSON value keep their
+// exact raw encoding.
+func TestVectorValueToJSONTopLevelJSONNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("top-level JSON null is rejected", func(t *testing.T) {
+		nullViaEncode, err := types.EncodeJson(bytejson.Null)
+		require.NoError(t, err)
+		for _, encoded := range [][]byte{
+			encodeJSONForExportTest(t, "null"),
+			nullViaEncode,
+		} {
+			func() {
+				vec := vector.NewVec(types.T_json.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+				_, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.Contains(t, err.Error(), "JSONLINE")
+				require.Contains(t, err.Error(), "JSON null")
+			}()
+		}
+	})
+
+	t.Run("nested null, string null and other JSON values still encode", func(t *testing.T) {
+		for _, tc := range []struct{ in, want string }{
+			{`{"a":null}`, `{"a":null}`},
+			{`[null]`, `[null]`},
+			{`"null"`, `"null"`},
+			{`true`, `true`},
+			{`false`, `false`},
+			{`0`, `0`},
+			{`{"a":1}`, `{"a":1}`},
+		} {
+			func() {
+				vec := vector.NewVec(types.T_json.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, encodeJSONForExportTest(t, tc.in), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.NoError(t, err)
+				// constructJSONLine embeds the value in a row map and marshals
+				// it with encoding/json, which compacts the raw message; pin
+				// the exact bytes that land in the export file.
+				wire, err := json.Marshal(got)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, string(wire))
+			}()
+		}
+	})
+}
+
+// TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch proves the
+// batch worker reports the top-level JSON null error without publishing a
+// partial prefix, releases the batch, and still exports SQL NULL, nested JSON
+// null, the JSON string "null" and ordinary JSON with distinct encodings.
+func TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	bytesChan := make(chan *BatchByte, 2)
+
+	badBatch := batch.NewOffHeapWithSize(1)
+	badVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	badBatch.Vecs[0] = badVec
+	defer badBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(badVec, encodeJSONForExportTest(t, `{"a":1}`), false, mp))
+	require.NoError(t, vector.AppendBytes(badVec, encodeJSONForExportTest(t, `null`), false, mp))
+	badBatch.SetRowCount(2)
+	require.Positive(t, mp.CurrNB())
+	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
+	failed := <-bytesChan
+	require.Error(t, failed.err)
+	require.True(t, moerr.IsMoErrCode(failed.err, moerr.ErrNotSupported), "%v", failed.err)
+	require.Contains(t, failed.err.Error(), "JSON null")
+	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
+	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
+
+	goodBatch := batch.NewOffHeapWithSize(1)
+	goodVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	goodBatch.Vecs[0] = goodVec
+	defer goodBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(goodVec, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `{"a":null}`), false, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `"null"`), false, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `{"a":1}`), false, mp))
+	goodBatch.SetRowCount(4)
+	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
+	succeeded := <-bytesChan
+	require.NoError(t, succeeded.err)
+	require.Equal(t, []byte("{\"value\":null}\n{\"value\":{\"a\":null}}\n{\"value\":\"null\"}\n{\"value\":{\"a\":1}}\n"), succeeded.writeByte)
+	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
+}
+
 func Test_getExportFormat(t *testing.T) {
 	convey.Convey("getExportFormat returns correct format", t, func() {
 		// Test default format (empty string returns "csv")
@@ -1126,92 +1339,76 @@ func Test_vectorValueToJSON(t *testing.T) {
 	})
 }
 
-func TestEscapeJSONControl(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "empty string",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "normal characters",
-			input:    `{"a":"hello world 123"}`,
-			expected: `{"a":"hello world 123"}`,
-		},
-		{
-			name:     "UTF-8 characters",
-			input:    `{"a":"hello 世界 😊"}`,
-			expected: `{"a":"hello 世界 😊"}`,
-		},
-		{
-			name:     "single newline",
-			input:    `{"a":"abc` + `\n` + `def"}`,
-			expected: `{"a":"abc\\ndef"}`,
-		},
-		{
-			name:     "single carriage return",
-			input:    `{"a":"abc` + `\r` + `def"}`,
-			expected: `{"a":"abc\\rdef"}`,
-		},
-		{
-			name:     "single tab",
-			input:    `{"a":"abc` + `\t` + `def"}`,
-			expected: `{"a":"abc\\tdef"}`,
-		},
-		{
-			name:     "single form feed",
-			input:    `{"a":"abc` + `\f` + `def"}`,
-			expected: `{"a":"abc\\fdef"}`,
-		},
-		{
-			name:     "multiple newlines",
-			input:    `{"a":"abc` + `\n\n` + `def"}`,
-			expected: `{"a":"abc\\n\\ndef"}`,
-		},
-		{
-			name:     "escaped sequences unchanged",
-			input:    `{"a":"abc\\n\\r\\t\\b\\fdef"}`,
-			expected: `{"a":"abc\\\\n\\\\r\\\\t\\\\b\\\\fdef"}`,
-		},
-		{
-			name:     "mixed escaped and actual",
-			input:    `{"a":"abc\\n` + `\t` + `def\\r"}`,
-			expected: `{"a":"abc\\\\n\\tdef\\\\r"}`,
-		},
-		{
-			name:     "control at start",
-			input:    `\n` + `{"a":"def"}`,
-			expected: `\\n{"a":"def"}`,
-		},
-		{
-			name:     "control at end",
-			input:    `{"a":"def"}` + `\n`,
-			expected: `{"a":"def"}\\n`,
-		},
-		{
-			name:     "long string with controls",
-			input:    strings.Repeat("a", 10000) + `\n` + strings.Repeat("b", 10000) + `\t` + strings.Repeat("c", 10000),
-			expected: strings.Repeat("a", 10000) + `\\n` + strings.Repeat("b", 10000) + `\\t` + strings.Repeat("c", 10000),
-		},
-		{
-			name:     "backslash literal",
-			input:    `{"a":"abc\\def"}`,
-			expected: `{"a":"abc\\\\def"}`,
-		},
-	}
+func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			for _, value := range []string{"", "plain", "世界", "�", `\N`} {
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					got, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.NoError(t, err)
+					require.Equal(t, value, got)
+				}()
+			}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res := escapeJSONControlChars(tt.input)
-			if res != tt.expected {
-				t.Errorf("EscapeJSONControl(%v) =\n%v,\nwant\n%v", tt.input, res, tt.expected)
+			for _, value := range []string{"\xff", "a\xffb", "\xc3"} {
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					_, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), value)
+				}()
 			}
 		})
 	}
+
+	t.Run("datalink", func(t *testing.T) {
+		values := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "invalid URL path UTF-8", value: "file:///tmp/a\xffb", wantErr: true},
+			{name: "valid URL", value: "file:///tmp/a-valid-b"},
+		}
+		for _, tc := range values {
+			t.Run(tc.name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				vec := vector.NewVec(types.T_datalink.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, []byte(tc.value), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				if tc.wantErr {
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), tc.value)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.value, got)
+			})
+		}
+	})
 }
 
 func Test_getExportFilePath(t *testing.T) {
@@ -1958,7 +2155,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	dir := t.TempDir()
 	ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
-	}}
+	}, auditEnabled: true}
 	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
 	require.NoError(t, ec.Write(execCtx, nil, bat))
 	require.NoError(t, finalizeParquetExport(ec))
@@ -1967,19 +2164,24 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(files), 1)
 	var got []string
+	var actualBytes, actualRows uint64
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		require.NoError(t, err)
+		actualBytes += uint64(len(data))
 		rows, err := parquet.Read[struct {
 			Payload string `parquet:"payload,optional"`
 		}](bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
 		require.NotEmpty(t, rows) // No trailing empty split file.
+		actualRows += uint64(len(rows))
 		for _, row := range rows {
 			got = append(got, row.Payload)
 		}
 	}
 	require.ElementsMatch(t, values, got)
+	require.Equal(t, actualBytes, ec.auditBytesWritten)
+	require.Equal(t, actualRows, ec.auditRowsWritten)
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {
@@ -2374,4 +2576,71 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 		require.Equal(t, v, got[i].Val, "row %d must round-trip byte-equal", i)
 	}
 	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
+}
+
+// #30703: duplicatedJSONLineColumn flags the first repeated alias, even empty.
+func TestDuplicatedJSONLineColumn(t *testing.T) {
+	for _, tc := range []struct {
+		names []string
+		want  string
+		found bool
+	}{
+		{},
+		{names: []string{"a", "b"}},
+		{names: []string{"", "x"}},
+		{names: []string{"id", "x", "y", "x"}, want: "x", found: true},
+		{names: []string{"x", "x"}, want: "x", found: true},
+		{names: []string{"", ""}, found: true},
+		{names: []string{"", "", "x", "x"}, found: true},
+	} {
+		name, found := duplicatedJSONLineColumn(tc.names)
+		require.Equal(t, tc.want, name)
+		require.Equal(t, tc.found, found, "columns %q", tc.names)
+	}
+}
+
+// #30703: a JSONLINE export whose SELECT aliases repeat must fail explicitly
+// instead of writing rows with one column silently dropped.
+func TestJSONLineExportRejectsDuplicateAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		columns []string
+		want    string
+	}{
+		{name: "ordinary duplicates", columns: []string{"id", "x", "x"}},
+		{name: "empty duplicates", columns: []string{"", ""}},
+		{name: "empty duplicates before ordinary duplicates", columns: []string{"", "", "x", "x"}},
+		{name: "unique names", columns: []string{"x", "y"}, want: "{\"x\":11,\"y\":22}\n"},
+		{name: "one empty name", columns: []string{"", "x"}, want: "{\"\":11,\"x\":22}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			mrs := &MysqlResultSet{}
+			bat := batch.NewWithSize(len(tc.columns))
+			for i, name := range tc.columns {
+				column := new(MysqlColumn)
+				column.SetName(name)
+				mrs.AddColumn(column)
+				bat.Vecs[i] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{int32(11 * (i + 1))})
+			}
+			bat.SetRowCount(1)
+			ep := &ExportConfig{mrs: mrs}
+			bytesChan := make(chan *BatchByte, 1)
+			constructJSONLine(t.Context(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+			select {
+			case result := <-bytesChan:
+				if tc.want == "" {
+					require.ErrorContains(t, result.err, "duplicate column names")
+					require.Nil(t, result.writeByte)
+				} else {
+					require.NoError(t, result.err)
+					require.Equal(t, tc.want, string(result.writeByte))
+				}
+			default:
+				t.Fatal("JSONLINE export must report its result")
+			}
+			require.Zero(t, mp.CurrNB(), "the batch must be released on success and failure")
+		})
+	}
 }

@@ -23,6 +23,7 @@ create stage stage01 url = 'file:///$resources/into_outfile';
 drop stage if exists substage01;
 create stage substage01 url = 'stage://stage01/stage/';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -53,6 +54,7 @@ create stage stage02 url = 'file:///$resources/into_outfile';
 drop stage if exists substage02;
 create stage substage02 url = 'stage://stage02/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -83,6 +85,7 @@ create stage stage03 url = 'file:///$resources/into_outfile';
 drop stage if exists substage03;
 create stage substage03 url = 'stage://stage03/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -117,6 +120,7 @@ create stage stage04 url = 'file:///$resources/into_outfile';
 drop stage if exists substage04;
 create stage substage04 url = 'stage://stage04/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -147,6 +151,7 @@ create stage stage05 url = 'file:///$resources/into_outfile';
 drop stage if exists substage05;
 create stage substage05 url = 'stage://stage05/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -173,6 +178,7 @@ create stage stage06 url = 'file:///$resources/into_outfile';
 drop stage if exists substage06;
 create stage substage06 url = 'stage://stage06/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -197,6 +203,7 @@ create stage stage07 url = 'file:///$resources/into_outfile';
 drop stage if exists substage07;
 create stage substage07 url = 'stage://stage07/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -221,6 +228,7 @@ create stage stage08 url = 'file:///$resources/into_outfile' comment = 'this is 
 drop stage if exists substage08;
 create stage substage08 url = 'stage://stage08/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -245,6 +253,7 @@ create stage stage09 url = 'file:///$resources/into_outfile' comment = 'è¿™æ˜¯ä¸
 drop stage if exists substage09;
 create stage substage09 url = 'stage://stage09/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -256,6 +265,7 @@ show create table t9;
 drop table t9;
 drop stage stage09;
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -277,6 +287,7 @@ create stage stage11 url = 'file:///$resources/into_outfile' comment = 'stage11'
 drop stage if exists substage11;
 create stage substage11 url = 'stage://stage11/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -349,6 +360,7 @@ create stage alter_stage01 url = 'file:///$resources/into_outfile' comment = 'è¿
 drop stage if exists alter_substage01;
 create stage alter_substage01 url = 'stage://alter_stage01/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -356,6 +368,7 @@ alter stage alter_stage01 set url = 'file:/into_outfile';
 select * from t15 into outfile 'stage://alter_stage01/local_stage_t09.csv';
 alter stage alter_stage01 set comment = 'this is a modified stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 truncate t15;
 load data infile 'file:/into_outfile/into_outfile/stage/local_stage_t09.csv' into table t15 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
@@ -384,6 +397,7 @@ create stage ex_stage01 url = 'file:///$resources/into_outfile' comment = 'åŸºäº
 drop stage if exists sub_stage01;
 create stage sub_stage01 url = 'stage://ex_stage01/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -436,6 +450,7 @@ create stage ex_stage02 url = 'file:///$resources/into_outfile' comment = 'ex_st
 drop stage if exists sub_stage02;
 create stage sub_stage02 url = 'stage://ex_stage02/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
@@ -483,6 +498,7 @@ create stage ex_stage03 url = 'file:///$resources/into_outfile' comment = 'ex_st
 drop stage if exists sub_stage03;
 create stage sub_stage03 url = 'stage://ex_stage03/stage';
 -- @ignore:0,2,5
+-- @sortkey:1
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;

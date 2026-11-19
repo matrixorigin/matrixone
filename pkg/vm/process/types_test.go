@@ -15,10 +15,43 @@
 package process
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// Status polling runs concurrently with statement execution and session reuse.
+func TestStmtProfileConcurrentSQLSource(t *testing.T) {
+	sp := &StmtProfile{}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for _, action := range []func(){
+		func() { sp.SetSqlSourceType("external") },
+		func() { sp.Clear() },
+		func() {
+			value := sp.GetSqlSourceType()
+			if value != "" && value != "external" {
+				t.Errorf("unexpected SQL source %q", value)
+			}
+		},
+	} {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for range 1000 {
+				action()
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	sp.SetSqlSourceType("external")
+	require.Equal(t, "external", sp.GetSqlSourceType())
+	sp.Clear()
+	require.Empty(t, sp.GetSqlSourceType())
+}
 
 func TestStmtProfileStatementRuntimeProfileCompatibility(t *testing.T) {
 	sp := &StmtProfile{}

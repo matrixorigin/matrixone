@@ -15,8 +15,20 @@
 package executor
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+// ResultLimitError reports that an internal SQL result exceeded its caller's
+// logical payload budget. The caller owns the operation-specific diagnostic.
+type ResultLimitError struct {
+	Limit uint64
+}
+
+func (e *ResultLimitError) Error() string {
+	return fmt.Sprintf("internal SQL result exceeds %d bytes", e.Limit)
+}
 
 func (res Result) Close() {
 	for _, rows := range res.Batches {

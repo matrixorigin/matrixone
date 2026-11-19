@@ -156,6 +156,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// on this builder.
 	builder.insertInputKeysUnique = false
 	builder.isInsertIgnore = false
+	builder.isODKU = false
 
 	if stmt.Source == nil {
 		return moerr.NewInternalError(builder.GetContext(), "multi-table insert has no source query")
@@ -1109,7 +1110,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			if ok {
 				expr, err = builder.castInsertSourceColumn(expr, expr, colDef)
 			} else {
-				expr, err = getDefaultExprForAssignment(sysCtx, colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+				expr, err = getDefaultExprForAssignment(sysCtx, colDef, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			}
 			if err != nil {
 				return 0, err

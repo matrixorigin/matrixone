@@ -41,7 +41,6 @@ type BaseTask struct {
 	impl     Task
 	id       uint64
 	taskType TaskType
-	exec     func(Task) error
 }
 
 func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
@@ -64,9 +63,6 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	} else {
 		doneCB = task.onDone
 	}
-	if impl == nil {
-		impl = task
-	}
 	task.Op = ops.Op{
 		Impl:   impl.(base.IOpInternal),
 		DoneCB: doneCB,
@@ -85,13 +81,6 @@ func (task *BaseTask) onDone(_ base.IOp) {
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { return nil }
 func (task *BaseTask) ID() uint64          { return task.id }
-func (task *BaseTask) Execute() (err error) {
-	if task.exec != nil {
-		return task.exec(task)
-	}
-	logutil.Debugf("Execute Task Type=%d, ID=%d", task.taskType, task.id)
-	return nil
-}
 func (task *BaseTask) Name() string {
 	return fmt.Sprintf("Task[ID=%d][T=%s]", task.id, TaskName(task.taskType))
 }

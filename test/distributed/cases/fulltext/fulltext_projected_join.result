@@ -1,0 +1,145 @@
+drop database if exists ft_proj_join;
+create database ft_proj_join;
+use ft_proj_join;
+create table docs(id bigint primary key, body text);
+insert into docs values (1,'needle anchor'),(2,'needle other'),(3,'anchor other'),(4,'needle anchor'),(5,'filler text');
+create table members(k bigint);
+insert into members values (1),(1),(2),(4),(null);
+create fulltext index ft on docs(body);
+select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') and d.id in (1,2,4) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+explain select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') and d.id in (select k from members) order by d.id;
+-- @regex("Fulltext Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: d.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: RIGHT SEMI   hashOnPK  𝄀
+              Join Cond: (members.k = d.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_proj_join.members [ForceOneCN]  𝄀
+                    Runtime Filter Probe: members.k  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (d.id = mo_fulltext_alias_1.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_proj_join.docs [ForceOneCN]  𝄀
+                          Runtime Filter Probe: d.id  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (mo_fulltext_alias_1.doc_id = mo_fulltext_alias_0.doc_id)  𝄀
+                          ->  Fulltext Index Scan on ft  𝄀
+                                Fulltext Index: ft  𝄀
+                          ->  Fulltext Index Scan on ft  𝄀
+                                Fulltext Index: ft
+select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') and d.id in (select k from members) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('needle') as score from docs d where match(d.body) against('needle') and d.id in (select k from members) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') and match(d.body) against('anchor') and d.id in (select k from members) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where d.id in (select k from members) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where match(d.body) against('needle') and exists (select 1 from members m where m.k = d.id) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where not exists (select 1 from members m where m.k = d.id) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+3  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d join (select distinct k from members) m on m.k = d.id where match(d.body) against('needle') order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d join members m on m.k = d.id where match(d.body) against('needle') order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d join (select distinct k from members) m on m.k = d.id where match(d.body) against('needle') and match(d.body) against('anchor') order by d.id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select d.id, m.k, match(d.body) against('anchor') as score from docs d left join members m on m.k = d.id order by d.id, m.k;
+➤ id[-5,64,0]  ¦  k[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  1  ¦  0.049216866  𝄀
+1  ¦  1  ¦  0.049216866  𝄀
+3  ¦  null  ¦  0.049216866  𝄀
+4  ¦  4  ¦  0.049216866
+select d.id, round(match(d.body) against('anchor'), 3) as a, match(d.body) against('needle') as n from docs d where d.id in (select k from members) order by d.id;
+➤ id[-5,64,0]  ¦  a[8,53,31]  ¦  n[7,5,0]  𝄀
+1  ¦  0.049  ¦  0.049216866  𝄀
+4  ¦  0.049  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from docs d where d.id in (select k from members) order by score desc, d.id limit 1 offset 1;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+4  ¦  0.049216866
+select d.id, match(d.body) against('needle') as score from docs d where (match(d.body) against('needle') or match(d.body) against('filler')) and d.id in (select id from docs) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,23,31]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866  𝄀
+5  ¦  0.0
+select d.id, match(d.body) against('needle') as score from docs d where not match(d.body) against('needle') and d.id in (select id from docs) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,23,31]  𝄀
+3  ¦  0.0  𝄀
+5  ¦  0.0
+select d.id, match(d.body) against('needle') as score from docs d where match(d.body) against('needle') = 0 and d.id in (select id from docs) order by d.id;
+➤ id[-5,64,0]  ¦  score[7,23,31]  𝄀
+3  ¦  0.0  𝄀
+5  ¦  0.0
+select d.id, match(d.body) against('needle') as score from docs d join (select id as k from docs) m on m.k = d.id where match(d.body) against('needle') = 0 order by d.id;
+➤ id[-5,64,0]  ¦  score[7,23,31]  𝄀
+3  ¦  0.0  𝄀
+5  ¦  0.0
+select m.k, match(d.body) against('anchor') as score from members m left join docs d on m.k = d.id order by m.k;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set experimental_ivf_index = 1;
+create table vdocs(id bigint primary key, body text, v vecf32(3));
+insert into vdocs values (1,'needle anchor','[1,0,0]'),(2,'needle other','[2,0,0]'),(3,'anchor other','[3,0,0]'),(4,'needle anchor','[4,0,0]'),(5,'filler text','[5,0,0]');
+create fulltext index ftv on vdocs(body);
+create index vi using ivfflat on vdocs(v) lists=1 op_type 'vector_l2_ops';
+create table vmembers(k bigint);
+insert into vmembers values (1),(1),(2),(3),(4),(5),(null);
+select d.id, match(d.body) against('anchor') as score from vdocs d where d.id in (select k from vmembers) order by l2_distance(d.v, '[0,0,0]') limit 2;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+3  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from vdocs d where exists (select 1 from vmembers m where m.k = d.id) order by l2_distance(d.v, '[0,0,0]') limit 2;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+3  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from vdocs d join vmembers m on m.k = d.id order by l2_distance(d.v, '[0,0,0]'), d.id limit 3;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+1  ¦  0.049216866  𝄀
+3  ¦  0.049216866
+select d.id, match(d.body) against('anchor') as score from vdocs d where match(d.body) against('needle') and d.id in (select k from vmembers) order by l2_distance(d.v, '[0,0,0]') limit 2;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1) q;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1 offset 1) q;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select d.id, match(d.body) against('other') as score from (select * from docs order by id limit 1) d join members m on m.k = d.id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id) q order by q.id limit 1;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+2  ¦  0.15835625
+drop database ft_proj_join;

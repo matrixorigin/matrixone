@@ -16,14 +16,10 @@ package tables
 
 import (
 	"github.com/cespare/xxhash/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -559,68 +555,6 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				}
 			}
 			return nil
-		}
-	}
-}
-
-func dedupNABlkClosure(
-	vec containers.Vector,
-	txn txnif.TxnReader,
-	mask *nulls.Bitmap,
-	def *catalog.ColDef) func(any, bool, int) error {
-	return func(v any, _ bool, _ int) (err error) {
-		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(*vec.GetType(), v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-		}
-		return nil
-	}
-}
-
-func dedupABlkClosureFactory(
-	scan func() (containers.Vector, error),
-) func(
-	containers.Vector,
-	txnif.TxnReader,
-	*nulls.Bitmap,
-	*catalog.ColDef,
-) func(any, bool, int) error {
-	return func(vec containers.Vector, txn txnif.TxnReader, mask *nulls.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
-		return func(v1 any, _ bool, _ int) (err error) {
-			var tsVec containers.Vector
-			defer func() {
-				if tsVec != nil {
-					tsVec.Close()
-					tsVec = nil
-				}
-			}()
-			return vec.Foreach(func(v2 any, _ bool, row int) (err error) {
-				// logutil.Infof("%v, %v, %d", v1, v2, row)
-				if mask.Contains(uint64(row)) {
-					return
-				}
-				if compute.CompareGeneric(v1, v2, vec.GetType().Oid) != 0 {
-					return
-				}
-				if tsVec == nil {
-					tsVec, err = scan()
-					if err != nil {
-						return
-					}
-				}
-				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
-				startTS := txn.GetStartTS()
-				if commitTS.GT(&startTS) {
-					logutil.Info("Dedup-WW",
-						zap.String("txn", txn.Repr()),
-						zap.Int("row offset", row),
-						zap.String("commit ts", commitTS.ToString()),
-					)
-					return txnif.ErrTxnWWConflict
-				}
-				entry := common.TypeStringValue(*vec.GetType(), v1, false)
-				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-			}, nil)
 		}
 	}
 }

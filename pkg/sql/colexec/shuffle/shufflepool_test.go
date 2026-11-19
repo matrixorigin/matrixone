@@ -71,6 +71,59 @@ func TestShufflePoolStopsOnlyAfterEveryWriter(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolStopDrainsReadyPublishedAfterEmptyRead(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		drainAll bool
+	}{
+		{name: "fixed bucket"},
+		{name: "all buckets", drainAll: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(proc.Free)
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			sp := NewShufflePool(1, 2, tc.drainAll)
+			require.True(t, sp.hold())
+			t.Cleanup(func() { sp.release(proc.Mp(), true) })
+			require.True(t, sp.hold())
+			t.Cleanup(func() { sp.release(proc.Mp(), true) })
+
+			var readReady, readStopped func() *batch.Batch
+			if tc.drainAll {
+				readReady = sp.getAnyFullBatch
+				readStopped = sp.getAnyStoppedBatch
+			} else {
+				readReady = func() *batch.Batch { return sp.getFullBatch(0) }
+				readStopped = func() *batch.Batch { return sp.getStoppedBatch(0) }
+			}
+
+			// The producer may publish its last full batch after this empty read
+			// but before the consumer observes the stopped state.
+			require.Nil(t, readReady())
+			input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows, proc.Mp())
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			expected := slices.Clone(vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+			done, err := writeBatchToBucketForTest(sp, input, proc, 0)
+			require.NoError(t, err)
+			require.True(t, done)
+			sp.stopWriting()
+			require.False(t, sp.allStop())
+			sp.stopWriting()
+			require.True(t, sp.allStop())
+
+			full := readStopped()
+			if full != nil {
+				t.Cleanup(func() { sp.discardBatch(full, proc.Mp()) })
+			}
+			require.NotNil(t, full)
+			require.Equal(t, objectio.BlockMaxRows, full.RowCount())
+			require.Equal(t, expected, vector.MustFixedColNoTypeCheck[int64](full.Vecs[0]))
+			require.Nil(t, readStopped())
+		})
+	}
+}
+
 func TestShufflePoolDrainAllBucketsIsFair(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -191,6 +244,44 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.True(t, ownsStats)
 	require.Positive(t, peak)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShufflePoolWholeBucketResumesWithoutSelection(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 1, true)
+	require.True(t, sp.hold())
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows*4, proc.Mp())
+	defer input.Clean(proc.Mp())
+	bucket, offset, waiter, done, err := sp.tryWriteMode(input, nil, 0, 0, 0, true, proc)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, objectio.BlockMaxRows*2, offset)
+	rows := 0
+	for !done {
+		ready := sp.getAnyFullBatch()
+		require.NotNil(t, ready)
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+		select {
+		case <-waiter:
+		default:
+			t.Fatal("freeing a ready batch did not wake the range writer")
+		}
+		bucket, offset, waiter, done, err = sp.tryWriteMode(input, nil, 0, bucket, offset, true, proc)
+		require.NoError(t, err)
+	}
+	for ready := sp.getAnyFullBatch(); ready != nil; ready = sp.getAnyFullBatch() {
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+	}
+	if last := sp.getAnyLastBatch(); last != nil {
+		rows += last.RowCount()
+		sp.discardBatch(last, proc.Mp())
+	}
+	require.Equal(t, input.RowCount(), rows)
+	_, ownsStats := sp.release(proc.Mp(), false)
+	require.True(t, ownsStats)
 }
 
 func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
@@ -612,7 +703,7 @@ func TestShufflePoolFinalDrainDoesNotStealClaimedReadyBatch(t *testing.T) {
 			}()
 
 			require.Equal(t, int32(0), <-claimed)
-			tail := sp.getAnyLastBatch()
+			tail := sp.getAnyStoppedBatch()
 			resume <- struct{}{}
 			full := <-readyBatch
 

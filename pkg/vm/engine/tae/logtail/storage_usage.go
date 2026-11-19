@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,16 +86,7 @@ const (
 	UsageMAX
 )
 
-const cluster = "cluster"
 const StorageUsageMagic uint64 = 0x1A2B3C4D5E6F
-
-type triode int
-
-const (
-	unknown triode = 0
-	yeah    triode = 1
-	nope    triode = 2
-)
 
 type UsageData struct {
 	AccId        uint64
@@ -105,8 +94,6 @@ type UsageData struct {
 	TblId        uint64
 	Size         uint64
 	SnapshotSize uint64
-
-	special triode
 
 	// this will not persist
 	// only global ckp will update
@@ -126,7 +113,6 @@ var zeroUsageData UsageData = UsageData{
 	TblId:        math.MaxUint64,
 	Size:         math.MaxInt64,
 	SnapshotSize: math.MaxInt64,
-	special:      unknown,
 }
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
@@ -214,12 +200,6 @@ type StorageUsageCacheOption = func(c *StorageUsageCache)
 func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 	return StorageUsageCacheOption(func(c *StorageUsageCache) {
 		c.lazyThreshold = time.Second * time.Duration(lazy)
-	})
-}
-
-func WithLessFunc(less func(a UsageData, b UsageData) bool) StorageUsageCacheOption {
-	return StorageUsageCacheOption(func(c *StorageUsageCache) {
-		c.lessFunc = less
 	})
 }
 
@@ -373,15 +353,12 @@ type TNUsageMemo struct {
 		vers    []uint32
 		delayed map[uint64]UsageData
 	}
-
-	C *catalog.Catalog
 }
 
-func NewTNUsageMemo(c *catalog.Catalog) *TNUsageMemo {
+func NewTNUsageMemo() *TNUsageMemo {
 	memo := new(TNUsageMemo)
 	memo.cache = NewStorageUsageCache()
 	memo.newAccCache = NewStorageUsageCache()
-	memo.C = c
 	return memo
 }
 
@@ -492,90 +469,6 @@ func (m *TNUsageMemo) GatherAccountSize(id uint64) (size, snapshotSize uint64, e
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
 
-var specialNameRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s", pkgcatalog.MO_DATABASE, pkgcatalog.MO_TABLES, pkgcatalog.MO_COLUMNS))
-var indexNameRegexp = regexp.MustCompile("__mo_index.*")
-
-func (m *TNUsageMemo) checkSpecial(usage UsageData, tbl *catalog.TableEntry) triode {
-	if usage.special != unknown {
-		return usage.special
-	}
-
-	if tbl == nil {
-		return unknown
-	}
-
-	name := strings.ToLower(tbl.GetFullName())
-	if indexNameRegexp.MatchString(name) {
-		// we don't know if an index table is special or not
-		return nope
-	}
-
-	if specialNameRegexp.MatchString(name) {
-		return yeah
-	}
-
-	schema := tbl.GetLastestSchema(false)
-	if strings.ToLower(schema.Relkind) == cluster {
-		return yeah
-	}
-
-	return nope
-}
-
-func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
-	dbEntry, err := m.C.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
-	if err != nil {
-		logutil.Errorf("[storage]: get mo_catalog from catalog failed: %v", err)
-		return 0
-	}
-
-	usage := UsageData{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID}
-	iter := m.cache.Iter()
-
-	var updates []UsageData
-
-	ok := iter.Seek(usage)
-	for ok {
-		item := iter.Item()
-		if item.AccId != uint64(pkgcatalog.System_Account) || item.DbId != pkgcatalog.MO_CATALOG_ID {
-			break
-		}
-		//fmt.Println(item.String(), item.special)
-		var ret triode
-		if ret = m.checkSpecial(item, nil); ret != unknown {
-			if ret == yeah {
-				size += item.Size
-			}
-			ok = iter.Next()
-			continue
-		}
-
-		tbl, err := dbEntry.GetTableEntryByID(item.TblId)
-		if err != nil {
-			logutil.Errorf("[storage]: get table %d from db %s failed: %v", item.TblId, dbEntry.GetName(), err)
-			ok = iter.Next()
-			continue
-		}
-
-		if ret = m.checkSpecial(item, tbl); ret == yeah {
-			size += item.Size
-		}
-
-		item.special = ret
-		updates = append(updates, item)
-
-		ok = iter.Next()
-	}
-
-	iter.Release()
-
-	for _, item := range updates {
-		m.Replace(item)
-	}
-
-	return size
-}
-
 func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.newAccCache, id)
 }
@@ -586,15 +479,12 @@ func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64][]uint64) {
 
 func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, del bool) {
 	size := uint64(0)
-	special := unknown
 	if old, found := cache.Get(usage); found {
 		size = old.Size
-		special = old.special
 		usage.SnapshotSize = old.SnapshotSize
 
 		usage.ObjectAbstract = old.ObjectAbstract
 	}
-	usage.special = special
 
 	if del {
 		if usage.Size > size {
@@ -631,7 +521,7 @@ func (m *TNUsageMemo) Delete(usage UsageData) {
 
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{AccId: accId, special: unknown}
+	povit := UsageData{AccId: accId}
 
 	iter := m.cache.Iter()
 
@@ -702,7 +592,7 @@ func (m *TNUsageMemo) EstablishFromCKPs() {
 		// var skip bool
 		// var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y]}
 			m.DeltaUpdate(usage, false)
 		}
 
@@ -715,7 +605,7 @@ func (m *TNUsageMemo) EstablishFromCKPs() {
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y]}
 			m.DeltaUpdate(usage, true)
 		}
 	}

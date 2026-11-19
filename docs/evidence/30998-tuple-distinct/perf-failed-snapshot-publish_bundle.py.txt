@@ -1,0 +1,29 @@
+from pathlib import Path
+import shutil,hashlib,json
+p=Path(__file__).parent;d=Path('/private/tmp/mo-issue30995/docs/evidence/30998-tuple-distinct');d.mkdir(parents=True,exist_ok=True)
+def copy(src,dest=None):
+ f=p/src
+ if f.exists():shutil.copy2(f,d/(dest or f.name))
+for name in ['source-identity.json','build-receipts.json','baseline-buildinfo.txt','candidate-buildinfo.txt','native-provenance.txt','test-receipts.json','test-selection.json','sca-results.json','sca-scope.json','public-receipt.json','perf-receipt.json','fixture-schema.json','perf-host.txt','tool-versions.txt']:
+ copy(name)
+for name in ['baseline-build','candidate-build','normal-plan-service','normal-compile','race','sca-vet','sca-molint','sca-lint','public','perf']:copy(name+'.log',name+'.log.txt')
+for name in ['build_both','harness','public_qa','string_qa','axis_qa','cancel_qa','outer_join_qa','remote_qa','multicn','final_public_qa','perf_abba','run_experiment','run_checks','derive_sca','run_sca','publish_bundle']:copy(name+'.py',name+'.py.txt')
+copy('fixture-bootstrap.sql','fixture-bootstrap.sql.txt')
+for name in ['cn','tn','log','launch']:copy(name+'.toml',name+'.toml.txt')
+for src,dest in [('public-qa/results.json','public-results.json'),('remote-qa/results.json','remote-results.json'),('cancel-qa/results.json','cancel-results.json'),('cancel-qa/cleanup.json','cancel-cleanup.json'),('cancel-qa/observed-spill-files.json','cancel-observed-spill-files.json'),('perf-abba/results.json','perf-results.json'),('perf-abba/summary.json','perf-summary.json')]:copy(src,dest)
+for name in ['nn-1-b_a','nn-8-b_a','nn-8-c_b','grouped-8','nullable-8','invalid-8','empty-8','empty-grouped-8']:copy('public-qa/'+name+'-physical.txt','public-'+name+'-physical.txt')
+copy('public-qa/forced-spill-analyze.txt','public-forced-spill-analyze.txt')
+for f in p.glob('axes-*-physical.txt'):copy(f.name)
+for f in p.glob('outer-join-after-*.txt'):copy(f.name)
+for f in (p/'remote-qa').glob('*.txt'):copy(str(f.relative_to(p)),'remote-'+f.name)
+for f in p.glob('public-snapshot-*.txt'):copy(f.name)
+# The first two phases supply one same-run plan/profile per version/control.
+for f in (p/'perf-abba').glob('*.txt'):
+ if f.name.startswith(('0-','1-')):copy(str(f.relative_to(p)),'perf-'+f.name)
+s=(p/'README-draft.md').read_text()
+if (p/'perf-abba/summary.json').exists():
+ r=json.loads((p/'perf-abba/summary.json').read_text());table='| Case | Baseline median ms | Candidate median ms | Change |\n| --- | ---: | ---: | ---: |\n'+'\n'.join('| '+x['name']+' | '+f"{x['baseline']*1000:.3f} | {x['candidate']*1000:.3f} | {(x['ratio']-1)*100:+.2f}% |" for x in r)
+ s=s.replace('PERFORMANCE_TABLE',table)
+(d/'README.md').write_text(s)
+(d/'SHA256SUMS').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in sorted(d.iterdir()) if f.is_file() and f.name!='SHA256SUMS'))
+print('BUNDLE',len(list(d.iterdir())),sum(f.stat().st_size for f in d.iterdir()),flush=True)

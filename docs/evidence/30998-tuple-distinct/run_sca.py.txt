@@ -1,0 +1,13 @@
+import subprocess,json,os
+from pathlib import Path
+p=Path(__file__).parent;w=Path('/private/tmp/mo-issue30995');scope=json.loads((p/'sca-scope.json').read_text())['packages']
+env=os.environ.copy();env.update(GOWORK='off',GOEXPERIMENT='simd',GOMEMLIMIT='3GiB',GOFLAGS='-p=2',CGO_CFLAGS=f'-I{w}/cgo -I{w}/thirdparties/install/include',CGO_LDFLAGS=f'-L{w}/thirdparties/install/lib',DYLD_LIBRARY_PATH=f'{w}/cgo:{w}/thirdparties/install/lib')
+commands=[('vet',['go','vet','-mod=readonly',*scope]),('molint',['go','vet','-mod=readonly','-vettool='+str(p.parent/'tools/molint'),*scope]),('lint',[str(p.parent/'tools/golangci-lint'),'run','--timeout=10m','--concurrency=2','--new-from-rev=94faf0209b9ac3254d31906f92e34405f1988203','-c','.golangci.yml',*scope])]
+env['PATH']=subprocess.check_output(['go','env','GOROOT'],cwd=w,text=True).strip()+'/bin:'+env['PATH']
+env['GOTOOLCHAIN']='local'
+results=[]
+for name,cmd in commands:
+ with (p/f'sca-{name}.log').open('wb') as log:r=subprocess.run(cmd,cwd=w,env=env,stdout=log,stderr=subprocess.STDOUT)
+ results.append({'name':name,'command':cmd,'exit':r.returncode});(p/'sca-results.json').write_text(json.dumps(results,indent=2));print(name,r.returncode,flush=True)
+ if r.returncode:raise SystemExit(r.returncode)
+print('INCREMENTAL_SCA_PASS',len(scope),flush=True)

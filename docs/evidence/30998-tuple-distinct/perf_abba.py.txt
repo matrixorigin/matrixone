@@ -1,0 +1,36 @@
+from harness import *
+import statistics
+out=root/'perf-abba';out.mkdir(exist_ok=True);env['GOMAXPROCS']='8'
+base='qa30982_history_20261024.natural_unique5m'
+cases=[('unary',f'SELECT COUNT(DISTINCT k) FROM {base} WHERE k<1000000',((1000000,),)),('tuple',f'SELECT COUNT(DISTINCT g8,k) FROM {base} WHERE k<1000000',((1000000,),)),('reverse',f'SELECT COUNT(DISTINCT k,g8) FROM {base} WHERE k<1000000',((1000000,),)),('mixed',f'SELECT COUNT(DISTINCT k),SUM(g8) FROM {base} WHERE k<1000000',((1000000,3500000),)),('duplicates','SELECT COUNT(DISTINCT b,a) FROM qa30995.nn',((333337,),)),('char','SELECT COUNT(DISTINCT c,b) FROM qa30995.nn',((333337,),)),('invalid','SELECT COUNT(DISTINCT a,b) FROM qa30995.nullable WHERE g=4',((0,),)),('lowndv','SELECT COUNT(DISTINCT g,b) FROM qa30995.nn',((28,),))]
+records=[]
+(root/'perf-host.txt').write_text(subprocess.check_output(['uptime'],text=True)+subprocess.check_output(['sysctl','hw.ncpu','hw.memsize','machdep.cpu.brand_string'],text=True))
+for phase,variant in enumerate(['baseline','candidate','candidate','baseline']):
+ with Service(variant,f'perf-abba-{phase}-{variant}') as svc:
+  s=svc.s;s.execute('SET SESSION max_dop=8');s.execute('SET SESSION agg_spill_mem=0')
+  if phase==0:
+   schemas={}
+   for table in ['qa30982_history_20261024.natural_unique5m','qa30995.nn','qa30995.nullable']:
+    s.execute('SHOW CREATE TABLE '+table);schemas[table]=s.fetchall()
+   (root/'fixture-schema.json').write_text(json.dumps(schemas,indent=2))
+   run(s,'SELECT COUNT(*),MIN(k),MAX(k),SUM(g8) FROM '+base,((5000000,0,4999999,17500000),))
+  selected=cases if phase%2==0 else cases[::-1]
+  for _ in range(5):
+   for name,sql,want in selected:run(s,sql,want)
+  times={name:[] for name,_,_ in cases}
+  for repeat in range(10):
+   for name,sql,want in (selected if repeat%2==0 else selected[::-1]):times[name].append(run(s,sql,want)['seconds'])
+  for name,sql,want in cases:
+   for prefix,label in [('EXPLAIN PHYPLAN VERBOSE ','physical'),('EXPLAIN ANALYZE ','analyze')]:
+    s.execute(prefix+sql);(out/f'{phase}-{name}-{label}.txt').write_text('\n'.join(str(x[0]) for x in s.fetchall()))
+   records.append({'phase':phase,'variant':variant,'name':name,'sql':sql,'seconds':times[name],'median':statistics.median(times[name])})
+   (out/'results.json').write_text(json.dumps(records,indent=2))
+   print('PERF_CELL',phase,variant,name,records[-1]['median'],flush=True)
+summary=[]
+for name,_,_ in cases:
+ a=[x for r in records if r['name']==name and r['variant']=='baseline' for x in r['seconds']]
+ b=[x for r in records if r['name']==name and r['variant']=='candidate' for x in r['seconds']]
+ ma,mb=statistics.median(a),statistics.median(b)
+ summary.append({'name':name,'baseline':ma,'candidate':mb,'ratio':mb/ma,'samples_each':len(a),'baseline_range':[min(a),max(a)],'candidate_range':[min(b),max(b)]})
+(out/'summary.json').write_text(json.dumps(summary,indent=2))
+print('PERF_ABBA_COMPLETE',json.dumps(summary),flush=True)

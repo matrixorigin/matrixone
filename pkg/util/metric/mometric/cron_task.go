@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -62,25 +62,6 @@ func TaskMetadata(jobName string, id task.TaskCode, args ...string) task.TaskMet
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 		Options:  task.TaskOptions{Concurrency: 1},
 	}
-}
-
-// CreateCronTask should init once in/with schema-init.
-func CreateCronTask(
-	ctx context.Context,
-	service string,
-	executorID task.TaskCode,
-	taskService taskservice.TaskService,
-) error {
-	var err error
-	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
-	defer span.End()
-	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerName)
-	logger.Debug(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
-	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
-		return err
-	}
-	return nil
 }
 
 // GetMetricStorageUsageExecutor collect metric server_storage_usage

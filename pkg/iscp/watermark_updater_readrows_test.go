@@ -19,14 +19,45 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+func TestExecWithResultStatementPolicy(t *testing.T) {
+	sid := t.Name()
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	sqlExec := executortest.NewMockSQLExecutor(gomock.NewController(t))
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, sqlExec) })
+	txn := &iscpTxnForTest{}
+	for _, policy := range []lock.WaitPolicy{lock.WaitPolicy_Wait, lock.WaitPolicy_FastFail} {
+		sqlExec.EXPECT().Exec(gomock.Any(), "update job", gomock.Any()).DoAndReturn(func(_ context.Context, _ string, opts executor.Options) (executor.Result, error) {
+			require.Same(t, txn, opts.Txn())
+			require.True(t, opts.DisableIncrStatement())
+			require.Equal(t, policy, opts.StatementOption().WaitPolicy())
+			return executor.Result{}, nil
+		})
+		var options []executor.StatementOption
+		if policy == lock.WaitPolicy_FastFail {
+			options = []executor.StatementOption{executor.StatementOption{}.WithWaitPolicy(policy)}
+		}
+		result, err := ExecWithResult(context.Background(), "update job", sid, txn, options...)
+		require.NoError(t, err)
+		result.Close()
+	}
+}
 
 func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
 	oldExecWithResult := ExecWithResult
@@ -40,7 +71,7 @@ func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return result, nil
 	}
 
@@ -63,7 +94,7 @@ func TestUnregisterJobsByDBNameEscapesDatabaseLiteral(t *testing.T) {
 	}()
 
 	var capturedSQL string
-	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		capturedSQL = sql
 		return memResult.GetResult(), nil
 	}
@@ -91,7 +122,7 @@ func TestUnregisterJobPropagatesRetryableErrorWithoutLocalRetry(t *testing.T) {
 
 		retryErr := moerr.NewTxnNeedRetryNoCtx()
 		calls := 0
-		ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 			calls++
 			switch calls {
 			case 1:

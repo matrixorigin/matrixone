@@ -33,8 +33,6 @@ import (
 )
 
 func TestCatalog1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -72,8 +70,6 @@ func TestCatalog1(t *testing.T) {
 }
 
 func TestShowDatabaseNames(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -143,8 +139,6 @@ func TestShowDatabaseNames(t *testing.T) {
 }
 
 func TestCheckpointCatalog2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)

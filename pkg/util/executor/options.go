@@ -107,6 +107,17 @@ func (opts StatementOption) WithTrustedCheckConstraintNames() StatementOption {
 	return opts
 }
 
+// WithTrustedForeignKeyLayout marks a CREATE that physically reconstructs an
+// owned table unchanged — TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE — so the planner reinstalls the
+// historical foreign-key layout without re-validating it as a newly authored
+// constraint (#30282: a legacy SET NULL over a NOT NULL column must stay
+// truncatable). Never set this for user-visible CREATE TABLE statements.
+func (opts StatementOption) WithTrustedForeignKeyLayout() StatementOption {
+	opts.trustedForeignKeyLayout = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -117,6 +128,37 @@ func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 func (opts Options) WithDatabase(database string) Options {
 	opts.database = database
 	return opts
+}
+
+// WithIndexMaintenanceSpec supplies provenance for exactly one generated TVF
+// statement. It must not be applied to a transaction's arbitrary SQL.
+func (opts Options) WithIndexMaintenanceSpec(spec *IndexMaintenanceSpec) Options {
+	opts.indexMaintenanceSpec = spec.Clone()
+	return opts
+}
+
+func (opts Options) IndexMaintenanceSpec() *IndexMaintenanceSpec {
+	return opts.indexMaintenanceSpec.Clone()
+}
+
+func (opts Options) WithIndexMaintenanceValidator(validator IndexMaintenanceValidator) Options {
+	opts.indexMaintenanceValidator = validator
+	return opts
+}
+
+func (opts Options) IndexMaintenanceValidator() IndexMaintenanceValidator {
+	return opts.indexMaintenanceValidator
+}
+
+// WithIndexRelationPolicy restricts resolution of every statement in this
+// invocation, including statements executed by an ExecTxn callback.
+func (opts Options) WithIndexRelationPolicy(policy *IndexRelationPolicy) Options {
+	opts.indexRelationPolicy = policy.Clone()
+	return opts
+}
+
+func (opts Options) IndexRelationPolicy() *IndexRelationPolicy {
+	return opts.indexRelationPolicy.Clone()
 }
 
 // WithAccountID execute sql in account
@@ -292,6 +334,14 @@ func (opts StatementOption) SessionIdentity() (accountName, roleName string) {
 	return opts.accountName, opts.roleName
 }
 
+// WithSessionUser propagates the authenticated user name to child SQL.
+func (opts StatementOption) WithSessionUser(userName string) StatementOption {
+	opts.userName = userName
+	return opts
+}
+
+func (opts StatementOption) SessionUser() string { return opts.userName }
+
 func (opts StatementOption) WithUserID(userID uint32) StatementOption {
 	opts.userId = userID
 	return opts
@@ -312,6 +362,18 @@ func (opts StatementOption) WithDisableLog() StatementOption {
 
 func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
+}
+
+// WithMaxResultBytes limits the logical vector payload retained by one
+// statement. Zero leaves the result unlimited. The estimate excludes allocator
+// capacity, NULL/grouping bitmaps, and the plan and producer's memory.
+func (opts StatementOption) WithMaxResultBytes(limit uint64) StatementOption {
+	opts.maxResultBytes = limit
+	return opts
+}
+
+func (opts StatementOption) MaxResultBytes() uint64 {
+	return opts.maxResultBytes
 }
 
 // WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
@@ -349,6 +411,13 @@ func (opts StatementOption) TrustedCheckConstraintNames() bool {
 	return opts.trustedCheckConstraintNames
 }
 
+// TrustedForeignKeyLayout reports whether the internal CREATE physically
+// reconstructs an owned table unchanged, keeping its historical foreign-key
+// layout out of newly-authored-constraint validation (#30282).
+func (opts StatementOption) TrustedForeignKeyLayout() bool {
+	return opts.trustedForeignKeyLayout
+}
+
 func (opts Options) WithDisableWaitPaused() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableWaitPaused())
 	return opts
@@ -361,6 +430,14 @@ func (opts Options) WithUserTxn() Options {
 
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
+}
+
+// WithAuthorizationSnapshot borrows a live statement admission for an
+// independent read-only SI transaction. ExecTxn retains transaction cleanup;
+// the statement owner, not the executor, ends the admission.
+func (opts Options) WithAuthorizationSnapshot(admission *client.SnapshotAdmission) Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithAuthorizationSnapshot(admission))
+	return opts
 }
 
 // WithTxnIsolation overrides the runtime default for a newly created

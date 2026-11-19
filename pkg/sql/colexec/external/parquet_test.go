@@ -1833,7 +1833,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, []int64{100, 201}, vector.MustFixedColWithTypeCheck[int64](vecInt))
 
 		vecJSON := mapScalar(t, col, page, plan.Type{Id: int32(types.T_json), NotNullable: true}, types.T_json.ToType())
-		requireJSONAt(t, vecJSON, 0, `100`)
+		requireJSONAt(t, vecJSON, 0, `100.0`)
 		requireJSONAt(t, vecJSON, 1, `200.5`)
 	})
 	t.Run("date to varchar", func(t *testing.T) {

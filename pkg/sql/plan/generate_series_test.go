@@ -34,6 +34,10 @@ func TestGenerateSeriesDatetimeLiteralScale(t *testing.T) {
 		{value: "2020-02-29 23:59:59.123456", want: 6},
 		{value: "2020-02-29 23:59:59.123456789", want: 6},
 		{value: "2020-02-29 23:59:59.123+08:00", want: 3},
+		{value: "2024.01.15", want: 0},
+		{value: "2024.01.15 12:34:56", want: 0},
+		{value: "2024.01.15 12:34:56.123", want: 3},
+		{value: "20240115123456.123456", want: 6},
 	}
 	for _, test := range tests {
 		require.Equal(t, test.want, datetimeLiteralScale(test.value), test.value)

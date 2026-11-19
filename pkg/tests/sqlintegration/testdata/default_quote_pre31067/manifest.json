@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "source_database": "default_archive_baseline",
+  "source_table": "source",
+  "create_sql": "create table source(id int primary key,a varchar(10) default 'it''s',b varchar(10) default 'x`y',n int default 7,key ia(a))",
+  "schema_hash": "0eaecba42748217396dc75044f71e4094552961e3162e7001ddd4d4bfb108eea",
+  "metadata_only": false,
+  "relations": [
+    {
+      "role": "main",
+      "source_table": "source",
+      "schema_hash": "0eaecba42748217396dc75044f71e4094552961e3162e7001ddd4d4bfb108eea",
+      "logical_schema_hash": "0eaecba42748217396dc75044f71e4094552961e3162e7001ddd4d4bfb108eea",
+      "objects": [
+        {
+          "name": "01a172c1-47c3-7b46-af22-2552e6e01fc8_00000",
+          "stats": "AaFywUfDe0avIiVS5uAfyAAAMDFhMTcyYzEtNDdjMy03YjQ2LWFmMjItMjU1MmU2ZTAxZmM4XzAwMDAwAQ4CAACUAQAAJwcAAAEAAAABAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAABAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAS/FuIDAABNCgAAAg==",
+          "tombstone": false,
+          "size": 994,
+          "sha256": "ed967ad7804c1cb5aff3859fc310980faa8c38c00701ba718e704dbf89bb913c",
+          "fixture_path": "objects/01a172c1-47c3-7b46-af22-2552e6e01fc8_00000"
+        }
+      ]
+    },
+    {
+      "role": "index",
+      "index_name": "ia",
+      "source_table": "__mo_index_secondary_01a172c1-47ae-7a95-a8f7-6f0e3b8784c3",
+      "schema_hash": "b523ede81af4cec0718a2935ca7894c9b95123510af5ab93e0a2d96025c60612",
+      "logical_schema_hash": "07df512a4b9282b355ca21dba69d1b503a89c9f38a3e55cc573d176bd98eedd7",
+      "objects": [
+        {
+          "name": "01a172c1-49be-7056-ac01-25af29f07c93_00000",
+          "stats": "AaFywUm+cFasASWvKfB8kwAAMDFhMTcyYzEtNDliZS03MDU2LWFjMDEtMjVhZjI5ZjA3YzkzXzAwMDAwAYkBAABQAQAANwUAAAEAAAABAAAARgFpdCdzADoVAQAAAAAAAAAAAAAAAAAAAAAAAAAACkYBaXQncwA6FQEAAAAAAAAAAAAAAAAAAAAAAAAAAAqAPRkDAAB1BwAAAg==",
+          "tombstone": false,
+          "size": 793,
+          "sha256": "badd916abfba29de17a304f7d0e26f42f319c41e80fdf6e23975c49767cbdf18",
+          "fixture_path": "objects/01a172c1-49be-7056-ac01-25af29f07c93_00000"
+        }
+      ]
+    }
+  ]
+}
