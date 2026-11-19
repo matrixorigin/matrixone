@@ -52,6 +52,12 @@ func bindBitCountFloatField(ctx context.Context, args []*Expr) (*Expr, error) {
 // A mergeable projection forwards its operand's conversion. A materialized
 // query block exposes a field even when the original expression was a CAST.
 func (b *baseBinder) bitCountReadsFloatField(expr *Expr) bool {
+	// A same-block group slot represents the original GROUP BY expression.
+	// Inspect its conversion without replacing the slot used for evaluation.
+	if col := expr.GetCol(); col != nil && b.ctx != nil && b.ctx.groupTag > 0 &&
+		col.RelPos == b.ctx.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(b.ctx.groups) {
+		expr = b.ctx.groups[col.ColPos]
+	}
 	if b.builder == nil || b.builder.qry == nil {
 		return expr.GetCol() != nil || expr.GetCorr() != nil
 	}
