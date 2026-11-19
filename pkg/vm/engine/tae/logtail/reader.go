@@ -232,9 +232,15 @@ func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRe
 				err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an in-flight transaction")
 				return false
 			}
-			memo := row.GetMemo()
+			source := row.source.Load()
+			if source == nil {
+				// The row is already packed, but this scan did not see the block summary.
+				err = moerr.NewChangeWatchRetry(moerr.NoReportContext(), "scoped changed-table history changed during compaction")
+				return false
+			}
+			memo := source.GetMemo()
 			if memo == nil || memo.Tree == nil {
-				err = moerr.NewInternalErrorNoCtx("scoped changed-table history changed during compaction")
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an invalid transaction memo")
 				return false
 			}
 			// Dedicated flush and merge transactions rewrite existing data.

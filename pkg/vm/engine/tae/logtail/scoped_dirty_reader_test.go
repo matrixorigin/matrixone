@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -61,32 +62,78 @@ func TestScopedDirtyReaderChargesInactiveRecords(t *testing.T) {
 }
 
 func TestScopedDirtyReaderCompactionDoesNotLoseCandidates(t *testing.T) {
-	table := NewTxnTable(2, func() types.TS { return types.TS{} })
-	first := scopedDirtyTxn(10, txnif.TxnStateCommitted, 1)
-	require.NoError(t, table.AddTxn(first))
+	table := NewTxnTable(3, func() types.TS { return types.TS{} })
+	require.NoError(t, table.AddTxn(scopedDirtyTxn(10, txnif.TxnStateCommitted, 1)))
 	require.NoError(t, table.AddTxn(scopedDirtyTxn(20, txnif.TxnStateCommitted, 2)))
+	require.NoError(t, table.AddTxn(scopedDirtyTxn(30, txnif.TxnStateCommitted, 3)))
 	var block *txnBlock
 	table.Scan(func(b *txnBlock) bool {
 		block = b
 		return false
 	})
 	require.NotNil(t, block)
-	reader := Reader{table: table, from: types.BuildTS(20, 0), to: types.BuildTS(20, 0)}
+	reader := Reader{table: table, from: types.BuildTS(10, 0), to: types.BuildTS(20, 0)}
 	charge := func() error { return nil }
 
-	all, changed := block.TryCompact()
-	require.True(t, all && changed)
+	var beforeRetry []uint64
+	err := reader.ForEachDirtyTable(charge, func(record model.TableRecord) error {
+		beforeRetry = append(beforeRetry, record.ID)
+		require.Equal(t, []uint64{1}, beforeRetry)
+		// The reader chose the live path for this block. Compact it before
+		// the reader can acquire the next row's memo.
+		all, changed := block.TryCompact()
+		require.True(t, all && changed)
+		return nil
+	})
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ErrChangeWatchRetry, moErr.ErrorCode())
+	require.ErrorContains(t, err, "during compaction")
+	require.Equal(t, []uint64{1}, beforeRetry)
+
+	// TryCompact clears the row sources before publishing the block summary.
+	// Temporarily hide the summary to exercise that publication boundary too.
 	published := block.summary.Swap(nil)
+	require.NotNil(t, published)
+	err = reader.ForEachDirtyTable(charge, func(model.TableRecord) error {
+		t.Fatal("unpublished summary must yield no candidates")
+		return nil
+	})
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ErrChangeWatchRetry, moErr.ErrorCode())
+	block.summary.Store(published)
+
 	var ids []uint64
-	visit := func(record model.TableRecord) error {
+	require.NoError(t, reader.ForEachDirtyTable(charge, func(record model.TableRecord) error {
 		ids = append(ids, record.ID)
 		return nil
+	}))
+	require.ElementsMatch(t, []uint64{1, 2}, ids, "retry must include both endpoints and exclude the later table")
+}
+
+func TestScopedDirtyReaderRejectsInvalidLiveMemo(t *testing.T) {
+	for _, name := range []string{"missing memo", "missing tree"} {
+		t.Run(name, func(t *testing.T) {
+			table := NewTxnTable(1, func() types.TS { return types.TS{} })
+			txn := scopedDirtyTxn(10, txnif.TxnStateCommitted, 1)
+			if name == "missing memo" {
+				txn.Memo = nil
+			} else {
+				txn.Memo.Tree = nil
+			}
+			require.NoError(t, table.AddTxn(txn))
+			cut := types.BuildTS(10, 0)
+			reader := Reader{table: table, from: cut, to: cut}
+			err := reader.ForEachDirtyTable(func() error { return nil }, func(model.TableRecord) error {
+				t.Fatal("corrupt live memo must yield no candidates")
+				return nil
+			})
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, moerr.ErrInternal, moErr.ErrorCode())
+			require.ErrorContains(t, err, "invalid transaction memo")
+		})
 	}
-	require.ErrorContains(t, reader.ForEachDirtyTable(charge, visit), "during compaction")
-	require.Empty(t, ids)
-	block.summary.Store(published)
-	require.NoError(t, reader.ForEachDirtyTable(charge, visit))
-	require.Contains(t, ids, uint64(2), "compacted history must retain the inclusive upper endpoint")
 }
 
 func TestScopedDirtyReaderSkipsDisjointCompactedBlocks(t *testing.T) {

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -122,6 +123,17 @@ func TestChangeWatchProxy(t *testing.T) {
 	firstMarker, _ := readProjectedWatch(t, ctx, observer, nil, "BASELINE", "t", tableID)
 	exec(source, "insert into watched_db.t values(1)")
 	_, to := readProjectedWatch(t, ctx, observer, firstMarker, "CHANGED", "t", tableID)
+
+	t.Run("lower CN-local protocol version", func(t *testing.T) {
+		cnRuntime := moruntime.ServiceRuntime(cn.ServiceID())
+		require.NotNil(t, cnRuntime)
+		version, ok := cnRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.True(t, ok)
+		cnRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+		defer cnRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+
+		readProjectedWatch(t, ctx, observer, firstMarker, "CHANGED", "t", tableID)
+	})
 
 	tx, err := source.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err)

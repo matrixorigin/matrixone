@@ -89,11 +89,7 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 	if rt == nil {
 		return Result{}, moerr.NewNotSupported(ctx, "changed-table CN runtime is unavailable")
 	}
-	value, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	if version, ok := value.(int64); !ok || version < defines.MORPCVersion39 {
-		return Result{}, moerr.NewNotSupported(ctx, "changed-table queries require MORPC 39")
-	}
-	value, _ = rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	value, _ := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
 	exec, ok := value.(executor.SQLExecutor)
 	if !ok || exec == nil {
 		return Result{}, moerr.NewNotSupported(ctx, "changed-table catalog executor is unavailable")
