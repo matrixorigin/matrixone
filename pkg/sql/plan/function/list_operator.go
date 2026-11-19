@@ -2417,10 +2417,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `unary_tilde`
 	{
-		functionId: UNARY_TILDE,
-		class:      plan.Function_STRICT,
-		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    unaryTildeTypeMatch,
+		functionId:        UNARY_TILDE,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            UNARY_ARITHMETIC_OPERATOR,
+		checkFn:           unaryTildeTypeMatch,
 
 		Overloads: []overload{
 			{

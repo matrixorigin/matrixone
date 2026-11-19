@@ -51,6 +51,11 @@ func TestTemporalNumericConsumers(t *testing.T) {
 		{name: "time bit xor", expr: "time'01:02:03' ^ 1", wantUint: 10202},
 		{name: "date shift left", expr: "date'2024-01-01' << 1", wantUint: 40480202},
 		{name: "time shift right", expr: "time'01:02:03' >> 1", wantUint: 5101},
+		{name: "date unary tilde", expr: "~date'2024-01-01'", wantUint: ^uint64(20240101)},
+		{name: "datetime unary tilde", expr: "~cast('2024-01-01 10:00:00' as datetime)", wantUint: ^uint64(20240101100000)},
+		{name: "time unary tilde", expr: "~time'01:02:03'", wantUint: ^uint64(10203)},
+		{name: "integer unary tilde control", expr: "~5", wantUint: ^uint64(5)},
+		{name: "text unary tilde control", expr: "~'5'", wantUint: ^uint64(5)},
 		{name: "date bit count", expr: "bit_count(date'2024-01-01')", wantUint: 14},
 		{name: "datetime bit count", expr: "bit_count(cast('2024-01-01 10:00:00' as datetime))", wantUint: 15},
 		{name: "time bit count", expr: "bit_count(time'01:02:03')", wantUint: 10},
@@ -116,6 +121,27 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 			constant: 3, sourceArg: 1, want: []uint64{1, 0, 1, 0}, wantTemporal: true,
 		},
 		{
+			name: "date unary tilde", function: "unary_tilde", typ: types.T_date.ToType(),
+			values: []types.Date{date, types.ZeroDate, 0, 0}, nulls: []bool{false, false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101), ^uint64(0), ^uint64(10101), 0}, wantTemporal: true,
+		},
+		{
+			name: "datetime unary tilde", function: "unary_tilde", typ: types.T_datetime.ToTypeWithScale(6),
+			values: []types.Datetime{datetime, carryDatetime, 0}, nulls: []bool{false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101100000), ^uint64(20240301000000), 0}, wantTemporal: true,
+		},
+		{
+			name: "signed fractional time unary tilde", function: "unary_tilde", typ: types.T_time.ToTypeWithScale(6),
+			values: []types.Time{clockTime, negativeSubsecond, negativeTime, 0}, nulls: []bool{false, false, false, true},
+			sourceArg: 0,
+			want:      []uint64{^uint64(10203), ^uint64(negativeSubsecondInteger), ^uint64(negativeSecondInteger), 0}, wantTemporal: true,
+		},
+		{
+			name: "timestamp unary tilde UTC", function: "unary_tilde", typ: types.T_timestamp.ToTypeWithScale(6),
+			values: []types.Timestamp{datetime.ToTimestamp(time.UTC), carryDatetime.ToTimestamp(time.UTC), 0}, nulls: []bool{false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101100000), ^uint64(20240301000000), 0}, wantTemporal: true,
+		},
+		{
 			name: "date bit count", function: "bit_count", typ: types.T_date.ToType(),
 			values: []types.Date{date, types.ZeroDate, 0, 0}, nulls: []bool{false, false, false, true},
 			sourceArg: 0, want: []uint64{14, 0, 9, 0}, wantTemporal: true,
@@ -168,7 +194,7 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 			proc.GetSessionInfo().TimeZone = time.FixedZone("test", tc.zoneOffset)
 			source := temporalNumericColumn(tc.typ)
 			args := []*Expr{source}
-			if tc.function != "bit_count" {
+			if tc.function != "bit_count" && tc.function != "unary_tilde" {
 				constant := makePlan2Int64ConstExprWithType(tc.constant)
 				if tc.sourceArg == 0 {
 					args = append(args, constant)
@@ -204,7 +230,7 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 func TestPreparedTemporalNumericConsumers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		`prepare temporal_numeric_prepared from 'select ? & 3, 3 & ?, bit_count(?), sec_to_time(?)'`)
+		`prepare temporal_numeric_prepared from 'select ? & 3, 3 & ?, bit_count(?), sec_to_time(?), ~?'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
 	snapshot := proto.Clone(original)
@@ -214,10 +240,11 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name     string
-		values   []any
-		wantUint []uint64
-		wantTime types.Time
+		name      string
+		values    []any
+		wantUint  []uint64
+		wantTime  types.Time
+		wantTilde uint64
 	}{
 		{
 			name: "native temporal parameters",
@@ -226,8 +253,9 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 				ParamValue{Value: "2024-01-01", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "2024-01-01 10:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "01:02:03.500000", RuntimeType: types.T_time.ToTypeWithScale(6), HasRuntimeType: true, IsBinaryProtocol: true},
+				ParamValue{Value: "2024-01-01 10:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 			},
-			wantUint: []uint64{1, 1, 15}, wantTime: firstTime,
+			wantUint: []uint64{1, 1, 15}, wantTime: firstTime, wantTilde: ^uint64(20240101100000),
 		},
 		{
 			name: "template reuse with new temporal parameters",
@@ -236,8 +264,9 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 				ParamValue{Value: "2024-01-02", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "2024-01-02 00:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "00:00:01.500000", RuntimeType: types.T_time.ToTypeWithScale(6), HasRuntimeType: true, IsBinaryProtocol: true},
+				ParamValue{Value: "2024-01-02", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 			},
-			wantUint: []uint64{2, 2, 14}, wantTime: secondTime,
+			wantUint: []uint64{2, 2, 14}, wantTime: secondTime, wantTilde: ^uint64(20240102),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -246,7 +275,7 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 			require.True(t, changed)
 			query := bound.GetQuery()
 			root := query.Nodes[query.Steps[0]]
-			require.Len(t, root.ProjectList, 4)
+			require.Len(t, root.ProjectList, 5)
 			for row, want := range tc.wantUint {
 				result, free, err := colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[row], []*batch.Batch{batch.EmptyForConstFoldBatch})
 				require.NoError(t, err)
@@ -263,6 +292,13 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 			free()
 			require.Equal(t, int32(6), gotScale)
 			require.Equal(t, tc.wantTime, gotTime)
+			result, free, err = colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[4], []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			gotType := result.GetType().Oid
+			gotTilde := vector.GetFixedAtNoTypeCheck[uint64](result, 0)
+			free()
+			require.Equal(t, types.T_uint64, gotType)
+			require.Equal(t, tc.wantTilde, gotTilde)
 			require.True(t, proto.Equal(snapshot, original), "execution specialization must leave the template unchanged")
 		})
 	}

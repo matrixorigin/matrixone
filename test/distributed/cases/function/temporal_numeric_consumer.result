@@ -163,6 +163,25 @@ null
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 deallocate prepare temporal_bit_count_prepared;
+select ~date'2024-06-18' as literal_date_not,
+~cast('2024-06-18 01:02:03' as datetime) as literal_datetime_not,
+~time'01:02:03' as literal_time_not,
+~(date'2024-06-18' & -1) as via_bit_and,
+~cast(date'2024-06-18' as signed) as via_cast;
+➤ literal_date_not[-5,64,0]  ¦  literal_datetime_not[-5,64,0]  ¦  literal_time_not[-5,64,0]  ¦  via_bit_and[-5,64,0]  ¦  via_cast[-5,64,0]  𝄀
+18446744073689310997  ¦  18446723833091541412  ¦  18446744073709541412  ¦  18446744073689310997  ¦  18446744073689310997
+select id, ~d as date_not, ~dt as datetime_not, ~tm as time_not, ~ts as timestamp_not,
+~d = ~cast(d as signed) as date_matches_cast,
+~tm = ~cast(tm as signed) as time_matches_cast
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  date_not[-5,64,0]  ¦  datetime_not[-5,64,0]  ¦  time_not[-5,64,0]  ¦  timestamp_not[-5,64,0]  ¦  date_matches_cast[-6,8,0]  ¦  time_matches_cast[-6,8,0]  𝄀
+1  ¦  18446744073689311514  ¦  18446723833608451615  ¦  18446744073709541412  ¦  18446723833608451615  ¦  1  ¦  1  𝄀
+2  ¦  18446744073689311386  ¦  18446723833480315656  ¦  0  ¦  18446723833480315656  ¦  1  ¦  1  𝄀
+3  ¦  18446744073689311386  ¦  18446723833408551615  ¦  120000  ¦  18446723833408551615  ¦  1  ¦  1  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select ~20240101 as integer_control, ~'20240101' as text_control;
+➤ integer_control[-5,64,0]  ¦  text_control[-5,64,0]  𝄀
+18446744073689311514  ¦  18446744073689311514
 select '2024-01-01' & 3 as text_and,
 bit_count('2024-01-01') as text_bits,
 sec_to_time('01:02:03') as text_seconds;

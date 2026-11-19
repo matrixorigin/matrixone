@@ -121,6 +121,18 @@ execute temporal_bit_count_prepared using @temporal_bit_count_value;
 show warnings;
 deallocate prepare temporal_bit_count_prepared;
 
+-- Unary bitwise NOT uses the same native temporal integer conversion as the binary operators.
+select ~date'2024-06-18' as literal_date_not,
+       ~cast('2024-06-18 01:02:03' as datetime) as literal_datetime_not,
+       ~time'01:02:03' as literal_time_not,
+       ~(date'2024-06-18' & -1) as via_bit_and,
+       ~cast(date'2024-06-18' as signed) as via_cast;
+select id, ~d as date_not, ~dt as datetime_not, ~tm as time_not, ~ts as timestamp_not,
+       ~d = ~cast(d as signed) as date_matches_cast,
+       ~tm = ~cast(tm as signed) as time_matches_cast
+from temporal_values order by id;
+select ~20240101 as integer_control, ~'20240101' as text_control;
+
 -- Text and binary inputs retain their existing domains.
 select '2024-01-01' & 3 as text_and,
        bit_count('2024-01-01') as text_bits,
