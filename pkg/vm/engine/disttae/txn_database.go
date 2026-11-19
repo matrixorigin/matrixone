@@ -225,7 +225,10 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		panic("unknown relation type")
 	}
 
-	defs = toDelTbl.defs
+	defs, err = toDelTbl.internalDefs()
+	if err != nil {
+		return nil, err
+	}
 	id = toDelTbl.tableId
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 

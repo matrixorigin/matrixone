@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"maps"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
@@ -39,52 +38,12 @@ func (cc *CatalogCache) columnUpdateLeavesProjectionUnchanged(key *TableItem, co
 		}
 		return false // A tombstone or different incarnation must not expose older rows.
 	})
-	if previous == nil || previous.TableDef == nil || len(columns) == 0 {
+	if previous == nil || (previous.Defs == nil && previous.prototype == nil) || len(columns) == 0 {
 		return false
 	}
-	attributes := make([]*engine.AttributeDef, 0, len(previous.TableDef.Cols))
-	defs := make([]engine.TableDef, 0, len(previous.TableDef.Cols))
-	primary, primarySeqnum, cluster := -1, -1, -1
-	names := make(map[string]struct{}, len(previous.TableDef.Cols))
-	for _, def := range previous.Defs {
-		if attribute, ok := def.(*engine.AttributeDef); ok {
-			if attribute == nil || attribute.Attr.ID != uint64(len(attributes)+1) {
-				return false
-			}
-			index := len(attributes)
-			name := strings.ToLower(attribute.Attr.Name)
-			if _, exists := names[name]; exists {
-				return false
-			}
-			names[name] = struct{}{}
-			if attribute.Attr.Primary {
-				primary, primarySeqnum = index, int(attribute.Attr.Seqnum)
-			}
-			if attribute.Attr.ClusterBy {
-				cluster = index
-			}
-			attributes = append(attributes, attribute)
-			defs = append(defs, attribute)
-		}
-	}
-	if len(attributes) == 0 || len(attributes) != len(previous.TableDef.Cols) ||
-		previous.PrimaryIdx != primary || previous.PrimarySeqnum != primarySeqnum || previous.ClusterByIdx != cluster {
+	attributes, _, valid := validatedColumnAttributes(previous)
+	if !valid {
 		return false
-	}
-	last := attributes[len(attributes)-1].Attr
-	if last.Name != catalog.Row_ID || !last.IsHidden || last.Type.Oid != types.T_Rowid {
-		return false
-	}
-	// Reuse the column projection without decoding unrelated table metadata.
-	projected, _ := getTableDef(&TableItem{Name: previous.Name}, defs)
-	if !maps.Equal(previous.TableDef.Name2ColIndex, projected.Name2ColIndex) ||
-		!proto.Equal(previous.TableDef.ClusterBy, projected.ClusterBy) {
-		return false
-	}
-	for i, column := range projected.Cols {
-		if !proto.Equal(previous.TableDef.Cols[i], column) {
-			return false
-		}
 	}
 	seen := make(map[int32]struct{}, len(columns))
 	for _, column := range columns {
@@ -111,6 +70,53 @@ func (cc *CatalogCache) columnUpdateLeavesProjectionUnchanged(key *TableItem, co
 		}
 	}
 	return true
+}
+
+// validatedColumnAttributes validates the canonical schema before comparing updates.
+// A contiguous schema ending in the hidden row ID establishes completeness.
+func validatedColumnAttributes(previous *TableItem) ([]*engine.AttributeDef, []engine.TableDef, bool) {
+	source := previous.Defs
+	if previous.prototype != nil {
+		values := previous.prototype.attributes()
+		source = make([]engine.TableDef, len(values))
+		for i := range values {
+			source[i] = &engine.AttributeDef{Attr: values[i]}
+		}
+	}
+	attributes := make([]*engine.AttributeDef, 0, len(source))
+	defs := make([]engine.TableDef, 0, len(source))
+	primary, primarySeqnum, cluster := -1, -1, -1
+	names := make(map[string]struct{}, len(source))
+	for _, def := range source {
+		if attribute, ok := def.(*engine.AttributeDef); ok {
+			if attribute == nil || attribute.Attr.ID != uint64(len(attributes)+1) {
+				return nil, nil, false
+			}
+			index := len(attributes)
+			name := strings.ToLower(attribute.Attr.Name)
+			if _, exists := names[name]; exists {
+				return nil, nil, false
+			}
+			names[name] = struct{}{}
+			if attribute.Attr.Primary {
+				primary, primarySeqnum = index, int(attribute.Attr.Seqnum)
+			}
+			if attribute.Attr.ClusterBy {
+				cluster = index
+			}
+			attributes = append(attributes, attribute)
+			defs = append(defs, attribute)
+		}
+	}
+	if len(attributes) == 0 ||
+		previous.PrimaryIdx != primary || previous.PrimarySeqnum != primarySeqnum || previous.ClusterByIdx != cluster {
+		return nil, nil, false
+	}
+	last := attributes[len(attributes)-1].Attr
+	if last.Name != catalog.Row_ID || !last.IsHidden || last.Type.Oid != types.T_Rowid {
+		return nil, nil, false
+	}
+	return attributes, defs, true
 }
 
 func equalColumnAttributes(a, b engine.Attribute) bool {

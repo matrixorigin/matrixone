@@ -56,21 +56,37 @@ func newTxnTableWithItem(
 	process *process.Process,
 	eng engine.Engine,
 ) *txnTable {
+	source := item.SchemaSource()
+	var defs []engine.TableDef
+	var wire []byte
+	if !source.Valid() {
+		var err error
+		defs, err = item.BuildEngineDefs()
+		if err != nil {
+			panic(err)
+		}
+		wire = item.ConstraintBytes()
+	}
+	planner := source.BorrowPlanTableDef()
+	if planner == nil {
+		planner = item.BuildPlanTableDef()
+	}
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
 		tableId:       item.Id,
 		version:       item.Version,
 		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
+		source:        source,
+		defs:          defs,
+		tableDef:      planner,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
+		constraint:    wire,
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,

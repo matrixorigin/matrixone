@@ -3920,13 +3920,13 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 				e.pClient.dcaConfirmAndApply()
 			}
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
-			require.NotNil(t, q.TableDef)
-			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+			require.NotNil(t, q.BuildPlanTableDef())
+			require.Equal(t, "200", q.BuildPlanTableDef().Cols[0].Comment)
 			// Both versions must have been initialized, not only the last buffered one.
 			q.Ts.PhysicalTime = 100
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
-			require.NotNil(t, q.TableDef)
-			require.Equal(t, "100", q.TableDef.Cols[0].Comment)
+			require.NotNil(t, q.BuildPlanTableDef())
+			require.Equal(t, "100", q.BuildPlanTableDef().Cols[0].Comment)
 			cols[0].IsUnsigned = 1
 			cb, err := catalog.GenCreateColumnTuples(cols[:1], mp, packer)
 			require.NoError(t, err)
@@ -3936,7 +3936,7 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			q.Ts = to
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
 			require.Equal(t, uint32(200), q.Version)
-			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+			require.Equal(t, "200", q.BuildPlanTableDef().Cols[0].Comment)
 		})
 	}
 }

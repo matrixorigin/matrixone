@@ -1163,12 +1163,16 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			workspace := newTransactionWithActivePKTableForTest(t, "pk")
 			op := workspace.op.(*mock_frontend.MockTxnOperator)
 			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
 			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
 			table.extraInfo = &api.SchemaExtra{Checks: []*planpb.CheckDef{original}, AutoIncrEpoch: 9, DefaultCharset: uint32(types.CharsetUTF8MB4Bin)}
-			table.defs = engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
+			sourceDefs := engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
+			reconstructed := newTxnTableWithItem(table.db, cache.TableItem{Name: "tbl", Defs: sourceDefs}, workspace.proc, table.eng)
+			table.defs = reconstructed.defs
+			originalVersion := table.version
 			replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}}, DefaultCharset: uint32(types.CharsetUTF8)}
 			if kind != "clear" {
 				replacement.Checks = []*planpb.CheckDef{proto.Clone(original).(*planpb.CheckDef)}
@@ -1232,13 +1236,97 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			}
 			op.EXPECT().EnterRollbackStmt()
 			op.EXPECT().ExitRollbackStmt()
+			// A catalog-backed ALTER can advance the version before a later
+			// operation fails; rollback must restore the same generation.
+			table.version++
+			table.constraint = []byte{1}
 			require.NoError(t, workspace.RollbackLastStatement(context.Background()))
 			require.Empty(t, workspace.restoreTxnTableFunc)
 			require.Equal(t, uint32(types.CharsetUTF8MB4Bin), table.extraInfo.DefaultCharset)
 			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
 			require.Equal(t, "tbl", table.tableName)
+			require.Equal(t, originalVersion, table.version)
+			require.Nil(t, table.constraint)
+			columns, err := table.TableColumns(context.Background())
+			require.NoError(t, err)
+			require.Len(t, columns, 1)
+			require.Equal(t, "pk", columns[0].Name)
 			require.Len(t, table.GetTableDef(context.Background()).Checks, 1)
 			require.True(t, proto.Equal(original, table.GetTableDef(context.Background()).Checks[0]))
 		})
 	}
+}
+
+func TestRefreshTableDefExpressionIsolation(t *testing.T) {
+	ctx := context.Background()
+	attr := &engine.AttributeDef{Attr: engine.Attribute{Name: "a", Default: &planpb.Default{Expr: &planpb.Expr{}, OriginString: "default"}, OnUpdate: &planpb.OnUpdate{Expr: &planpb.Expr{}, OriginString: "update"}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{}, OriginString: "generated"}}}
+	defs := []engine.TableDef{attr}
+	first := &txnTable{db: &txnDatabase{}, defs: defs}
+	second := &txnTable{db: &txnDatabase{}, defs: defs}
+	first.RefeshTableDef(ctx)
+	old := first.GetTableDef(ctx).Cols[0]
+	other := second.GetTableDef(ctx).Cols[0]
+	first.RefeshTableDef(ctx)
+	current := first.GetTableDef(ctx).Cols[0]
+	old.Default.Expr.Typ.Width = 1
+	old.OnUpdate.Expr.Typ.Width = 2
+	old.GeneratedCol.Expr.Typ.Width = 3
+	for _, col := range []*planpb.ColDef{current, other} {
+		require.Zero(t, col.Default.Expr.Typ.Width)
+		require.Zero(t, col.OnUpdate.Expr.Typ.Width)
+		require.Zero(t, col.GeneratedCol.Expr.Typ.Width)
+	}
+	require.Zero(t, attr.Attr.Default.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.OnUpdate.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.GeneratedCol.Expr.Typ.Width)
+	exposed, err := first.TableDefs(ctx)
+	require.NoError(t, err)
+	for _, def := range exposed {
+		if a, ok := def.(*engine.AttributeDef); ok {
+			a.Attr.Default.Expr.Typ.Width = 4
+			a.Attr.OnUpdate.Expr.Typ.Width = 5
+			a.Attr.GeneratedCol.Expr.Typ.Width = 6
+		}
+	}
+	require.Zero(t, attr.Attr.Default.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.OnUpdate.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.GeneratedCol.Expr.Typ.Width)
+}
+
+// A borrowed catalog generation must survive a transaction-local DDL and its
+// rollback while another transaction still holds the old planner.
+func TestBorrowedSchemaReaderAcrossAlterRollback(t *testing.T) {
+	workspace := newTransactionWithActivePKTableForTest(t, "pk")
+	op := workspace.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
+	base := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	workspace.tableOps.addCreatedInTxn(base.tableId, 0)
+	typ := types.T_int64.ToType()
+	wire, err := typ.Marshal()
+	require.NoError(t, err)
+	item := cache.TableItem{Name: "tbl", Id: 42, Version: 1, ExtraInfo: &api.SchemaExtra{}}
+	cache.InitTableItemWithColumns(&item, cache.Columns{{Name: "pk", Num: 1, Typ: wire}, {Name: "other", Num: 2, Typ: wire}})
+	reader := newTxnTableWithItem(base.db, item, workspace.proc, base.eng)
+	writer := newTxnTableWithItem(base.db, item, workspace.proc, base.eng)
+	ctx := context.Background()
+	old := reader.GetTableDef(ctx)
+	require.Same(t, old, writer.GetTableDef(ctx))
+	private := reader.CopyTableDef(ctx)
+	private.Cols[0].Name = "private"
+	require.Equal(t, "pk", old.Cols[0].Name)
+	replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "renamed", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
+	req := api.NewGuardedReplaceDefReq(7, 42, writer.version, 1, 1, 1, replacement)
+	// The missing account produces a deterministic failure after local publication.
+	_, wantErr := defines.GetAccountId(ctx)
+	require.EqualError(t, writer.AlterTable(ctx, nil, []*api.AlterTableReq{req}), wantErr.Error())
+	require.Equal(t, "pk", old.Cols[0].Name)
+	require.Equal(t, "other", old.Cols[1].Name)
+	require.Same(t, old, reader.GetTableDef(ctx))
+	op.EXPECT().EnterRollbackStmt()
+	op.EXPECT().ExitRollbackStmt()
+	require.NoError(t, workspace.RollbackLastStatement(ctx))
+	require.Same(t, old, writer.GetTableDef(ctx))
+	require.Equal(t, "pk", writer.GetTableDef(ctx).Cols[0].Name)
 }

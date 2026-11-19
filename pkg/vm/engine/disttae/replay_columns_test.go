@@ -195,10 +195,10 @@ func TestReplayColumnsParserOwnership(t *testing.T) {
 	cache.InitTableItemWithColumns(item, cols)
 	require.Equal(t, 0, item.PrimaryIdx)
 	require.Equal(t, 1, item.ClusterByIdx)
-	require.Equal(t, a.Name, item.TableDef.Cols[0].Name)
-	require.Equal(t, "12345678901234567890", item.TableDef.Cols[0].Default.OriginString)
-	require.Equal(t, "c0 + 123456789", item.TableDef.Cols[1].OnUpdate.OriginString)
-	require.Equal(t, "c0 + c1 + 123456789", item.TableDef.Cols[2].GeneratedCol.OriginString)
+	require.Equal(t, a.Name, item.BuildPlanTableDef().Cols[0].Name)
+	require.Equal(t, "12345678901234567890", item.BuildPlanTableDef().Cols[0].Default.OriginString)
+	require.Equal(t, "c0 + 123456789", item.BuildPlanTableDef().Cols[1].OnUpdate.OriginString)
+	require.Equal(t, "c0 + c1 + 123456789", item.BuildPlanTableDef().Cols[2].GeneratedCol.OriginString)
 }
 
 func TestReplayColumnsCancelAndRetry(t *testing.T) {
@@ -374,7 +374,7 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 		})
 	require.ErrorIs(t, err, injected)
 	require.Equal(t, 3, calls)
-	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").TableDef.Cols[0].Name, cc.GetTableByName(1, 8, "first").TableDef.Cols[1].Name})
+	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").BuildPlanTableDef().Cols[0].Name, cc.GetTableByName(1, 8, "first").BuildPlanTableDef().Cols[1].Name})
 	require.False(t, cc.CanServe(ts))
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, mp.OnHeapCurrNB())
@@ -383,10 +383,10 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 	err = consumeReplayColumns(t.Context(), []*batch.Batch{makeBatch(first), makeBatch(second)}, mp, ts, cc.InsertColumns)
 	require.NoError(t, err)
 	got := cc.GetTableByName(1, 8, "first")
-	require.NotNil(t, got.TableDef)
-	require.Len(t, got.TableDef.Cols, 1)
-	require.Equal(t, "keep", got.TableDef.Cols[0].Name)
-	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").TableDef.Cols[0].Name)
+	require.NotNil(t, got.BuildPlanTableDef())
+	require.Len(t, got.BuildPlanTableDef().Cols, 1)
+	require.Equal(t, "keep", got.BuildPlanTableDef().Cols[0].Name)
+	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").BuildPlanTableDef().Cols[0].Name)
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, mp.OnHeapCurrNB())
 }

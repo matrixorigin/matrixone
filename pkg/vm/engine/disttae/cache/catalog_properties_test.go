@@ -77,10 +77,36 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				want = append(want, &plan.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: tc.createSQL})
 			}
 
+			// The prototype must preserve the original stream, including historical
+			// duplicate groups, rather than reconstruct it from planner properties.
+			item.Defs = buildCanonicalDefs(item, nil)
+			prototype := newPrototypeSchema(item)
+			require.NotNil(t, prototype)
+			for projection := 0; projection < 2; projection++ {
+				defs, err := prototype.engineDefs(item)
+				require.NoError(t, err)
+				var found bool
+				for _, def := range defs {
+					if c, ok := def.(*engine.ConstraintDef); ok {
+						got, err := c.MarshalBinary()
+						require.NoError(t, err)
+						require.Equal(t, wire, got)
+						c.Cts = nil
+						found = true
+					}
+				}
+				require.True(t, found)
+			}
+			var projectedProperties []*plan.Property
+			for _, def := range prototype.projection().Defs {
+				projectedProperties = append(projectedProperties, def.GetProperties().GetProperties()...)
+			}
+			require.Equal(t, want, projectedProperties)
+
 			var stableWire []byte
 			for round := 0; round < 3; round++ {
 				before := bytes.Clone(item.Constraint)
-				decoded, exeDefs := getTableDef(item, nil)
+				decoded, exeDefs := getTableDef(item, buildCanonicalDefs(item, nil))
 				require.NotNil(t, decoded)
 				require.Equal(t, before, item.Constraint, "reader must not mutate persisted input")
 				require.Equal(t, item.Kind, decoded.TableType)
