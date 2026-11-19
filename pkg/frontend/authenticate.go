@@ -4938,7 +4938,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4947,6 +4947,10 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, account.GetTenantID()); err != nil {
 		return err
 	}
 
@@ -11992,7 +11996,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12000,6 +12004,10 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, tenant.GetTenantID()); err != nil {
 		return err
 	}
 
@@ -12224,7 +12232,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12232,6 +12240,10 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, tenant.GetTenantID()); err != nil {
 		return err
 	}
 

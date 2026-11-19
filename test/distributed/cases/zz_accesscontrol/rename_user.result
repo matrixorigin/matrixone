@@ -58,6 +58,13 @@ select count(*)=1 as identity_credential_default_preserved from mo_catalog.mo_us
 select count(*)=1 as grant_preserved from mo_catalog.mo_user_grant g join mo_catalog.mo_role r on g.role_id=r.role_id where g.user_id={{ru30467_a_id}} and r.role_name='ru30467_reader';
 ➤ grant_preserved[-6,8,0]  𝄀
 1
+create role ru30467_moved;
+internal error: there is a user with the same name as the role ru30467_moved
+alter role ru30467_reader rename to ru30467_moved;
+internal error: there is a user with the same name as the role ru30467_moved
+select count(*)=1 as original_role_preserved from mo_catalog.mo_role where role_name='ru30467_reader';
+➤ original_role_preserved[-6,8,0]  𝄀
+1
 select count(*)=0 as old_name_absent from mo_catalog.mo_user where user_name='ru30467_a';
 ➤ old_name_absent[-6,8,0]  𝄀
 1

@@ -840,7 +840,12 @@ func Test_initRole(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
+		account := mock_frontend.NewMockExecResult(ctrl)
+		account.EXPECT().GetRowCount().Return(uint64(1))
+		gomock.InOrder(
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{account}),
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes(),
+		)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()

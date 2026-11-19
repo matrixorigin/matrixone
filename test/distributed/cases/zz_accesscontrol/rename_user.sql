@@ -41,6 +41,9 @@ select count(*)=0 as no_user_created_on_role_collision from mo_catalog.mo_user w
 rename user ru30467_a to ru30467_mid, ru30467_mid to ru30467_moved;
 select count(*)=1 as identity_credential_default_preserved from mo_catalog.mo_user where user_name='ru30467_moved' and user_id={{ru30467_a_id}} and authentication_string=@ru30467_auth and default_role=@ru30467_default;
 select count(*)=1 as grant_preserved from mo_catalog.mo_user_grant g join mo_catalog.mo_role r on g.role_id=r.role_id where g.user_id={{ru30467_a_id}} and r.role_name='ru30467_reader';
+create role ru30467_moved;
+alter role ru30467_reader rename to ru30467_moved;
+select count(*)=1 as original_role_preserved from mo_catalog.mo_role where role_name='ru30467_reader';
 select count(*)=0 as old_name_absent from mo_catalog.mo_user where user_name='ru30467_a';
 -- @session:id=12&user=sys:ru30467_moved&password=ru30467_password
 select connection_id() <> {{ru30467_old_conn}} as fresh_login;

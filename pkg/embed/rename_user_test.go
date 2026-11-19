@@ -15,12 +15,17 @@
 package embed
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,5 +91,84 @@ func TestRenameUserIdentity(t *testing.T) {
 		require.NoError(t, userDB.PingContext(ctx))
 		_, err = userDB.ExecContext(ctx, "rename user rename_taken to rename_src")
 		require.Error(t, err)
+	})
+}
+
+func TestRenameUserSerializesRoleNameClaim(t *testing.T) {
+	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		_, err = db.ExecContext(ctx, "create user ns_claim_source identified by 'RenameTestPassword1'")
+		require.NoError(t, err)
+		var userID int32
+		require.NoError(t, db.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='ns_claim_source'").Scan(&userID))
+
+		lockService := lockservice.GetLockServiceByServiceID(cn.ServiceID())
+		require.NotNil(t, lockService)
+		waitForRowWaiter := func(tableName string, rowID int32) {
+			t.Helper()
+			var tableID uint64
+			require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname=?", tableName).Scan(&tableID))
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt32(rowID)
+			require.Eventually(t, func() bool {
+				found := false
+				lockService.IterLocks(func(table uint64, keys [][]byte, held lockservice.Lock) bool {
+					if table == tableID {
+						for _, key := range keys {
+							if bytes.Equal(key, packer.Bytes()) {
+								held.IterWaiters(func(lock.WaitTxn) bool { found = true; return false })
+								break
+							}
+						}
+					}
+					return !found
+				})
+				return found
+			}, 10*time.Second, 20*time.Millisecond, "expected waiter on %s", tableName)
+		}
+
+		holder, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var workers sync.WaitGroup
+		defer func() {
+			cancel()
+			_ = holder.Rollback()
+			workers.Wait()
+		}()
+		require.NoError(t, holder.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_id=? for update", userID).Scan(&userID))
+
+		runDDL := func(stmt string) <-chan error {
+			done := make(chan error, 1)
+			workers.Go(func() {
+				_, err := db.ExecContext(ctx, stmt)
+				done <- err
+			})
+			return done
+		}
+		// Hold the rename after namespace admission and before it can update
+		// the source row. A role creator must wait on the account row.
+		rename := runDDL("rename user ns_claim_source to ns_claim_destination")
+		waitForRowWaiter("mo_user", userID)
+		createRole := runDDL("create role ns_claim_destination")
+		waitForRowWaiter("mo_account", 0)
+		require.NoError(t, holder.Rollback())
+		require.NoError(t, <-rename)
+		require.ErrorContains(t, <-createRole, "there is a user with the same name as the role")
+
+		var actualID int32
+		require.NoError(t, db.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='ns_claim_destination'").Scan(&actualID))
+		require.Equal(t, userID, actualID)
+		var roles int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_role where role_name='ns_claim_destination'").Scan(&roles))
+		require.Zero(t, roles)
 	})
 }

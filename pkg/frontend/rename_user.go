@@ -143,6 +143,21 @@ func validateRenameUserDestination(ctx context.Context, name string) error {
 	return nil
 }
 
+// lockAccountPrincipalNamespace serializes user and role name claims on the
+// account row, even when the destination is absent from both catalog tables.
+// Callers acquire it before principal rows and hold it through finishTxn.
+func lockAccountPrincipalNamespace(ctx context.Context, bh BackgroundExec, accountID uint32) (ExecResult, error) {
+	result, err := querySetDefaultRoleResult(defines.AttachAccountId(ctx, sysAccountID), bh,
+		fmt.Sprintf("select admin_name from mo_catalog.mo_account where account_id = %d for update;", accountID))
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.GetRowCount() != 1 {
+		return nil, moerr.NewInternalError(ctx, "account no longer exists")
+	}
+	return result, nil
+}
+
 func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err error) {
 	if ses == nil || ses.GetTenantInfo() == nil || stmt == nil || len(stmt.Pairs) == 0 {
 		return moerr.NewInternalError(ctx, "RENAME USER requires account and pairs")
@@ -173,6 +188,15 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 		return err
 	}
 	defer func() { err = finishTxn(ctx, bh, err) }()
+	admin, e := lockAccountPrincipalNamespace(ctx, bh, account.GetTenantID())
+	if e != nil {
+		return e
+	}
+	adminName, e := admin.GetString(ctx, 0, 0)
+	if e != nil {
+		return e
+	}
+
 	var users []accountUserBinding
 	for _, p := range stmt.Pairs {
 		for _, u := range []*tree.User{p.From, p.To} {
@@ -198,17 +222,7 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 	for _, u := range users {
 		locked[u.id] = true
 	}
-	admin, e := querySetDefaultRoleResult(defines.AttachAccountId(ctx, sysAccountID), bh, fmt.Sprintf("select admin_name from mo_catalog.mo_account where account_id = %d;", account.GetTenantID()))
-	if e != nil {
-		return e
-	}
-	if admin == nil || admin.GetRowCount() != 1 {
-		return moerr.NewInternalError(ctx, "account no longer exists")
-	}
-	adminName, e := admin.GetString(ctx, 0, 0)
-	if e != nil {
-		return e
-	}
+
 	for _, p := range stmt.Pairs {
 		src, e := queryAccountUsers(ctx, bh, "user_name = "+quoteSQLStringLiteral(p.From.Username), false)
 		if e != nil {

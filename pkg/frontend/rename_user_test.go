@@ -62,7 +62,7 @@ func newRenameFixture(t *testing.T) (*Session, *backgroundExecTest) {
 	bh.init()
 	seedAccountUser(bh, 1, "admin")
 	seedAccountUser(bh, 8, "alice")
-	bh.sql2result["select admin_name from mo_catalog.mo_account where account_id = 17;"] = renameRows([]interface{}{"admin"})
+	bh.sql2result["select admin_name from mo_catalog.mo_account where account_id = 17 for update;"] = renameRows([]interface{}{"admin"})
 	// Explicit empty catalog results, never an implicit mock authentication bypass.
 	bh.beforeExec = func(sql string) {
 		if strings.HasPrefix(sql, "select ") {
