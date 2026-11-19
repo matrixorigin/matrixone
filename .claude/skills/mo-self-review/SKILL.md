@@ -31,9 +31,9 @@ These rules apply to Codex, Claude, and every other compatible reviewing agent.
   serve one cluster together. "An older CN/TN cannot decode or run this" is not
   a finding: never request, or block on the absence of, a per-feature
   `MORPCVersion`, `AllCNsSupportProtocol`/capability gate, or old-peer
-  fallback. Compatibility findings must show a new binary misreading persisted
-  state, backups, or an external-boundary protocol. See
-  [upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md).
+  fallback. Check supported persisted state, backups and external contracts,
+  including changes to the meaning of existing stored definitions. Use the
+  [shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md).
 - When uncertain, classify non-blocking and ask for the developer's decision;
   never use a blocking label merely to force attention or another review round.
 
@@ -137,7 +137,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
-| **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each affected owning package once with `-race`. Ordinary sequential logic uses focused tests plus an ordinary owning-package run. §6 defines the proportional budget and narrow measurement-test exception. |
+| **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each affected owning package once with `-race`. §6 defines the proportional budget and measurement-test exception. Use the [shared validation scope](../../../.agents/skills/mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr) for normal tests. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
 untracked files in scope—not just the last file touched. Inspect `git status
@@ -158,7 +158,7 @@ lens is obvious to another.
 | **Control path** | Can cancel/close/reject/timeout make progress independently of the blocked operation, or does it wait on the same lock/channel/RPC? |
 | **State / generation** | Is every transition and failed transition defined? Can old work affect a restarted/reused generation or observe it before admission completes? |
 | **Resource lifecycle** | Every fd/goroutine/lock/alloc created on the change's paths — closed/released on **every** branch incl. error/panic? (→ §4 Q1) |
-| **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? Upgrade is shutdown-only: never require in-cluster mixed-version gates or `MORPCVersion` bumps ([upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md)). |
+| **Compatibility / boundary** | Do released formats, stored definitions, backups and external contracts work as expected on the target? Apply the shared upgrade compatibility contract. |
 | **Failure modes** | Every error return handled; partial failure leaves consistent state; no silent fallback that hides corruption. |
 | **Contract / API** | Callers updated on both ends of a protocol change; interface impls complete (compile-time `var _` checks intact). |
 | **Performance / scale** | On frequency-sensitive paths, did allocations, copies, scans, locks/atomics, goroutines, I/O, logs, or metric cardinality materially change? Benchmark/profile only when the cost can be material; otherwise record a bounded cost analysis. |

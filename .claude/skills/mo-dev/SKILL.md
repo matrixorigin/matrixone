@@ -20,7 +20,8 @@ Load only the reference needed for the task:
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Systematic regression design, counterexamples, white-box/black-box validation, planner/explain/rewrite correctness, avoiding scenario overfit | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
-| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
+| Changed persisted format or interpretation, upgrade/restore, or protocol and plan encoding | [Shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md) |
+| Focused versus owning-package validation, evidence selection and reuse | [Shared validation scope](../../../.agents/skills/mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr) |
 
 ## Enforcement Gates
 
@@ -170,7 +171,7 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
   `GOWORK=off go list -mod=readonly <patterns...>` proves the selection is non-empty
 □ if Go is affected, GOWORK=off go build -mod=readonly <patterns...> -> exit 0
 □ if Go is affected, GOWORK=off go vet -mod=readonly <patterns...>   -> exit 0
-□ if Go is affected, GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s <patterns...> -> exit 0, no hangs
+□ if Go behavior is affected, tests cover it at the scope defined in the shared validation reference
 □ if non-Go artifacts are affected, their parser/linter plus the smallest
   behavior-level validation for the changed contract pass (for example shell
   syntax + script tests, Make dry-run + target test, or Docker check + relevant build)

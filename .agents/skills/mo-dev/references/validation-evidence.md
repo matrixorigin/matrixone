@@ -44,9 +44,9 @@ changes pay the same cost.
 | Level | Shape | Required review/validation depth |
 |---|---|---|
 | **R0: non-behavioral** | explanatory docs, comments, formatting, mechanical rename, or generated output whose source contract is unchanged | inspect diff/delivery, links/schema/parser/lint as applicable; no unrelated Go tests |
-| **R1: local** | deterministic test-only work or local sequential internal behavior with no public, persistent, shared-state, or cross-owner contract | invariant/oracle review and exact focused validation; exercise the owning package when shared fixtures, selection, or behavior beyond the focused check may change |
-| **R2: contract** | public result/error/metadata, cross-package ownership, protocol-facing code, or a changed dependent contract | real consumer and negative/control proof at the changed boundary; use the test contract to select UT/BVT and affected packages |
-| **R3: systemic** | concurrency/lifecycle/global state, persisted format or interpretation, distributed protocol, restart/upgrade, security/tenant boundary, material hot path, background resource, or large/complex feature/refactor | model the affected ownership, state, waits, or bounds and prove the applicable unhappy paths with relevant race, fault, restart, upgrade or performance evidence |
+| **R1: local** | deterministic test-only work or local sequential internal behavior with no public, persistent, shared-state, or cross-owner contract | exact focused validation of the invariant and affected callers; run the owning package when shared fixtures, test selection, or behavior outside the focused checks can change |
+| **R2: contract** | public result/error/metadata, cross-package ownership, protocol-facing code, or a changed dependent contract | real consumer and negative/control proof at the changed boundary; include normal owning-package evidence when package behavior changes, plus applicable public-path checks |
+| **R3: systemic** | concurrency/lifecycle/global state, persisted format or interpretation, distributed protocol, restart/upgrade, security/tenant boundary, material hot path, background resource, or large/complex feature/refactor | applicable R2 evidence plus the ownership, state, waits, or bounds and unhappy-path evidence required by the affected risks |
 
 Risk is evidence-driven. A large diff can be R0 if it is proven mechanical; a
 small state-machine change can be R3. Record why each elevated dimension applies.
@@ -59,7 +59,7 @@ Order validation by information gained per unit cost:
 
 1. syntax, selection, compile/type, and focused invariant checks;
 2. focused regression and nearest negative/control case;
-3. owning-package or owning-group checks;
+3. owning-package or owning-group checks when the affected scope calls for them;
 4. dependent consumer and public-path validation;
 5. race, topology, restart, upgrade, fault, GPU, benchmark, scale, or full-suite
    work only when the mapped contract requires that dimension.
