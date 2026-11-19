@@ -1004,16 +1004,14 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.sawDateTimeFormat = true
 	}
 
-	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
-		ctx.WriteString("INTERVAL ")
-		node.Exprs[0].Format(ctx)
-		ctx.WriteByte(' ')
-		if nv, ok := node.Exprs[1].(*NumVal); ok {
-			ctx.WriteString(nv.String())
-		} else {
-			node.Exprs[1].Format(ctx)
+	if strings.EqualFold(funcName, "interval") && len(node.Exprs) == 2 {
+		if unit, ok := node.Exprs[1].(*TimeUnitExpr); ok {
+			ctx.WriteString("INTERVAL ")
+			node.Exprs[0].Format(ctx)
+			ctx.WriteByte(' ')
+			unit.Format(ctx)
+			return
 		}
-		return
 	}
 
 	if funcName != "" {
@@ -1128,16 +1126,6 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
 			node.Exprs[1:].Format(ctx)
-		}
-	case "interval":
-		node.Exprs[0].Format(ctx)
-		if len(node.Exprs) > 1 {
-			ctx.WriteString(", ")
-			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[1])
-			if len(node.Exprs) > 2 {
-				ctx.WriteString(", ")
-				node.Exprs[2:].Format(ctx)
-			}
 		}
 	default:
 		node.Exprs.Format(ctx)

@@ -408,6 +408,20 @@ set sql_mode = '';
 select a from db1.t_dup order by a;
 -- @session
 
+-- Both rules contribute rows when the earlier rule uses scalar INTERVAL.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1 and interval(marker, ascii('a'), 200) = 0" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+-- @session
+
+-- An ineligible earlier rule does not replace or invalidate the later rule.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes' order by a" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

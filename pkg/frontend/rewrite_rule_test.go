@@ -696,6 +696,44 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, sql))
 }
 
+func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	t.Cleanup(gostub.StubFunc(&NewBackgroundExec, bh).Reset)
+	ses := newSes(&privilege{}, ctrl)
+	t.Cleanup(ses.Close)
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{11, false}})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const left = `select a from db1.t1 where code = 'docs\'notes'`
+	const right = "select a from db1.t1 where a = 2"
+	for _, tc := range []struct {
+		name, left, right string
+		wantErr           bool
+	}{
+		{"ineligible earlier rule", left + " order by a", right, false},
+		{"invalid winner", left + " order by a", "select a from", true},
+		{"potentially mergeable earlier rule", left, right, true},
+		{"corrupt earlier rule", "select a from", right, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 11})] = newMrsForRewriteRules([][]interface{}{
+				{10, "db1.t1", tc.left}, {11, "db1.t1", tc.right},
+			})
+			rules, err := loadRuleCache(t.Context(), ses, mode)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, rules)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, map[string]string{"db1.t1": right}, rules)
+		})
+	}
+}
+
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

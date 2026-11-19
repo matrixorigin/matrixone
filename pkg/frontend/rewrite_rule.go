@@ -1277,6 +1277,13 @@ type rewriteRuleMergeShape struct {
 func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
 	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
 	if err != nil {
+		// The catalog admits rules in default parser mode. Use that mode only
+		// to prove this earlier rule could never merge, not to interpret a
+		// predicate for execution. The effective rule is still validated in
+		// the session mode before loadRuleCache publishes it.
+		if mysql.ParseSQLModeFlags(sqlMode) != 0 && defaultModeRuleIsUnmergeable(ctx, leftRule) {
+			return "", false, nil
+		}
 		return "", false, err
 	}
 	if !ok {
@@ -1306,6 +1313,21 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		return "", false, moerr.NewInvalidInput(ctx, "merged rewrite rule cannot be represented as UTF-8")
 	}
 	return sql, true, nil
+}
+
+func defaultModeRuleIsUnmergeable(ctx context.Context, rule string) bool {
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	switch stmt.(type) {
+	case *tree.Select, *tree.ParenSelect:
+		_, mergeable := rewriteRuleMergeShapeForStatement(stmt, "")
+		return !mergeable
+	default:
+		return false
+	}
 }
 
 func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {

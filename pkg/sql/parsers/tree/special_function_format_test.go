@@ -32,6 +32,9 @@ func TestSpecialFunctionFormatRoundTripForCTAS(t *testing.T) {
 		wantCTAS     string
 		wantOrdinary string
 	}{
+		{"two-argument scalar interval", `select interval(n, ascii('a')) from s`, `interval(` + "`n`" + `, ascii("a"))`, "interval(`n`, ascii('a'))"},
+		{"multi-argument scalar interval", `select interval(n, ascii('a'), 200) from s`, `interval(` + "`n`" + `, ascii("a"), 200)`, "interval(`n`, ascii('a'), 200)"},
+		{"temporal interval", `select interval n day from s`, "INTERVAL `n` day", "INTERVAL `n` day"},
 		{"get_format type keyword", "select get_format(date, 'USA') as f from s", `get_format(DATE, "USA")`, `get_format(DATE, 'USA')`},
 		{"trim default", "select trim(b) as t from s", "trim(`b`)", "trim(`b`)"},
 		{"trim removal", "select trim(a from b) as t from s", "trim(`a` from `b`)", "trim(`a` from `b`)"},
