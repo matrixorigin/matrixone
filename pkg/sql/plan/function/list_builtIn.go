@@ -8742,7 +8742,16 @@ var supportedMathBuiltIns = []FuncNew{
 			case types.T_char, types.T_varchar, types.T_text:
 				return newCheckResultWithSuccess(13)
 			}
-			return fixedTypeMatch(overloads[:BitCountFieldFloat32Overload], inputs)
+			// Type-only lookup uses expression conversion. The binder
+			// explicitly selects rounding for native floating fields.
+			match := fixedTypeMatch(overloads[:bitCountTruncatedFloat32Overload], inputs)
+			switch match.idx {
+			case BitCountRoundedFloat32Overload:
+				match.idx = bitCountTruncatedFloat32Overload
+			case BitCountRoundedFloat64Overload:
+				match.idx = bitCountTruncatedFloat64Overload
+			}
+			return match
 		},
 
 		Overloads: []overload{
@@ -8827,23 +8836,23 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 8,
+				overloadId: BitCountRoundedFloat32Overload,
 				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return BitCountFloat[float32]
+					return bitCountRoundedFloat[float32]
 				},
 			},
 			{
-				overloadId: 9,
+				overloadId: BitCountRoundedFloat64Overload,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return BitCountFloat[float64]
+					return bitCountRoundedFloat[float64]
 				},
 			},
 			{
@@ -8900,16 +8909,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: BitCountFieldFloat32Overload,
+				overloadId: bitCountTruncatedFloat32Overload,
 				args:       []types.T{types.T_float32},
 				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
-				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32] },
+				newOp:      func() executeLogicOfOverload { return bitCountTruncatedFloat[float32] },
 			},
 			{
-				overloadId: BitCountFieldFloat64Overload,
+				overloadId: bitCountTruncatedFloat64Overload,
 				args:       []types.T{types.T_float64},
 				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
-				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float64] },
+				newOp:      func() executeLogicOfOverload { return bitCountTruncatedFloat[float64] },
 			},
 		},
 	},

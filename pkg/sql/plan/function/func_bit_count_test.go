@@ -83,7 +83,7 @@ func TestBitCountStringNumericPrefixCoercion(t *testing.T) {
 	}
 }
 
-func TestBitCountFloat(t *testing.T) {
+func TestBitCountTruncatedFloat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := []float64{
 		1.4, 1.5, 2.5, 3.5, 3.9, 64.9,
@@ -109,8 +109,8 @@ func TestBitCountFloat(t *testing.T) {
 		values any
 		fn     executeLogicOfOverload
 	}{
-		{types.T_float32, float32Values, BitCountFloat[float32]},
-		{types.T_float64, values, BitCountFloat[float64]},
+		{types.T_float32, float32Values, bitCountTruncatedFloat[float32]},
+		{types.T_float64, values, bitCountTruncatedFloat[float64]},
 	} {
 		t.Run(tc.typ.String(), func(t *testing.T) {
 			fc := NewFunctionTestCase(proc,
@@ -146,6 +146,36 @@ func TestBitCountFloat(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	_, err = bitCountFromFloat(float32(math.NaN()), proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+func TestBitCountReleasedFloatOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []float64{3.5, -0.6, -0.5, -2.5, math.Inf(1), math.Inf(-1), 0}
+	want := []uint64{1, 64, 0, 63, 64, 1, 0}
+	nulls := []bool{false, false, false, false, false, false, true}
+	values32 := make([]float32, len(inputs))
+	for i, value := range inputs {
+		values32[i] = float32(value)
+	}
+	for _, tc := range []struct {
+		typ        types.T
+		values     any
+		overloadID int32
+	}{
+		{types.T_float32, values32, 8},
+		{types.T_float64, inputs, 9},
+	} {
+		t.Run(tc.typ.String(), func(t *testing.T) {
+			typ := tc.typ.ToType()
+			released, err := GetFunctionById(proc.Ctx, encodeOverloadID(BIT_COUNT, tc.overloadID))
+			require.NoError(t, err)
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(typ, tc.values, nulls)},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nulls), released.newOp())
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestBitCountDecimal64(t *testing.T) {
