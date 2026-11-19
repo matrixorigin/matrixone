@@ -97,16 +97,16 @@ type bitmask = uint64
 
 // tailFact: a set bit lies below Len, so Has is just the bit.
 // @ ghost
-// @ requires acc(n.Inv(), 1/4)
-// @ ensures acc(n.Inv(), 1/4)
+// @ requires acc(n.Inv(), 1/8)
+// @ ensures acc(n.Inv(), 1/8) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == (0 <= r && r/64 < len(n.ISeq()) && bits.Bit(n.ISeq()[r/64], r%64))
 // @ decreases
 // @ func (n *Bitmap) tailFact() {
-// @ 	unfold acc(n.Inv(), 1/4)
-// @ 	unfold acc(n.Mem(), 1/4)
+// @ 	unfold acc(n.Inv(), 1/8)
+// @ 	unfold acc(n.Mem(), 1/8)
 // @ 	assert forall r int :: {bits.Bit(n.data[r/64], r%64)} 0 <= r && r/64 < len(n.data) && bits.Bit(n.data[r/64], r%64) ==> r < int(n.numBits)
-// @ 	fold acc(n.Mem(), 1/4)
-// @ 	fold acc(n.Inv(), 1/4)
+// @ 	fold acc(n.Mem(), 1/8)
+// @ 	fold acc(n.Inv(), 1/8)
 // @ }
 
 // NumRows is the number of set rows.
@@ -142,6 +142,93 @@ type bitmask = uint64
 // @ 	assert forall r int :: {n.Has(r)} {HasS(n.ISeq(), n.Len(), r)} n.Has(r) == HasS(n.ISeq(), n.Len(), r)
 // @ }
 
+// rowFacts exposes the row-count structure of a bitmap held with Inv.
+// @ ghost
+// @ requires acc(n.Inv(), 1/8)
+// @ ensures acc(n.Inv(), 1/8) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures forall j int :: {CntS(n.ISeq(), n.Len(), 64*j)} 0 <= j && j <= len(n.ISeq()) ==> CntS(n.ISeq(), n.Len(), 64*j) == SumPc(n.ISeq(), j)
+// @ ensures forall r int :: {n.Has(r)} n.Has(r) == HasS(n.ISeq(), n.Len(), r)
+// @ ensures TailClear(n.ISeq(), n.Len())
+// @ decreases
+// @ func (n *Bitmap) rowFacts() {
+// @ 	unfold acc(n.Inv(), 1/8)
+// @ 	unfold acc(n.Mem(), 1/8)
+// @ 	cntAllWords(seq(n.data), n.numBits, len(n.data))
+// @ 	fold acc(n.Mem(), 1/8)
+// @ 	fold acc(n.Inv(), 1/8)
+// @ }
+
+// rowCnt is the number of set rows below m, with m clamped to Len.
+// @ ghost
+// @ requires acc(n.Inv(), _) && 0 <= m
+// @ decreases
+// @ pure func (n *Bitmap) rowCnt(m int) int {
+// @ 	return CntS(n.ISeq(), n.Len(), m < int(n.Len()) ? m : int(n.Len()))
+// @ }
+
+// CntBelow is the number of set rows below m.
+// @ ghost
+// @ requires acc(n.Inv(), _) && 0 <= m
+// @ decreases
+// @ pure func (n *Bitmap) CntBelow(m int) int {
+// @ 	return CntS(n.ISeq(), n.Len(), m)
+// @ }
+
+// Row-count lemmas in terms of Has and CntBelow.
+// @ ghost
+// @ requires acc(n.Inv(), 1/4) && 0 <= m
+// @ requires forall r int :: {n.Has(r)} 0 <= r && r < m ==> !n.Has(r)
+// @ ensures acc(n.Inv(), 1/4) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures n.CntBelow(m) == 0
+// @ decreases
+// @ func (n *Bitmap) cntZeroBelow(m int) {
+// @ 	n.rowFacts()
+// @ 	assert forall r int :: {HasS(n.ISeq(), n.Len(), r)} 0 <= r && r < m ==> !n.Has(r) && !HasS(n.ISeq(), n.Len(), r)
+// @ 	cntZero(n.ISeq(), n.Len(), m)
+// @ }
+
+// @ ghost
+// @ requires acc(n.Inv(), 1/4) && 0 <= a && a < b && n.Has(a)
+// @ requires forall r int :: {n.Has(r)} a < r && r < b ==> !n.Has(r)
+// @ ensures acc(n.Inv(), 1/4) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures n.CntBelow(b) == n.CntBelow(a)+1
+// @ decreases
+// @ func (n *Bitmap) cntNext(a, b int) {
+// @ 	n.rowFacts()
+// @ 	assert HasS(n.ISeq(), n.Len(), a)
+// @ 	assert forall r int :: {HasS(n.ISeq(), n.Len(), r)} a < r && r < b ==> !n.Has(r) && !HasS(n.ISeq(), n.Len(), r)
+// @ 	cntStep(n.ISeq(), n.Len(), a, b)
+// @ }
+
+// @ ghost
+// @ requires acc(n.Inv(), 1/4) && 0 <= a && n.Has(a)
+// @ ensures acc(n.Inv(), 1/4) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures forall r int :: {n.Has(r)} n.Has(r) && n.CntBelow(r) == n.CntBelow(a) ==> r == a
+// @ decreases
+// @ func (n *Bitmap) cntInj(a int) {
+// @ 	n.rowFacts()
+// @ 	cntInjS(n.ISeq(), n.Len(), a)
+// @ }
+
+// @ ghost
+// @ requires acc(n.Inv(), 1/4) && 0 <= m
+// @ ensures acc(n.Inv(), 1/4) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures n.CntBelow(m+1) == n.CntBelow(m)+(n.Has(m) ? 1 : 0)
+// @ decreases
+// @ func (n *Bitmap) cntSucc(m int) {
+// @ 	n.rowFacts()
+// @ }
+
+// @ ghost
+// @ requires acc(n.Inv(), 1/4) && 0 <= a && a <= b && n.CntBelow(a) == n.CntBelow(b)
+// @ ensures acc(n.Inv(), 1/4) && n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len())
+// @ ensures forall r int :: {n.Has(r)} a <= r && r < b ==> !n.Has(r)
+// @ decreases
+// @ func (n *Bitmap) cntGap(a, b int) {
+// @ 	n.rowFacts()
+// @ 	cntFlat(n.ISeq(), n.Len(), a, b)
+// @ }
+
 // Words is the number of data words.
 // @ ghost
 // @ requires acc(n.Inv(), _)
@@ -171,11 +258,12 @@ func (n *Bitmap) InitWithSize(length int64) {
 // IteratorValue returns a bitmap iterator by value for allocation-sensitive
 // callers. Iterator keeps its interface return type for compatibility, while
 // callers on hot paths can keep the iterator on their own stack.
-// @ requires acc(n.Inv(), 1/2)
-// @ ensures acc(n.Inv(), 1/2)
+// @ requires acc(n.Inv(), 1/4)
+// @ ensures acc(n.Inv(), 1/4)
 // @ ensures itr.bm == n && 0 <= itr.i && itr.i <= uint64(n.Len())
 // @ ensures itr.i < uint64(n.Len()) ==> n.Has(int(itr.i))
 // @ ensures forall r int :: {n.Has(r)} 0 <= r && r < int(itr.i) ==> !n.Has(r)
+// @ ensures n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ decreases
 func (n *Bitmap) IteratorValue() (itr BitmapIterator) {
 	itr = BitmapIterator{bm: n}
@@ -187,12 +275,12 @@ func (n *Bitmap) IteratorValue() (itr BitmapIterator) {
 // if there is none. Bits at or beyond numBits are never read, and words missing
 // from data read as zero.
 // @ requires 0 <= i
-// @ requires acc(n.Inv(), 1/2)
-// @ ensures acc(n.Inv(), 1/2)
+// @ requires acc(n.Inv(), 1/4)
+// @ ensures acc(n.Inv(), 1/4)
 // @ ensures 0 <= res && res <= uint64(n.Len())
 // @ ensures res < uint64(n.Len()) ==> res >= i && n.Has(int(res))
 // @ ensures forall r int :: {n.Has(r)} int(i) <= r && r < int(res) ==> !n.Has(r)
-// @ ensures n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+// @ ensures n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ decreases
 func (n *Bitmap) nextSet(i uint64) (res uint64) {
 	end := uint64(n.Len())
@@ -205,8 +293,8 @@ func (n *Bitmap) nextSet(i uint64) (res uint64) {
 		nwords = words
 	}
 	mask := ^bitmask(0) << (i % 64)
-	// @ invariant acc(n.Inv(), 1/2) && end == uint64(n.Len()) && nwords == uint64(n.Words())
-	// @ invariant n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+	// @ invariant acc(n.Inv(), 1/4) && end == uint64(n.Len()) && nwords == uint64(n.Words())
+	// @ invariant n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 	// @ invariant 0 <= i/64 && i/64 <= word && word <= nwords && i < end
 	// @ invariant mask == (word == i/64 ? ^bitmask(0) << (i % 64) : ^bitmask(0))
 	// @ invariant forall r int :: {n.Has(r)} n.Has(r) == (0 <= r && r/64 < len(n.ISeq()) && bits.Bit(n.ISeq()[r/64], r%64))
@@ -214,7 +302,7 @@ func (n *Bitmap) nextSet(i uint64) (res uint64) {
 	// @ decreases nwords - word
 	for word := i / 64; word < nwords; word++ {
 		// @ ghost w := n.ISeq()[word]
-		if v := /*@ unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in @*/ n.data[word] & mask; v != 0 {
+		if v := /*@ unfolding acc(n.Inv(), 1/4) in unfolding acc(n.Mem(), 1/4) in @*/ n.data[word] & mask; v != 0 {
 			// @ assert v == w & mask
 			res = word*64 + uint64(bits.TrailingZeros64(v))
 			// @ assert word == i/64 ==> int(i%64) == int(i)-64*int(word)
@@ -244,8 +332,8 @@ func (itr *BitmapIterator) HasNext() bool {
 }
 
 // PeekNext returns the next set bit without advancing, or 0 if there is none.
-// @ requires acc(itr, 1/2) && acc(itr.bm.Inv(), 1/2)
-// @ ensures acc(itr, 1/2) && acc(itr.bm.Inv(), 1/2)
+// @ requires acc(itr, 1/2) && acc(itr.bm.Inv(), 1/4)
+// @ ensures acc(itr, 1/2) && acc(itr.bm.Inv(), 1/4)
 // @ decreases
 func (itr *BitmapIterator) PeekNext() uint64 {
 	if itr.HasNext() {
@@ -256,12 +344,13 @@ func (itr *BitmapIterator) PeekNext() uint64 {
 
 // Next returns the next set bit and advances. Call it only after HasNext
 // returns true.
-// @ requires acc(itr) && acc(itr.bm.Inv(), 1/2) && 0 <= itr.i && itr.i < uint64(itr.bm.Len())
-// @ ensures acc(itr) && acc(itr.bm.Inv(), 1/2) && itr.bm == old(itr.bm)
+// @ requires acc(itr) && acc(itr.bm.Inv(), 1/4) && 0 <= itr.i && itr.i < uint64(itr.bm.Len())
+// @ ensures acc(itr) && acc(itr.bm.Inv(), 1/4) && itr.bm == old(itr.bm)
 // @ ensures 0 <= itr.i && itr.i <= uint64(itr.bm.Len())
 // @ ensures res == old(itr.i) && itr.i > res
 // @ ensures itr.i < uint64(itr.bm.Len()) ==> itr.bm.Has(int(itr.i))
 // @ ensures forall r int :: {itr.bm.Has(r)} int(res) < r && r < int(itr.i) ==> !itr.bm.Has(r)
+// @ ensures itr.bm.Len() == old(itr.bm.Len()) && itr.bm.ISeq() == old(itr.bm.ISeq()) && forall r int :: {itr.bm.Has(r)} itr.bm.Has(r) == old(itr.bm.Has(r))
 // @ decreases
 func (itr *BitmapIterator) Next() (res uint64) {
 	res = itr.i
@@ -1134,4 +1223,395 @@ func (n *Bitmap) finishOrderedRemap(written, logicalLength int64) {
 		// @ fold n.Mem()
 	}
 	// @ fold n.Inv()
+}
+
+// IsSame reports whether n and b have the same data words. It compares words,
+// not lengths: bitmaps with the same rows but a different number of words
+// compare unequal, and equal words imply the same rows.
+// @ requires acc(n.Inv(), 1/4) && acc(b.Inv(), 1/4)
+// @ ensures acc(n.Inv(), 1/4) && acc(b.Inv(), 1/4)
+// @ ensures n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len()) && b.ISeq() == old(b.ISeq()) && b.Len() == old(b.Len())
+// @ ensures res == (n.ISeq() == b.ISeq())
+// @ ensures res ==> forall r int :: {n.Has(r)} {b.Has(r)} n.Has(r) == b.Has(r)
+// @ decreases
+func (n *Bitmap) IsSame(b *Bitmap) (res bool) {
+	if b.Size() != n.Size() {
+		return false
+	}
+	words := n.Size() / 8
+	// @ invariant acc(n.Inv(), 1/4) && acc(b.Inv(), 1/4)
+	// @ invariant n.ISeq() == old(n.ISeq()) && n.Len() == old(n.Len()) && b.ISeq() == old(b.ISeq()) && b.Len() == old(b.Len())
+	// @ invariant 0 <= i && i <= words && words == len(n.ISeq()) && words == len(b.ISeq())
+	// @ invariant forall j int :: {n.ISeq()[j]} 0 <= j && j < i ==> n.ISeq()[j] == b.ISeq()[j]
+	// @ decreases words - i
+	for i := 0; i < words; i++ {
+		if /*@ unfolding acc(n.Inv(), 1/4) in unfolding acc(n.Mem(), 1/4) in @*/ n.data[i] != /*@ unfolding acc(b.Inv(), 1/4) in unfolding acc(b.Mem(), 1/4) in @*/ b.data[i] {
+			return false
+		}
+	}
+	// @ assert n.ISeq() == b.ISeq()
+	// @ n.rowFacts()
+	// @ b.rowFacts()
+	// @ sameWordsSameRows(n.ISeq(), n.Len(), b.Len())
+	return true
+}
+
+// Filter returns a bitmap whose row i is row sels[i] of n. Selected rows that
+// are negative or at or beyond Len read as clear.
+// @ requires acc(n.Inv(), 1/2) && acc(sels, 1/2)
+// @ ensures acc(n.Inv(), 1/2) && acc(sels, 1/2) && res.Inv()
+// @ ensures n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+// @ ensures res.Len() == int64(len(sels))
+// @ ensures forall i int :: {res.Has(i)} 0 <= i && i < len(sels) ==> res.Has(i) == (sels[i] >= 0 && n.Has(int(sels[i])))
+// @ ensures forall i int :: {res.Has(i)} len(sels) <= i ==> !res.Has(i)
+// @ decreases
+func (n *Bitmap) Filter(sels []int64) (res *Bitmap) {
+	res = &Bitmap{}
+	res.InitWithSize(int64(len(sels)))
+	// @ ghost ss := seq(sels)
+	// @ invariant acc(n.Inv(), 1/2) && acc(sels, 1/2) && seq(sels) == ss && res.Inv()
+	// @ invariant n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+	// @ invariant 0 <= i && i <= len(sels) && res.Len() == int64(len(sels))
+	// @ invariant forall j int :: {res.Has(j)} 0 <= j && j < i ==> res.Has(j) == (sels[j] >= 0 && n.Has(int(sels[j])))
+	// @ invariant forall j int :: {res.Has(j)} i <= j ==> !res.Has(j)
+	// @ decreases len(sels) - i
+	for i := 0; i < len(sels); i++ {
+		if sels[i] >= 0 && n.Contains(uint64(sels[i])) {
+			res.Add(uint64(i))
+		}
+	}
+	return res
+}
+
+// CountRange returns the number of set bits in [start, end). It never scans
+// outside the bitmap's logical coverage and does not allocate.
+// @ requires acc(n.Inv(), 1/2) && 0 <= start && 0 <= end
+// @ ensures acc(n.Inv(), 1/2) && n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq())
+// @ ensures res == (start < end ? n.rowCnt(int(end))-n.rowCnt(int(start)) : 0)
+// @ decreases
+func (n *Bitmap) CountRange(start, end uint64) (res int) {
+	// @ assert unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in n != nil
+	if n == nil || start >= end || start >= uint64(n.Len()) {
+		return 0
+	}
+	if end > uint64(n.Len()) {
+		end = uint64(n.Len())
+	}
+	// @ n.rowFacts()
+	// @ ghost s := n.ISeq()
+	// @ ghost nb := n.Len()
+	first := start / 64
+	last := (end - 1) / 64
+	tail := (64 - end%64) % 64
+	// @ assert end == 64*last+(64-tail) && start == 64*first+start%64
+	if first == last {
+		mask := (^uint64(0) << (start % 64)) & (^uint64(0) >> tail)
+		w := /*@ unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in @*/ n.data[first]
+		// @ pcMask(w, mask, int(start%64), 64-int(tail), 64)
+		// @ cntWord(s, nb, int(first), int(start%64))
+		// @ cntWord(s, nb, int(first), 64-int(tail))
+		return bits.OnesCount64(w & mask)
+	}
+	w := /*@ unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in @*/ n.data[first]
+	// @ assert w == s[first] && CntS(s, nb, 64*int(first)) == SumPc(s, int(first))
+	// @ pcMask(w, ^uint64(0)<<(start%64), int(start%64), 64, 64)
+	// @ cntWord(s, nb, int(first), int(start%64))
+	// @ cntWord(s, nb, int(first), 64)
+	count := bits.OnesCount64(w & (^uint64(0) << (start % 64)))
+	// @ assert count == CntS(s, nb, 64*int(first)+64)-CntS(s, nb, int(start))
+	// @ invariant acc(n.Inv(), 1/2) && n.Len() == old(n.Len()) && n.ISeq() == s && nb == n.Len()
+	// @ invariant first < word && word <= last && last < uint64(len(s))
+	// @ invariant count == CntS(s, nb, 64*int(word))-CntS(s, nb, int(start))
+	// @ decreases last - word
+	for word := first + 1; word < last; word++ {
+		// @ assert CntS(s, nb, 64*int(word)) == SumPc(s, int(word))
+		// @ cntWord(s, nb, int(word), 64)
+		// @ assert CntS(s, nb, 64*int(word)+64) == CntS(s, nb, 64*int(word))+bits.Pc(s[word])
+		// @ ghost w := s[word]
+		count += bits.OnesCount64( /*@ unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in @*/ n.data[word])
+		// @ assert count == CntS(s, nb, 64*int(word+1))-CntS(s, nb, int(start))
+	}
+	w = /*@ unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in @*/ n.data[last]
+	// @ assert w == s[last] && CntS(s, nb, 64*int(last)) == SumPc(s, int(last))
+	// @ pcMask(w, ^uint64(0)>>tail, 0, 64-int(tail), 64)
+	// @ cntWord(s, nb, int(last), 64-int(tail))
+	count += bits.OnesCount64(w & (^uint64(0) >> tail))
+	return count
+}
+
+// AnySetNotIn reports whether [start, end) contains a bit set in n and not in
+// other. It is used when one provenance bitmap (GROUPING) overrides another
+// (SQL NULL) without expanding either bitmap row by row.
+// @ requires acc(n.Inv(), 1/4) && (other != nil ==> acc(other.Inv(), 1/4)) && 0 <= start && 0 <= end
+// @ ensures acc(n.Inv(), 1/4) && (other != nil ==> acc(other.Inv(), 1/4))
+// @ ensures n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+// @ ensures other != nil ==> other.Len() == old(other.Len()) && forall r int :: {other.Has(r)} other.Has(r) == old(other.Has(r))
+// @ ensures res == (exists r int :: {n.Has(r)} int(start) <= r && r < int(end) && n.Has(r) && !(other != nil && other.Has(r)))
+// @ decreases
+func (n *Bitmap) AnySetNotIn(other *Bitmap, start, end uint64) (res bool) {
+	// @ assert unfolding acc(n.Inv(), 1/4) in unfolding acc(n.Mem(), 1/4) in n != nil
+	if n == nil || start >= end || start >= uint64(n.Len()) {
+		return false
+	}
+	if end > uint64(n.Len()) {
+		end = uint64(n.Len())
+	}
+	// @ n.rowFacts()
+	// @ ghost if other != nil { other.rowFacts() }
+	first := start / 64
+	last := (end - 1) / 64
+	tail := (64 - end%64) % 64
+	otherWords := uint64(0)
+	if other != nil {
+		otherWords = uint64(other.Size() / 8)
+	}
+	// @ invariant acc(n.Inv(), 1/4) && (other != nil ==> acc(other.Inv(), 1/4))
+	// @ invariant n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+	// @ invariant other != nil ==> other.Len() == old(other.Len()) && forall r int :: {other.Has(r)} other.Has(r) == old(other.Has(r))
+	// @ invariant forall r int :: {n.Has(r)} n.Has(r) == HasS(n.ISeq(), n.Len(), r)
+	// @ invariant other != nil ==> forall r int :: {other.Has(r)} other.Has(r) == HasS(other.ISeq(), other.Len(), r)
+	// @ invariant other != nil ==> otherWords == uint64(len(other.ISeq())) && TailClear(other.ISeq(), other.Len()) && len(other.ISeq()) == int((other.Len()+63)/64)
+	// @ invariant TailClear(n.ISeq(), n.Len()) && first == start/64 && last == (end-1)/64 && tail == (64-end%64)%64 && start < end
+	// @ invariant first <= word && word <= last+1 && last < uint64(len(n.ISeq())) && end <= uint64(n.Len())
+	// @ invariant forall r int :: {n.Has(r)} int(start) <= r && r < 64*int(word) && r < int(end) ==> !(n.Has(r) && !(other != nil && other.Has(r)))
+	// @ decreases last + 1 - word
+	for word := first; word <= last; word++ {
+		mask := ^uint64(0)
+		if word == first {
+			mask &= ^uint64(0) << (start % 64)
+		}
+		if word == last {
+			mask &= ^uint64(0) >> tail
+		}
+		// @ assert forall k int :: {bits.Bit(mask, k)} 0 <= k && k < 64 ==> bits.Bit(mask, k) == ((word != first || k >= int(start%64)) && (word != last || k < 64-int(tail)))
+		// @ ghost nw := n.ISeq()[word]
+		value := /*@ unfolding acc(n.Inv(), 1/4) in unfolding acc(n.Mem(), 1/4) in @*/ n.data[word] & mask
+		// @ assert value == nw & mask
+		// @ ghost hasOther := other != nil && word < otherWords
+		// @ ghost ow := uint64(0)
+		if other != nil && word < otherWords {
+			// @ ow = other.ISeq()[word]
+			value &^= /*@ unfolding acc(other.Inv(), 1/4) in unfolding acc(other.Mem(), 1/4) in @*/ other.data[word]
+		}
+		// @ assert forall k int :: {bits.Bit(value, k)} 0 <= k && k < 64 ==> bits.Bit(value, k) == (bits.Bit(nw, k) && bits.Bit(mask, k) && !(hasOther && bits.Bit(ow, k)))
+		if value != 0 {
+			// @ ghost k := bits.SomeBit(value)
+			// @ ghost r := 64*int(word) + k
+			// @ assert r/64 == int(word) && r%64 == k
+			// @ assert n.Has(r) && !(other != nil && other.Has(r))
+			return true
+		}
+		// @ assert forall k int :: {bits.Bit(value, k)} 0 <= k && k < 64 ==> !bits.Bit(value, k)
+		// @ assert forall r int :: {n.Has(r)} r/64 == int(word) && int(start) <= r && r < int(end) ==> bits.Bit(mask, r%64) && !bits.Bit(value, r%64)
+		// @ assert forall r int :: {n.Has(r)} r/64 == int(word) && int(start) <= r && r < int(end) && n.Has(r) ==> bits.Bit(nw, r%64)
+		// @ assert forall r int :: {n.Has(r)} r/64 == int(word) && int(start) <= r && r < int(end) && n.Has(r) ==> hasOther && bits.Bit(ow, r%64)
+	}
+	return false
+}
+
+// RemapMaskOrdered is RemapOrdered for an ordered bitmap selection. Selection
+// bitmap iteration is monotonic, so the rewrite uses no row-scaled scratch.
+// @ requires n.Inv() && (sels != nil ==> acc(sels.Inv(), 1/2))
+// @ ensures n.Inv() && (sels != nil ==> acc(sels.Inv(), 1/2) && sels.Len() == old(sels.Len()) && sels.ISeq() == old(sels.ISeq()))
+// @ ensures sels != nil && !negate ==> n.Len() == (old(n.Len()) < int64(old(sels.Count())) ? old(n.Len()) : int64(old(sels.Count())))
+// @ ensures sels != nil && !negate ==> forall r int :: {sels.Has(r)} sels.Has(r) && sels.CntBelow(r) < int(n.Len()) ==> n.Has(sels.CntBelow(r)) == old(n.Has(r))
+// @ ensures sels != nil && negate ==> n.Len() == old(n.Len())
+// @ ensures sels != nil && negate ==> forall s int :: {old(n.Has(s))} 0 <= s && s < int(old(n.Len())) && !sels.Has(s) ==>
+// @ 	n.Has(s-RankOff(sels.ISeq(), sels.Len(), 0, s)) == old(n.Has(s))
+// @ ensures sels != nil && negate ==> forall i int :: {n.Has(i)} int(old(n.Len()))-RankOff(sels.ISeq(), sels.Len(), 0, int(old(n.Len()))) <= i ==> !n.Has(i)
+// @ decreases
+func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
+	n.RemapMaskOrderedWithOffset(sels, negate, 0)
+}
+
+// RemapMaskOrderedWithOffset applies an ordered bitmap selection after adding
+// offset to every selected source row, without materializing an index slice.
+// The selected source rows are r + offset for the set rows r of sels, in
+// increasing order. When negate is false, output row i comes from the i-th
+// selected row and the length becomes min(Len, sels.Count()). When negate is
+// true, the selected rows are removed: the kept rows are packed at the front,
+// the length stays Len and the freed tail is clear. sels must not be n.
+// @ requires n.Inv() && (sels != nil ==> acc(sels.Inv(), 1/2)) && 0 <= offset
+// @ ensures n.Inv() && (sels != nil ==> acc(sels.Inv(), 1/2) && sels.Len() == old(sels.Len()) && sels.ISeq() == old(sels.ISeq()))
+// @ ensures sels != nil && !negate ==> n.Len() == (old(n.Len()) < int64(old(sels.Count())) ? old(n.Len()) : int64(old(sels.Count())))
+// @ ensures sels != nil && !negate ==> forall r int :: {sels.Has(r)} sels.Has(r) && sels.CntBelow(r) < int(n.Len()) ==> n.Has(sels.CntBelow(r)) == old(n.Has(r+int(offset)))
+// @ ensures sels != nil && negate ==> n.Len() == old(n.Len())
+// @ ensures sels != nil && negate ==> forall s int :: {old(n.Has(s))} 0 <= s && s < int(old(n.Len())) && !(s >= int(offset) && sels.Has(s-int(offset))) ==>
+// @ 	n.Has(s-RankOff(sels.ISeq(), sels.Len(), int(offset), s)) == old(n.Has(s))
+// @ ensures sels != nil && negate ==> forall i int :: {n.Has(i)} int(old(n.Len()))-RankOff(sels.ISeq(), sels.Len(), int(offset), int(old(n.Len()))) <= i ==> !n.Has(i)
+// @ decreases
+func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset uint64) {
+	// @ assert unfolding n.Inv() in unfolding n.Mem() in n != nil
+	if n == nil || sels == nil {
+		return
+	}
+	oldLength := n.Len()
+	logicalLength := oldLength
+	// @ sels.CountIsRows()
+	if !negate && int64(sels.Count()) < logicalLength {
+		logicalLength = int64(sels.Count())
+	}
+	// @ ghost sq := sels.ISeq()
+	// @ ghost sl := sels.Len()
+	// @ ghost off := int(offset)
+	// @ ghost orig := n.ISeq()
+	// @ assert forall r int :: {HasS(orig, oldLength, r)} HasS(orig, oldLength, r) == n.Has(r)
+	// @ assert forall r int :: {HasS(orig, oldLength, r)} HasS(orig, oldLength, r) == old(n.Has(r))
+	// @ unfold n.Inv()
+	// @ assert n.Seq() == orig && n.NB() == oldLength
+	n.prepareOrderedRemap(logicalLength)
+	sourceWordIndex := int64(-1)
+	var sourceWord uint64
+	output := int64(0)
+	it /*@@@*/ := sels.IteratorValue()
+	// @ sels.cntZeroBelow(int(it.i))
+	if !negate {
+		// @ ghost lastSrc := int64(-1)
+		// @ ghost srcs := seq[int]{}
+		// @ invariant acc(&it) && it.bm == sels && acc(sels.Inv(), 1/2) && sels.ISeq() == sq && sels.Len() == sl
+		// @ invariant 0 <= it.i && it.i <= uint64(sl) && (it.i < uint64(sl) ==> sels.Has(int(it.i)))
+		// @ invariant sels.CntBelow(int(it.i)) == int(output) && 0 <= output && output <= logicalLength && logicalLength <= oldLength
+		// @ invariant n.Mem() && n.NB() == oldLength && len(n.Seq()) == len(orig)
+		// @ invariant forall w int :: {n.Seq()[w]} 0 <= w && w < len(orig) && 64*int64(w) >= output ==> n.Seq()[w] == orig[w]
+		// @ invariant sourceWordIndex == -1 || (0 <= sourceWordIndex && sourceWordIndex < int64(len(orig)) && sourceWord == orig[sourceWordIndex])
+		// @ invariant output > 0 ==> output-1 <= lastSrc && lastSrc < int64(it.i)+int64(off) && (lastSrc < oldLength ==> sourceWordIndex == lastSrc/64)
+		// @ invariant len(srcs) == int(output)
+		// @ invariant forall p int :: {HasS(n.Seq(), oldLength, p)} 0 <= p && p < len(srcs) ==> HasS(n.Seq(), oldLength, p) == HasS(orig, oldLength, srcs[p])
+		// @ invariant forall r int :: {sels.Has(r)} sels.Has(r) && sels.CntBelow(r) < int(output) ==> srcs[sels.CntBelow(r)] == r+off
+		// @ decreases logicalLength - output
+		for output < logicalLength && it.HasNext() {
+			// @ ghost r0 := int(it.i)
+			source := int64(it.Next() + offset)
+			// @ sels.cntNext(r0, int(it.i))
+			// @ sels.cntInj(r0)
+			value := false
+			if source < oldLength {
+				if w := int64(uint64(source) / 64); w != sourceWordIndex {
+					// @ assert 64*w >= output
+					sourceWordIndex = w
+					sourceWord = /*@ unfolding n.Mem() in @*/ n.data[w]
+				}
+				value = sourceWord&(uint64(1)<<(uint64(source)%64)) != 0
+			}
+			// @ assert value == HasS(orig, oldLength, int(source))
+			// @ ghost sqn := n.Seq()
+			// @ unfold n.Mem()
+			// @ ghost s0 := seq(n.data)
+			// @ assert s0 == sqn
+			mask := uint64(1) << (uint64(output) % 64)
+			if value {
+				n.data[uint64(output)/64] |= mask
+			} else {
+				n.data[uint64(output)/64] &^= mask
+			}
+			// @ ghost s3 := seq(n.data)
+			// @ assert s3 == s0[int(output/64) = n.data[output/64]]
+			// @ assert forall q int :: {HasS(s3, oldLength, q)} q/64 != int(output/64) ==> HasS(s3, oldLength, q) == HasS(s0, oldLength, q)
+			// @ assert forall q int :: {HasS(s3, oldLength, q)} q/64 == int(output/64) && q != int(output) ==> HasS(s3, oldLength, q) == HasS(s0, oldLength, q)
+			// @ assert HasS(s3, oldLength, int(output)) == value
+			// @ fold n.Mem()
+			// @ assert n.Seq() == s3
+			// @ lastSrc = source
+			// @ srcs = srcs ++ seq[int]{int(source)}
+			output++
+		}
+		// @ ghost if output < logicalLength {
+		// @ 	assert int(it.i) == int(sl)
+		// @ }
+		// @ assert forall r int :: {sels.Has(r)} sels.Has(r) && sels.CntBelow(r) < int(logicalLength) ==> sels.CntBelow(r) < int(output)
+	} else {
+		selected := int64(-1)
+		if it.HasNext() {
+			// @ ghost r0 := int(it.i)
+			selected = int64(it.Next() + offset)
+			// @ sels.cntNext(r0, int(it.i))
+		}
+		// @ ghost selIdx := 0
+		// @ ghost lastSrc := int64(-1)
+		// @ ghost kept := seq[int]{}
+		// @ invariant acc(&it) && it.bm == sels && acc(sels.Inv(), 1/2) && sels.ISeq() == sq && sels.Len() == sl
+		// @ invariant 0 <= it.i && it.i <= uint64(sl) && (it.i < uint64(sl) ==> sels.Has(int(it.i)))
+		// @ invariant n.Mem() && n.NB() == oldLength && len(n.Seq()) == len(orig) && logicalLength == oldLength
+		// @ invariant 0 <= source && source <= oldLength && 0 <= selIdx && int64(selIdx) <= source && output == source-int64(selIdx)
+		// @ invariant selIdx == RankOff(sq, sl, off, int(source))
+		// @ invariant selected == -1 ==> int(it.i) == int(sl) && sels.CntBelow(int(sl)) == selIdx
+		// @ invariant selected != -1 ==> selected >= source && selected >= int64(off) && sels.Has(int(selected)-off) &&
+		// @ 	sels.CntBelow(int(selected)-off) == selIdx && int(it.i) > int(selected)-off && sels.CntBelow(int(it.i)) == selIdx+1
+		// @ invariant forall w int :: {n.Seq()[w]} 0 <= w && w < len(orig) && 64*int64(w) >= output ==> n.Seq()[w] == orig[w]
+		// @ invariant sourceWordIndex == -1 || (0 <= sourceWordIndex && sourceWordIndex < int64(len(orig)) && sourceWord == orig[sourceWordIndex])
+		// @ invariant output > 0 ==> output-1 <= lastSrc && lastSrc < source && sourceWordIndex == lastSrc/64
+		// @ invariant len(kept) == int(output)
+		// @ invariant forall p int :: {HasS(n.Seq(), oldLength, p)} 0 <= p && p < len(kept) ==> HasS(n.Seq(), oldLength, p) == HasS(orig, oldLength, kept[p])
+		// @ invariant forall q int :: {RankOff(sq, sl, off, q)} 0 <= q && int64(q) < source && !(q >= off && sels.Has(q-off)) ==>
+		// @ 	0 <= q-RankOff(sq, sl, off, q) && q-RankOff(sq, sl, off, q) < len(kept) && kept[q-RankOff(sq, sl, off, q)] == q
+		// @ decreases oldLength - source
+		for source := int64(0); source < oldLength; source++ {
+			if source == selected {
+				// @ assert int(source) >= off && sels.Has(int(source)-off)
+				// @ sels.cntSucc(int(source)-off)
+				// @ assert RankOff(sq, sl, off, int(source)+1) == selIdx+1
+				if it.HasNext() {
+					// @ ghost r0 := int(it.i)
+					// @ assert sels.Has(r0) && sels.CntBelow(r0) == selIdx+1 && r0 > int(selected)-off
+					selected = int64(it.Next() + offset)
+					// @ sels.cntNext(r0, int(it.i))
+					// @ assert int(selected) == r0+off && selected >= source+1 && selected >= int64(off)
+					// @ assert sels.Has(int(selected)-off) && sels.CntBelow(int(selected)-off) == selIdx+1
+					// @ assert int(it.i) > int(selected)-off && sels.CntBelow(int(it.i)) == selIdx+2
+				} else {
+					selected = -1
+					// @ assert int(it.i) == int(sl) && sels.CntBelow(int(sl)) == selIdx+1
+				}
+				// @ assert sels.Has(int(source)-off)
+				// @ assert forall q int :: {RankOff(sq, sl, off, q)} 0 <= q && int64(q) < source && !(q >= off && sels.Has(q-off)) ==>
+				// @ 	0 <= q-RankOff(sq, sl, off, q) && q-RankOff(sq, sl, off, q) < len(kept) && kept[q-RankOff(sq, sl, off, q)] == q
+				// @ assert forall q int :: {RankOff(sq, sl, off, q)} 0 <= q && int64(q) < source+1 && !(q >= off && sels.Has(q-off)) ==>
+				// @ 	0 <= q-RankOff(sq, sl, off, q) && q-RankOff(sq, sl, off, q) < len(kept) && kept[q-RankOff(sq, sl, off, q)] == q
+				// @ selIdx = selIdx + 1
+				continue
+			}
+			// @ ghost if source >= int64(off) {
+			// @ 	if selected != -1 {
+			// @ 		sels.cntGap(int(source)-off, int(selected)-off)
+			// @ 	} else if int(source)-off < int(sl) {
+			// @ 		sels.cntGap(int(source)-off, int(sl))
+			// @ 	}
+			// @ 	sels.cntSucc(int(source)-off)
+			// @ }
+			// @ assert RankOff(sq, sl, off, int(source)+1) == selIdx
+			// @ assert !(int(source) >= off && sels.Has(int(source)-off))
+			// @ assert RankOff(sq, sl, off, int(source)) == selIdx
+			if w := int64(uint64(source) / 64); w != sourceWordIndex {
+				// @ assert 64*w >= output
+				sourceWordIndex = w
+				sourceWord = /*@ unfolding n.Mem() in @*/ n.data[w]
+			}
+			value := sourceWord&(uint64(1)<<(uint64(source)%64)) != 0
+			// @ assert value == HasS(orig, oldLength, int(source))
+			// @ ghost sqn := n.Seq()
+			// @ unfold n.Mem()
+			// @ ghost s0 := seq(n.data)
+			// @ assert s0 == sqn
+			mask := uint64(1) << (uint64(output) % 64)
+			if value {
+				n.data[uint64(output)/64] |= mask
+			} else {
+				n.data[uint64(output)/64] &^= mask
+			}
+			// @ ghost s3 := seq(n.data)
+			// @ assert s3 == s0[int(output/64) = n.data[output/64]]
+			// @ assert forall q int :: {HasS(s3, oldLength, q)} q/64 != int(output/64) ==> HasS(s3, oldLength, q) == HasS(s0, oldLength, q)
+			// @ assert forall q int :: {HasS(s3, oldLength, q)} q/64 == int(output/64) && q != int(output) ==> HasS(s3, oldLength, q) == HasS(s0, oldLength, q)
+			// @ assert HasS(s3, oldLength, int(output)) == value
+			// @ fold n.Mem()
+			// @ assert n.Seq() == s3
+			// @ lastSrc = source
+			// @ kept = kept ++ seq[int]{int(source)}
+			// @ assert kept[int(source)-selIdx] == int(source)
+			// @ assert forall q int :: {RankOff(sq, sl, off, q)} 0 <= q && int64(q) < source+1 && !(q >= off && sels.Has(q-off)) ==>
+			// @ 	0 <= q-RankOff(sq, sl, off, q) && q-RankOff(sq, sl, off, q) < len(kept) && kept[q-RankOff(sq, sl, off, q)] == q
+			output++
+		}
+	}
+	n.finishOrderedRemap(output, logicalLength)
 }

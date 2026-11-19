@@ -185,8 +185,9 @@ pure func HasS(s seq[uint64], nb int64, r int) bool {
 // CntS is the number of set rows below m.
 ghost
 requires 0 <= m
+ensures 0 <= res && res <= m
 decreases m
-pure func CntS(s seq[uint64], nb int64, m int) int {
+pure func CntS(s seq[uint64], nb int64, m int) (res int) {
 	return m == 0 ? 0 : CntS(s, nb, m-1) + (HasS(s, nb, m-1) ? 1 : 0)
 }
 
@@ -294,4 +295,126 @@ func rankAt(sels seq[int64], m int, x int64, idx int) {
 	if m > 0 {
 		rankAt(sels, m-1, x, idx)
 	}
+}
+
+// Counting the bits of w inside a mask that keeps exactly bits [a, b).
+ghost
+requires 0 <= a && a <= b && b <= 64 && 0 <= k && k <= 64
+requires forall j int :: {bits.Bit(m, j)} 0 <= j && j < 64 ==> bits.Bit(m, j) == (a <= j && j < b)
+ensures bits.PcUpTo(w&m, k) == bits.PcUpTo(w, k < b ? k : b)-bits.PcUpTo(w, k < a ? k : a)
+decreases k
+func pcMask(w, m uint64, a, b, k int) {
+	if k > 0 {
+		pcMask(w, m, a, b, k-1)
+	}
+}
+
+// Every word boundary splits the row count like the word sums.
+ghost
+requires 0 <= nb && len(s) == int((nb+63)/64) && TailClear(s, nb)
+requires 0 <= m && m <= len(s)
+ensures forall j int :: {SumPc(s, j)} 0 <= j && j <= m ==> CntS(s, nb, 64*j) == SumPc(s, j)
+decreases m
+func cntAllWords(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntAllWords(s, nb, m-1)
+		cntWord(s, nb, m-1, 64)
+	}
+}
+
+// Same words with the same word count mean the same rows, whatever the bit
+// lengths: rows between the two lengths are tail bits, which are clear.
+ghost
+requires 0 <= nb1 && 0 <= nb2 && len(s) == int((nb1+63)/64) && len(s) == int((nb2+63)/64)
+requires TailClear(s, nb1) && TailClear(s, nb2)
+ensures forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} HasS(s, nb1, r) == HasS(s, nb2, r)
+decreases
+func sameWordsSameRows(s seq[uint64], nb1, nb2 int64) {
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb1) <= r && r < int(nb2) ==>
+		r/64 == len(s)-1 && nb1%64 != 0 && r%64 >= int(nb1%64)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb2) <= r && r < int(nb1) ==>
+		r/64 == len(s)-1 && nb2%64 != 0 && r%64 >= int(nb2%64)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb1) <= r && r < int(nb2) ==>
+		!bits.Bit(s[len(s)-1], r%64) && !HasS(s, nb2, r)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb2) <= r && r < int(nb1) ==>
+		!bits.Bit(s[len(s)-1], r%64) && !HasS(s, nb1, r)
+}
+
+// The number of set rows below m is between 0 and m, and grows with m.
+ghost
+requires 0 <= a && a <= b
+ensures 0 <= CntS(s, nb, a) && CntS(s, nb, a) <= CntS(s, nb, b) && CntS(s, nb, b)-CntS(s, nb, a) <= b-a
+ensures CntS(s, nb, a) <= a
+decreases b
+func cntMono(s seq[uint64], nb int64, a, b int) {
+	if b > a {
+		cntMono(s, nb, a, b-1)
+	} else {
+		cntLe(s, nb, a)
+	}
+}
+
+// The number of set rows below m is between 0 and m.
+ghost
+requires 0 <= m
+ensures 0 <= CntS(s, nb, m) && CntS(s, nb, m) <= m
+decreases m
+func cntLe(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntLe(s, nb, m-1)
+	}
+}
+
+// A set row a followed by unset rows up to b adds exactly one.
+ghost
+requires 0 <= a && a < b && HasS(s, nb, a)
+requires forall r int :: {HasS(s, nb, r)} a < r && r < b ==> !HasS(s, nb, r)
+ensures CntS(s, nb, b) == CntS(s, nb, a)+1
+decreases b
+func cntStep(s seq[uint64], nb int64, a, b int) {
+	if b > a+1 {
+		cntStep(s, nb, a, b-1)
+	}
+}
+
+// An equal count at a and b means no set row in [a, b).
+ghost
+requires 0 <= a && a <= b && CntS(s, nb, a) == CntS(s, nb, b)
+ensures forall r int :: {HasS(s, nb, r)} a <= r && r < b ==> !HasS(s, nb, r)
+decreases b
+func cntFlat(s seq[uint64], nb int64, a, b int) {
+	if b > a {
+		cntMono(s, nb, a, b-1)
+		cntFlat(s, nb, a, b-1)
+	}
+}
+
+// RankOff is the number of rows r + off below s, for set rows r.
+ghost
+requires 0 <= off
+decreases
+pure func RankOff(s seq[uint64], nb int64, off int, x int) int {
+	return x >= off ? CntS(s, nb, x-off) : 0
+}
+
+// The count of set rows is monotonic over [0, m].
+ghost
+requires 0 <= m
+ensures forall a, b int :: {CntS(s, nb, a), CntS(s, nb, b)} 0 <= a && a <= b && b <= m ==> CntS(s, nb, a) <= CntS(s, nb, b)
+decreases m
+func cntMonoAll(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntMonoAll(s, nb, m-1)
+	}
+}
+
+// Distinct set rows have distinct counts below them.
+ghost
+requires 0 <= a && HasS(s, nb, a) && 0 <= nb
+ensures forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && CntS(s, nb, r) == CntS(s, nb, a) ==> r == a
+decreases
+func cntInjS(s seq[uint64], nb int64, a int) {
+	cntMonoAll(s, nb, int(nb))
+	assert forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && r < a ==> CntS(s, nb, r+1) == CntS(s, nb, r)+1 && CntS(s, nb, r+1) <= CntS(s, nb, a)
+	assert forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && a < r ==> CntS(s, nb, a+1) == CntS(s, nb, a)+1 && CntS(s, nb, a+1) <= CntS(s, nb, r)
 }

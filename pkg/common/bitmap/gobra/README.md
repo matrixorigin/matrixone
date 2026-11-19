@@ -1,7 +1,7 @@
 # Gobra verification of the bitmap core
 
 `bitmap.go` is formally verified with [Gobra](https://github.com/viperproject/gobra).
-`bitmap_ext.go` is not verified. It holds copy, mask-based remap, serialization, and the code using `unsafe` and generics.
+`bitmap_ext.go` is not verified. It holds copy and clone, serialization and validation, conversions to arrays and strings, and the code using `unsafe` and generics.
 
 ```
 GOBRA_JAR=/path/to/gobra.jar Z3_EXE=/path/to/z3 ./gobra/verify.sh
@@ -28,6 +28,11 @@ For every method in `bitmap.go`:
   - `RemapOrdered(sels, negate)`, for a strictly increasing, non-negative `sels`:
     - `negate == false`: `Len` becomes `min(Len, len(sels))`, and row `i` becomes old row `sels[i]`. Rows at or beyond `len(sels)` are clear.
     - `negate == true`: `Len` is unchanged. Each row not in `sels` moves to its position minus `Rank(sels, s)`, the number of selected rows below it, and the freed tail is clear.
+  - `RemapMaskOrdered(WithOffset)(sels, negate, offset)`: like `RemapOrdered`, where the selected rows are `r + offset` for the set rows `r` of `sels`, and a row's rank is `sels.CntBelow(r)`, the number of set rows of `sels` below it.
+  - `Filter(sels)`: returns a bitmap of length `len(sels)` whose row `i` is old row `sels[i]`.
+  - `IsSame(b)`: true exactly when the data words are equal. Equal words imply the same rows. Bit lengths are not compared, so the same rows stored in a different number of words compare unequal.
+  - `CountRange(start, end)`: the number of set rows in `[start, min(end, Len))`.
+  - `AnySetNotIn(other, start, end)`: whether some row in `[start, end)` is set in `n` and not in `other`.
   - `CountIsRows`: `Count()` is the number of set rows. `EmptyIsNone`: `IsEmpty()` is true exactly when no row is set.
 
 The proof assumes callers meet the preconditions, which the Go code does not check. `Add` and `AddRange` need rows below `Len`. `Or` and `And` need `b != n`. `Next` must be called only while `HasNext()` is true. The code in `bitmap_ext.go` is trusted to keep `Inv`.
@@ -51,3 +56,7 @@ All lemmas in `bitmap_lemmas.gobra` are proven. None of them is trusted.
   - For a signed value, convert first (`uint64(x)/64`). Signed division adds a sign fix-up, which made `RemapOrdered` 25% slower until it was converted.
 - Write low masks as `^uint64(0) >> (64-t)`, not `(1<<t)-1`. The subtraction defeats the axiom triggers.
 - Avoid `min`, `max`, `clear`, and `range` over an int. Gobra rejects them.
+- Let lemmas and read-only methods take a smaller permission fraction than the caller holds, for example ⅛ or ¼. A callee that takes all of a caller's fraction makes Viper forget the bitmap's contents.
+- Keep quantified facts out of lemma postconditions unless they are needed. A redundant `forall r :: Has(r) == old(Has(r))` turned a 40-second run into one that never finished.
+- Prove fiddly arithmetic in small, heap-free lemmas in `bitmap_lemmas.gobra`.
+- When a method is slow, run with `--assertTimeout 30000`. A single overloaded check then fails with its line number instead of hanging the whole run.
