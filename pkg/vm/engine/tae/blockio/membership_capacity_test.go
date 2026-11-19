@@ -26,7 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -135,6 +138,8 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(proc.Free)
 	typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}
 	input := batch.NewWithSchema(false, nil, typs)
 	t.Cleanup(func() { input.Clean(mp) })
@@ -157,6 +162,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		selective      bool
 		bypass         bool
 		predicateError bool
+		realPredicate  bool
 		ordinary       bool
 		tombstone      bool
 		exact          bool
@@ -168,6 +174,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		{name: "early output pressure", limit: 64, selective: true, bypass: true},
 		{name: "late output pressure", limit: 96, selective: true, bypass: true},
 		{name: "callback capacity error", limit: 128, predicateError: true},
+		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true},
 		{name: "generic ordinary fallback", limit: 128, ordinary: true},
 		{name: "tombstoned ordinary fallback", limit: 128, ordinary: true, tombstone: true},
 		{name: "total tombstoned visibility once", limit: 128, tombstone: true},
@@ -209,8 +216,34 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				t.Cleanup(func() { request.FreeMembership(mp); cache.Free(mp) })
 				memberCalls, predicateCalls := 0, 0
 				var memberUsed uint64
+				var evaluate func(*batch.Batch, []int) (engine.ReaderFilterResult, error)
+				if tc.realPredicate {
+					fn, err := function.GetFunctionByName(proc.Ctx, "isnull", []types.Type{typs[0]})
+					require.NoError(t, err)
+					exprs, err := colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, []*plan.Expr{{
+						Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{
+							Func: &plan.ObjectRef{ObjName: "isnull", Obj: fn.GetEncodedOverloadID()},
+							Args: []*plan.Expr{{Typ: typs[0].PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+						}},
+					}}, allocation)
+					require.NoError(t, err)
+					t.Cleanup(func() {
+						for _, expr := range exprs {
+							expr.Free()
+						}
+					})
+					var scratch []int64
+					var parameter vector.FunctionParameterWrapper[bool]
+					evaluate = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+						rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, exprs, allocation, &scratch, &parameter, nil, nil, nil)
+						return engine.ReaderFilterResult{Sels: rows, All: all}, err
+					}
+				}
 				request.Select = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 					predicateCalls++
+					if evaluate != nil {
+						return evaluate(bat, []int{0})
+					}
 					if tc.predicateError && enabled {
 						return engine.ReaderFilterResult{}, mpool.ErrAllocationAccountCapacity
 					}
@@ -258,6 +291,9 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				}
 				require.NoError(t, err, "membership=%v", enabled)
 				wantRows, wantCalls := 8, 1
+				if tc.realPredicate {
+					wantRows = 0
+				}
 				if tc.tombstone {
 					wantRows--
 				}

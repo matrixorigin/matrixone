@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -214,14 +216,49 @@ type localDomainFoldContext struct {
 	cache          *StatsCache
 	hints          string
 	statementHints string
+	hintReads      int
 }
 
 func (c *localDomainFoldContext) GetStatsCache() *StatsCache { return c.cache }
 func (c *localDomainFoldContext) ResolveVariable(name string, system, global bool) (interface{}, error) {
 	if name == "optimizer_hints" {
+		c.hintReads++
 		return c.hints, nil
 	}
 	return c.CompilerContext.ResolveVariable(name, system, global)
+}
+
+func TestLocalDomainBoundPreparedPlanningSkipsPostFoldPass(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		reads := make([]int, 2)
+		for join := range 2 {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := &localDomainFoldContext{CompilerContext: mock.CurrentContext(), cache: NewStatsCache()}
+			sql := "select l.l_orderkey from lineitem l"
+			if join != 0 {
+				sql += " join part p on l.l_partkey = p.p_partkey"
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			if bound {
+				plan, err := BuildPreparedExecutionPlan(ctx, stmt, nil, nil)
+				require.NoError(t, err)
+				require.NotNil(t, plan.Plan.GetQuery())
+			} else {
+				_, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+				require.NoError(t, err)
+			}
+			reads[join] = ctx.hintReads
+		}
+		// Both SQL shapes resolve builder hints. Only the ordinary joined
+		// SELECT may resolve them again for post-fold domain derivation.
+		if bound {
+			require.Equal(t, reads[0], reads[1], "bound planning must not enter the ordinary post-fold pass")
+		} else {
+			require.Equal(t, reads[0]+1, reads[1], "ordinary joined SELECT must still enter post-fold analysis")
+		}
+	}
 }
 func (c *localDomainFoldContext) GetContext() context.Context {
 	ctx := c.CompilerContext.GetContext()

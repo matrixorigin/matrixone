@@ -62,7 +62,9 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool, inpu
 		panic(moerr.NewInternalError(opt.ctx.GetContext(), pn.String()))
 	}
 	opt.qry = qry.Query
-	opt.skipLocalDomains = isPrepareStmt
+	skipLocalDomains := opt.skipLocalDomains
+	opt.skipLocalDomains = skipLocalDomains || isPrepareStmt
+	defer func() { opt.skipLocalDomains = skipLocalDomains }()
 	return opt.optimize()
 }
 

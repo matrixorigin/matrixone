@@ -184,3 +184,20 @@ If post-read dictionary publication exhausts optional capacity, preserve the
 already read batch for the exact join and record the publication fallback.
 Successful publication still prunes; callback and I/O errors retain their usual
 propagation. A failed publication never destroys or repeats the required read.
+
+The same retryable-capacity classification covers optional maps, view metadata,
+gathers and post-read publication. A proven-total predicate capacity refusal
+with live optional physical-map storage first leaves the pinned scope and frees
+that storage, then uses the existing ordinary predicate fallback. Capacity
+errors without optional storage, semantic callback errors and I/O errors keep
+their normal propagation. No unknown/fallible callback is made replayable.
+
+Post-read dictionary-key normalization is optional probe work. On capacity
+refusal, keep the completed batch, bypass that probe with the existing pass
+state and allow any other healthy domain to prune. Mandatory source-building
+normalization and non-capacity errors retain their existing behavior.
+
+The prepared optimizer's constructor mode survives the public Optimize call
+used by bound planning, even though that call passes isPrepareStmt=false.
+Per-call prepared suppression is restored afterward rather than becoming sticky
+when a normal optimizer is reused. Post-fold derivation remains ordinary-only.

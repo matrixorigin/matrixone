@@ -387,6 +387,77 @@ func TestLocalDomainMaskCompositionAndCounters(t *testing.T) {
 	}
 }
 
+func TestLocalDomainDictionaryKeyCapacityRefusal(t *testing.T) {
+	for _, limit := range []uint64{48, 128} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetMessageBoard(message.NewMessageBoard())
+			t.Cleanup(proc.Free)
+			budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			t.Cleanup(generation.Close)
+			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
+			require.NotNil(t, domain)
+			t.Cleanup(domain.Close)
+			source, err := domain.Begin(proc, 0, 1)
+			require.NoError(t, err)
+			keys := testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+			t.Cleanup(func() { keys.Free(proc.Mp()) })
+			require.NoError(t, source.AddVector(proc.Ctx, keys, 1))
+			source.Complete(false)
+			bloom, _, err := domain.Wait(proc.Ctx)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			base, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), allocation)
+			require.NoError(t, err)
+			t.Cleanup(func() { base.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendFixedList(base, []int64{1, 2, 3, 4}, nil, proc.Mp()))
+			selected := make([]*vector.Vector, 1)
+			admitted, err := vector.TrySelectDictionaryVectors([]*vector.Vector{base}, selected, []int64{0, 2}, 4, proc.Mp(), allocation)
+			require.NoError(t, err)
+			require.True(t, admitted)
+			input := batch.NewOffHeapWithSize(1)
+			input.Vecs = selected
+			input.SetRowCount(2)
+			scan := &TableScan{OutputAllocation: allocation, ctr: container{buf: input,
+				domainProbes: []localDomainProbeState{{domain: domain, bloom: bloom, mask: make([]uint8, 2)}},
+			}}
+			t.Cleanup(func() { scan.ctr.buf.Clean(proc.Mp()) })
+			require.NoError(t, scan.applyLocalDomains(proc))
+			if limit == 48 {
+				require.Same(t, input, scan.ctr.buf)
+				require.Same(t, selected[0], scan.ctr.buf.Vecs[0])
+				require.True(t, selected[0].IsDictionary())
+				require.Equal(t, 2, scan.ctr.buf.RowCount())
+				require.True(t, scan.ctr.domainProbes[0].pass)
+				require.EqualValues(t, 2, scan.ctr.domainProbes[0].bypassed)
+				require.EqualValues(t, 48, account.Snapshot().Used)
+			} else {
+				require.False(t, scan.ctr.domainProbes[0].pass)
+				want := 1
+				other := int64(3)
+				if bloom.Test(types.EncodeInt64(&other)) {
+					want++
+				}
+				require.Equal(t, want, scan.ctr.buf.RowCount())
+			}
+			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](scan.ctr.buf.Vecs[0], 0))
+		})
+	}
+}
+
 func BenchmarkLocalDomainMaskConsumer(b *testing.B) {
 	for _, nullable := range []bool{false, true} {
 		b.Run(fmt.Sprintf("nullable=%t", nullable), func(b *testing.B) {

@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -97,7 +96,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		var physical []int64
 		if !member.All {
 			if err := s.Physical.PreExtend(count, mp); err != nil {
-				if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+				if mpool.IsRetryableAllocationCapacity(err) {
 					fallback = true
 					return nil
 				}
@@ -107,7 +106,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			physical = vector.MustFixedColNoTypeCheck[int64](s.Physical)
 			copy(physical, member.Sels)
 			admitted, err := s.Scope.Bind(s.Sources, s.Views, predicates, physical, inputs[0].Length(), mp, request.OutputAllocation)
-			if err != nil && !errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			if err != nil && !mpool.IsRetryableAllocationCapacity(err) {
 				return err
 			}
 			if admitted {
@@ -124,6 +123,13 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		output.SetRowCount(count)
 		residual, err := request.Select(output, predicates)
 		if err != nil {
+			// Only this proven-total route may retry predicates. Release its
+			// optional map/views before the ordinary evaluation; without live
+			// scratch a callback capacity error has no staging work to reclaim.
+			if mpool.IsRetryableAllocationCapacity(err) && s.Physical.Allocated() > 0 {
+				fallback = true
+				return nil
+			}
 			return err
 		}
 		selected := count
@@ -158,7 +164,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		}
 		output.SetRowCount(selected)
 		if err := borrowed.gather(output, physical, member.All && residual.All, request, mp); err != nil {
-			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			if mpool.IsRetryableAllocationCapacity(err) {
 				fallback = true
 				return nil
 			}
@@ -170,7 +176,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			readRows = physical
 		}
 		if err := loadMembershipColumns(ctx, info, columns, typs, late, readRows, policy, output, mp, fs, request); err != nil {
-			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			if mpool.IsRetryableAllocationCapacity(err) {
 				fallback = true
 				return nil
 			}

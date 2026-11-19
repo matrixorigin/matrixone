@@ -15,7 +15,6 @@
 package table_scan
 
 import (
-	"errors"
 	"math"
 	"slices"
 	"strings"
@@ -167,7 +166,7 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
 		next, _, err := colexec.SelectBatchColumns(bat, nil, rows, proc.Mp(), tableScan.OutputAllocation, true)
 		if err != nil {
-			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			if mpool.IsRetryableAllocationCapacity(err) {
 				// The join remains the correctness owner. Optional publication
 				// must not invalidate an already completed ordinary read.
 				if tableScan.OpAnalyzer != nil {
@@ -215,6 +214,13 @@ func (tableScan *TableScan) selectLocalDomains(proc *process.Process, bat *batch
 				matched = p.bloom.TestFixedVectorInto(key, p.mask)
 				return nil
 			}); err != nil {
+				if mpool.IsRetryableAllocationCapacity(err) {
+					// Optional key normalization must not invalidate a completed
+					// read. Other domains can still prune through their own masks.
+					p.pass = true
+					p.bypassed += int64(bat.RowCount())
+					continue
+				}
 				return nil, false, err
 			}
 		}
