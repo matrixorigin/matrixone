@@ -17,6 +17,7 @@ package bitmap
 import (
 	"bytes"
 	"encoding"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -40,6 +41,28 @@ func (n *Bitmap) InitWith(m *Bitmap) {
 	n.numBits = m.numBits
 	n.popCount = m.popCount
 	n.data = append([]uint64(nil), m.data...)
+}
+
+// InitWithInvertedBits sets n to length bits read LSB-first from src
+// starting at bit offset, each bit inverted. It turns an Arrow validity
+// bitmap (1 = valid) into a null bitmap (1 = null). src must hold at least
+// offset+length bits.
+func (n *Bitmap) InitWithInvertedBits(src []byte, offset, length int) {
+	n.InitWithSize(int64(length))
+	var count int64
+	for w := range n.data {
+		bit := offset + w*64
+		var buf [9]byte
+		copy(buf[:], src[bit>>3:])
+		shift := uint(bit & 7)
+		word := ^(binary.LittleEndian.Uint64(buf[:8])>>shift | uint64(buf[8])<<(64-shift))
+		if rem := length - w*64; rem < 64 {
+			word &= uint64(1)<<uint(rem) - 1
+		}
+		n.data[w] = word
+		count += int64(bits.OnesCount64(word))
+	}
+	n.popCount = count
 }
 
 func (n *Bitmap) Clone() *Bitmap {

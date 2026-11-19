@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"math"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,7 +89,7 @@ func (v *Vector) AreaBackingKind() BackingKind {
 }
 
 func (v *Vector) HasBorrowedBacking() bool {
-	return v != nil && (v.dataLease != nil || v.areaLease != nil || v.nsp.HasBorrowedValidity())
+	return v != nil && (v.dataLease != nil || v.areaLease != nil)
 }
 
 func (v *Vector) BorrowedAccountedBytes() int64 {
@@ -104,7 +103,6 @@ func (v *Vector) BorrowedAccountedBytes() int64 {
 	if v.areaLease != nil && !sameBufferLease(v.areaLease, v.dataLease) {
 		bytes += v.areaLease.AccountedBytes()
 	}
-	bytes += v.nsp.BorrowedAccountedBytes()
 	return bytes
 }
 
@@ -165,22 +163,6 @@ func (v *Vector) InstallBorrowedArea(area []byte, lease BufferLease) error {
 	v.area = area
 	v.areaLease = lease
 	v.cantFreeArea = true
-	return nil
-}
-
-// PrepareBorrowedValidity reserves the owned COW destination before a
-// borrowed Arrow validity view is published. Nulls' legacy mutation APIs
-// cannot return allocation errors, so admission must happen here while the
-// bridge can still fail transactionally. The bitmap remains logically empty
-// until the validity view is materialized.
-func (v *Vector) PrepareBorrowedValidity(rows int, mp *mpool.MPool) error {
-	if v == nil || mp == nil || rows < 0 || rows > math.MaxInt-63 ||
-		v.nsp.HasBorrowedValidity() || v.nsp.Len() != 0 {
-		return moerr.NewInvalidInputNoCtx("invalid borrowed validity reservation")
-	}
-	bitmap := v.nsp.GetBitmap()
-	bitmap.Reset()
-	bitmap.Reserve(rows)
 	return nil
 }
 

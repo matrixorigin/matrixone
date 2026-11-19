@@ -3780,8 +3780,7 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 
 func (v *Vector) NeedDup() bool {
 	return v.IsDictionary() || v.AreaBackingKind() != OwnedMPoolUnique ||
-		v.DataBackingKind() != OwnedMPoolUnique ||
-		v.nsp.HasBorrowedValidity()
+		v.DataBackingKind() != OwnedMPoolUnique
 }
 
 // make sure the type check is done before calling this function
@@ -4549,7 +4548,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	} else if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
-	v.freeBitmapStorage()
 	v.class = FLAT
 	v.data = nil
 	v.area = nil
@@ -4699,27 +4697,15 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		v.HasNull() && dataLength%types.VarlenaSize == 0 {
 		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
 		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
-			if v.nsp.HasBorrowedValidity() {
-				// Keep the borrowed validity view read-only. Its legacy bitmap
-				// materialization is an admitted COW boundary, not part of this
-				// read-only marshal check.
-				for index, descriptor := range descriptors {
-					if v.IsNull(uint64(index)) && !descriptor.IsSmall() {
-						normalizeNullVarlen = true
-						break
-					}
+			iterator := v.nsp.GetBitmap().IteratorValue()
+			for iterator.HasNext() {
+				row := iterator.Next()
+				if row >= uint64(len(descriptors)) {
+					break
 				}
-			} else {
-				iterator := v.nsp.GetBitmap().IteratorValue()
-				for iterator.HasNext() {
-					row := iterator.Next()
-					if row >= uint64(len(descriptors)) {
-						break
-					}
-					if !descriptors[row].IsSmall() {
-						normalizeNullVarlen = true
-						break
-					}
+				if !descriptors[row].IsSmall() {
+					normalizeNullVarlen = true
+					break
 				}
 			}
 		}
@@ -4748,13 +4734,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 			(*types.Varlena)(unsafe.Pointer(&normalizedVarlenData[0])),
 			len(descriptors),
 		)
-		if v.nsp.HasBorrowedValidity() {
-			for index := range normalizedDescriptors {
-				if v.IsNull(uint64(index)) {
-					normalizedDescriptors[index] = types.Varlena{}
-				}
-			}
-		} else {
+		{
 			iterator := v.nsp.GetBitmap().IteratorValue()
 			for iterator.HasNext() {
 				row := iterator.Next()
@@ -5972,15 +5952,7 @@ func (v *Vector) dup(
 		}
 	}
 	w.length = v.length
-	if v.GetNulls().HasBorrowedValidity() {
-		w.GetNulls().GetBitmap().InitWithSize(nullLength)
-		v.GetNulls().Foreach(func(row uint64) bool {
-			w.GetNulls().GetBitmap().Add(row)
-			return true
-		})
-	} else {
-		w.GetNulls().InitWith(v.GetNulls())
-	}
+	w.GetNulls().InitWith(v.GetNulls())
 	w.GetGrouping().InitWith(v.GetGrouping())
 	if err := v.copyBinaryStringTo(w, mp); err != nil {
 		w.Free(mp)
@@ -11490,27 +11462,11 @@ func (v *Vector) CoversLogicalRows(start, rows int) bool {
 
 func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {
 	length := end - start
-	if v.nsp.HasBorrowedValidity() {
-		if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
-			// Retained/asynchronous windows provide an MPool and must reserve
-			// their independent COW destination before sharing the source view.
-			if mp != nil {
-				if err := w.PrepareBorrowedValidity(length, mp); err != nil {
-					return err
-				}
-			}
-			if _, err := v.nsp.InitBorrowedWindow(&w.nsp, start, end); err != nil {
-				return err
-			}
+	if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
+		if err := w.PreExtendNulls(length, mp); err != nil {
+			return err
 		}
-	} else {
-		hasNull := v.nsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
-		if hasNull {
-			if err := w.PreExtendNulls(length, mp); err != nil {
-				return err
-			}
-			nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
-		}
+		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	}
 	hasGrouping := v.gsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
 	if hasGrouping {

@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -571,35 +570,21 @@ func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
 
 func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		column   int
-		row      uint64
-		want     bool
-		borrowed bool
+		name   string
+		column int
+		row    uint64
+		want   bool
 	}{
 		{name: "first key sentinel", column: 0, row: 0, want: true},
 		{name: "non-key sentinel", column: 1, row: 0},
 		{name: "out-of-range key bit", column: 0, row: 513},
-		{name: "borrowed key sentinel", column: 0, want: true, borrowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			input := testutil.NewBatch([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, true, 513, proc.Mp())
 			defer input.Clean(proc.Mp())
-			if tc.borrowed {
-				validity := make([]byte, (input.RowCount()+7)/8)
-				for i := range validity {
-					validity[i] = 0xff
-				}
-				validity[0] &^= 1
-				lease, err := bufferlease.NewRefCounted(validity, int64(len(validity)), nil)
-				require.NoError(t, err)
-				defer lease.Release()
-				require.NoError(t, input.Vecs[0].GetGrouping().InstallBorrowedValidity(validity, 0, input.RowCount(), 1, lease))
-			} else {
-				input.Vecs[tc.column].GetGrouping().Add(tc.row)
-			}
+			input.Vecs[tc.column].GetGrouping().Add(tc.row)
 			expr := newExpr(0, types.T_int64.ToType())
 			expr.GetCol().RelPos = 1 // Direct keys still resolve against the single build batch.
 			executor, err := colexec.NewExpressionExecutor(proc, expr)
@@ -638,9 +623,6 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 			}
 			require.Equal(t, uint64(inputBytes)+wantMapBytes, projected)
 			require.Equal(t, tc.want, recoveryGrouping)
-			if tc.borrowed {
-				require.True(t, input.Vecs[0].GetGrouping().HasBorrowedValidity(), "projection must not mutate upstream-owned metadata")
-			}
 
 			// A sentinel first appearing in a later input changes the projected
 			// map kind before that input is copied into the retained relation.

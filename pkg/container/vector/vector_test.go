@@ -7469,7 +7469,7 @@ func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
 }
 
 func BenchmarkConstSetSelection(b *testing.B) {
-	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "borrowed_null", "text", "zero"} {
+	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "text", "zero"} {
 		b.Run(shape, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
@@ -7495,13 +7495,6 @@ func BenchmarkConstSetSelection(b *testing.B) {
 			b.Cleanup(func() { source.Free(mp) })
 			if shape == "flat_null" {
 				source.GetNulls().Add(1)
-			}
-			if shape == "borrowed_null" {
-				validity := []byte{1}
-				lease, err := NewRefCountedBufferLease(validity, 1, nil)
-				require.NoError(b, err)
-				b.Cleanup(lease.Release)
-				require.NoError(b, source.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
 			}
 			destination := NewConstNull(typ, 0, mp)
 			b.Cleanup(func() { destination.Free(mp) })

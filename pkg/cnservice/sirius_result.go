@@ -82,11 +82,8 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 			}
 		}
 		vec.SetLength(int(result.Rows))
-		// Reserve bitmap allocation while errors can still unwind this batch.
 		if len(v.Nulls) != 0 {
-			if err = vec.PrepareBorrowedValidity(int(result.Rows), mp); err != nil {
-				return bat, err
-			}
+			vec.GetNulls().InitWithSize(int(result.Rows))
 			for row := uint32(0); row < result.Rows; row++ {
 				if v.Nulls[row/8]&(1<<(row%8)) != 0 {
 					vec.SetNull(uint64(row))

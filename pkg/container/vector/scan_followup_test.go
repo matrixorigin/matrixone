@@ -60,10 +60,7 @@ func scanFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, pat
 		}
 	}
 	if backing == "borrowed" && nulls != 0 {
-		lease, err := NewRefCountedBufferLease(nil, 0, nil)
-		require.NoError(tb, err)
-		tb.Cleanup(lease.Release)
-		require.NoError(tb, v.GetNulls().InstallBorrowedValidity(validity, 3, len(values), nulls, lease))
+		v.GetNulls().GetBitmap().InitWithInvertedBits(validity, 3, len(values))
 	}
 	return v
 }
@@ -114,9 +111,6 @@ func TestScanFollowupMinMax(t *testing.T) {
 							require.Equal(t, before, after)
 							if backing == "borrowed" && n != 0 {
 								require.NotNil(t, v.dataLease)
-								if v.HasNull() {
-									require.True(t, v.GetNulls().HasBorrowedValidity())
-								}
 							}
 						}
 					})

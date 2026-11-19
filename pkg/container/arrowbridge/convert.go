@@ -390,7 +390,7 @@ func convertFixed(
 	if err != nil {
 		return nil, stats, err
 	}
-	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
+	if err = installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, stats, err
 	}
@@ -453,15 +453,11 @@ func newArrayDataLease(
 	return lease, nil
 }
 
-func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.MPool, nullCount int) error {
+// installValidity converts the Arrow validity bitmap (1 = valid) into the
+// vector's null bitmap (1 = null) by flipping bits.
+func installValidity(column arrow.Array, vec *vector.Vector, nullCount int) error {
 	if nullCount == 0 {
 		return nil
-	}
-	// MO nulls use an inverted bitmap. Reserve the possible legacy-materialized
-	// bitmap before publishing the readonly Arrow validity view, so a later
-	// compatibility consumer cannot allocate outside statement admission.
-	if err := vec.PrepareBorrowedValidity(column.Len(), mp); err != nil {
-		return err
 	}
 	data := column.Data()
 	buffers := data.Buffers()
@@ -469,13 +465,11 @@ func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.M
 		return moerr.NewInvalidInputNoCtx("Arrow validity buffer is missing")
 	}
 	validity := buffers[0].Bytes()
-	lease, err := newArrayDataLease(data, validity, int64(buffers[0].Cap()))
-	if err != nil {
-		return err
+	if data.Offset() < 0 || (data.Offset()+column.Len()+7)/8 > len(validity) {
+		return moerr.NewInvalidInputNoCtx("Arrow validity buffer is too short")
 	}
-	err = vec.GetNulls().InstallBorrowedValidity(validity, data.Offset(), column.Len(), nullCount, lease)
-	lease.Release()
-	return err
+	vec.GetNulls().GetBitmap().InitWithInvertedBits(validity, data.Offset(), column.Len())
+	return nil
 }
 
 type varlenView struct {
@@ -591,7 +585,7 @@ func convertVarlen(
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
-	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
+	if err = installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}

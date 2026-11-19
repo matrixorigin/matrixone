@@ -131,56 +131,6 @@ func TestUnionBatchBinaryDomainNullablePrefix(t *testing.T) {
 	}
 }
 
-func TestUnionBatchBinaryDomainBorrowedDestination(t *testing.T) {
-	for _, accounted := range []bool{false, true} {
-		t.Run(fmt.Sprintf("accounted=%t", accounted), func(t *testing.T) {
-			mp, dst, _ := binaryAppendDestination(t, accounted)
-			require.NoError(t, dst.PreExtend(3, mp))
-			require.NoError(t, AppendBytesList(dst, [][]byte{[]byte("old-a"), []byte("old-null"), []byte("old-b")}, nil, mp))
-			require.Less(t, dst.Capacity(), 5, "the append must force payload growth")
-			require.NoError(t, dst.PrepareBorrowedValidity(3, mp))
-			validity := []byte{0b00000101}
-			releases := 0
-			lease, err := NewRefCountedBufferLease(validity, 1, func() { releases++ })
-			require.NoError(t, err)
-			incomingReleased := false
-			t.Cleanup(func() {
-				if !incomingReleased {
-					lease.Release()
-				}
-			})
-			t.Cleanup(func() {
-				dst.Free(mp)
-				require.Equal(t, 1, releases)
-			})
-			require.NoError(t, dst.GetNulls().InstallBorrowedValidity(validity, 0, 3, 1, lease))
-			lease.Release()
-			incomingReleased = true
-			require.True(t, dst.GetNulls().HasBorrowedValidity())
-			require.Zero(t, releases)
-			src := NewVec(types.T_varchar.ToType())
-			t.Cleanup(func() { src.Free(mp) })
-			// An all-valid source reaches payload growth without a NULL-capacity
-			// preflight that would independently materialize the destination.
-			require.NoError(t, AppendBytesList(src, [][]byte{[]byte("new-a"), []byte("new-b")}, nil, mp))
-			require.NoError(t, dst.PreflightUnionBatchBinaryString(src, 0, 2, nil, mp))
-			require.False(t, dst.GetNulls().HasBorrowedValidity())
-			require.Equal(t, 1, releases, "validity materializes before payload growth")
-			require.NoError(t, dst.UnionBatch(src, 0, 2, nil, mp))
-			require.Equal(t, 5, dst.Length())
-			require.GreaterOrEqual(t, dst.Capacity(), 5)
-			for row, value := range []string{"old-a", "", "old-b", "new-a", "new-b"} {
-				require.Equal(t, row == 1, dst.IsNull(uint64(row)), "row %d", row)
-				if row != 1 {
-					require.Equal(t, value, dst.GetStringAt(row), "row %d", row)
-				}
-				require.Equal(t, types.RuntimeStringInherit, dst.GetRuntimeStringDomainAt(row))
-			}
-			require.False(t, dst.HasBinaryStringRows())
-		})
-	}
-}
-
 func BenchmarkUnionBatchBinaryDomainNullablePrefix(b *testing.B) {
 	for _, prefix := range []int{64, 4096} {
 		for _, mode := range []string{"inherit", "binary", "conflict"} {

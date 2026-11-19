@@ -191,16 +191,8 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 		if err != nil {
 			return nil, err
 		}
-		validityBytes := source.nsp.BorrowedAccountedBytes()
-		if validityBytes < 0 {
-			return nil, moerr.NewInvalidInputNoCtx("invalid dictionary validity pin size")
-		}
-		upper := pinned + uint64(validityBytes)
-		if upper < pinned {
-			return nil, moerr.NewInvalidInputNoCtx("dictionary pin size overflows")
-		}
-		if upper > 0 {
-			reservation, err = account.account.ReserveCapacityWithClass(upper, account.capacityClass, account.owner, account.dataSite)
+		if pinned > 0 {
+			reservation, err = account.account.ReserveCapacityWithClass(pinned, account.capacityClass, account.owner, account.dataSite)
 			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
 				if !allowCopy {
 					return nil, errDictionaryRequiresCopy
@@ -245,7 +237,7 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 			return nil, err
 		}
 	}
-	retained := retainedVectorBytes(snapshot) // eagerly owns any borrowed validity metadata
+	retained := retainedVectorBytes(snapshot)
 	var pin *mpool.CapacityLease
 	if reservation != nil {
 		pinned, err = dictionaryForeignPinBytes(snapshot, account)
