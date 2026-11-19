@@ -28,6 +28,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
+	proc, allocation, _ := dependentTestAllocation(t)
+	typ := types.T_varchar.ToType()
+	input := batch.NewWithSize(3)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	args := make([]*plan.Expr, 3)
+	for i, values := range [][]string{{"aa", "bc", "de"}, {"b", "b", "b"}, {"c", "c", "c"}} {
+		input.Vecs[i] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		args[i] = &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}}
+	}
+	input.SetRowCount(3)
+	executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "prefix_between", args...), allocation)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	batches := []*batch.Batch{input}
+	result, err := executor.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true, false}, vector.MustFixedColNoTypeCheck[bool](result))
+	require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Same(t, allocation, result.AllocationAccountSelection())
+	for _, arg := range input.Vecs {
+		arg.GetNulls().Add(1)
+		result, err = executor.Eval(proc, batches, nil)
+		require.NoError(t, err)
+		require.True(t, result.IsNull(1), "a NULL value or bound needs admitted validity storage")
+		arg.GetNulls().Del(1)
+	}
+}
+
 func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
 	for _, oid := range []types.T{types.T_int64, types.T_decimal128} {
 		t.Run(oid.String(), func(t *testing.T) {
