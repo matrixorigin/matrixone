@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -87,6 +88,34 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 	for i := 0; i < window.Length(); i++ {
 		require.Equal(t, source.GetStringAt(windowStart+i), window.GetStringAt(i))
 	}
+	meta := BuildMetaData(1, 1)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(rows)
+	col := block.ColumnMeta(0)
+	col.setDataType(uint8(types.T_varchar))
+	col.setLocation(extent)
+	var spills []*testColumnWindowSpill
+	factory := func(context.Context) (ColumnWindowSpill, error) {
+		file, err := os.CreateTemp(t.TempDir(), "chunked-window-*")
+		if err != nil {
+			return nil, err
+		}
+		spill := &testColumnWindowSpill{File: file}
+		spills = append(spills, spill)
+		return spill, nil
+	}
+	budgeted, admitted, err := ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, []uint16{0}, windowStart, 7, 1<<20,
+		fileservice.SkipAllCache, fs, mp, factory,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 7, admitted)
+	require.Len(t, spills, 1, "both overlapping chunks use one spill file")
+	require.True(t, spills[0].closed)
+	for i := 0; i < admitted; i++ {
+		require.Equal(t, source.GetStringAt(windowStart+i), budgeted.Vecs[0].GetStringAt(i))
+	}
+	budgeted.Clean(mp)
 	_, err = readChunkedColumnWindow(
 		ctx, name, extent, -1, 1, fileservice.SkipAllCache, fs, mp,
 	)

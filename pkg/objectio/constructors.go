@@ -359,16 +359,10 @@ func MaterializeCachedVectorWindow(
 		)
 	}
 	// A checked persisted vector may legally contain overlapping varlena
-	// descriptors (broadcast/shrink representations). Union would copy every
-	// logical value and can turn one compact area into rows*area bytes. Preserve
-	// the bounded physical representation for that shape instead.
+	// descriptors and dead payload outside this window. Copy only selected
+	// values, while retaining exact aliases within the new compact area.
 	if cachedVarlenaAreaOverlaps(&source) {
-		window, err := source.Window(offset, offset+length)
-		if err != nil {
-			return nil, err
-		}
-		defer window.Free(nil)
-		return window.DupOffHeap(mp)
+		return materializeAliasedVarlenaWindow(&source, offset, length, mp)
 	}
 	dst := vector.NewVec(*source.GetType())
 	sels := make([]int64, length)
@@ -378,6 +372,53 @@ func MaterializeCachedVectorWindow(
 	if err := dst.Union(&source, sels, mp); err != nil {
 		dst.Free(mp)
 		return nil, err
+	}
+	return dst, nil
+}
+
+func materializeAliasedVarlenaWindow(
+	source *vector.Vector, offset, length int, mp *mpool.MPool,
+) (_ *vector.Vector, err error) {
+	dst := vector.NewVec(*source.GetType())
+	defer func() {
+		if err != nil {
+			dst.Free(mp)
+		}
+	}()
+	type areaRef struct{ offset, length uint32 }
+	shared := make(map[areaRef]types.Varlena)
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	if source.HasGrouping() {
+		if err = dst.PreExtendGrouping(length, mp); err != nil {
+			return nil, err
+		}
+	}
+	for row := offset; row < offset+length; row++ {
+		if source.IsNull(uint64(row)) {
+			if err = vector.AppendBytes(dst, nil, true, mp); err != nil {
+				return nil, err
+			}
+		} else if value := values[row]; value.IsSmall() {
+			if err = vector.AppendFixed(dst, value, false, mp); err != nil {
+				return nil, err
+			}
+		} else {
+			areaOffset, areaLength := value.OffsetLen()
+			key := areaRef{areaOffset, areaLength}
+			if existing, ok := shared[key]; ok {
+				if err = vector.AppendFixed(dst, existing, false, mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err = vector.AppendBytes(dst, source.GetBytesAt(row), false, mp); err != nil {
+					return nil, err
+				}
+				shared[key] = vector.GetFixedAtNoTypeCheck[types.Varlena](dst, dst.Length()-1)
+			}
+		}
+		if source.GetGrouping().Contains(uint64(row)) {
+			dst.GetGrouping().Add(uint64(dst.Length() - 1))
+		}
 	}
 	return dst, nil
 }

@@ -4195,25 +4195,26 @@ func prefetchObjects(
 					}
 				}
 				cols := persistedColumnSeqnums(blockMeta)
-				spillFactory := func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
-					return newLegacyColumnSpill(ctx, spillConfig)
-				}
-				if windowByteBudget > 0 && windowRows > 1 {
-					windowRows, err = objectio.FitOneBlockAllColumnsWindow(
-						ctx, &dataMeta, loc.Name().String(), blockID, cols,
-						rowOffset, windowRows, windowByteBudget,
-						fileservice.SkipAllCache, fs, spillFactory,
-					)
-					if err != nil {
-						return &tasks.JobResult{Err: err}
+				var spillFactory objectio.ColumnWindowSpillFactory
+				if spillConfig.Enabled() {
+					spillFactory = func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
+						return newLegacyColumnSpill(ctx, spillConfig)
 					}
 				}
-				bat, err := objectio.ReadOneBlockAllColumnsWindow(
-					ctx, &dataMeta, loc.Name().String(), blockID, cols,
-					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
-					windowByteBudget,
-					spillFactory,
-				)
+				var bat *batch.Batch
+				if windowByteBudget > 0 && windowRows > 1 {
+					bat, windowRows, err = objectio.ReadOneBlockAllColumnsBudgetedWindow(
+						ctx, &dataMeta, loc.Name().String(), blockID, cols,
+						rowOffset, windowRows, windowByteBudget,
+						fileservice.SkipAllCache, fs, mp, spillFactory,
+					)
+				} else {
+					bat, err = objectio.ReadOneBlockAllColumnsWindow(
+						ctx, &dataMeta, loc.Name().String(), blockID, cols,
+						rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
+						windowByteBudget, spillFactory,
+					)
+				}
 				if err != nil {
 					return &tasks.JobResult{Err: err}
 				}
