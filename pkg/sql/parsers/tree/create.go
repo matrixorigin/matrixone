@@ -2835,8 +2835,19 @@ type TableOptionEngineAttr struct {
 }
 
 func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
+	// The engine_attribute grammar accepts only a STRING literal, and the
+	// scanner hands the option its decoded value, so the shared serializer
+	// must re-emit it as a single-quoted SQL literal (PR 32906 review
+	// 5977119308): escape backslash sequences first, then double the quotes,
+	// mirroring the reviewed PROPERTIES serializer.
+	engineAttribute := node.Engine
+	if !ctx.NoBackslashEscape() {
+		engineAttribute = FormatString(engineAttribute)
+	}
 	ctx.WriteString("ENGINE_ATTRIBUTE = ")
-	ctx.WriteString(node.Engine)
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(engineAttribute, "'", "''"))
+	ctx.WriteByte('\'')
 }
 
 func (node TableOptionEngineAttr) TypeName() string { return "tree.TableOptionEngineAttr" }
@@ -3043,7 +3054,18 @@ type TableOptionComment struct {
 }
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
-	ctx.WriteString("comment = '" + node.Comment + "'")
+	// The comment grammar stores util.DealCommentString(...), which already
+	// single-quote-doubles embedded quotes, so serialization must escape
+	// backslashes only (a decoded trailing backslash would otherwise escape
+	// the closing quote and break the catalog's rel_createsql reparse;
+	// PR 32906 review 5977119308). Do not double already-doubled quotes.
+	ctx.WriteString("comment = '")
+	if !ctx.NoBackslashEscape() {
+		ctx.WriteString(FormatString(node.Comment))
+	} else {
+		ctx.WriteString(node.Comment)
+	}
+	ctx.WriteByte('\'')
 }
 
 func (node TableOptionComment) TypeName() string { return "tree.TableOptionComment" }
@@ -3383,8 +3405,17 @@ type TableOptionSecondaryEngineAttr struct {
 }
 
 func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
+	// Same STRING-literal contract as ENGINE_ATTRIBUTE (PR 32906 review
+	// 5977119308): the scanner stores the decoded value, so serialize it as
+	// an escaped single-quoted literal that reparses to the same bytes.
+	secondaryEngineAttribute := node.Attr
+	if !ctx.NoBackslashEscape() {
+		secondaryEngineAttribute = FormatString(secondaryEngineAttribute)
+	}
 	ctx.WriteString("SECONDARY_ENGINE_ATTRIBUTE = ")
-	ctx.WriteString(node.Attr)
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(secondaryEngineAttribute, "'", "''"))
+	ctx.WriteByte('\'')
 }
 
 func (node TableOptionSecondaryEngineAttr) TypeName() string {

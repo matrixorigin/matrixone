@@ -25307,7 +25307,7 @@ yydefault:
 				yylex.Error(intoErr)
 				return 1
 			}
-			yyLOCAL = &tree.Select{Select: yyDollar[2].selectStatementUnion(), IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: yyDollar[1].withClauseUnion()}
+			yyLOCAL = &tree.Select{Select: yyDollar[2].selectStatementUnion(), Ep: tree.SelectIntoExportOr(yyDollar[2].selectStatementUnion(), nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: yyDollar[1].withClauseUnion()}
 			if intoErr := tree.ValidateSelectIntoPlacement(yyLOCAL); intoErr != "" {
 				yylex.Error(intoErr)
 				return 1
