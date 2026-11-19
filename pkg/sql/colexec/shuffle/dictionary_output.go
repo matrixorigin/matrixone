@@ -74,7 +74,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		if !source.IsConst() {
 			copyBytes += int64(len(rows)) * int64(source.GetType().TypeSize())
 		}
-		if allocation != nil && !source.IsDictionary() {
+		if !source.IsDictionary() {
 			// Queued views can outlive producer reuse. Owned backing then
 			// remains charged while the producer allocates its replacement.
 			if source.DataBackingKind() == vector.OwnedMPoolUnique {
@@ -165,8 +165,6 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 			output.Vecs[i], err = source.SelectDictionary(selection, proc.Mp(), columnAllocation)
 		} else {
 			if s.bases[i] == nil {
-				borrowed := source.HasBorrowedBacking()
-				ownedPayload := int64(cap(source.GetData())) + int64(cap(source.GetArea()))
 				var admitted bool
 				s.bases[i], admitted, err = vector.TryFreezeVector(source, proc.Mp(), columnAllocation)
 				if err != nil {
@@ -176,13 +174,9 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 					s.disabled = true
 					return nil, nil
 				}
-				added := s.bases[i].RetainedBytes()
-				// An accounted source can refill before its queued borrowers
-				// release. Include its backing even though it is charged now.
-				if allocation == nil && !borrowed {
-					added -= ownedPayload
-				}
-				retainedBytes += max(0, added)
+				// Producer refill can need replacement storage under statement,
+				// MPool or global capacity, regardless of allocation provenance.
+				retainedBytes += s.bases[i].RetainedBytes()
 			}
 			output.Vecs[i], err = vector.NewDictionaryVector(s.bases[i], selection, proc.Mp(), columnAllocation)
 		}
@@ -193,12 +187,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		ownedMetadata := int64(output.Vecs[i].Allocated()) - output.Vecs[i].DictionaryRetainedBytes()
 		retainedBytes += ownedMetadata
 		if source.IsDictionary() {
-			retained := output.Vecs[i].DictionaryRetainedBytes()
-			if allocation == nil {
-				oldSelection := int64(cap(vector.ResolveFixedBytesReadView(source).Selection)) * 8
-				retained -= source.DictionaryRetainedBytes() - oldSelection
-			}
-			retainedBytes += retained
+			retainedBytes += output.Vecs[i].DictionaryRetainedBytes()
 		}
 	}
 	if retainedBytes > copyBytes {
