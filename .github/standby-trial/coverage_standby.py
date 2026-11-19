@@ -124,10 +124,7 @@ def observe(r, t, pool):
     for j in data["jobs"]:
         check(j["run_id"] == r and j["run_attempt"] == 1, "wrong job identity")
         if j["name"].split(" / ")[-1] == f"Coverage reservation {pool.upper()} group {t['group']}":
-            expected = [POOLS[pool]]
-            if pool == "cs" and t["group"] == 1:
-                expected.append("trial-only-32922-no-matching-runner-60df1")
-            check(sorted(j["labels"]) == sorted(expected), "wrong trial worker labels")
+            check(j["labels"] == [POOLS[pool]], "wrong worker label")
             target.append(j)
         else:
             # The dispatcher has two mutually exclusive reusable calls. GitHub can
