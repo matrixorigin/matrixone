@@ -959,7 +959,7 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if val >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
-	// MySQL truncates FLOAT/DOUBLE inputs toward zero before counting bits.
+	// Explicit real casts use truncation in MySQL integer context.
 	truncated := math.Trunc(val)
 	// Converting a negative float directly to uint64 is undefined in Go (the
 	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
@@ -1012,6 +1012,19 @@ func BitCountInteger[T constraints.Unsigned | constraints.Signed](ivecs []*vecto
 func BitCountFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
 		return bitCountFromFloat(v, proc)
+	}, selectList)
+}
+
+// Append-only planner-selected overloads. Ordinary type lookup retains the
+// original floating overloads for explicit casts and other scalar inputs.
+const (
+	BitCountFieldFloat32Overload = 15
+	BitCountFieldFloat64Overload = 16
+)
+
+func bitCountFloatField[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		return bitCountFromFloat(math.RoundToEven(float64(v)), proc)
 	}, selectList)
 }
 

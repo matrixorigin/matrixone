@@ -5259,6 +5259,9 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			return nil, err
 		}
 	}
+	if name == "bit_count" && len(args) == 1 && bitCountFloatFieldOverload(types.T(args[0].Typ.Id)) >= 0 && b.bitCountReadsFloatField(args[0]) {
+		return bindBitCountFloatField(b.GetContext(), args)
+	}
 	var integerInputs []uint32
 	if b.builder != nil && b.builder.integerPrecision != nil {
 		integerInputs = b.builder.integerPrecision.functionInputs(b.ctx, name, args)
@@ -8502,6 +8505,14 @@ func bindFuncExprImplByPlanExpr(
 	if isUnsignedDecimalAdmissionName(name) && !allowInternalFunctionArgs {
 		return nil, moerr.NewInvalidInputf(
 			ctx, "function %s is plan-internal and cannot be called directly", name)
+	}
+	if name == "bit_count" && len(args) == 1 && args[0] != nil {
+		if fn := originalBoundExpr.GetF(); fn != nil && fn.Func != nil {
+			fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+			if fid == function.BIT_COUNT && overload == bitCountFloatFieldOverload(types.T(args[0].Typ.Id)) {
+				return bindBitCountFloatField(ctx, args)
+			}
+		}
 	}
 	preparedCalendarResult := preparedRawCalendarResult(ctx, name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
