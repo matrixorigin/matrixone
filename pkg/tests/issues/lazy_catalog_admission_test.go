@@ -122,7 +122,7 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			check("select count(*) from mo_catalog.mo_tables where account_id=%d and reldatabase='lazy_catalog_reader_db' and relname='two'", 0)
 		})
 
-		t.Run("show accounts includes cold catalog counts", func(t *testing.T) {
+		t.Run("show accounts leaves cold tenants unsubscribed", func(t *testing.T) {
 			execSQLRequire(t, ctx, sys0, "create account lazy_counts_owner admin_name 'admin' identified by '111'")
 			tenant := open(t, 0, "lazy_counts_owner#admin#accountadmin")
 			execSQLRequire(t, ctx, tenant, "create database lazy_counts_db")
@@ -142,11 +142,16 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 				}
 				require.True(t, rows.Next())
 				require.NoError(t, rows.Scan(dest...))
+				require.Equal(t, "lazy_counts_owner", values[0].String)
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
 				return [2]string{values[5].String, values[6].String}
 			}
-			require.Equal(t, counts(sys0), counts(sys1), "cold and warm CN must report identical database/table counts")
+			counts(sys1)
+			execSQLRequire(t, ctx, sys1, "show accounts")
+			require.False(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()))
+			execSQLRequire(t, ctx, sys1, fmt.Sprintf("select mo_ctl('cn','ActivateTenantCatalog','%d')", id))
+			require.Equal(t, counts(sys0), counts(sys1), "an explicitly activated tenant has complete counts")
 		})
 
 		t.Run("snapshot activates a cold owner", func(t *testing.T) {

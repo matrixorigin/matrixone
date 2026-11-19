@@ -161,17 +161,15 @@ SELECT relname FROM mo_catalog.mo_tables WHERE account_id = @id;
 |---------|------|
 | `AuthenticateUser` | 登录账户 |
 | `doAlterAccount` / `doDropAccount` | ALTER/DROP ACCOUNT 的目标账户 |
-| `doShowAccounts` / `getSpecialTableInfo` | SHOW ACCOUNTS 结果中的账户 |
 | `doRestoreSnapshot` / `restoreAccountUsingClusterSnapshotToNew` | RESTORE 涉及的源、目标账户 |
 | `handleCloneTable` / `handleCloneDatabaseWithSource` | CLONE 的目标账户 |
 | `GetSubscriptionMeta` / `ResolveSnapshotWithSnapshotName` | 订阅的发布账户、命名快照的所属账户 |
 | `featureLimitCheckerForAccount` | 需要检查配额的账户 |
 | `activateRemoteTenantCatalog` | 远端 CN 执行 pipeline 时的账户 |
 
-`SHOW ACCOUNTS` 先从 sys catalog 枚举账号，再激活结果中的租户并重新查询库表数量，
-避免将冷租户的缺失增量当作零。全量查询会加载所有返回账号的 catalog，不保证操作之后
-仍保持只加载少量租户。默认 StorageUsage 定时执行全量 `SHOW ACCOUNTS` 会触发该行为；
-该后台任务的收益与代价仍需单独决策，本次正确性修复不改变其激活策略。
+`SHOW ACCOUNTS` 从 sys catalog 枚举账号，不改变当前 CN 的订阅。lazy CN 仍会列出冷租户，
+但其库数和表数可能不完整。需要准确计数时，先在同一 CN 显式激活目标租户；
+全局盘点应使用 full CN，执行全量 `SHOW ACCOUNTS` 的 StorageUsage 任务也应调度到 full CN。
 
 ---
 

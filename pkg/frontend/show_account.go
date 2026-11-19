@@ -587,34 +587,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}
 
-	// Account enumeration is sys-owned, but catalog counts require each
-	// listed tenant's row deltas. Refresh the counts after activation.
-	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
-		refresh := false
-		for _, ids := range accIds {
-			for _, id := range ids {
-				if id == sysAccountID {
-					continue
-				}
-				if err = activator.ActivateTenantCatalog(ctx, uint32(id)); err != nil {
-					return err
-				}
-				refresh = true
-			}
-		}
-		if refresh {
-			for _, b := range accInfosBatches {
-				b.Clean(mp)
-			}
-			accInfosBatches = nil
-			accInfosBatches, accIds, err = getAccountInfo(defines.AttachAccountId(ctx, uint32(sysAccountID)), bh, sql, mp)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	specialTableCnt, specialDBCnt, err = getSpecialTableCnt(ctx, ses, bh, accIds)
+	specialTableCnt, specialDBCnt, err = getSpecialTableCnt(ctx, bh, accIds)
 	t1 := time.Now()
 	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(t1.Sub(t0).Seconds())
 	if err != nil {
@@ -716,7 +689,6 @@ func getAccountInfo(ctx context.Context,
 	var rsOfMoAccount []*batch.Batch
 
 	bh.ClearExecResultBatches()
-	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, nil, err
@@ -765,24 +737,20 @@ func getAccountInfo(ctx context.Context,
 	return rsOfMoAccount, accountIds, err
 }
 
-func getSpecialTableCnt(ctx context.Context, ses *Session, bh BackgroundExec, accIds [][]int64) (dbCnt, tblCnt int64, err error) {
+func getSpecialTableCnt(ctx context.Context, bh BackgroundExec, accIds [][]int64) (dbCnt, tblCnt int64, err error) {
 	for x := range accIds {
 		for y := range accIds[x] {
 			if accIds[x][y] == sysAccountID {
 				continue
 			}
-			dbCnt, tblCnt, err = getSpecialTableInfo(ctx, ses, bh, accIds[x][y])
+			dbCnt, tblCnt, err = getSpecialTableInfo(ctx, bh, accIds[x][y])
 			return
 		}
 	}
 	return
 }
 
-func getSpecialTableInfo(ctx context.Context, ses *Session, bh BackgroundExec, accId int64) (dbCnt, tblCnt int64, err error) {
-	// Activate target account's catalog so table resolution uses cache.
-	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(accId)); err != nil {
-		return 0, 0, err
-	}
+func getSpecialTableInfo(ctx context.Context, bh BackgroundExec, accId int64) (dbCnt, tblCnt int64, err error) {
 	sql := fmt.Sprintf(getSpecialTablesInfoFormat, sysAccountID, sysAccountID)
 	newCtx := defines.AttachAccountId(ctx, uint32(accId))
 
