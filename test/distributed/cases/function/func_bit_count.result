@@ -478,22 +478,66 @@ SELECT BIT_COUNT(CAST(3.9 AS DECIMAL(10,2))) AS d_pos, BIT_COUNT(CAST(-3.9 AS DE
 d_pos    d_neg    d_subunit
 1    62    64
 DROP TABLE IF EXISTS t_bit_count_float;
-CREATE TABLE t_bit_count_float(id INT, f FLOAT, d DOUBLE);
-INSERT INTO t_bit_count_float VALUES (1, 3.9, 3.9), (2, -3.5, -3.5), (3, 0.9, 0.9), (4, -0.9, -0.9), (5, NULL, NULL);
-SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits FROM t_bit_count_float ORDER BY id;
-id    f_bits    d_bits
-1    2    2
-2    63    63
-3    0    0
-4    0    0
-5    null    null
-SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 2 AND BIT_COUNT(d) = 2 ORDER BY id;
-id
-1
-SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 63 AND BIT_COUNT(d) = 63 ORDER BY id;
-id
+CREATE TABLE t_bit_count_float(id INT PRIMARY KEY, f FLOAT, d DOUBLE);
+INSERT INTO t_bit_count_float VALUES (1,3.9,3.9),(2,-3.5,-3.5),(3,0.6,0.6),(4,-0.6,-0.6),(5,NULL,NULL),(6,3.5,3.5),(7,2.5,2.5),(8,-0.5,-0.5);
+SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits, BIT_COUNT(CAST(d AS DOUBLE)) AS cast_bits FROM t_bit_count_float ORDER BY id;
+➤ id[4,32,0]  ¦  f_bits[-5,64,0]  ¦  d_bits[-5,64,0]  ¦  cast_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  2  𝄀
+2  ¦  62  ¦  62  ¦  63  𝄀
+3  ¦  1  ¦  1  ¦  0  𝄀
+4  ¦  64  ¦  64  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  1  ¦  1  ¦  2  𝄀
+7  ¦  1  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0  ¦  0
+SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 64 AND BIT_COUNT(d) = 64 ORDER BY id;
+➤ id[4,32,0]  𝄀
+4
+SELECT id, BIT_COUNT(SUM(d) OVER(PARTITION BY id)) AS sum_bits, BIT_COUNT(AVG(d) OVER(PARTITION BY id)) AS avg_bits FROM t_bit_count_float ORDER BY id;
+➤ id[4,32,0]  ¦  sum_bits[-5,64,0]  ¦  avg_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  62  ¦  62  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  64  ¦  64  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  1  ¦  1  𝄀
+7  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0
+SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
+➤ bits[-5,64,0]  𝄀
 2
+SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
+➤ bits[-5,64,0]  𝄀
+1
+SELECT BIT_COUNT((SELECT CAST(3.9 AS DOUBLE))) AS scalar_cast_bits;
+➤ scalar_cast_bits[-5,64,0]  𝄀
+2
+SELECT (SELECT BIT_COUNT(s.x)) AS correlated_cast_bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
+➤ correlated_cast_bits[-5,64,0]  𝄀
+2
+DROP TABLE IF EXISTS t_bit_count_float_saved;
+CREATE TABLE t_bit_count_float_saved AS SELECT id, BIT_COUNT(d) AS bits FROM t_bit_count_float;
+SELECT id, bits FROM t_bit_count_float_saved WHERE id IN (1,4,5) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+4  ¦  64  𝄀
+5  ¦  null
+DROP TABLE t_bit_count_float_saved;
 DROP TABLE t_bit_count_float;
+PREPARE bit_count_field FROM 'SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(? AS DOUBLE) AS x) s';
+SET @bit_count_field = 3.9;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+1
+SET @bit_count_field = -0.6;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+64
+SET @bit_count_field = NULL;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+null
+DEALLOCATE PREPARE bit_count_field;
 PREPARE bit_count_float_marker FROM 'SELECT BIT_COUNT(CAST(? AS FLOAT)) AS f_bits, BIT_COUNT(CAST(? AS DOUBLE)) AS d_bits';
 SET @bit_count_f = 3.9;
 SET @bit_count_d = -3.5;
