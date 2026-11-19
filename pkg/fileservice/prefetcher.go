@@ -305,15 +305,9 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			}
 			next, kept := deferred()
 			grow := next.Size - kept
-			if grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
-				if p.reclaimEndedDeferredLocked() {
-					next, kept = deferred()
-					grow = next.Size - kept
-				}
-				if grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
-					metric.FSPrefetchDroppedCounter.Inc()
-					return
-				}
+			if grow > 0 && !p.roomLocked(grow, nil) {
+				metric.FSPrefetchDroppedCounter.Inc()
+				return
 			}
 			p.deferred += grow
 			p.deferredOf[e] = struct{}{}
@@ -324,19 +318,28 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			}
 			return
 		}
-		e.addScan(req.Scan)
 		if q := e.queue; q != nil {
-			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() &&
-				(!p.reclaimEndedDeferredLocked() || p.queuedBytesLocked()+grow > p.limit()) {
-				// Past the queues' bytes, the queued download keeps what it downloads.
-				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
-				metric.FSPrefetchDroppedCounter.Inc()
+			// What scans that all ended asked for is replaced by req, not merged into it.
+			merged := req
+			if e.live() {
+				merged = e.req.merge(req)
 			}
+			if grow := merged.Size - e.req.Size; grow > 0 && !p.roomLocked(grow, e) {
+				// Past the queues' bytes, a queued download in use keeps what it downloads,
+				// needed as soon as req; one whose reads all ended is not kept by req.
+				metric.FSPrefetchDroppedCounter.Inc()
+				if !e.live() {
+					return
+				}
+				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
+			}
+			e.addScan(req.Scan)
 			q.bytes += merged.Size - e.req.Size
 			e.req = merged
 			heap.Fix(&q.queue, e.index)
+			return
 		}
+		e.addScan(req.Scan)
 		return
 	}
 	if have {
@@ -389,6 +392,25 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 // requests deferred behind running downloads.
 func (p *prefetcher) queuedBytesLocked() int64 {
 	return p.prefetch.bytes + p.live.bytes + p.deferred
+}
+
+// roomLocked reports whether need more bytes fit in the queues, after dropping as many as
+// it takes of the requests deferred behind running downloads whose scans all ended, then
+// of the downloads in the prefetch queue whose reads all ended, other than keep.
+func (p *prefetcher) roomLocked(need int64, keep *prefetchEntry) bool {
+	limit := p.limit()
+	if p.queuedBytesLocked()+need <= limit {
+		return true
+	}
+	p.reclaimEndedDeferredLocked()
+	for p.queuedBytesLocked()+need > limit {
+		i := slices.IndexFunc(p.prefetch.queue, func(o *prefetchEntry) bool { return o != keep && !o.live() })
+		if i < 0 {
+			return false
+		}
+		p.dropLocked(p.prefetch.queue[i])
+	}
+	return true
 }
 
 // reclaimEndedDeferredLocked drops the requests deferred behind running downloads whose
