@@ -338,7 +338,7 @@ func TestEnumValueIndexAssignmentBoundaries(t *testing.T) {
 }
 
 // A released definition may store padded and empty labels side by side, e.g.
-// ENUM(' ','red ',''). The empty string must keep selecting its own member,
+// a space, "red " and the empty string. The empty string must keep selecting its own member,
 // and the padded label must still match its trimmed spelling.
 func TestEnumValueIndexLegacyPaddedLabels(t *testing.T) {
 	for _, labelCount := range []int{7, 8} {

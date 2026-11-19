@@ -460,7 +460,7 @@ func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
 }
 
 // A released catalog may store ENUM labels that are equal after trimming, e.g.
-// ENUM(' ','red',''). CREATE TABLE LIKE (and CLONE/restore, which share this
+// a space, red and the empty string. CREATE TABLE LIKE (and CLONE/restore, which share this
 // planner) must reproduce that domain and its ordinals instead of rejecting it.
 func TestCreateTableLikePreservesLegacyPaddedEnumDomain(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
