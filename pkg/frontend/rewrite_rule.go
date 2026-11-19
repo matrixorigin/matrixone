@@ -1134,7 +1134,7 @@ func loadRuleCache(ctx context.Context, ses *Session, sqlMode string) (_ map[str
 			continue
 		}
 		if pending[row.ruleName] != nil {
-			if rewriteRulesKnownIncompatible(ctx, existingRule, row.rule, sqlMode) {
+			if laterRewriteRuleDeterminesResult(ctx, existingRule, row.rule, sqlMode) {
 				delete(pending, row.ruleName)
 			}
 			rules[row.ruleName] = row.rule
@@ -1287,6 +1287,7 @@ type rewriteRuleMergeShape struct {
 	clause     *tree.SelectClause
 	selectList string
 	table      string
+	unfiltered bool
 }
 
 // Rewrite rules from active roles are a source-row visibility union: if any
@@ -1298,16 +1299,8 @@ type rewriteRuleMergeShape struct {
 func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
 	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
 	if err != nil {
-		// The catalog admits rules in default parser mode. Use that mode only
-		// to prove this earlier rule could never merge, not to interpret a
-		// predicate for execution. The effective rule is still validated in
-		// the session mode before loadRuleCache publishes it.
-		if mysql.ParseSQLModeFlags(sqlMode) != 0 {
-			// The later rule can independently settle precedence even when
-			// the earlier predicate cannot be parsed in this mode.
-			if rewriteRulesKnownIncompatible(ctx, leftRule, rightRule, sqlMode) {
-				return "", false, nil
-			}
+		if mysql.ParseSQLModeFlags(sqlMode) != 0 && laterRewriteRuleDeterminesResult(ctx, leftRule, rightRule, sqlMode) {
+			return "", false, nil
 		}
 		return "", false, err
 	}
@@ -1340,7 +1333,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 	return sql, true, nil
 }
 
-func rewriteRulesKnownIncompatible(ctx context.Context, left, right, sqlMode string) bool {
+func laterRewriteRuleDeterminesResult(ctx context.Context, left, right, sqlMode string) bool {
 	// The selected rule must parse in the session mode. An alternate-mode
 	// parse of a discarded rule is only evidence about its merge shape.
 	r, rightOK := rewriteRuleShapeForPrecedence(ctx, right, sqlMode, false)
@@ -1351,7 +1344,10 @@ func rewriteRulesKnownIncompatible(ctx context.Context, left, right, sqlMode str
 		return true
 	}
 	l, leftOK := rewriteRuleShapeForPrecedence(ctx, left, sqlMode, true)
-	return leftOK && (l == nil || l.selectList != r.selectList || l.table != r.table)
+	// Incompatible shapes already select the later rule. For compatible
+	// shapes, an unfiltered later rule absorbs the earlier predicate in
+	// the visibility union (all rows OR any subset is all rows).
+	return leftOK && (l == nil || l.selectList != r.selectList || l.table != r.table || r.unfiltered)
 }
 
 func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, allowDefault bool) (*rewriteRuleMergeShape, bool) {
@@ -1370,7 +1366,7 @@ func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, al
 			return nil, true
 		}
 		// Do not retain references to a freed parser tree.
-		return &rewriteRuleMergeShape{selectList: shape.selectList, table: shape.table}, true
+		return &rewriteRuleMergeShape{selectList: shape.selectList, table: shape.table, unfiltered: shape.unfiltered}, true
 	default:
 		return nil, false
 	}
@@ -1428,6 +1424,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 		clause:     clause,
 		selectList: rewriteProjectionKey(clause.Exprs, sqlMode),
 		table:      table,
+		unfiltered: clause.Where == nil || clause.Where.Expr == nil,
 	}, true
 }
 

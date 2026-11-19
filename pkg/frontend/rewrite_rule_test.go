@@ -717,6 +717,8 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		{"ineligible earlier rule", left + " order by a", "", right, false},
 		{"ineligible later rule", left, "", right + " order by a", false},
 		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
+		{"unfiltered later rule absorbs invalid predicate", left, "", "select a from db1.t1", false},
+		{"unfiltered last rule absorbs invalid middle predicate", "select a from db1.t1 where a = 1", left, "select a from db1.t1", false},
 		{"ineligible middle rule is superseded", "select a from db1.t1 where a = 1", left + " order by a", right + " order by a", false},
 		{"compatible last rule cannot mask earlier failure", "select a from db1.t1 where a = 1", left, right, true},
 		{"invalid winner", left + " order by a", "", "select a from", true},
