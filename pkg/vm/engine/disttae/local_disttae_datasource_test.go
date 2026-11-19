@@ -137,6 +137,74 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	calls int
+}
+
+func (it *countedReplayRows) Next() bool {
+	it.calls++
+	return it.RowsIter.Next()
+}
+
+func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: stamp, id: 42},
+		{rowID: types.NewRowid(&block, 1), ts: stamp, id: 43},
+		{rowID: types.NewRowid(&block, 2), ts: stamp.Next(), id: 44},
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		calls  int
+	}{
+		{"first-row-denied", 7, 1},
+		{"growth-denied", 23, 2},
+		{"fits", 24, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, out.SetAllocationAccount(selection))
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			if tc.name == "fits" {
+				require.NoError(t, err)
+				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			}
+			require.Equal(t, tc.calls, it.calls)
+		})
+	}
+}
+
 func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
