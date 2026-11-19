@@ -107,26 +107,20 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						// A failed child operation may still have an unknown result.
 						// The failed fixture owns shutdown instead of another parent DDL.
 						if !t.Failed() {
-							_ = cleanupSQL(sys.ExecContext, 20*time.Second, "drop account if exists issue31401_scalar")
+							// DROP ACCOUNT also drops the tenant databases and their
+							// catalogs. Give this cleanup its own bounded budget.
+							_ = cleanupSQL(sys.ExecContext, 2*time.Minute, "drop account if exists issue31401_scalar")
 						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				var tenantSourceOwned bool
-				defer func() {
-					if tenantSourceOwned {
-						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
-					}
-				}()
-				// The next selected child already resets both databases. Keep
-				// system resources until that reset, then clean the final pair once.
-				// Tenant source cleanup still precedes its dependent DROP ACCOUNT.
+				// Each case resets both databases. Keep system resources until
+				// the next reset, then clean the final pair once. DROP ACCOUNT
+				// owns removal of the tenant's source database.
 				resetIssue277xxDatabase(t, ctx, db, source)
-				if tenant {
-					tenantSourceOwned = true
-				} else {
+				if !tenant {
 					systemSourceOwned = true
 				}
 				resetIssue277xxDatabase(t, ctx, sys, peer)
