@@ -86,8 +86,11 @@ func TestIndexObjectServesReads(t *testing.T) {
 	cacheIndexObject(t, fs, "object", data)
 	require.Equal(t, data[1000:1010], readIndexObjectRange(t, fs, IndexFileObject, 1000, 10))
 	require.Equal(t, data[200<<10:200<<10+100], readIndexObjectRange(t, fs, IndexFileObject|SkipFullFilePreloads, 200<<10, 100))
-	require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject|SkipAllCache, 2000, 10), "a skip of disk-cache reads does not apply to the index-file cache")
+	require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject|SkipDiskCacheReads, 2000, 10), "a skip of disk-cache reads does not apply to the index-file cache")
 	require.Zero(t, storage.reads.Load())
+	require.Equal(t, data[3000:3010], readIndexObjectRange(t, fs, IndexFileObject|SkipAllCache, 3000, 10))
+	require.NotZero(t, storage.reads.Load(), "a read that skips every cache skips the index-file cache")
+	storage.reads.Store(0)
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
 
 	readIndexObjectRange(t, fs, 0, 250<<10, 10)

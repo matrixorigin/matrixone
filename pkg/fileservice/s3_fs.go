@@ -937,7 +937,8 @@ read_disk_cache:
 			}
 		}
 	}
-	if vector.Policy.Any(IndexFileObject) && s.cachesIndexObjects() {
+	// A read that skips every cache, not only the disk cache, skips the index-file cache.
+	if vector.Policy.Any(IndexFileObject) && vector.Policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects() {
 		if err := s.readIndexObject(ctx, vector); err != nil {
 			finishFill()
 			return err

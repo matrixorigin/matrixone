@@ -111,7 +111,7 @@ asynchronous updates run in the order the updates were submitted, whichever is
 published first; an update that publishes nothing holds no place in that order. A read
 that skips disk-cache reads reads object storage itself; it does not join a prefetch
 object. A read of an index-file object reads the index-file cache, which a skip of
-disk-cache reads does not apply to. A MemoryPrefetchObject
+disk-cache reads does not apply to; a read that skips every cache skips it too. A MemoryPrefetchObject
 caches its range before it ends, so the reads after it find the range cached. A download
 the disk cache keeps for a cached file holds no reader of its source once the fill ends
 (decision 2026-11-18, v9, after the TN OOM in the nightly regression: the source of a
