@@ -298,6 +298,29 @@ func TestViewMetadataCandidateFailureProvenance(t *testing.T) {
 	}
 }
 
+func TestViewMetadataCandidateInvalidFulltextDependency(t *testing.T) {
+	for _, stage := range []string{"root", "definition"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.addView(t, "current_v", "select n_nationkey from nation")
+			missingIndex := moerr.NewFtMatchingKeyNotFound(t.Context())
+			f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+				if (stage == "root" && name == "current_v") || (stage == "definition" && name == "nation") {
+					return missingIndex
+				}
+				return nil
+			}
+			r := NewViewMetadataRequest(t.Context(), f.provider)
+			defer r.Close()
+			result, invalid, err := DescribeViewMetadataCandidate(r.Context(), "tpch", "current_v", nil)
+			require.Nil(t, result)
+			require.ErrorIs(t, err, missingIndex)
+			require.Equal(t, stage == "definition", invalid,
+				"only a proven View dependency may be skipped by a metadata scan")
+		})
+	}
+}
+
 func TestViewMetadataWarmMemoFailureRecovery(t *testing.T) {
 	for _, mode := range []string{"memo", "cache off"} {
 		for _, fault := range []string{"root missing", "transient resolution", "authorization revoked"} {
