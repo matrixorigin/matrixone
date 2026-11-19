@@ -1,5 +1,14 @@
 # Concurrency And Lifecycle Reasoning
 
+## Contents
+
+1. Start From Invariants
+2. Build The State And Ownership Model
+3. Draw The Wait-For Graph
+4. Close The Generation Boundary
+5. Derive The Test Matrix
+6. Validate The Closure
+
 Use this reference when a diff changes shared state, cancellation, close/terminal
 operations, retry/restart, pooling, callbacks, or asynchronous cleanup. Derive
 tests from the model below; do not copy a fixed list of cases.
@@ -112,22 +121,15 @@ when a remembered list of test names is present.
 - Assert fail-fast latency with a short outer deadline and verify it did not fire.
 - Count irreversible side effects and require exactly once, not merely non-zero.
 - Make test cleanup release blockers even after an assertion fails.
-- Run new concurrency tests with `-race`; stress the focused transition set with
-  `-count=N`, then run the entire owning package under `-race` once.
+- Apply the [shared race protocol](../../../../.agents/skills/mo-dev/references/race-validation.md)
+  for focused stress and owning-package coverage.
 
 ## 6. Validate The Closure
 
-Use layered evidence after the final edit or rebase:
-
-1. Focused regression proving the original invariant violation.
-2. Focused race stress across transition boundaries.
-3. Full owning-package tests and race tests.
-4. Tests for every package changed by the complete diff.
-5. Static analysis and a dependent build.
-6. Benchmarks only for changed hot paths; report allocations and contention.
-
-No PASS/FAIL result, a surviving test process, or output produced before the
-last semantic change is not fresh evidence.
+Use the [shared validation and evidence rules](../../../../.agents/skills/mo-dev/references/validation-evidence.md)
+to pick and reuse proof for the affected state transitions. Include a focused
+test of the invariant and race stress across affected transitions as required
+by the shared race protocol.
 
 Also validate the delivery boundary, not only the working directory:
 
