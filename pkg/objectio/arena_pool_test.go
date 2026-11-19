@@ -117,6 +117,8 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 	// subtest owns its own bubble below.
 	for _, schedule := range []string{"normal first fire", "delayed first fire"} {
 		t.Run(schedule, func(t *testing.T) {
+			const ttl = 150 * time.Millisecond
+			withArenaIdleTTL(t, ttl)
 			synctest.Test(t, func(t *testing.T) {
 				// Drain the reaper on every exit path, including failed
 				// assertions: this defer runs during Goexit while still
@@ -124,19 +126,17 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 				// always stopped in-bubble and the outer cleanup, which
 				// runs outside the bubble, only ever sees reaper == nil.
 				defer drainArenaReaper(ArenaLarge)
-				const ttl = 150 * time.Millisecond
-				withArenaIdleTTL(t, ttl)
 				base := arenaMPool.CurrNB()
 
-				// Within capacity, so perArena below divides by what is actually parked.
-				burst := make([]*WriteArena, min(8, arenaPools[ArenaLarge].maxCount))
-				for i := range burst {
-					burst[i] = GetArena(ArenaLarge)
-				}
-				for _, a := range burst {
+				// Exercise the large tier with small off-heap buffers so
+				// the bubble cannot arm the process-wide mmap cache timer.
+				count := min(8, arenaPools[ArenaLarge].maxCount)
+				for range count {
+					a := NewArena(4 << 10)
+					a.sizeLimit = arenaMaxSize
 					PutArena(a)
 				}
-				perArena := (arenaMPool.CurrNB() - base) / int64(len(burst))
+				perArena := (arenaMPool.CurrNB() - base) / int64(count)
 
 				pool := &arenaPools[ArenaLarge]
 				holdFirstReaper := schedule != "normal first fire"
@@ -170,6 +170,7 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 					if n == 1 {
 						break
 					}
+					require.NotZero(t, n, "a busy arena remains available for reuse")
 					if holdFirstReaper && time.Since(start) >= 6*ttl {
 						// Re-arm the held reaper after the old fixed warmup
 						// (4*ttl) plus the TTL has elapsed in bubble time,
