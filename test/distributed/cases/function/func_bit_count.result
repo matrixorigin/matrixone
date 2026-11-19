@@ -503,6 +503,22 @@ SELECT id, BIT_COUNT(SUM(d) OVER(PARTITION BY id)) AS sum_bits, BIT_COUNT(AVG(d)
 6  ¦  1  ¦  1  𝄀
 7  ¦  1  ¦  1  𝄀
 8  ¦  0  ¦  0
+SELECT d, BIT_COUNT(CAST(d AS DOUBLE)) AS bits FROM t_bit_count_float WHERE id IN (1,4,5) GROUP BY d, CAST(d AS DOUBLE) ORDER BY d;
+➤ d[8,53,31]  ¦  bits[-5,64,0]  𝄀
+null  ¦  null  𝄀
+-0.6  ¦  0  𝄀
+3.9  ¦  2
+SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float GROUP BY d, CAST(d AS DOUBLE) HAVING BIT_COUNT(CAST(d AS DOUBLE)) = 2 ORDER BY x;
+➤ x[8,53,31]  𝄀
+3.5  𝄀
+3.9
+SELECT d, BIT_COUNT(d) AS bits FROM t_bit_count_float WHERE id IN (1,4) GROUP BY d ORDER BY d;
+➤ d[8,53,31]  ¦  bits[-5,64,0]  𝄀
+-0.6  ¦  64  𝄀
+3.9  ¦  1
+SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 GROUP BY CAST(d AS DOUBLE)) s;
+➤ x[8,53,31]  ¦  bits[-5,64,0]  𝄀
+3.9  ¦  1
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 ➤ bits[-5,64,0]  𝄀
 2
