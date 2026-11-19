@@ -508,7 +508,7 @@ func TestBinaryStringResultDomainReset(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	staticBinary := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{{'a'}, {'b'}},
 		[]types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringInherit})

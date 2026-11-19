@@ -128,7 +128,7 @@ func TestDictionarySelectionScopeStringsAndFailure(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	many := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() { many.Free(mp) })

@@ -64,7 +64,7 @@ func newTestBatchAllocationAccount(
 	require.NoError(t, err)
 	account, err := registry.Open(16 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	return testBatchAllocationAccount{
 		registry:  registry,
@@ -650,8 +650,6 @@ func TestBatchSetFillsTailAcrossEquivalentAllocationSelections(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	require.NotSame(t, state.selection, equivalent)
@@ -692,8 +690,6 @@ func TestBatchSetCoalescesEquivalentParallelProducerChunks(t *testing.T) {
 			1,
 			1,
 			2,
-			3,
-			4,
 		)
 		require.NoError(t, err)
 		source := newMixedBatchAllocationSource(
@@ -891,7 +887,7 @@ func TestBatchUnionOneRetainsAllStringSourcePreflightsUntilPublication(t *testin
 	controller := &rejectNextBatchAllocation{}
 	account, err := registry.OpenWithController(1<<20, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	destination := NewWithSize(2)
 	source := NewWithSize(2)

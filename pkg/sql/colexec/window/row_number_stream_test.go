@@ -107,7 +107,7 @@ func TestRowNumberStreamStreaming(t *testing.T) {
 			if sourceAccounted {
 				source, err = sourceRegistry.Open(4 << 20)
 				require.NoError(t, err)
-				selection, err = vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+				selection, err = vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerOrder, 1, 2)
 				require.NoError(t, err)
 			}
 			first := rowNumberInput(t, proc, selection, 0, 3)
@@ -284,7 +284,7 @@ func TestRowNumberStreamSharedAccountAndInputReuse(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(4 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
 	require.NoError(t, err)
 	rows := colexec.DefaultBatchSize + 3
 	input := rowNumberInput(t, proc, selection, 0, rows)

@@ -50,16 +50,16 @@ const (
 	dedupJoinAllocationSiteCaptured
 	dedupJoinAllocationSiteCaptureData
 	dedupJoinAllocationSiteCaptureArea
-	dedupJoinAllocationSiteCaptureNulls
-	dedupJoinAllocationSiteCaptureGrouping
+	_ // reserved: was dedupJoinAllocationSiteCaptureNulls
+	_ // reserved: was dedupJoinAllocationSiteCaptureGrouping
 	dedupJoinAllocationSiteFinalizeSelections
 )
 
 const (
 	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
 	dedupJoinAllocationSiteResultArea
-	dedupJoinAllocationSiteResultNulls
-	dedupJoinAllocationSiteResultGrouping
+	_ // reserved: was dedupJoinAllocationSiteResultNulls
+	_ // reserved: was dedupJoinAllocationSiteResultGrouping
 )
 
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
@@ -394,8 +394,6 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
 		dedupJoinAllocationSiteCaptureArea,
-		dedupJoinAllocationSiteCaptureNulls,
-		dedupJoinAllocationSiteCaptureGrouping,
 	)
 	if err != nil {
 		return err
@@ -405,8 +403,6 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
 		dedupJoinAllocationSiteResultArea,
-		dedupJoinAllocationSiteResultNulls,
-		dedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err

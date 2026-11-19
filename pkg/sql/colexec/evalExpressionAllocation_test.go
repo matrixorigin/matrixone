@@ -103,7 +103,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_varchar.ToType()
 	column := &plan.Expr{
@@ -268,7 +268,7 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	expression := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varbinary)},

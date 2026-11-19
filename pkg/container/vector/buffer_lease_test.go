@@ -186,7 +186,7 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
+		account, mpool.AllocationOwnerExternal, 1, 2,
 	)
 	require.NoError(t, err)
 	vec, err := NewBorrowedFixedVectorWithAllocation(
@@ -225,7 +225,7 @@ func TestBorrowedValidityLegacyMaterializationUsesGoStorage(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
+		account, mpool.AllocationOwnerExternal, 1, 2,
 	)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()

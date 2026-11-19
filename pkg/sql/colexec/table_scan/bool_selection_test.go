@@ -105,7 +105,7 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			boolType, intType := types.T_bool.ToType(), types.T_int32.ToType()
 			scan := &TableScan{

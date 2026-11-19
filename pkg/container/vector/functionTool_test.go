@@ -89,7 +89,7 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	wrapper, err := NewFunctionResultWrapperWithAllocation(
 		types.T_int64.ToType(), mp, selection,
@@ -117,7 +117,7 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	wrapper, err := NewFunctionResultWrapperWithAllocation(
 		types.T_int64.ToType(), mp, selection,
@@ -617,7 +617,7 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
 	require.NoError(t, err)
@@ -675,7 +675,7 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
 	require.NoError(t, err)

@@ -918,7 +918,7 @@ func TestMongoScanAccountedSourceLifecycle(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 			require.NoError(t, err)
 			doc, err := bson.Marshal(bson.D{{Key: "value", Value: int64(11)}})
 			require.NoError(t, err)

@@ -888,8 +888,6 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
 			GroupAllocationSiteKeyArea,
-			GroupAllocationSiteKeyNulls,
-			GroupAllocationSiteKeyGrouping,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(

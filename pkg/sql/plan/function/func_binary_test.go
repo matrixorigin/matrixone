@@ -15473,7 +15473,7 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 					t.Errorf("finalize account: %v", err)
 				}
 			})
-			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 			require.NoError(t, err)
 			result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_date.ToType(), proc.Mp(), selection)
 			require.NoError(t, err)

@@ -221,7 +221,7 @@ func TestScopedSubstringNullMetadataBindsScope(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.New(types.T_char, 15, 0)
 	input := batch.NewWithSize(1)

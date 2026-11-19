@@ -1232,8 +1232,6 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
 		HashBuildAllocationSiteDedupDeleteOnlyArea,
-		HashBuildAllocationSiteDedupDeleteOnlyNulls,
-		HashBuildAllocationSiteDedupDeleteOnlyGrouping,
 	)
 	if err != nil {
 		bat.Clean(proc.Mp())

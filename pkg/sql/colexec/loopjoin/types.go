@@ -45,15 +45,15 @@ const (
 const (
 	loopJoinAllocationSiteResultData mpool.AllocationSite = iota + 106
 	loopJoinAllocationSiteResultArea
-	loopJoinAllocationSiteResultNulls
-	loopJoinAllocationSiteResultGrouping
+	_ // reserved: was loopJoinAllocationSiteResultNulls
+	_ // reserved: was loopJoinAllocationSiteResultGrouping
 )
 
 const (
 	loopJoinAllocationSiteConditionData mpool.AllocationSite = iota + 118
 	loopJoinAllocationSiteConditionArea
-	loopJoinAllocationSiteConditionNulls
-	loopJoinAllocationSiteConditionGrouping
+	_ // reserved: was loopJoinAllocationSiteConditionNulls
+	_ // reserved: was loopJoinAllocationSiteConditionGrouping
 )
 
 const defaultLoopJoinResultBatchBytes = 64 * mpool.MB
@@ -179,8 +179,6 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteResultData,
 		loopJoinAllocationSiteResultArea,
-		loopJoinAllocationSiteResultNulls,
-		loopJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -190,8 +188,6 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteConditionData,
 		loopJoinAllocationSiteConditionArea,
-		loopJoinAllocationSiteConditionNulls,
-		loopJoinAllocationSiteConditionGrouping,
 	)
 	if err != nil {
 		return err

@@ -340,7 +340,7 @@ func TestProjectionColumnUses(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			typ := types.T_int32.ToType()
 			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}, OutputAllocation: allocation, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}}
@@ -402,7 +402,7 @@ func TestConsumerOwnedDemandUpdatesColumnUses(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_int32.ToType()
 	scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType()}, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}, OutputAllocation: allocation}

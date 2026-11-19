@@ -25,12 +25,10 @@ import (
 // several operators; aggexec must not silently attribute their memory to one
 // operator family.
 type AllocationAccountSites struct {
-	VectorData     mpool.AllocationSite
-	VectorArea     mpool.AllocationSite
-	VectorNulls    mpool.AllocationSite
-	VectorGrouping mpool.AllocationSite
-	ArgumentCount  mpool.AllocationSite
-	ArgumentArena  mpool.AllocationSite
+	VectorData    mpool.AllocationSite
+	VectorArea    mpool.AllocationSite
+	ArgumentCount mpool.AllocationSite
+	ArgumentArena mpool.AllocationSite
 }
 
 // AllocationAccount is an immutable physical-allocation selection shared by
@@ -71,8 +69,6 @@ func NewAllocationAccountWithCapacityClass(
 		owner,
 		sites.VectorData,
 		sites.VectorArea,
-		sites.VectorNulls,
-		sites.VectorGrouping,
 		capacityClass,
 	)
 	if err != nil {

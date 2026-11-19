@@ -54,15 +54,15 @@ const hashJoinAllocationSiteAsofIndex mpool.AllocationSite = 106
 const (
 	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
 	hashJoinAllocationSiteResultArea
-	hashJoinAllocationSiteResultNulls
-	hashJoinAllocationSiteResultGrouping
+	_ // reserved: was hashJoinAllocationSiteResultNulls
+	_ // reserved: was hashJoinAllocationSiteResultGrouping
 )
 
 const (
 	hashJoinAllocationSiteAsofCandidateData mpool.AllocationSite = iota + 107
 	hashJoinAllocationSiteAsofCandidateArea
-	hashJoinAllocationSiteAsofCandidateNulls
-	hashJoinAllocationSiteAsofCandidateGrouping
+	_ // reserved: was hashJoinAllocationSiteAsofCandidateNulls
+	_ // reserved: was hashJoinAllocationSiteAsofCandidateGrouping
 	hashJoinAllocationSiteAsofCandidateState
 )
 
@@ -291,8 +291,6 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteResultData,
 		hashJoinAllocationSiteResultArea,
-		hashJoinAllocationSiteResultNulls,
-		hashJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -302,8 +300,6 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteAsofCandidateData,
 		hashJoinAllocationSiteAsofCandidateArea,
-		hashJoinAllocationSiteAsofCandidateNulls,
-		hashJoinAllocationSiteAsofCandidateGrouping,
 	)
 	if err != nil {
 		return err

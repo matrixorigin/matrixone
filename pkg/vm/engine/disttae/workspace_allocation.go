@@ -58,7 +58,7 @@ func (txn *Transaction) workspaceAllocationWithLimit(limit uint64) (*vector.Allo
 		generation.Close()
 		return nil, err
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
 	if err != nil {
 		_, _, _ = registry.CompleteTerminal(account)
 		generation.Close()

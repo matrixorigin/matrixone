@@ -80,7 +80,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 				if tc.accounted {
 					account, err = registry.Open(1 << 20)
 					require.NoError(t, err)
-					selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+					selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
 					require.NoError(t, err)
 				}
 				columns := [][]int32{{1, 1, 1}, {3, 1, 2}, {30, 10, 20}}
@@ -245,7 +245,7 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 					if tc.sourceAccounted {
 						sourceAccount, err = sourceRegistry.Open(1 << 20)
 						require.NoError(t, err)
-						selection, err = vector.NewAllocationAccountSelection(sourceAccount, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+						selection, err = vector.NewAllocationAccountSelection(sourceAccount, mpool.AllocationOwnerOrder, 1, 2)
 						require.NoError(t, err)
 						defer func() {
 							arg.Free(proc, false, nil)

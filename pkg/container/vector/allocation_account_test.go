@@ -82,8 +82,6 @@ func newTestVectorAllocationAccount(
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 	return testVectorAllocationAccount{
@@ -180,8 +178,6 @@ func TestVectorAllocationAccountConfiguration(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 
@@ -230,8 +226,6 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 	recoveryController := &rejectNextVectorAllocation{}
@@ -242,8 +236,6 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 		class,
 	)
 	require.NoError(t, err)
@@ -284,8 +276,6 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 	recoveryController := &rejectNextVectorAllocation{}
@@ -296,8 +286,6 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 		class,
 	)
 	require.NoError(t, err)
@@ -343,8 +331,6 @@ func TestAllocationAccountSelectionsEqual(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 	differentSite, err := NewAllocationAccountSelection(
@@ -352,8 +338,6 @@ func TestAllocationAccountSelectionsEqual(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite+1,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 
@@ -1607,8 +1591,6 @@ func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 	require.NotSame(t, state.selection, equivalent)
@@ -1846,8 +1828,6 @@ func TestSelectedBatchStringSourcePreflightSurvivesLengthPublication(t *testing.
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
 		testVectorAreaAllocationSite,
-		testVectorNullAllocationSite,
-		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
 
@@ -1913,8 +1893,7 @@ func TestDirectUnionStringSourcePreflightSurvivesLengthPublication(t *testing.T)
 			require.NoError(t, err)
 			selection, err := NewAllocationAccountSelection(
 				account, testVectorAllocationOwner, testVectorDataAllocationSite,
-				testVectorAreaAllocationSite, testVectorNullAllocationSite,
-				testVectorGroupAllocationSite)
+				testVectorAreaAllocationSite)
 			require.NoError(t, err)
 			destination := newAccountedTestVector(t, types.T_int64.ToType(), selection)
 			require.NoError(t, destination.PreExtend(2, mp))
@@ -2546,7 +2525,7 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			})
-			selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner, testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
+			selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner, testVectorDataAllocationSite, testVectorAreaAllocationSite)
 			require.NoError(t, err)
 			v := newAccountedTestVector(t, types.T_text.ToType(), selection)
 			t.Cleanup(func() { v.Free(mp) })

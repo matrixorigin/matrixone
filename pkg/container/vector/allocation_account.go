@@ -45,8 +45,6 @@ type AllocationAccountSelection struct {
 	owner         mpool.AllocationOwner
 	dataSite      mpool.AllocationSite
 	areaSite      mpool.AllocationSite
-	nullsSite     mpool.AllocationSite
-	groupingSite  mpool.AllocationSite
 	capacityClass mpool.AllocationCapacityClass
 }
 
@@ -74,8 +72,6 @@ func AllocationAccountSelectionsEqual(
 		left.owner == right.owner &&
 		left.dataSite == right.dataSite &&
 		left.areaSite == right.areaSite &&
-		left.nullsSite == right.nullsSite &&
-		left.groupingSite == right.groupingSite &&
 		left.capacityClass == right.capacityClass
 }
 
@@ -92,9 +88,7 @@ func allocationAccountSelectionsShareProvenance(
 		left.account == right.account &&
 		left.owner == right.owner &&
 		left.dataSite == right.dataSite &&
-		left.areaSite == right.areaSite &&
-		left.nullsSite == right.nullsSite &&
-		left.groupingSite == right.groupingSite
+		left.areaSite == right.areaSite
 }
 
 // ShuffleWithAllocationAccount is Shuffle with a capacity class selected for
@@ -167,16 +161,12 @@ func NewAllocationAccountSelection(
 	owner mpool.AllocationOwner,
 	dataSite mpool.AllocationSite,
 	areaSite mpool.AllocationSite,
-	nullsSite mpool.AllocationSite,
-	groupingSite mpool.AllocationSite,
 ) (*AllocationAccountSelection, error) {
 	return NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		owner,
 		dataSite,
 		areaSite,
-		nullsSite,
-		groupingSite,
 		mpool.AllocationCapacityClassDefault,
 	)
 }
@@ -188,8 +178,6 @@ func NewAllocationAccountSelectionWithCapacityClass(
 	owner mpool.AllocationOwner,
 	dataSite mpool.AllocationSite,
 	areaSite mpool.AllocationSite,
-	nullsSite mpool.AllocationSite,
-	groupingSite mpool.AllocationSite,
 	capacityClass mpool.AllocationCapacityClass,
 ) (*AllocationAccountSelection, error) {
 	selection := &AllocationAccountSelection{
@@ -197,8 +185,6 @@ func NewAllocationAccountSelectionWithCapacityClass(
 		owner:         owner,
 		dataSite:      dataSite,
 		areaSite:      areaSite,
-		nullsSite:     nullsSite,
-		groupingSite:  groupingSite,
 		capacityClass: capacityClass,
 	}
 	if err := selection.validate(); err != nil {
@@ -342,9 +328,7 @@ func (s *AllocationAccountSelection) validate() error {
 		s.owner < mpool.AllocationOwnerMin ||
 		s.owner > mpool.AllocationOwnerCatalogMax ||
 		s.dataSite < mpool.AllocationSiteMin ||
-		s.areaSite < mpool.AllocationSiteMin ||
-		s.nullsSite < mpool.AllocationSiteMin ||
-		s.groupingSite < mpool.AllocationSiteMin {
+		s.areaSite < mpool.AllocationSiteMin {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil

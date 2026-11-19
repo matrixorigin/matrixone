@@ -57,7 +57,7 @@ func (a *SetOperationAllocation) SetAllocationAccount(account *mpool.AllocationA
 	if err != nil {
 		return err
 	}
-	vectors, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 4, 5, 6, 7)
+	vectors, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 4, 5)
 	if err != nil {
 		return err
 	}

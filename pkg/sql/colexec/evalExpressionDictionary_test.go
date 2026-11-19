@@ -106,7 +106,7 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 		require.NoError(t, err)
 		var retained Batches
 		t.Cleanup(func() { retained.Clean(mp) })
@@ -150,7 +150,7 @@ func TestDictionaryFunctionStateCapacityFailureCleanup(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	executor := &FunctionExpressionExecutor{m: mp, allocation: selection}
 	t.Cleanup(executor.freeDictionaryParameters)
@@ -296,7 +296,7 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			source := vector.NewVec(types.T_int64.ToType())
 			t.Cleanup(func() { source.Free(mp) })
