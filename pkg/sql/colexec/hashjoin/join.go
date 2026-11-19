@@ -324,8 +324,12 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				ctr.leftBat = bat
 				ctr.lastIdx = 0
+				// A unique build key selects the probe row at most once.
+				// Without a residual, fan-out uses UnionMulti to copy a flat
+				// probe payload once per group in each result batch.
+				probePayloadCopiedOnce := ctr.probeHashOnPK || hashJoin.NonEqCond == nil
 				ctr.checkProbeArea = !hashJoin.IsShuffle && ctr.mp != nil && !ctr.skipProbe &&
-					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, hashJoin.usesMembershipProjection())
+					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, probePayloadCopiedOnce)
 			}
 
 			if err = hashJoin.resetResultBat(); err != nil {

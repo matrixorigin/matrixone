@@ -157,27 +157,66 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 	}
 }
 
-func TestHashJoinMembershipOutputArea(t *testing.T) {
+func TestHashJoinProbeOutputArea(t *testing.T) {
 	previousLimit := mpool.CapLimit
 	mpool.CapLimit = 1 << 20
 	t.Cleanup(func() { mpool.CapLimit = previousLimit })
 
 	for _, shape := range []struct {
-		name       string
-		valueBytes int
-		dictionary bool
-		batchRows  []int
+		name           string
+		joinType       plan.Node_JoinType
+		valueBytes     int
+		uniqueBuild    bool
+		dictionary     bool
+		residual       bool
+		buildPayload   bool
+		probeKeys      []int32
+		buildKeys      []int32
+		wantKeys       []int32
+		batchRows      []int
+		checkProbeArea bool
 	}{
-		{name: "flat-disjoint", valueBytes: 256 << 10, batchRows: []int{2}},
-		{name: "dictionary-repeated", valueBytes: 600 << 10, dictionary: true, batchRows: []int{1, 1}},
+		{
+			name: "semi-flat", joinType: plan.Node_SEMI, valueBytes: 256 << 10,
+			buildKeys: []int32{1, 1, 2}, batchRows: []int{2},
+		},
+		{
+			name: "semi-dictionary", joinType: plan.Node_SEMI, valueBytes: 600 << 10,
+			buildKeys: []int32{1, 1, 2}, dictionary: true, batchRows: []int{1, 1}, checkProbeArea: true,
+		},
+		{
+			name: "unique-inner-flat", joinType: plan.Node_INNER, valueBytes: 256 << 10,
+			uniqueBuild: true, batchRows: []int{2},
+		},
+		{
+			name: "unique-inner-dictionary", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			uniqueBuild: true, dictionary: true, batchRows: []int{1, 1}, checkProbeArea: true,
+		},
+		{
+			name: "inner-flat-fan-out", joinType: plan.Node_INNER, valueBytes: 384 << 10,
+			buildKeys: []int32{1, 1, 2}, wantKeys: []int32{1, 1, 2}, batchRows: []int{3},
+		},
+		{
+			name: "inner-flat-residual-fan-out", joinType: plan.Node_INNER, valueBytes: 384 << 10,
+			residual: true, buildKeys: []int32{1, 1, 2}, wantKeys: []int32{1, 1, 2},
+			batchRows: []int{2, 1}, checkProbeArea: true,
+		},
+		{
+			name: "unique-inner-repeated-build", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{1, 1}, buildKeys: []int32{1},
+			batchRows: []int{1, 1},
+		},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			keyType, textType := types.T_int32.ToType(), types.T_text.ToType()
 			key := newExpr(0, keyType)
 			tc := newTestCase(t, []types.Type{keyType}, nil, [][]*plan.Expr{{key}, {key}})
-			tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_SEMI, nil
-			tc.arg.LeftTypes = append(tc.arg.LeftTypes, textType)
-			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 0, Pos: 1}}
+			tc.arg.JoinType = shape.joinType
+			if !shape.residual {
+				tc.arg.NonEqCond = nil
+			}
+			tc.barg.HashOnPK = shape.uniqueBuild
+			tc.barg.NeedAllocateSels = !shape.uniqueBuild
 			mp := tc.proc.Mp()
 			t.Cleanup(func() {
 				tc.proc.Free()
@@ -185,10 +224,29 @@ func TestHashJoinMembershipOutputArea(t *testing.T) {
 				require.Zero(t, mp.CurrNB())
 			})
 
-			values := []int32{1, 2}
-			probe, build := makeInt32Batch(tc.proc, values), makeInt32Batch(tc.proc, values)
+			defaultKeys := []int32{1, 2}
+			probeKeys, buildKeys := shape.probeKeys, shape.buildKeys
+			if probeKeys == nil {
+				probeKeys = defaultKeys
+			}
+			if buildKeys == nil {
+				buildKeys = defaultKeys
+			}
+			wantKeys := shape.wantKeys
+			if wantKeys == nil {
+				wantKeys = probeKeys
+			}
+			probe, build := makeInt32Batch(tc.proc, probeKeys), makeInt32Batch(tc.proc, buildKeys)
 			t.Cleanup(func() { probe.Clean(mp) })
 			t.Cleanup(func() { build.Clean(mp) })
+			relation, source := int32(0), probe
+			if shape.buildPayload {
+				relation, source = 1, build
+				tc.arg.RightTypes = append(tc.arg.RightTypes, textType)
+			} else {
+				tc.arg.LeftTypes = append(tc.arg.LeftTypes, textType)
+			}
+			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: relation, Pos: 1}}
 			payload := vector.NewOffHeapVecWithType(textType)
 			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
 			if shape.dictionary {
@@ -202,10 +260,10 @@ func TestHashJoinMembershipOutputArea(t *testing.T) {
 				t.Cleanup(selection.Release)
 				dictionary, err := vector.NewDictionaryVector(base, selection, mp, nil)
 				require.NoError(t, err)
-				probe.Vecs = append(probe.Vecs, dictionary)
+				source.Vecs = append(source.Vecs, dictionary)
 			} else {
-				probe.Vecs = append(probe.Vecs, payload)
-				for range values {
+				source.Vecs = append(source.Vecs, payload)
+				for range source.RowCount() {
 					require.NoError(t, vector.AppendBytes(payload, value, false, mp))
 				}
 				require.True(t, payload.VarlenaAreaIsDisjoint())
@@ -225,11 +283,11 @@ func TestHashJoinMembershipOutputArea(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, res.Batch)
 				require.Equal(t, rows, res.Batch.RowCount())
-				// Disjoint membership can skip sizing even when a single
-				// value would require checks on a row-repeating path.
-				require.Equal(t, shape.dictionary, tc.arg.ctr.checkProbeArea)
+				require.Equal(t, shape.uniqueBuild, tc.arg.ctr.probeHashOnPK)
+				require.Equal(t, shape.checkProbeArea, tc.arg.ctr.checkProbeArea)
+				require.Equal(t, shape.buildPayload, tc.arg.ctr.checkBuildArea)
 				for row := range rows {
-					require.Equal(t, values[next], vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[0], row))
+					require.Equal(t, wantKeys[next], vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[0], row))
 					require.True(t, bytes.Equal(value, res.Batch.Vecs[1].GetBytesAt(row)))
 					next++
 				}
@@ -238,7 +296,7 @@ func TestHashJoinMembershipOutputArea(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, vm.ExecStop, res.Status)
 			require.Nil(t, res.Batch)
-			require.Equal(t, len(values), next)
+			require.Equal(t, len(wantKeys), next)
 		})
 	}
 }
