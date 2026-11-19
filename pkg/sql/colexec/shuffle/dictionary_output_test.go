@@ -269,13 +269,28 @@ func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		dictionary, nullable bool
+		pressure             string
 	}{
 		{name: "wide flat"}, {name: "composed dictionary", dictionary: true}, {name: "nullable metadata", nullable: true},
+		{name: "composed metadata capacity", dictionary: true, pressure: "metadata"},
+		{name: "composed pool capacity", dictionary: true, pressure: "pool"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			var pool *mpool.MPool
+			if tc.pressure == "pool" {
+				var err error
+				pool, err = mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+				require.NoError(t, err)
+			} else {
+				pool = mpool.MustNewZero()
+			}
+			proc := testutil.NewProcessWithOwnedMPool(t, "", pool)
 			t.Cleanup(proc.Free)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			slots := uint64(128)
+			if tc.pressure == "metadata" {
+				slots = 4 // The source owns two allocations; an owned gather needs one more.
+			}
+			registry, err := mpool.NewAllocationAccountRegistry(1, slots)
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
@@ -320,8 +335,27 @@ func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
 			if tc.dictionary {
 				rows = []int32{0, 2, 4, 6, 8, 10, 12, 14}
 			}
+			if tc.pressure == "pool" {
+				// The ordinary 128-byte gather fits; three concurrent 64-byte
+				// maps do not. Keep pressure private to this process's pool.
+				filler, err := proc.Mp().Alloc(int(proc.Mp().Cap()-proc.Mp().CurrNB()-128), true)
+				require.NoError(t, err)
+				t.Cleanup(func() { proc.Mp().Free(filler) })
+			}
 			output, err := sp.selectPartition(input, rows, &views, proc)
 			require.NoError(t, err)
+			if tc.pressure != "" {
+				require.Nil(t, output)
+				require.Equal(t, before, account.Snapshot().Used)
+				output = batch.NewWithSchema(true, nil, []types.Type{typ})
+				t.Cleanup(func() { output.Clean(proc.Mp()) })
+				require.NoError(t, output.SetAllocationAccount(allocation))
+				require.NoError(t, output.Vecs[0].Union(input.Vecs[0], []int64{0, 2, 4, 6, 8, 10, 12, 14}, proc.Mp()))
+				for row := range 8 {
+					require.Equal(t, types.Decimal128{B0_63: uint64(4 - row%2)}, vector.GetFixedAtNoTypeCheck[types.Decimal128](output.Vecs[0], row))
+				}
+				return
+			}
 			if !tc.dictionary {
 				require.Nil(t, output)
 				require.Equal(t, before, account.Snapshot().Used, "rejected metadata must release all unpublished capacity")

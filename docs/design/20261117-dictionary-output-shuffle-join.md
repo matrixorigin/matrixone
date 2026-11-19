@@ -163,3 +163,9 @@ bound already exceeds the ordinary copy. Include an existing dictionary's base
 in the final retained bound as well. Unaccounted inputs keep their existing
 admission policy. The queue, producer reuse and lease-release protocols do not
 change.
+
+Optional partition construction uses the existing retryable-capacity classifier,
+including allocation metadata slots and MPool/global capacity. On refusal, unwind
+all unpublished maps and snapshots before the ordinary owned gather. Ownership,
+sealed-generation, allocator-limit and other terminal failures still propagate;
+the ordinary gather also keeps its own required-allocation errors.

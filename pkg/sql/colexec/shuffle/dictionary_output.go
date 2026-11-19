@@ -108,7 +108,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		}
 	}
 	if err := s.rows.PreExtend(len(rows), proc.Mp()); err != nil {
-		if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+		if mpool.IsRetryableAllocationCapacity(err) {
 			s.free(proc.Mp())
 			s.disabled = true
 			return nil, nil
@@ -122,7 +122,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 	}
 	selection, err := vector.NewRowSelection(logical, input.RowCount(), proc.Mp(), allocation)
 	if err != nil {
-		if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+		if mpool.IsRetryableAllocationCapacity(err) {
 			s.free(proc.Mp())
 			s.disabled = true
 			return nil, nil
@@ -141,7 +141,7 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 			s.free(proc.Mp())
 			s.disabled = true
 		}
-		if errors.Is(retErr, mpool.ErrAllocationAccountCapacity) || errors.Is(retErr, mpool.ErrAllocationAccountMismatch) {
+		if mpool.IsRetryableAllocationCapacity(retErr) || errors.Is(retErr, mpool.ErrAllocationAccountMismatch) {
 			retErr = nil
 		}
 	}()
