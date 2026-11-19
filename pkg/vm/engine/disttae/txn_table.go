@@ -3213,145 +3213,150 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
-	if len(candidateBlks) > 0 {
-		bytes, _ := keys.MarshalBinary()
-		colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
-		inExpr := plan2.MakeInExpr(
-			ctx,
-			colExpr,
-			int32(keys.Length()),
-			bytes,
-			false)
+	checkTombstones := func() (bool, error) {
+		if checkTombstone {
+			pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+			pkType := plan2.ExprType2Type(&pkDef.Typ)
+			changed, tombstoneReason, err := tombstonePKExistsInRange(
+				ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+			)
+			if changed {
+				reason = tombstoneReason
+			}
+			return changed, err
+		}
+		return false, nil
+	}
+	if len(candidateBlks) == 0 {
+		return checkTombstones()
+	}
 
-		basePKFilter, err := readutil.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
-		if err != nil {
+	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
+		reason = "candidate_blocks_bailout"
+		return true, nil
+	}
+
+	bytes, _ := keys.MarshalBinary()
+	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+	inExpr := plan2.MakeInExpr(
+		ctx,
+		colExpr,
+		int32(keys.Length()),
+		bytes,
+		false)
+
+	basePKFilter, err := readutil.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
+	if err != nil {
+		return false, err
+	}
+
+	filter, err := readutil.ConstructBlockPKFilter(
+		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+		basePKFilter,
+		nil,
+	)
+	if err != nil {
+		return false, err
+	}
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
+
+	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
+		inner := LinearSearchOffsetByValFactory(keys)
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+			return inner(&cacheVectors[0])
+		}
+	}
+
+	cacheVectors := containers.NewVectors(3)
+	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkSeq := pkDef.Seqnum
+	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	// Acquire semaphore to limit concurrent block I/O across all transactions.
+	// This prevents 1000 goroutines from simultaneously reading blocks and
+	// exhausting mpool capacity. Release before the tombstone phase, which
+	// acquires its own permit (never nest acquisitions).
+	if err := acquirePKCheckSemaphore(ctx); err != nil {
+		return false, err
+	}
+
+	v2.TxnPKChangeCheckIOCounter.Inc()
+
+	for _, blk := range candidateBlks {
+		if err := ctx.Err(); err != nil {
+			releasePKCheckSemaphore()
 			return false, err
 		}
-
-		filter, err := readutil.ConstructBlockPKFilter(
-			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
-			basePKFilter,
-			nil,
-		)
-		if err != nil {
-			return false, err
-		}
-		if filter.Cleanup != nil {
-			defer filter.Cleanup()
+		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
+		if searchFunc == nil {
+			searchFunc = buildUnsortedFilter()
 		}
 
-		buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-			inner := LinearSearchOffsetByValFactory(keys)
-			return func(cacheVectors containers.Vectors) []int64 {
-				if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
-					return nil
+		var matched, usable bool
+		if filter.CachedSearch != nil {
+			matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+				ctx,
+				uint16(pkSeq),
+				pkType,
+				fs,
+				blk.MetaLocation(),
+				filter.CachedSearch,
+				blk.IsSorted() && !filter.HasFakePK,
+				objectio.SEQNUM_COMMITTS,
+				from,
+				to,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+		} else {
+			var release func()
+			release, _, err = ioutil.LoadColumns(
+				ctx,
+				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+				[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
+				fs,
+				blk.MetaLocation(),
+				cacheVectors,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+			if err == nil {
+				sels := searchFunc(cacheVectors)
+				if len(sels) == 0 {
+					matched, usable = false, true
+				} else {
+					matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
 				}
-				return inner(&cacheVectors[0])
+				release()
 			}
 		}
-
-		if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
-			reason = "candidate_blocks_bailout"
+		if err != nil {
+			releasePKCheckSemaphore()
+			reason = "data_block_read_error"
+			if !checkTombstone {
+				obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
+				if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
+					return true, moerr.NewTxnNeedRetry(ctx)
+				}
+			}
+			return true, err
+		}
+		if !usable || matched {
+			releasePKCheckSemaphore()
+			if usable {
+				reason = "data_commit_ts_hit"
+			} else {
+				reason = "data_commit_ts_unavailable"
+			}
 			return true, nil
 		}
-
-		cacheVectors := containers.NewVectors(3)
-		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
-		pkSeq := pkDef.Seqnum
-		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		// Acquire semaphore to limit concurrent block I/O across all transactions.
-		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Release before the tombstone phase, which
-		// acquires its own permit (never nest acquisitions).
-		if err := acquirePKCheckSemaphore(ctx); err != nil {
-			return false, err
-		}
-
-		v2.TxnPKChangeCheckIOCounter.Inc()
-
-		for _, blk := range candidateBlks {
-			if err := ctx.Err(); err != nil {
-				releasePKCheckSemaphore()
-				return false, err
-			}
-			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
-			if searchFunc == nil {
-				searchFunc = buildUnsortedFilter()
-			}
-
-			var matched, usable bool
-			if filter.CachedSearch != nil {
-				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
-					ctx,
-					uint16(pkSeq),
-					pkType,
-					fs,
-					blk.MetaLocation(),
-					filter.CachedSearch,
-					blk.IsSorted() && !filter.HasFakePK,
-					objectio.SEQNUM_COMMITTS,
-					from,
-					to,
-					tbl.proc.Load().GetMPool(),
-					fileservice.Policy(0),
-				)
-			} else {
-				var release func()
-				release, _, err = ioutil.LoadColumns(
-					ctx,
-					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
-					fs,
-					blk.MetaLocation(),
-					cacheVectors,
-					tbl.proc.Load().GetMPool(),
-					fileservice.Policy(0),
-				)
-				if err == nil {
-					sels := searchFunc(cacheVectors)
-					if len(sels) == 0 {
-						matched, usable = false, true
-					} else {
-						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
-					}
-					release()
-				}
-			}
-			if err != nil {
-				releasePKCheckSemaphore()
-				reason = "data_block_read_error"
-				if !checkTombstone {
-					obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
-					if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
-						return true, moerr.NewTxnNeedRetry(ctx)
-					}
-				}
-				return true, err
-			}
-			if !usable || matched {
-				releasePKCheckSemaphore()
-				if usable {
-					reason = "data_commit_ts_hit"
-				} else {
-					reason = "data_commit_ts_unavailable"
-				}
-				return true, nil
-			}
-		}
-		releasePKCheckSemaphore()
 	}
-	if checkTombstone {
-		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
-		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		changed, tombstoneReason, err := tombstonePKExistsInRange(
-			ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
-		)
-		if changed {
-			reason = tombstoneReason
-		}
-		return changed, err
-	}
-	return false, nil
+	releasePKCheckSemaphore()
+	return checkTombstones()
 }
 
 // tombstonePKExistsInRange checks whether any tombstone object created or deleted

@@ -316,26 +316,41 @@ func TestPersistedPKCheckUnsortedKeysAndTimeWindow(t *testing.T) {
 func TestPersistedPKCheckCandidateBlockBudget(t *testing.T) {
 	for _, blocks := range []int{32, 33} {
 		t.Run(fmt.Sprint(blocks), func(t *testing.T) {
-			tbl, eng, fs, keys := newPersistedPKCheckTableBlocks(t, types.T_int64, false, blocks, false)
-			ctx := tbl.proc.Load().Ctx
-			blockReads := 0
-			eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
-				if len(v.Entries) > 1 {
-					blockReads++
-				}
-				return fs.Read(ctx, v)
-			}}
-			// All matching row commits predate from. Only the over-budget
-			// case may conservatively report a conflict before reading rows.
-			changed, err := tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(20, 0), types.BuildTS(50, 0), keys, 0)
-			require.NoError(t, err)
-			require.Equal(t, blocks > 32, changed)
-			if blocks == 32 {
-				require.Positive(t, blockReads)
-			} else {
-				require.Zero(t, blockReads)
+			for _, check := range []struct {
+				name     string
+				modified bool
+			}{{"upserted", false}, {"modified", true}} {
+				t.Run(check.name, func(t *testing.T) {
+					tbl, eng, fs, keys := newPersistedPKCheckTableBlocks(t, types.T_int64, false, blocks, false)
+					ctx := tbl.proc.Load().Ctx
+					blockReads := 0
+					eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
+						if len(v.Entries) > 1 {
+							blockReads++
+						}
+						return fs.Read(ctx, v)
+					}}
+					// All matching commits are at the exclusive lower bound. Only
+					// the over-budget case may report a conflict before reading rows.
+					baseline := tbl.proc.Load().Mp().CurrNB()
+					var changed bool
+					var err error
+					if check.modified {
+						changed, err = tbl.PrimaryKeysMayBeModified(ctx, types.BuildTS(20, 0), types.BuildTS(50, 0), keys, 0, -1)
+					} else {
+						changed, err = tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(20, 0), types.BuildTS(50, 0), keys, 0)
+					}
+					require.NoError(t, err)
+					require.Equal(t, blocks > 32, changed)
+					if blocks == 32 {
+						require.Positive(t, blockReads)
+					} else {
+						require.Zero(t, blockReads)
+					}
+					require.Empty(t, pkCheckSemaphore)
+					require.Equal(t, baseline, tbl.proc.Load().Mp().CurrNB())
+				})
 			}
-			require.Empty(t, pkCheckSemaphore)
 		})
 	}
 }
