@@ -60,7 +60,7 @@ const (
 	maxObserverNameRunes = 300
 )
 
-var errReadDeadline = errors.New("changed-table query deadline")
+var errReadDeadline = moerr.NewInternalErrorNoCtx("changed-table query deadline")
 
 func Read(proc *process.Process, marker, observerName *string) (_ Result, err error) {
 	if proc == nil || proc.Base == nil || proc.Ctx == nil {

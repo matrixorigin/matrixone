@@ -39,7 +39,7 @@ const (
 	scopedChangedTablesMaxIndexBlocks = 1_024
 )
 
-var errScopedChangedTablesDeadline = errors.New("scoped changed-table request deadline")
+var errScopedChangedTablesDeadline = moerr.NewInternalErrorNoCtx("scoped changed-table request deadline")
 
 // scopedChangedTablesAdmission admits one scan and at most one waiting request.
 // A request holds its admission slot until it finishes or leaves the wait.
