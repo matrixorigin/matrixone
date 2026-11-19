@@ -43,7 +43,7 @@ changes pay the same cost.
 
 | Level | Shape | Required review/validation depth |
 |---|---|---|
-| **R0: non-behavioral** | documentation, comments, formatting, mechanical rename, or generated output whose source contract is unchanged | inspect diff/delivery, links/schema/parser/lint as applicable; no unrelated Go tests |
+| **R0: non-behavioral** | explanatory docs, comments, formatting, mechanical rename, or generated output whose source contract is unchanged | inspect diff/delivery, links/schema/parser/lint as applicable; no unrelated Go tests |
 | **R1: local** | deterministic test-only work or local sequential internal behavior with no public, persistent, shared-state, or cross-owner contract | invariant/oracle review and exact focused validation; exercise the owning package when shared fixtures, selection, or behavior beyond the focused check may change |
 | **R2: contract** | public result/error/metadata, cross-package ownership, protocol-facing code, or a changed dependent contract | real consumer and negative/control proof at the changed boundary; use the test contract to select UT/BVT and affected packages |
 | **R3: systemic** | concurrency/lifecycle/global state, persisted format or interpretation, distributed protocol, restart/upgrade, security/tenant boundary, material hot path, background resource, or large/complex feature/refactor | model the affected ownership, state, waits, or bounds and prove the applicable unhappy paths with relevant race, fault, restart, upgrade or performance evidence |
@@ -98,11 +98,13 @@ rediscover a different blocker.
   where the new behavior should not apply. For timing failures, perturb
   scheduling along an existing reachable path and assert the terminal outcome.
   A forced impossible state can prove a defensive invariant only.
-- **Test or CI changes.** Confirm the same required assertions, cases, race
-  instrumentation and cleanup still run at the intended entry point. Inspect
-  changed filters, retries, skips, timeouts, exits and expected results that
-  could hide a failure. For merged cases, account for each distinct prior
-  oracle once.
+- **Test or CI changes.** Verify the required cases, assertions, instrumentation
+  and cleanup at the workflow entry point. For selection changes, compare the
+  actual selected set and execution mode on a representative diff. A focused
+  selector run and existing job evidence can establish selection and wiring.
+  Inspect filters, skips, retries, timeouts, exits or expected results that
+  could hide a failure. Account for each distinct prior oracle when merging
+  cases. Use product counterexamples when the change also affects product behavior.
 - **Performance claims.** Check equivalent results and completed work, including
   work deferred to another phase, process, or background task. Compare the
   affected phase and end-to-end metric under comparable data and setup. Where

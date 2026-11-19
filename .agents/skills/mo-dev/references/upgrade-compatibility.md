@@ -58,15 +58,20 @@ the actual supported source release.
   unpublished commit is not sufficient justification. Any exception requires an
   explicit supported deployment and upgrade contract.
 
-## Preserve the meaning of released data
+## Preserve or explicitly migrate released semantics
 
-- Identify what the release actually wrote and how upgraded code consumes it.
-  Preserve the meaning of released encodings and stored IDs, including when
-  new writes reevaluate an existing definition. Use the existing owner to
-  distinguish released definitions from newly bound ones. Prefer deciding at
-  binding, decoding or migration time so ordinary execution avoids per-row
-  version checks, metadata lookups and allocations. Remove superseded
-  development-only branches or encodings within the changed boundary.
+- Identify what the release wrote and how upgraded code consumes it. Preserve
+  the meaning of existing definitions by default, including when later writes
+  reevaluate them. Use the existing owner to distinguish released definitions
+  from newly bound ones. Prefer binding, decoding or migration time to avoid
+  per-row compatibility work. Remove superseded development-only branches
+  in the changed scope.
+- When a fix deliberately changes an existing definition's behavior, state
+  the intended result and use the existing migration or rebuild owner. Verify
+  consistency across the definition, materialized values and dependent indexes
+  where affected. Exercise interruption and retry if the change can leave
+  durable partial progress. Keep decoding a released ID consistently while
+  any supported artifact can still carry it.
 - Choose the smallest test that distinguishes the two behaviors. For a
   reachable change to released interpretation or migration, exercise a real
   artifact from the verified release (or reuse equivalent evidence), open it

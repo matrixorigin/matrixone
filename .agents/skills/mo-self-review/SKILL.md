@@ -89,7 +89,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Large/complex feature or major refactor; design review (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 | Production behavior or changed/added/removed/merged/optimized UT/BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
-| Planner/explain/rewrite correctness or a credible reproducer-specific, bypassed, or self-validating check | [../mo-dev/references/counterexample-testing.md](../mo-dev/references/counterexample-testing.md) |
+| Planner/explain/rewrite correctness or a credible overfit in product behavior | [../mo-dev/references/counterexample-testing.md](../mo-dev/references/counterexample-testing.md) |
 | Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [../mo-dev/references/upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md) |
 | Index algorithm dispatch/plugin/registry/ISCP paths | [../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change](../mo-dev/references/index-plugin.md#9-reviewing-an-index-plugin-change) |
 
@@ -139,7 +139,7 @@ exclusions that affect the verdict in the shared map.
 | Control/liveness | Can cancel/close/reject/timeout terminate independently of the work it controls? |
 | Resource lifecycle | Does each resource have one effective cleanup owner on success, partial failure, cancel, panic, reset, and reuse? |
 | Boundedness/scale | Are queues, retries, caches, retained state, logs/metrics, memory/disk/FDs, and work admission bounded? |
-| Compatibility/security | Does the changed closure preserve the interpretation of released state on reads and later writes, supported migrations/restores, external contracts, and auth, tenant, and trust boundaries where applicable? Route affected compatibility boundaries through the shared upgrade contract. |
+| Compatibility/security | Does the target interpret released state consistently on reads and later writes, including any deliberate migration? Are restore, external contracts, and auth, tenant, and trust boundaries preserved where applicable? Route affected compatibility boundaries through the shared upgrade contract. |
 | Performance/operations | Did hot-path work, allocations, I/O, synchronization, startup, capacity, rollout, observability, or blast radius change materially? |
 | Platform/delivery | Are build tags, OS/arch, CGo/native loading, generated files, packaging, and final committed artifacts correct? |
 | Test architecture | Do tests prove distinct contracts with minimum deterministic data/setup, correct UT/BVT layer, isolation, cleanup, and real selection? |
