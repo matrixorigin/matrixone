@@ -37,6 +37,7 @@ type ownedSelectionTestReader struct {
 	t              *testing.T
 	selectCalls    int
 	expectedSelect bool
+	applyOnly      bool
 	uses           []engine.ReaderColumnUse
 }
 
@@ -47,6 +48,8 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 	}
 	require.Equal(r.t, []int{0, 1}, early)
 	require.Equal(r.t, r.expectedSelect, filter.Select != nil)
+	require.Nil(r.t, filter.Workspace, "a fresh scan has nothing to publish before selection")
+	require.Nil(r.t, filter.SelectionSlot)
 	r.uses = append([]engine.ReaderColumnUse(nil), filter.ColumnUses...)
 	source := batch.NewWithSize(2)
 	defer source.Clean(mp)
@@ -60,7 +63,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 	source.SetRowCount(4)
 	count := 0
 	var selected engine.ReaderFilterResult
-	if filter.Select != nil {
+	if filter.Select != nil && !r.applyOnly {
 		r.selectCalls++
 		var err error
 		selected, err = filter.Select(source, early)
@@ -71,6 +74,10 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		count = source.RowCount()
 		if !selected.All {
 			count = len(selected.Sels)
+			if filter.ColumnUse(0, len(out.Vecs)) == engine.ReaderColumnRetain {
+				require.Len(r.t, filter.Workspace, len(out.Vecs))
+				require.NotNil(r.t, filter.SelectionSlot)
+			}
 		}
 	} else {
 		if _, err := filter.Apply(source, early); err != nil {
@@ -102,7 +109,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 type eagerSelectionTestReader struct{ engine.Reader }
 
 func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
-	for _, shape := range []string{"flat", "accepting", "missing-account", "unsupported-reader", "summary", "pad-char"} {
+	for _, shape := range []string{"flat", "accepting", "accepting-apply-only", "missing-account", "unsupported-reader", "summary", "pad-char"} {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			t.Cleanup(proc.Free)
@@ -157,13 +164,13 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 				passes = 2
 			}
 			for pass := 0; pass < passes; pass++ {
-				reader := &ownedSelectionTestReader{t: t, expectedSelect: shape != "pad-char"}
+				reader := &ownedSelectionTestReader{t: t, expectedSelect: shape != "pad-char", applyOnly: shape == "accepting-apply-only"}
 				scan.Reader = reader
 				if shape == "unsupported-reader" {
 					scan.Reader = &eagerSelectionTestReader{Reader: reader}
 				}
 				require.NoError(t, scan.Prepare(proc))
-				if shape == "accepting" {
+				if shape == "accepting" || reader.applyOnly {
 					parent := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator()}
 					parent.AppendChild(scan)
 					vm.ConfigureDictionaryBoundaries(parent)
@@ -185,13 +192,16 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 					require.False(t, result.Batch.HasDictionary())
 					require.Equal(t, []types.Decimal64{100, 200}, vector.MustFixedColNoTypeCheck[types.Decimal64](result.Batch.Vecs[0]))
 					require.Equal(t, 2, result.Batch.RowCount())
-					if shape == "accepting" {
+					if shape == "accepting" || reader.applyOnly {
 						require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnUnused}, reader.uses)
+						if reader.applyOnly {
+							require.Nil(t, scan.ctr.readerWorkspace)
+						}
 					} else {
 						require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, reader.uses)
 						require.Nil(t, scan.ctr.readerWorkspace)
 					}
-					require.Equal(t, shape != "pad-char", reader.selectCalls > 0)
+					require.Equal(t, shape != "pad-char" && !reader.applyOnly, reader.selectCalls > 0)
 					if frame := scan.ctr.dictionaryInputs; frame != nil {
 						require.Zero(t, frame.Gathers, "the second predicate must borrow phone values")
 					}

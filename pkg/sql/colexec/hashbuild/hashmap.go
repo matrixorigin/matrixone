@@ -58,6 +58,9 @@ type HashmapBuilder struct {
 	DedupColName       string
 	DedupColTypes      []plan.Type
 	DedupKeyExprs      []*plan.Expr
+	// AuxiliaryRowIdColIdx is one-based; zero disables auxiliary arbitration.
+	// NULL identifies a reservation or release, rather than a real candidate.
+	AuxiliaryRowIdColIdx int32
 
 	IgnoreRows *bitmap.Bitmap
 
@@ -192,6 +195,10 @@ func (hb *HashmapBuilder) Prepare(
 	proc *process.Process,
 	foldOwnedConstantCasts ...bool,
 ) error {
+	if hb.AuxiliaryRowIdColIdx < 0 || hb.AuxiliaryRowIdColIdx > 0 &&
+		(!hb.IsDedup || hb.OnDuplicateAction != plan.Node_IGNORE || delColIdx < 0 || dedupDeleteMarkerColIdx < 0) {
+		return moerr.NewInternalError(proc.Ctx, "invalid auxiliary IGNORE arbitration metadata")
+	}
 	if len(hb.executors) == 0 {
 		needDupVec := false
 		keyWidth := 0
@@ -498,6 +505,17 @@ func (hb *HashmapBuilder) RetainedBatchRecoverySafe() bool {
 	return hb.retainedBatchRecoverySafe
 }
 
+// An auxiliary IGNORE stage protects the preceding accepted image before
+// admitting a changed key. Releases are persistent evidence, not competitors.
+// Without auxiliary metadata, only claimant/owner priorities are used, retaining
+// the generic IGNORE original-key-owner rule.
+const (
+	ignoreReleasePriority uint8 = iota
+	ignoreClaimPriority
+	ignoreReservationPriority
+	ignoreOwnerPriority
+)
+
 func (hb *HashmapBuilder) buildHashmap(
 	hashOnPK bool,
 	needAllocateSels bool,
@@ -506,6 +524,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	// Auxiliary diagnostics need a physical build row for every group. Finalize
+	// keeps explicit selections unless the mapping is the compact g -> g-1 form.
+	needAllocateSels = needAllocateSels || hb.AuxiliaryRowIdColIdx > 0
 	runtimeFilterRequested := needUniqueVec
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() && hb.IsDedup &&
@@ -525,6 +546,17 @@ func (hb *HashmapBuilder) buildHashmap(
 	recordDuplicateWarning := func(vec *vector.Vector, row int, inputRow int) {
 		if !warningsEnabled {
 			return
+		}
+		if hb.AuxiliaryRowIdColIdx > 0 {
+			batIdx := inputRow / colexec.DefaultBatchSize
+			colIdx := hb.AuxiliaryRowIdColIdx - 1
+			if batIdx < 0 || batIdx >= len(hb.Batches.Buf) || int(colIdx) >= len(hb.Batches.Buf[batIdx].Vecs) {
+				duplicateWarnings.AddCount()
+				return
+			}
+			if hb.Batches.Buf[batIdx].Vecs[colIdx].IsNull(uint64(inputRow % colexec.DefaultBatchSize)) {
+				return
+			}
 		}
 		if !duplicateWarnings.NeedsDiagnostic() {
 			duplicateWarnings.AddCount()
@@ -551,6 +583,19 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 	if hb.InputBatchRowCount == 0 {
 		return nil
+	}
+	if hb.AuxiliaryRowIdColIdx > 0 {
+		for _, bat := range hb.Batches.Buf {
+			if int(hb.AuxiliaryRowIdColIdx) > len(bat.Vecs) ||
+				hb.delColIdx < 0 || int(hb.delColIdx) >= len(bat.Vecs) ||
+				hb.dedupDeleteMarkerColIdx < 0 || int(hb.dedupDeleteMarkerColIdx) >= len(bat.Vecs) ||
+				bat.Vecs[hb.AuxiliaryRowIdColIdx-1] == nil ||
+				bat.Vecs[hb.delColIdx] == nil ||
+				bat.Vecs[hb.dedupDeleteMarkerColIdx] == nil ||
+				bat.Vecs[hb.dedupDeleteMarkerColIdx].GetType().Oid != types.T_bool {
+				return moerr.NewInternalError(proc.Ctx, "invalid auxiliary IGNORE arbitration columns")
+			}
+		}
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -687,24 +732,24 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	var (
-		vOld                   uint64
-		cardinality            uint64
-		lastBatch              = -1
-		lastRows               []int64
-		ignoreSurvivorRows     []int64
-		ignoreSurvivorOwnsKey  []bool
-		ignoreBuildGroups      []uint64
-		ignoreBuildZvals       []int64
-		ignoreCandidateOwnsKey []bool
-		ignoreCandidateOldKey  []*vector.Vector
+		vOld                    uint64
+		cardinality             uint64
+		lastBatch               = -1
+		lastRows                []int64
+		ignoreSurvivorRows      []int64
+		ignoreSurvivorPriority  []uint8
+		ignoreBuildGroups       []uint64
+		ignoreBuildZvals        []int64
+		ignoreCandidatePriority []uint8
+		ignoreCandidateOldKey   []*vector.Vector
 	)
 	cleanupDedupScratch := func() {
 		freeDedupSlice(hb, lastRows, proc.Mp())
 		lastRows = nil
 		freeDedupSlice(hb, ignoreSurvivorRows, proc.Mp())
 		ignoreSurvivorRows = nil
-		freeDedupSlice(hb, ignoreSurvivorOwnsKey, proc.Mp())
-		ignoreSurvivorOwnsKey = nil
+		freeDedupSlice(hb, ignoreSurvivorPriority, proc.Mp())
+		ignoreSurvivorPriority = nil
 	}
 	defer cleanupDedupScratch()
 	if dedupBuildKeepLast {
@@ -731,18 +776,18 @@ func (hb *HashmapBuilder) buildHashmap(
 		if err != nil {
 			return err
 		}
-		ignoreSurvivorOwnsKey, err = makeDedupSlice[bool](
+		ignoreSurvivorPriority, err = makeDedupSlice[uint8](
 			hb,
 			hb.InputBatchRowCount+1,
 			proc.Mp(),
-			HashBuildAllocationSiteDedupSurvivorOwnsKey,
+			HashBuildAllocationSiteDedupSurvivorPriority,
 		)
 		if err != nil {
 			return err
 		}
 		ignoreBuildGroups = make([]uint64, hashmap.UnitLimit)
 		ignoreBuildZvals = make([]int64, hashmap.UnitLimit)
-		ignoreCandidateOwnsKey = make([]bool, hashmap.UnitLimit)
+		ignoreCandidatePriority = make([]uint8, hashmap.UnitLimit)
 		ignoreCandidateOldKey = make([]*vector.Vector, 1)
 	}
 
@@ -805,7 +850,6 @@ buildUnits:
 			copy(ignoreBuildZvals[:n], zvals[:n])
 			vals = ignoreBuildGroups[:n]
 			zvals = ignoreBuildZvals[:n]
-			clear(ignoreCandidateOwnsKey[:n])
 			ignoreCandidateOldKey[0] = hb.Batches.Buf[vecIdx1].Vecs[hb.delColIdx]
 			oldVals, oldZvals, findErr := itr.Find(
 				vecIdx2,
@@ -816,7 +860,31 @@ buildUnits:
 				return findErr
 			}
 			for k := 0; k < n; k++ {
-				ignoreCandidateOwnsKey[k] = zvals[k] != 0 && oldZvals[k] != 0 && vals[k] != 0 && oldVals[k] == vals[k]
+				priority := ignoreClaimPriority
+				if zvals[k] != 0 && oldZvals[k] != 0 && vals[k] != 0 && oldVals[k] == vals[k] {
+					priority = ignoreOwnerPriority
+				}
+				if hb.AuxiliaryRowIdColIdx > 0 {
+					bat := hb.Batches.Buf[vecIdx1]
+					row := uint64(vecIdx2 + k)
+					auxiliary := bat.Vecs[hb.AuxiliaryRowIdColIdx-1].IsNull(row)
+					marker := bat.Vecs[hb.dedupDeleteMarkerColIdx]
+					if marker.IsNull(row) {
+						return moerr.NewInternalError(proc.Ctx, "NULL auxiliary IGNORE release marker")
+					}
+					release := vector.GetFixedAtNoTypeCheck[bool](marker, int(row))
+					if release && !auxiliary {
+						return moerr.NewInternalError(proc.Ctx, "non-auxiliary IGNORE release row")
+					}
+					if auxiliary {
+						if release {
+							priority = ignoreReleasePriority
+						} else {
+							priority = ignoreReservationPriority
+						}
+					}
+				}
+				ignoreCandidatePriority[k] = priority
 			}
 		}
 		for k, v := range vals[:n] {
@@ -851,14 +919,19 @@ buildUnits:
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
-						if ignoreSurvivorRows != nil && ignoreCandidateOwnsKey[k] && !ignoreSurvivorOwnsKey[v] {
+						if ignoreSurvivorRows != nil && ignoreCandidatePriority[k] == ignoreReleasePriority {
+							// Release evidence must survive every shrink/rebuild, but
+							// never wins against a real claimant or reservation.
+							continue
+						}
+						if ignoreSurvivorRows != nil && ignoreCandidatePriority[k] > ignoreSurvivorPriority[v] {
 							previousRow := ignoreSurvivorRows[v]
-							if previousRow > 0 {
+							if previousRow > 0 && ignoreSurvivorPriority[v] != ignoreReleasePriority {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
 								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, int(previousRow-1))
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
-							ignoreSurvivorOwnsKey[v] = true
+							ignoreSurvivorPriority[v] = ignoreCandidatePriority[k]
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
 							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, i+k)
@@ -868,7 +941,7 @@ buildUnits:
 					cardinality = v
 					if ignoreSurvivorRows != nil {
 						ignoreSurvivorRows[v] = int64(i+k) + 1
-						ignoreSurvivorOwnsKey[v] = ignoreCandidateOwnsKey[k]
+						ignoreSurvivorPriority[v] = ignoreCandidatePriority[k]
 					}
 					if hb.OnDuplicateAction == plan.Node_IGNORE && needAllocateSels {
 						hb.Sels.Insert(int32(v), int32(i+k))
