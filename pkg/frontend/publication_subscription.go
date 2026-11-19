@@ -1631,8 +1631,19 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 		if err != nil {
 			return err
 		}
+		missingAccounts := 0
 		for _, subInfo := range subscribedInfos {
-			subscribedAccountNames = append(subscribedAccountNames, accIdInfoMap[subInfo.SubAccountId].Name)
+			accountInfo := accIdInfoMap[subInfo.SubAccountId]
+			if accountInfo == nil {
+				// A stale subscription must not hide this or other publications.
+				// Do not fall back to the stored name: it may belong to a new ID.
+				missingAccounts++
+				continue
+			}
+			subscribedAccountNames = append(subscribedAccountNames, accountInfo.Name)
+		}
+		if missingAccounts > 0 {
+			ses.Warnf(ctx, "SHOW PUBLICATIONS: publication %q has %d subscribed account IDs absent from the account lookup; omitted from subscribed_accounts", pubInfo.PubName, missingAccounts)
 		}
 		slices.Sort(subscribedAccountNames)
 

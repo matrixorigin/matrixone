@@ -10264,6 +10264,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = b(builder, tbl, ctx, exprs, nil)
 	} else {
 		switch id {
+		case "mo_current_roles":
+			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
 		case "unnest":
 			nodeId, err = builder.buildUnnest(tbl, ctx, exprs, nil)
 		case "generate_series":

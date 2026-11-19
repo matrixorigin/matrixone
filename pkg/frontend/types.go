@@ -629,6 +629,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	currentRoleContext *process.CurrentRoleContext
 	readSnapshot       timestamp.Timestamp
 }
 
@@ -905,6 +906,7 @@ type ExecCtx struct {
 	// Authorization uses a statement view independently of an old user SI transaction.
 	authorizationMu       sync.Mutex
 	authorizationSnapshot timestamp.Timestamp
+	showMetadataRead      *backExec
 	protectedPolicyLoaded bool
 	protectedPolicyRaw    string
 	sequenceAuthorization sync.Once

@@ -1542,7 +1542,7 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = make(map[string]string)
+	ses.ruleCache = &roleRuleCache{}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
 		`{"remapdb":{"src":"session_db"}}`))
 	execCtx := newTestExecCtx(ctx, ctrl)
@@ -1627,7 +1627,7 @@ func TestPrepareStringStatementCombinesSQLModeAndRemapPolicy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = make(map[string]string)
+	ses.ruleCache = &roleRuleCache{}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
 		`{"remapdb":{"src":"session_db"}}`))
@@ -2456,6 +2456,29 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 }
 
+func TestRefreshStatementRoleIdentity(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	tenant := &TenantInfo{Tenant: "tenant", User: "user", TenantID: 12, UserID: 34, DefaultRoleID: 56}
+	ses.SetTenantInfo(tenant)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want := process.CurrentRoleContext{Mode: 1, AccountID: 12, UserID: 34, PrimaryRoleID: 56, AccountName: "tenant", UserName: "user"}
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	tenant.SetUseSecondaryRole(true)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want.Mode = 2
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	tenant.SetUseSecondaryRole(false)
+	refreshStatementScopedSessionInfo(ses, proc)
+	want.Mode = 1
+	require.Equal(t, want, proc.Base.SessionInfo.CurrentRoleContext)
+	ses.SetTenantInfo(nil)
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, process.CurrentRoleContext{}, proc.Base.SessionInfo.CurrentRoleContext)
+}
+
 func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -2565,7 +2588,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
-	ses.ruleCache = map[string]string{}
+	ses.ruleCache = &roleRuleCache{}
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
@@ -2713,7 +2736,7 @@ func TestExecRequestStmtPrepareBindsSource(t *testing.T) {
 			defer ses.Close()
 			ses.txnHandler = &TxnHandler{}
 			ses.rewriteEnabled.Store(enabled)
-			ses.ruleCache = map[string]string{"db.t": "select id from db.t where id=1"}
+			ses.ruleCache = &roleRuleCache{first: map[string]string{"db.t": "select id from db.t where id=1"}}
 			original := GetComputationWrapper
 			observed := false
 			stubs := gostub.Stub(&GetComputationWrapper, func(ec *ExecCtx, _ string, _ string,
@@ -6011,7 +6034,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			ses := newTestSession(t, ctrl)
 			ses.txnHandler = &TxnHandler{}
 			ses.rewriteEnabled.Store(true)
-			ses.ruleCache = map[string]string{}
+			ses.ruleCache = &roleRuleCache{}
 			setRowCount(ses, ses.GetProc(), 7)
 			ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 

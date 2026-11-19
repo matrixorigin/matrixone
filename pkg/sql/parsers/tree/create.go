@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func init() {
@@ -952,6 +954,24 @@ type CreateTable struct {
 	IsAsLike           bool
 	LikeTableName      TableName
 	SubscriptionOption *SubscriptionOption
+
+	// InheritedEnums carries typed metadata for internally reconstructed DDL.
+	InheritedEnums map[string]planpb.Type
+}
+
+// InheritedEnumTypes extracts the typed ENUM definitions from an existing
+// table or the final schema of a table being rebuilt.
+func InheritedEnumTypes(table *planpb.TableDef) map[string]planpb.Type {
+	var inherited map[string]planpb.Type
+	for _, col := range table.GetCols() {
+		if col != nil && !col.Hidden && col.Typ.Id == int32(types.T_enum) {
+			if inherited == nil {
+				inherited = make(map[string]planpb.Type)
+			}
+			inherited[strings.ToLower(col.Name)] = col.Typ
+		}
+	}
+	return inherited
 }
 
 func NewCreateTable() *CreateTable {

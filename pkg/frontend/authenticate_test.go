@@ -9614,7 +9614,7 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 			DefaultRoleID: 5,
 		}
 		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+		ses.ruleCache = &roleRuleCache{first: map[string]string{"db1.t1": "select a from db1.t1"}}
 
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -9692,7 +9692,7 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 		bh.sql2result[getSqlForAuthorizationUser(tenant)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.UserID)}})
 		stub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer stub.Reset()
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+		ses.ruleCache = &roleRuleCache{first: map[string]string{"db1.t1": "select a from db1.t1"}}
 
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
 			SecondaryRole:     true,
@@ -9730,7 +9730,7 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		}
 		tenant.SetUseSecondaryRole(true)
 		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+		ses.ruleCache = &roleRuleCache{first: map[string]string{"db1.t1": "select a from db1.t1"}}
 
 		bh.sql2result[getSqlForAuthorizationUser(tenant)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.UserID)}})
 		bh.sql2result["begin;"] = nil

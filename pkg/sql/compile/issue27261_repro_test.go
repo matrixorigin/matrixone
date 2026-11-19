@@ -325,6 +325,60 @@ func TestBuildReadersUsesSourceScopeContext(t *testing.T) {
 	require.True(t, called)
 	require.ErrorIs(t, err, expected)
 }
+
+func TestSerialReaderBuildCancellation(t *testing.T) {
+	storageErr := errors.New("reader construction failed")
+	for _, tc := range []struct {
+		name              string
+		cancelQuery       bool
+		leavePipelineLive bool
+		readErr           error
+		want              error
+	}{
+		{name: "local stop"},
+		{name: "query canceled", cancelQuery: true, want: context.Canceled},
+		{name: "reader reports cancellation while pipeline and query are live", leavePipelineLive: true, readErr: context.Canceled, want: context.Canceled},
+		{name: "storage error during local stop", readErr: storageErr, want: storageErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := testutil.NewProcess(t)
+			t.Cleanup(root.Free)
+			queryCtx := root.Base.GetContextBase().BuildQueryCtx(root.GetTopContext())
+			root.BuildPipelineContext(queryCtx)
+			t.Cleanup(func() { root.Cancel(nil) })
+			source := root.NewContextChildProc(0)
+			reg := process.NewPipelineEdge(1, 1)
+			conn := connector.NewArgument().WithReg(reg)
+			conn.AppendChild(table_scan.NewArgument())
+			called := false
+			rel := &issue32389ReaderRelation{read: func(ctx context.Context) error {
+				called = true
+				if tc.cancelQuery {
+					_, cancel := process.GetQueryCtxFromProc(root)
+					cancel()
+				} else if !tc.leavePipelineLive {
+					source.Cancel(nil)
+				}
+				if tc.readErr != nil {
+					return tc.readErr
+				}
+				return ctx.Err()
+			}}
+			s := &Scope{Proc: source, RootOp: conn, NodeInfo: engine.Node{Mcpu: 1},
+				DataSource: &Source{Rel: rel, FilterList: []*plan.Expr{plan2.MakeFalseExpr()}},
+			}
+			err := s.Run(&Compile{proc: root})
+			require.True(t, called)
+			require.ErrorIs(t, err, tc.want)
+			receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+			batch, terminalErr := receiver.GetNextBatch(nil)
+			require.Nil(t, batch)
+			require.ErrorIs(t, terminalErr, tc.want)
+			require.Equal(t, tc.cancelQuery, queryCtx.Err() != nil)
+		})
+	}
+}
+
 func TestParallelReaderBuildPreservesPrimaryErrors(t *testing.T) {
 	primary := errors.New("storage read failed")
 	for _, tc := range []struct {

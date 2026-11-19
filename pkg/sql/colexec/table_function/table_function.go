@@ -142,6 +142,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
+	case "mo_current_roles":
+		tblArg.ctr.state, err = currentRolesPrepare(proc, tblArg)
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":

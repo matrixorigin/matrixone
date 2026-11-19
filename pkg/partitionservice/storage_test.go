@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -254,4 +255,18 @@ func TestGetPartitionTableCreateSQL(t *testing.T) {
 		},
 	)
 	require.Equal(t, "create table `test_p1` (`a` int)", str)
+}
+
+func TestPartitionCreatePreservesReleasedEnumMembers(t *testing.T) {
+	legacy := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,c"}
+	def := &plan.TableDef{
+		Createsql: "create table t (id int, e enum('a,b','c')) partition by hash(id) partitions 2",
+		Cols:      []*plan.ColDef{{Name: "e", Typ: legacy}},
+	}
+	stmt, err := parsePartitionCreate(t.Context(), def)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, legacy, stmt.InheritedEnums["e"])
+	require.Equal(t, "create table `child` (`id` int, `e` enum('a','b','c'))",
+		getPartitionTableCreateSQL(stmt, partition.Partition{PartitionTableName: "child"}))
 }

@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,9 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +117,38 @@ func TestConsumeCheckpointWithTableID(t *testing.T) {
 		1,
 		proc.Mp(),
 		fs,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, dataEntries)
+	require.Equal(t, 1, tombstoneEntries)
+
+	meta := ckputil.NewMetaBatch()
+	defer meta.Clean(proc.Mp())
+	for _, ranges := range [][]ckputil.TableRange{dataRanges, tombstoneRanges} {
+		for _, r := range ranges {
+			require.NoError(t, r.AppendTo(meta, proc.Mp()))
+		}
+	}
+	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
+	_, err = writer.WriteBatch(meta)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	dataEntries, tombstoneEntries = 0, 0
+	reader := NewCKPReaderWithTableID_V2(CheckpointCurrentVersion, location, 1, proc.Mp(), fs)
+	require.NoError(t, reader.ReadMeta(context.Background()))
+	err = reader.ConsumeCheckpointWithTableID(
+		context.Background(),
+		func(_ context.Context, _ fileservice.FileService, _ objectio.ObjectEntry, isTombstone bool) error {
+			if isTombstone {
+				tombstoneEntries++
+			} else {
+				dataEntries++
+			}
+			return nil
+		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, dataEntries)
@@ -427,4 +464,307 @@ func makeCheckpointObjectRanges(
 			1,
 			ckputil.ObjectType_Tombstone,
 		)
+}
+
+func makeCheckpointMetaFixture(
+	t testing.TB, ranges []ckputil.TableRange,
+) (*fileservice.LocalFS, objectio.Location, *mpool.MPool) {
+	t.Helper()
+	ctx := context.Background()
+	capacity := toml.ByteSize(32 << 20)
+	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, t.TempDir(),
+		fileservice.CacheConfig{MemoryCapacity: &capacity}, nil)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		fs.Close(ctx)
+		require.Zero(t, mp.CurrNB())
+	})
+	return fs, writeCheckpointMeta(t, fs, mp, ranges), mp
+}
+
+func writeCheckpointMeta(
+	t testing.TB, fs fileservice.FileService, mp *mpool.MPool, ranges []ckputil.TableRange,
+) objectio.Location {
+	t.Helper()
+	ctx := context.Background()
+	bat := ckputil.NewMetaBatch()
+	defer bat.Clean(mp)
+	for i := range ranges {
+		require.NoError(t, ranges[i].AppendTo(bat, mp))
+	}
+	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	return stats.ObjectLocation()
+}
+
+func checkpointMetaRange(tableID uint64, objectType int8, ordinal int) ckputil.TableRange {
+	stats := objectio.NewObjectStats()
+	name := objectio.BuildObjectName(&types.Uuid{1, byte(ordinal), byte(ordinal >> 8)}, uint16(ordinal))
+	_ = objectio.SetObjectStatsObjectName(stats, name)
+	_ = objectio.SetObjectStatsBlkCnt(stats, 1)
+	return ckputil.TableRange{
+		TableID: tableID, ObjectType: objectType,
+		Start: types.BuildTestRowid(int64(ordinal+1), 0),
+		End:   types.BuildTestRowid(int64(ordinal+1), 1), ObjectStats: *stats,
+	}
+}
+
+func TestReadMetaWithTableIDSelectedRanges(t *testing.T) {
+	ranges := []ckputil.TableRange{
+		checkpointMetaRange(11, ckputil.ObjectType_Data, 0),
+		checkpointMetaRange(11, ckputil.ObjectType_Data, 1),
+		checkpointMetaRange(11, ckputil.ObjectType_Tombstone, 2),
+		checkpointMetaRange(22, ckputil.ObjectType_Data, 3),
+		checkpointMetaRange(33, ckputil.ObjectType_Tombstone, 4),
+		checkpointMetaRange(33, ckputil.ObjectType_Tombstone, 5),
+		checkpointMetaRange(44, ckputil.ObjectType_Data, 6),
+		checkpointMetaRange(44, ckputil.ObjectType_Tombstone, 7),
+	}
+	fs, loc, mp := makeCheckpointMetaFixture(t, ranges)
+	ctx := context.Background()
+	for _, tid := range []uint64{0, 11, 12, 22, 33, 44, 45} {
+		t.Run(fmt.Sprint(tid), func(t *testing.T) {
+			var wantData, wantTombstone []ckputil.TableRange
+			for _, r := range ranges {
+				if r.TableID == tid {
+					if r.ObjectType == ckputil.ObjectType_Data {
+						wantData = append(wantData, r)
+					} else {
+						wantTombstone = append(wantTombstone, r)
+					}
+				}
+			}
+			for range 2 {
+				data, tombstone, err := readMetaWithTableID(ctx, loc, tid, mp, fs)
+				require.NoError(t, err)
+				require.Equal(t, wantData, data)
+				require.Equal(t, wantTombstone, tombstone)
+				require.Zero(t, mp.CurrNB())
+				fs.FlushCache(ctx)
+				// Ranges must own their bytes after both scratch and cache release.
+				require.Equal(t, wantData, data)
+				require.Equal(t, wantTombstone, tombstone)
+				if len(data) > 0 {
+					data[0].ObjectStats[0] ^= 0xff
+				}
+			}
+		})
+	}
+}
+
+func TestReadMetaWithTableIDColdMemoryCache(t *testing.T) {
+	ctx := t.Context()
+	capacity := toml.ByteSize(1 << 20)
+	fs, err := fileservice.NewS3FS(ctx,
+		fileservice.ObjectStorageArguments{Name: "checkpoints", Endpoint: "disk", Bucket: t.TempDir()},
+		fileservice.CacheConfig{MemoryCapacity: &capacity}, nil, false, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.SetAsyncUpdate(false)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	ranges := []ckputil.TableRange{
+		checkpointMetaRange(1, ckputil.ObjectType_Data, 0),
+		checkpointMetaRange(2, ckputil.ObjectType_Data, 1),
+		checkpointMetaRange(2, ckputil.ObjectType_Tombstone, 2),
+	}
+	loc := writeCheckpointMeta(t, fs, mp, ranges)
+	fs.FlushCache(ctx)
+	// Prime only the object header, which both the old and new readers need.
+	_, err = objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+	require.NoError(t, err)
+	var counters perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counters)
+
+	for _, mode := range []string{"cold", "warm"} {
+		data, tombstone, err := readMetaWithTableID(ctx, loc, 2, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, ranges[1:2], data)
+		require.Equal(t, ranges[2:], tombstone)
+		require.EqualValues(t, 1, counters.FileService.S3.Get.Load(), "%s backing-store reads", mode)
+	}
+}
+
+type checkpointMetaLease struct {
+	fscache.Data
+	releases *atomic.Int64
+	corrupt  bool
+}
+
+func (d *checkpointMetaLease) Bytes() []byte {
+	if d.corrupt {
+		return nil
+	}
+	return d.Data.Bytes()
+}
+
+func (d *checkpointMetaLease) Release() {
+	d.releases.Add(1)
+	d.Data.Release()
+}
+
+type checkpointMetaReadFS struct {
+	fileservice.FileService
+	failure          error
+	corruptColumn    *int
+	leases, releases atomic.Int64
+	afterRead        func()
+}
+
+func (fs *checkpointMetaReadFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if len(v.Entries) != len(ckputil.MetaSeqnums) {
+		return fs.FileService.Read(ctx, v)
+	}
+	if fs.failure != nil {
+		return fs.failure
+	}
+	if err := fs.FileService.Read(ctx, v); err != nil {
+		return err
+	}
+	for i := range v.Entries {
+		entry := &v.Entries[i]
+		if entry.CachedData != nil {
+			fs.leases.Add(1)
+			entry.CachedData = &checkpointMetaLease{
+				Data: entry.CachedData, releases: &fs.releases,
+				corrupt: fs.corruptColumn != nil && i == *fs.corruptColumn,
+			}
+		}
+	}
+	if fs.afterRead != nil {
+		fs.afterRead()
+	}
+	return nil
+}
+
+func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
+	fs, loc, mp := makeCheckpointMetaFixture(t, []ckputil.TableRange{
+		checkpointMetaRange(1, ckputil.ObjectType_Data, 1),
+		checkpointMetaRange(1, ckputil.ObjectType_Tombstone, 2),
+	})
+	ctx := context.Background()
+	_, _, err := readMetaWithTableID(ctx, loc, 1, mp, fs)
+	require.NoError(t, err)
+	readErr := errors.New("checkpoint metadata read failure")
+	for _, test := range []struct {
+		name          string
+		corruptColumn int
+		wantErr       error
+	}{
+		{"read", -1, readErr},
+		{"ID decode", ckputil.MetaAttr_Table_Idx, io.ErrUnexpectedEOF},
+		{"partial materialization", ckputil.MetaAttr_ObjectStats_Idx, io.ErrUnexpectedEOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wrapped := &checkpointMetaReadFS{FileService: fs}
+			if test.corruptColumn < 0 {
+				wrapped.failure = readErr
+			} else {
+				wrapped.corruptColumn = &test.corruptColumn
+			}
+			data, tombstone, err := readMetaWithTableID(ctx, loc, 1, mp, wrapped)
+			require.ErrorIs(t, err, test.wantErr)
+			require.Nil(t, data)
+			require.Nil(t, tombstone)
+			require.Zero(t, mp.CurrNB())
+			require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
+			if test.corruptColumn >= 0 {
+				require.EqualValues(t, len(ckputil.MetaSeqnums), wrapped.leases.Load())
+			}
+			// Injected failures must not poison the shared cached representation.
+			data, tombstone, err = readMetaWithTableID(ctx, loc, 1, mp, fs)
+			require.NoError(t, err)
+			require.Len(t, data, 1)
+			require.Len(t, tombstone, 1)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, _, err = readMetaWithTableID(canceled, loc, 1, mp, fs)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, mp.CurrNB())
+	t.Run("canceled with column leases held", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(ctx)
+		defer cancel()
+		wrapped := &checkpointMetaReadFS{FileService: fs}
+		wrapped.afterRead = func() {
+			require.Greater(t, wrapped.leases.Load(), wrapped.releases.Load())
+			cancel()
+		}
+		data, tombstone, err := readMetaWithTableID(canceled, loc, 1, mp, wrapped)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+		require.Positive(t, wrapped.leases.Load())
+		require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
+		require.Zero(t, mp.CurrNB())
+		data, tombstone, err = readMetaWithTableID(ctx, loc, 1, mp, fs)
+		require.NoError(t, err)
+		require.Len(t, data, 1)
+		require.Len(t, tombstone, 1)
+	})
+	wrapped := &checkpointMetaReadFS{FileService: fs}
+	data, tombstone, err := readMetaWithTableID(ctx, loc, 2, mp, wrapped)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.EqualValues(t, len(ckputil.MetaSeqnums), wrapped.leases.Load())
+	require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
+}
+
+func BenchmarkReadMetaWithTableID(b *testing.B) {
+	for _, rows := range []int{4096, 32768, 131072} {
+		b.Run(fmt.Sprint(rows), func(b *testing.B) {
+			ranges := make([]ckputil.TableRange, rows)
+			for i := range ranges {
+				ranges[i] = checkpointMetaRange(uint64(i/4+1), int8(i%4/2+1), i)
+			}
+			fs, loc, mp := makeCheckpointMetaFixture(b, ranges)
+			tid := uint64(rows / 8)
+			for _, full := range []bool{true, false} {
+				b.Run(fmt.Sprintf("full-batch-%t", full), func(b *testing.B) {
+					read := func() {
+						if full {
+							bat, release, err := readMetaBatch(b.Context(), loc, mp, fs)
+							if err != nil {
+								b.Fatal(err)
+								return
+							}
+							defer release()
+							if len(ckputil.ExportToTableRangesByFilter(bat, tid, ckputil.ObjectType_Data)) != 2 {
+								b.Fatal("missing data ranges")
+							}
+							if len(ckputil.ExportToTableRangesByFilter(bat, tid, ckputil.ObjectType_Tombstone)) != 2 {
+								b.Fatal("missing tombstone ranges")
+							}
+							return
+						}
+						data, tombstone, err := readMetaWithTableID(b.Context(), loc, tid, mp, fs)
+						if err != nil || len(data) != 2 || len(tombstone) != 2 {
+							b.Fatalf("ranges=%d/%d err=%v", len(data), len(tombstone), err)
+						}
+					}
+					read()
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						read()
+					}
+					b.StopTimer()
+					require.Zero(b, mp.CurrNB())
+				})
+			}
+		})
+	}
 }

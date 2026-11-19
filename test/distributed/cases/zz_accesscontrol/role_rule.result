@@ -32,8 +32,8 @@ drop database if exists ctas_remap_db;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
-create table db1.t_dup(a int, marker int);
-insert into db1.t_dup values (1,1),(1,2),(2,3);
+create table db1.t_dup(a int, marker int, code varchar(16));
+insert into db1.t_dup values (1,1,'0001'),(1,2,'O''Brien'),(2,3,'1');
 create role test_rule_role;
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
 show rules on role test_rule_role;
@@ -349,8 +349,8 @@ select * from db1.t1 order by a;
 100  ¦  30
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
@@ -367,6 +367,104 @@ select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+select a, count(*) from db1.t_dup group by a order by a;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
+set @rule_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from concat(' ',code)) = '0001' and 'A\B' = concat('A',char(92),'B')" on table db1.t_dup;
+set sql_mode = @rule_saved_mode;
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+2
+set sql_mode = '';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+2
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+set secondary role none;
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
+set sql_mode = '';
+set secondary role all;
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table db1.t_rule_txn(id int primary key);
+create table db1.t_rule_commit_refresh(id int);
+create table db1.t_rule_rollback_refresh(id int);
+grant insert, select on table db1.t_rule_txn to test_rule_role_dup_projection_a;
+grant drop table on database db1 to test_rule_role_dup_projection_a;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (1);
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (2);
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+drop table db1.t_rule_commit_refresh;
+select count(*) from db1.t_dup;
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+select count(*) as visible_before_commit from db1.t_rule_txn;
+➤ visible_before_commit[-5,64,0]  𝄀
+0
+commit;
+drop table db1.t_rule_rollback_refresh;
+select count(*) from db1.t_dup;
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'O\\'Brien'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near "Brien'";
+rollback;
+select id from db1.t_rule_txn order by id;
+➤ id[4,32,0]  𝄀
+1
+alter table db1.t_dup rename column code to `part-code`;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where `part-code` = _binary '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where `part-code` = _binary 0x4f27427269656e" on table db1.t_dup;
+set sql_mode = 'ANSI_QUOTES';
+set enable_remap_hint = 1;
+set secondary role all;
+select a, count(*) from db1.t_dup group by a order by a;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
+alter role test_rule_role_dup_projection_a add rule "select '`marker`' as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select marker as x from db1.t_dup where marker = 2" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+select x from db1.t_dup order by x;
+➤ x[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum('East')) as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum('east')) as x from db1.t_dup where marker = 2" on table db1.t_dup;
+set enable_remap_hint = 1;
+set secondary role all;
+select count(*) from db1.t_dup;
+➤ count(*)[-5,64,0]  𝄀
+1
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;

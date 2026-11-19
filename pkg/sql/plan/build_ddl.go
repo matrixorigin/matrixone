@@ -1014,6 +1014,7 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
+			stmtLike.InheritedEnums = tree.InheritedEnumTypes(tableDef)
 			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
@@ -1388,6 +1389,25 @@ func buildCreateTable(
 	}, nil
 }
 
+func getCreateColumnType(ctx context.Context, stmt *tree.CreateTable, col *tree.ColumnTableDef) (Type, error) {
+	source, ok := stmt.InheritedEnums[strings.ToLower(col.Name.ColName())]
+	if !ok {
+		return getTypeFromAst(ctx, col.Type)
+	}
+	decl, ok := col.Type.(*tree.T)
+	if !ok || decl.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {
+		return Type{}, moerr.NewInternalErrorf(ctx, "unexpected type for inherited ENUM column %q", col.Name.ColName())
+	}
+	members, err := types.DecodeEnumMembers(source.Enumvalues, source.EnumEncoding)
+	if err != nil {
+		return Type{}, err
+	}
+	if !slices.Equal(members, decl.InternalType.EnumValues) {
+		return Type{}, moerr.NewInternalErrorf(ctx, "member mismatch for inherited ENUM column %q", col.Name.ColName())
+	}
+	return Type{Id: source.Id, Enumvalues: source.Enumvalues, EnumEncoding: source.EnumEncoding}, nil
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -1418,7 +1438,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	var isGeneratedCol []bool
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			cType, err := getCreateColumnType(ctx.GetContext(), stmt, def)
 			if err != nil {
 				return err
 			}
@@ -1440,11 +1460,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
-			if err != nil {
-				return err
-			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+			colType := allColDefs[genColIdx].Typ
+			var err error
+			if err := applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||

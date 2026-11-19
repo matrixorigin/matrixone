@@ -39,7 +39,14 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
+	byteExactBinaryLiterals       bool
 	paramExprOffset               bool
+	stringLiteralPositions        *[]StringLiteralPosition
+}
+
+// StringLiteralPosition is the byte range of a formatted string literal.
+type StringLiteralPosition struct {
+	Start, End int
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -71,6 +78,11 @@ func WithSingleQuoteString() FmtCtxOption {
 	})
 }
 
+// WithStringLiteralPositions records string literal ranges when formatting SQL with WithSingleQuoteString.
+func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
+	return func(ctx *FmtCtx) { ctx.stringLiteralPositions = positions }
+}
+
 func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
@@ -90,6 +102,11 @@ func WithNoBackslashEscape() FmtCtxOption {
 // NoBackslashEscape reports whether string literals should be formatted for the
 // NO_BACKSLASH_ESCAPES sql_mode.
 func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+// WithByteExactBinaryLiterals keeps quoted binary bytes intact while deparsing.
+func WithByteExactBinaryLiterals() FmtCtxOption {
+	return func(ctx *FmtCtx) { ctx.byteExactBinaryLiterals = true }
+}
 
 func WithModeIndependentStringLiterals() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
@@ -190,10 +207,31 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 			return ctx.WriteString(v)
 		}
 	}
-	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+	if ctx.singleQuoteString {
+		var literal string
+		switch t {
+		case P_char:
+			literal = "'" + strings.ReplaceAll(v, "'", "''") + "'"
+		case P_ScoreBinary:
+			literal = "_binary '" + strings.ReplaceAll(v, "'", "''") + "'"
+		case P_ScoreBinaryHexnum:
+			return ctx.WriteString("_binary " + v)
+		default:
+			return ctx.WriteString(v)
+		}
+		return ctx.writeSQLStringLiteral(literal)
 	}
 	return ctx.WriteString(v)
+}
+
+// writeSQLStringLiteral writes a complete, already quoted literal.
+func (ctx *FmtCtx) writeSQLStringLiteral(literal string) (int, error) {
+	start := ctx.Len()
+	n, err := ctx.WriteString(literal)
+	if ctx.stringLiteralPositions != nil {
+		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{start, ctx.Len()})
+	}
+	return n, err
 }
 
 func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {

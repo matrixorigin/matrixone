@@ -778,9 +778,7 @@ func materializeDiffOutputAsTable(
 			context.WithoutCancel(ctx), diffOutputCleanupTimeout,
 		)
 		defer cleanupCancel()
-		if cleanupErr := execDataBranchOutputSQL(
-			cleanupCtx, bh, fmt.Sprintf("drop table if exists %s", output.qualifiedName()),
-		); cleanupErr != nil {
+		if cleanupErr := output.drop(cleanupCtx, ses, bh); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
@@ -790,7 +788,7 @@ func materializeDiffOutputAsTable(
 		cancel()
 		return err
 	}
-	if err = execDataBranchOutputSQL(ctx, bh, createSQL); err != nil {
+	if err = output.create(ctx, ses, bh, createSQL); err != nil {
 		cancel()
 		return err
 	}
@@ -905,6 +903,50 @@ func materializeDiffOutputAsTable(
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddRow([]any{output.qualifiedName()})
 	return trySaveQueryResult(ctx, ses, mrs)
+}
+
+func (output *diffOutputTable) create(ctx context.Context, ses *Session, bh BackgroundExec, sql string) error {
+	if len(output.enumDomains) == 0 {
+		return execDataBranchOutputSQL(ctx, bh, sql)
+	}
+	stmt, err := mysql.ParseOne(ctx, sql, parserLowerCaseTableNames(ses))
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+	create := stmt.(*tree.CreateTable)
+	// The following INSERT and DROP resolve session aliases before permanent tables.
+	if _, exists := ses.GetTempTable(create.Table.SchemaName.String(), create.Table.ObjectName.String()); exists {
+		return moerr.NewTableAlreadyExists(ctx, output.qualifiedName())
+	}
+	create.InheritedEnums = make(map[string]plan2.Type, len(output.enumDomains))
+	for position, domain := range output.enumDomains {
+		create.InheritedEnums[strings.ToLower(output.columnNames[position])] = domain
+	}
+	if err := bh.ExecStmt(ctx, create); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
+}
+
+func (output *diffOutputTable) drop(ctx context.Context, ses *Session, bh BackgroundExec) error {
+	sql := "drop table if exists " + output.qualifiedName()
+	if len(output.enumDomains) == 0 {
+		return execDataBranchOutputSQL(ctx, bh, sql)
+	}
+
+	// The background SQL parser folds names independently of the caller.
+	stmt, err := mysql.ParseOne(ctx, sql, parserLowerCaseTableNames(ses))
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+	if err := bh.ExecStmt(ctx, stmt); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
 }
 
 func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string) error {
