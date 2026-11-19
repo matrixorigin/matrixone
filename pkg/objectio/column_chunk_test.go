@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
-	"os"
 	"strings"
 	"testing"
 
@@ -94,28 +94,62 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 	col := block.ColumnMeta(0)
 	col.setDataType(uint8(types.T_varchar))
 	col.setLocation(extent)
-	var spills []*testColumnWindowSpill
-	factory := func(context.Context) (ColumnWindowSpill, error) {
-		file, err := os.CreateTemp(t.TempDir(), "chunked-window-*")
-		if err != nil {
-			return nil, err
-		}
-		spill := &testColumnWindowSpill{File: file}
-		spills = append(spills, spill)
-		return spill, nil
+	spillCalls := 0
+	noSpill := func(context.Context) (ColumnWindowSpill, error) {
+		spillCalls++
+		return nil, errors.New("unexpected chunked window spill")
 	}
 	budgeted, admitted, err := ReadOneBlockAllColumnsBudgetedWindow(
 		ctx, &meta, name, 0, []uint16{0}, windowStart, 7, 1<<20,
-		fileservice.SkipAllCache, fs, mp, factory,
+		fileservice.SkipAllCache, fs, mp, noSpill,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 7, admitted)
-	require.Len(t, spills, 1, "both overlapping chunks use one spill file")
-	require.True(t, spills[0].closed)
+	require.Zero(t, spillCalls)
 	for i := 0; i < admitted; i++ {
 		require.Equal(t, source.GetStringAt(windowStart+i), budgeted.Vecs[0].GetStringAt(i))
 	}
 	budgeted.Clean(mp)
+	const sourceBudget = 10 << 20
+	require.Less(t, int(metas[0].originSize), sourceBudget)
+	require.Less(t, int(metas[1].originSize), sourceBudget)
+	require.Greater(t, int(metas[0].originSize+metas[1].originSize), sourceBudget)
+	countedFS := &countingColumnFS{FileService: fs}
+	budgeted, admitted, err = ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, []uint16{0}, windowStart, 7, sourceBudget,
+		fileservice.SkipAllCache, countedFS, mp, noSpill,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 7, admitted)
+	require.Zero(t, spillCalls)
+	require.Equal(t, int32(4), countedFS.reads.Load(), "header and each selected chunk are read once")
+	for i := 0; i < admitted; i++ {
+		require.Equal(t, source.GetStringAt(windowStart+i), budgeted.Vecs[0].GetStringAt(i))
+	}
+	budgeted.Clean(mp)
+	budgeted, admitted, err = ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, []uint16{0}, windowStart, 7, 100<<10,
+		fileservice.SkipAllCache, fs, mp, noSpill,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 4, admitted, "the second chunk narrows the admitted prefix")
+	require.Zero(t, spillCalls)
+	for i := 0; i < admitted; i++ {
+		require.Equal(t, source.GetStringAt(windowStart+i), budgeted.Vecs[0].GetStringAt(i))
+	}
+	budgeted.Clean(mp)
+	beforeFailure := mp.CurrNB()
+	readErr := errors.New("second chunk read failed")
+	failingFS := &countingColumnFS{FileService: fs, failAt: 4, failErr: readErr}
+	budgeted, admitted, err = ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, []uint16{0}, windowStart, 7, sourceBudget,
+		fileservice.SkipAllCache, failingFS, mp, noSpill,
+	)
+	require.Nil(t, budgeted)
+	require.Zero(t, admitted)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, beforeFailure, mp.CurrNB(), "earlier chunk output is released on a later read error")
+	require.Zero(t, spillCalls)
 	_, err = readChunkedColumnWindow(
 		ctx, name, extent, -1, 1, fileservice.SkipAllCache, fs, mp,
 	)

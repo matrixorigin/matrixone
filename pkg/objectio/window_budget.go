@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +30,7 @@ type blockWindowPart struct {
 	firstRow, rows int
 	originSize     int64
 	data           fscache.Data
-	spill          io.ReaderAt
+	spill          ColumnWindowSpill
 }
 
 func (p *blockWindowPart) close() {
@@ -39,7 +38,10 @@ func (p *blockWindowPart) close() {
 		p.data.Release()
 		p.data = nil
 	}
-	p.spill = nil
+	if p.spill != nil {
+		_ = p.spill.Close()
+		p.spill = nil
+	}
 }
 
 func (p *blockWindowPart) addCosts(offset int, costs []uint64) error {
@@ -56,111 +58,22 @@ func (p *blockWindowPart) materialize(offset, length int, mp *mpool.MPool) (*vec
 	return MaterializeCachedVectorWindow(p.data, offset, length, mp)
 }
 
-type blockWindowColumn struct {
-	parts []blockWindowPart
-}
-
-// One file owns all spilled chunks of the current column. The file is closed
-// before loading the next column, so wide tables use at most one spill FD.
-type blockWindowSpill struct {
-	file  ColumnWindowSpill
-	bytes int64
-}
-
-type blockWindowSpillWriter struct {
-	owner   *blockWindowSpill
-	written int64
-}
-
-func (w *blockWindowSpillWriter) Write(data []byte) (int, error) {
-	n, err := w.owner.file.Write(data)
-	w.written += int64(n)
-	return n, err
-}
-
-func (w *blockWindowSpillWriter) Grow(size uint64) error { return w.owner.file.Grow(size) }
-func (w *blockWindowSpillWriter) ReadAt(data []byte, offset int64) (int, error) {
-	return w.owner.file.ReadAt(data, offset)
-}
-func (w *blockWindowSpillWriter) Close() error { return nil }
-
-func (s *blockWindowSpill) appendColumn(
-	ctx context.Context, name string, ext Extent, fs fileservice.FileService,
-) (io.ReaderAt, error) {
-	writer := &blockWindowSpillWriter{owner: s}
-	if err := streamLegacyColumnToSpill(ctx, name, ext, fs, writer); err != nil {
-		return nil, err
+func appendBlockWindowVector(dst **vector.Vector, part *vector.Vector, mp *mpool.MPool) error {
+	if *dst == nil {
+		*dst = part
+		return nil
 	}
-	section := io.NewSectionReader(s.file, s.bytes, writer.written)
-	s.bytes += writer.written
-	return section, nil
+	defer part.Free(mp)
+	if *part.GetType() != *(*dst).GetType() {
+		return moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
+	}
+	return (*dst).UnionBatch(part, 0, part.Length(), nil, mp)
 }
 
-func (c *blockWindowColumn) close() {
-	for i := range c.parts {
-		c.parts[i].close()
-	}
-}
-
-func (c *blockWindowColumn) addCosts(offset int, costs []uint64) error {
-	for i := range c.parts {
-		part := &c.parts[i]
-		start := max(offset, part.firstRow)
-		end := min(offset+len(costs), part.firstRow+part.rows)
-		if start < end {
-			if err := part.addCosts(start-part.firstRow, costs[start-offset:end-offset]); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (c *blockWindowColumn) materialize(offset, length int, mp *mpool.MPool) (*vector.Vector, error) {
-	var dst *vector.Vector
-	for i := range c.parts {
-		part := &c.parts[i]
-		start := max(offset, part.firstRow)
-		end := min(offset+length, part.firstRow+part.rows)
-		if start >= end {
-			continue
-		}
-		vec, err := part.materialize(start-part.firstRow, end-start, mp)
-		if err != nil {
-			if dst != nil {
-				dst.Free(mp)
-			}
-			return nil, err
-		}
-		if dst == nil {
-			dst = vec
-		} else {
-			if *vec.GetType() != *dst.GetType() {
-				vec.Free(mp)
-				dst.Free(mp)
-				return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
-			}
-			if err = dst.UnionBatch(vec, 0, vec.Length(), nil, mp); err != nil {
-				vec.Free(mp)
-				dst.Free(mp)
-				return nil, err
-			}
-			vec.Free(mp)
-		}
-	}
-	if dst == nil || dst.Length() != length {
-		if dst != nil {
-			dst.Free(mp)
-		}
-		return nil, moerr.NewInvalidInputNoCtx("object column window row count mismatch")
-	}
-	return dst, nil
-}
-
-// ReadOneBlockAllColumnsBudgetedWindow sizes and materializes each column from
-// one decoded source. The admitted prefix only shrinks as columns are added;
+// ReadOneBlockAllColumnsBudgetedWindow sizes and materializes one extent at a
+// time. The admitted prefix only shrinks as columns are added;
 // previous output vectors are compacted if a later column narrows it. This
-// keeps at most one column source and one spill file live at a time. One
+// keeps at most one decoded chunk source and one spill file live at a time. One
 // oversized row is admitted to make progress.
 func ReadOneBlockAllColumnsBudgetedWindow(
 	ctx context.Context, meta *ObjectDataMeta, name string, id uint32,
@@ -187,52 +100,45 @@ func ReadOneBlockAllColumnsBudgetedWindow(
 			return nil, 0, err
 		}
 		ext := block.ColumnMeta(seqnum).Location()
-		var retained uint64
-		var spill *blockWindowSpill
-		source, err := loadBlockWindowColumn(
-			ctx, name, ext, int(block.GetRows()), offset, rows,
-			uint64(maxBytes), &retained, &spill, policy, fs, spillFactory,
-		)
-		if err != nil {
-			if spill != nil {
-				_ = spill.file.Close()
-			}
-			bat.Clean(mp)
-			return nil, 0, err
-		}
 		var vec *vector.Vector
-		if err = source.addCosts(offset, costs[:rows]); err == nil {
-			newRows, used := rows, uint64(0)
-			for row, cost := range costs[:rows] {
-				if row > 0 && (used >= uint64(maxBytes) || cost > uint64(maxBytes)-used) {
-					newRows = row
-					break
+		newRows := rows
+		err := forEachBlockWindowPart(
+			ctx, name, ext, int(block.GetRows()), offset, rows,
+			uint64(maxBytes), policy, fs, spillFactory,
+			func(part *blockWindowPart) (bool, error) {
+				start := max(offset, part.firstRow)
+				end := min(offset+newRows, part.firstRow+part.rows)
+				if start >= end {
+					return true, nil
 				}
-				used += cost
-			}
-			if err = ctx.Err(); err == nil {
-				vec, err = source.materialize(offset, newRows, mp)
-			}
-			if err == nil {
-				for j := 0; j < i && err == nil; j++ {
-					if bat.Vecs[j].Length() > newRows {
-						var compact *vector.Vector
-						compact, err = bat.Vecs[j].CloneWindow(0, newRows, mp)
-						if err == nil {
-							bat.Vecs[j].Free(mp)
-							bat.Vecs[j] = compact
-						}
+				if err := part.addCosts(start-part.firstRow, costs[start-offset:end-offset]); err != nil {
+					return false, err
+				}
+				used := uint64(0)
+				for row, cost := range costs[:newRows] {
+					if row > 0 && (used >= uint64(maxBytes) || cost > uint64(maxBytes)-used) {
+						newRows = row
+						break
+					}
+					used += cost
+				}
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				if materializeEnd := min(end, offset+newRows); start < materializeEnd {
+					partVec, err := part.materialize(start-part.firstRow, materializeEnd-start, mp)
+					if err != nil {
+						return false, err
+					}
+					if err = appendBlockWindowVector(&vec, partVec, mp); err != nil {
+						return false, err
 					}
 				}
-				if err == nil {
-					bat.Vecs[i] = vec
-					rows = newRows
-				}
-			}
-		}
-		source.close()
-		if spill != nil {
-			_ = spill.file.Close()
+				return newRows < rows, nil
+			},
+		)
+		if err == nil && (vec == nil || vec.Length() != newRows) {
+			err = moerr.NewInvalidInputNoCtx("object column window row count mismatch")
 		}
 		if err != nil {
 			if vec != nil {
@@ -241,53 +147,70 @@ func ReadOneBlockAllColumnsBudgetedWindow(
 			bat.Clean(mp)
 			return nil, 0, err
 		}
+		for j := 0; j < i; j++ {
+			if bat.Vecs[j].Length() > newRows {
+				compact, cloneErr := bat.Vecs[j].CloneWindow(0, newRows, mp)
+				if cloneErr != nil {
+					vec.Free(mp)
+					bat.Clean(mp)
+					return nil, 0, cloneErr
+				}
+				bat.Vecs[j].Free(mp)
+				bat.Vecs[j] = compact
+			}
+		}
+		bat.Vecs[i] = vec
+		rows = newRows
 	}
 	bat.SetRowCount(rows)
 	return bat, rows, nil
 }
 
-func loadBlockWindowColumn(
+// Each part is released before the next chunk is loaded. Chunk metadata caps
+// each decoded source at columnChunkTargetBytes, so chunked columns need no
+// spill even when several chunks overlap the requested window.
+func forEachBlockWindowPart(
 	ctx context.Context, name string, ext Extent, totalRows, offset, candidateRows int,
-	maxSourceBytes uint64, retained *uint64, spill **blockWindowSpill, policy fileservice.Policy,
-	fs fileservice.FileService, spillFactory ColumnWindowSpillFactory,
-) (_ *blockWindowColumn, err error) {
-	column := &blockWindowColumn{}
-	defer func() {
+	maxSourceBytes uint64, policy fileservice.Policy, fs fileservice.FileService,
+	spillFactory ColumnWindowSpillFactory,
+	visit func(*blockWindowPart) (bool, error),
+) error {
+	loadAndVisit := func(ext Extent, firstRow, rows int, chunked bool) (bool, error) {
+		part, err := loadBlockWindowPart(ctx, name, ext, firstRow, rows,
+			maxSourceBytes, policy, fs, spillFactory, chunked)
 		if err != nil {
-			column.close()
+			part.close()
+			return false, err
 		}
-	}()
+		defer part.close()
+		return visit(&part)
+	}
 	if ext.Alg() != compress.Lz4Chunked {
-		part, loadErr := loadBlockWindowPart(ctx, name, ext, 0, totalRows,
-			maxSourceBytes, retained, spill, policy, fs, spillFactory, false)
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		column.parts = append(column.parts, part)
-		return column, nil
+		_, err := loadAndVisit(ext, 0, totalRows, false)
+		return err
 	}
 	prefixExtent := NewExtent(compress.None, ext.Offset(), columnChunkHeaderSize, columnChunkHeaderSize)
 	prefix, err := readCachedColumnRange(ctx, name, prefixExtent, policy, fs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	headerSize, err := chunkedColumnHeaderReadSize(prefix.Bytes(), ext.Length())
 	prefix.Release()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	headerExtent := NewExtent(compress.None, ext.Offset(), uint32(headerSize), uint32(headerSize))
 	header, err := readCachedColumnRange(ctx, name, headerExtent, policy, fs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rows, metas, err := parseColumnChunkHeader(header.Bytes(), ext.Length())
 	header.Release()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if int(rows) != totalRows {
-		return nil, moerr.NewInvalidInputNoCtx("chunked object column row count mismatch")
+		return moerr.NewInvalidInputNoCtx("chunked object column row count mismatch")
 	}
 	for _, meta := range metas {
 		first, last := int(meta.rowStart), int(meta.rowStart+meta.rowCount)
@@ -296,52 +219,38 @@ func loadBlockWindowColumn(
 		}
 		chunkExtent := NewExtent(meta.algorithm, ext.Offset()+meta.offset,
 			meta.length, meta.originSize)
-		part, loadErr := loadBlockWindowPart(ctx, name, chunkExtent, first,
-			int(meta.rowCount), maxSourceBytes, retained, spill, policy, fs, spillFactory, true)
-		if loadErr != nil {
-			return nil, loadErr
+		stop, err := loadAndVisit(chunkExtent, first, int(meta.rowCount), true)
+		if err != nil {
+			return err
 		}
-		column.parts = append(column.parts, part)
+		if stop {
+			break
+		}
 	}
-	return column, nil
+	return nil
 }
 
 func loadBlockWindowPart(
 	ctx context.Context, name string, ext Extent, firstRow, rows int,
-	maxSourceBytes uint64, retained *uint64, spillStore **blockWindowSpill, policy fileservice.Policy,
+	maxSourceBytes uint64, policy fileservice.Policy,
 	fs fileservice.FileService, spillFactory ColumnWindowSpillFactory, chunked bool,
 ) (blockWindowPart, error) {
 	part := blockWindowPart{firstRow: firstRow, rows: rows, originSize: int64(ext.OriginSize())}
-	size := uint64(ext.OriginSize())
-	spill := size > maxSourceBytes || (spillFactory != nil && *retained+size > maxSourceBytes)
-	if chunked && spillFactory == nil {
-		// Preserve the existing chunked reader's source allowance for callers
-		// without a spill factory, but never retain an unbounded number of
-		// decoded chunks while sizing a single column.
-		if *retained+size > max(maxSourceBytes, uint64(2*columnChunkTargetBytes)) {
-			return part, moerr.NewInvalidInputNoCtx("chunked object column window requires spill")
-		}
-		spill = false
-	}
-	if spill {
+	if !chunked && uint64(ext.OriginSize()) > maxSourceBytes {
 		if spillFactory == nil {
 			return part, moerr.NewInternalErrorNoCtx("legacy object column spill is unavailable")
 		}
-		if *spillStore == nil {
-			file, err := spillFactory(ctx)
-			if err != nil {
-				return part, err
-			}
-			if file == nil {
-				return part, moerr.NewInternalErrorNoCtx("legacy object column spill is nil")
-			}
-			*spillStore = &blockWindowSpill{file: file}
-		}
-		reader, err := (*spillStore).appendColumn(ctx, name, ext, fs)
+		file, err := spillFactory(ctx)
 		if err != nil {
 			return part, err
 		}
-		part.spill = reader
+		if file == nil {
+			return part, moerr.NewInternalErrorNoCtx("legacy object column spill is nil")
+		}
+		part.spill = file
+		if err := streamLegacyColumnToSpill(ctx, name, ext, fs, file); err != nil {
+			return part, err
+		}
 		return part, nil
 	}
 	data, err := readCachedColumnRange(ctx, name, ext, policy, fs)
@@ -349,7 +258,6 @@ func loadBlockWindowPart(
 		return part, err
 	}
 	part.data = data
-	*retained += size
 	return part, nil
 }
 
