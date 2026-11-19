@@ -34,6 +34,10 @@ rename user ru30467_a to ru30467_mid, ru30467_b to ru30467_mid;
 select count(*)=1 as source_rolled_back from mo_catalog.mo_user where user_name='ru30467_a' and user_id={{ru30467_a_id}};
 select count(*)=1 as second_unchanged from mo_catalog.mo_user where user_name='ru30467_b' and user_id={{ru30467_b_id}};
 select count(*)=0 as intermediate_absent from mo_catalog.mo_user where user_name='ru30467_mid';
+-- A role collision in the second pair also rolls back the first write.
+rename user ru30467_a to ru30467_mid, ru30467_b to ru30467_reader;
+select count(*)=2 as sources_preserved_on_role_collision from mo_catalog.mo_user where (user_name='ru30467_a' and user_id={{ru30467_a_id}}) or (user_name='ru30467_b' and user_id={{ru30467_b_id}});
+select count(*)=0 as no_user_created_on_role_collision from mo_catalog.mo_user where user_name in ('ru30467_mid','ru30467_reader');
 rename user ru30467_a to ru30467_mid, ru30467_mid to ru30467_moved;
 select count(*)=1 as identity_credential_default_preserved from mo_catalog.mo_user where user_name='ru30467_moved' and user_id={{ru30467_a_id}} and authentication_string=@ru30467_auth and default_role=@ru30467_default;
 select count(*)=1 as grant_preserved from mo_catalog.mo_user_grant g join mo_catalog.mo_role r on g.role_id=r.role_id where g.user_id={{ru30467_a_id}} and r.role_name='ru30467_reader';

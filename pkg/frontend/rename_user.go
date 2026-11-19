@@ -236,6 +236,17 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 		if len(dst) != 0 {
 			return moerr.NewInvalidInput(ctx, "RENAME USER destination already exists")
 		}
+		roleSQL, e := getSqlForRoleIdOfRole(ctx, p.To.Username)
+		if e != nil {
+			return e
+		}
+		role, e := querySetDefaultRoleResult(ctx, bh, roleSQL)
+		if e != nil {
+			return e
+		}
+		if role != nil && role.GetRowCount() > 0 {
+			return moerr.NewInvalidInput(ctx, "RENAME USER destination is already a role")
+		}
 		if strings.EqualFold(u.name, adminName) || strings.EqualFold(p.To.Username, adminName) {
 			return moerr.NewInvalidInput(ctx, "cannot rename administrator")
 		}

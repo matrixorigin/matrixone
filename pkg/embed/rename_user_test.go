@@ -18,9 +18,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestRenameUserIdentity exercises public SQL against the task-owned cluster.
@@ -62,6 +63,12 @@ func TestRenameUserIdentity(t *testing.T) {
 		require.Error(t, err)
 		count("select count(*) from mo_catalog.mo_user where user_name='rename_src'", 1)
 		count("select count(*) from mo_catalog.mo_user where user_name='rename_dst'", 0)
+		const roleCollision = "rename user rename_src to rename_dst, rename_taken to rename_role"
+		_, err = conn.ExecContext(ctx, roleCollision)
+		require.ErrorContains(t, err, "RENAME USER destination is already a role")
+		count(fmt.Sprintf("select count(*) from mo_catalog.mo_user where user_name='rename_src' and user_id=%d", id), 1)
+		count("select count(*) from mo_catalog.mo_user where user_name='rename_taken'", 1)
+		count("select count(*) from mo_catalog.mo_user where user_name in ('rename_dst','rename_role')", 0)
 		exec("rename user rename_src to rename_dst, rename_dst to rename_end")
 		var newID int64
 		var newPassword string

@@ -24,6 +24,9 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,5 +152,36 @@ func TestRenameUserShowGrants(t *testing.T) {
 		require.Equal(t, wantA, grants(old, "show grants for 'sg30467_moved'"))
 		require.Equal(t, wantA, grants(old, "show grants for 'sg30467_moved'@'%'"))
 		require.Equal(t, grants(admin, "show grants for role sg30467_read"), grants(old, "show grants for role sg30467_read"))
+	})
+}
+
+func TestInternalExecutorImplicitShowGrants(t *testing.T) {
+	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
+		require.True(t, ok)
+		exec := value.(executor.SQLExecutor)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		grants := func(stmt string) []string {
+			t.Helper()
+			result, err := exec.Exec(ctx, stmt, executor.Options{}.WithAccountID(0))
+			require.NoError(t, err, stmt)
+			defer result.Close()
+			var rows []string
+			result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				require.Len(t, cols, 1)
+				rows = append(rows, executor.GetStringRows(cols[0])...)
+				return true
+			})
+			return rows
+		}
+		want := grants("show grants for 'root'@'localhost'")
+		require.NotEmpty(t, want)
+		for _, stmt := range []string{"show grants", "show grants for current_user", "show grants for current_user()"} {
+			require.Equal(t, want, grants(stmt), stmt)
+		}
 	})
 }

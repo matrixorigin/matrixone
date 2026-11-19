@@ -1199,7 +1199,8 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 	if stmt.Username == "" {
 		identity, ok := ctx.(interface{ GetCurrentUserID() (uint32, error) })
 		if !ok {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "current user identity is unavailable")
+			// The internal SQL executor uses its compiler username.
+			return returnByRewriteSQL(ctx, buildShowGrantsUserSQL(accountId, ctx.GetUserName(), stmt.Hostname), ddlType)
 		}
 		id, err := identity.GetCurrentUserID()
 		if err != nil {
