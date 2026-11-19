@@ -769,6 +769,12 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
+	// Allocate failure state only when a cache can receive completed entries.
+	// Deferred cache updates must not publish entries after a failed read.
+	var readFailed *bool
+	if len(vector.Caches) > 0 || s.memCache != nil || s.diskCache != nil {
+		readFailed = new(bool)
+	}
 	for _, cache := range vector.Caches {
 
 		t0 := time.Now()
@@ -777,22 +783,22 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		LogEvent(ctx, str_read_vector_Caches_end)
 		metric.FSReadDurationReadVectorCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
-			return err
+			return recordCacheReadFailure(err, readFailed)
 		}
 		if vector.allDone() {
 			return nil
 		}
 
-		defer func() {
-			if err != nil {
+		defer func(readFailed *bool) {
+			if err != nil || (readFailed != nil && *readFailed) {
 				return
 			}
 			t0 := time.Now()
 			LogEvent(ctx, str_update_vector_Caches_begin)
-			err = cache.Update(ctx, vector, false)
+			_ = cache.Update(ctx, vector, false)
 			LogEvent(ctx, str_update_vector_Caches_end)
 			metric.FSReadDurationUpdateVectorCache.Observe(time.Since(t0).Seconds())
-		}()
+		}(readFailed)
 	}
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
@@ -808,22 +814,22 @@ read_memory_cache:
 		LogEvent(ctx, str_read_memory_cache_Caches_end)
 		metric.FSReadDurationReadMemoryCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
-			return err
+			return recordCacheReadFailure(err, readFailed)
 		}
 		if vector.allDone() {
 			return nil
 		}
 
-		defer func() {
-			if err != nil {
+		defer func(readFailed *bool) {
+			if err != nil || (readFailed != nil && *readFailed) {
 				return
 			}
 			t0 := time.Now()
 			LogEvent(ctx, str_update_memory_cache_begin)
-			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
+			_ = s.memCache.Update(ctx, vector, s.asyncUpdate)
 			LogEvent(ctx, str_update_memory_cache_end)
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
-		}()
+		}(readFailed)
 	}
 
 read_disk_cache:
@@ -831,18 +837,18 @@ read_disk_cache:
 		decodePrepared = true
 		finishDecode, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
 		if err != nil {
-			return err
+			return recordCacheReadFailure(err, readFailed)
 		}
 		if fillAttempted {
 			if fillTicket != nil && !fillTicket.leader {
 				if err = fillTicket.wait(ctx, sharedDecodeFillWait); err != nil {
 					finishFill()
-					return err
+					return recordCacheReadFailure(err, readFailed)
 				}
 			}
 			if err = readCache(ctx, s.memCache, vector); err != nil {
 				finishFill()
-				return err
+				return recordCacheReadFailure(err, readFailed)
 			}
 			if vector.allDone() {
 				return nil
@@ -868,7 +874,7 @@ read_disk_cache:
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			finishFill()
-			return err
+			return recordCacheReadFailure(err, readFailed)
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
 		var actualDiskReadBytes int64
@@ -889,16 +895,16 @@ read_disk_cache:
 
 		// try to cache IOEntry if not caching the full file
 		if vector.Policy.CacheIOEntry() {
-			defer func() {
-				if err != nil {
+			defer func(readFailed *bool) {
+				if err != nil || (readFailed != nil && *readFailed) {
 					return
 				}
 				t0 := time.Now()
 				LogEvent(ctx, str_update_disk_cache_Caches_begin)
-				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+				_ = s.diskCache.Update(ctx, vector, s.asyncUpdate)
 				LogEvent(ctx, str_update_disk_cache_Caches_end)
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
-			}()
+			}(readFailed)
 		}
 		finishFill()
 
@@ -911,7 +917,7 @@ read_disk_cache:
 		LogEvent(ctx, str_read_remote_cache_Caches_end)
 		metric.FSReadDurationReadRemoteCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
-			return err
+			return recordCacheReadFailure(err, readFailed)
 		}
 		if vector.allDone() {
 			return nil
@@ -957,7 +963,7 @@ read_disk_cache:
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if waitErr != nil {
-				return waitErr
+				return recordCacheReadFailure(waitErr, readFailed)
 			}
 			if !completed && mergeKey.FullObject {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
@@ -978,7 +984,7 @@ read_disk_cache:
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
 					if waitErr != nil {
-						return waitErr
+						return recordCacheReadFailure(waitErr, readFailed)
 					}
 					if !completed {
 						forcePerEntryRangeRead = true
@@ -1017,7 +1023,7 @@ read_disk_cache:
 						metric.FSReadDurationIOMerger.Observe(rangeMergeTime.Seconds())
 						LogEvent(ctx, str_ioMerger_Merge_end)
 						if waitErr != nil {
-							return waitErr
+							return recordCacheReadFailure(waitErr, readFailed)
 						}
 						if completed {
 							if mayReadMemoryCache {
@@ -1053,10 +1059,10 @@ read_s3:
 	if forcePerEntryRangeRead {
 		err = s.readEntriesIndividually(ctx, vector)
 	} else {
-		err = s.read(ctx, vector, forceMinimalRangeRead)
+		err = s.read(ctx, vector, forceMinimalRangeRead, false)
 	}
 	if err != nil {
-		return err
+		return recordCacheReadFailure(err, readFailed)
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
 	// Record S3 read size (all bytes read from S3)
@@ -1067,6 +1073,14 @@ read_s3:
 	}
 
 	return nil
+}
+
+// recordCacheReadFailure suppresses deferred updates after any later read error.
+func recordCacheReadFailure(err error, readFailed *bool) error {
+	if err != nil && readFailed != nil {
+		*readFailed = true
+	}
+	return err
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
@@ -1085,7 +1099,7 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 			ExpireAt: vector.ExpireAt,
 			Policy:   vector.Policy,
 		}
-		if err := s.read(ctx, single, true); err != nil {
+		if err := s.read(ctx, single, true, false); err != nil {
 			return err
 		}
 		vector.Entries[i] = single.Entries[0]
@@ -1132,7 +1146,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead bool) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead, laterSparseRange bool) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -1149,6 +1163,44 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	if readFullObject && (forceMinimalRangeRead || s.diskCache == nil) {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
+	}
+
+	// Split a small number of sparse buffered reads while retaining the
+	// existing full-object and streaming lifecycles.
+	if !readFullObject {
+		_, _, expensive := vector.expensiveMinimalRangeRead()
+		misses := 0
+		buffered := true
+		ordered := true
+		var previousOffset int64
+		for _, entry := range vector.Entries {
+			if !entry.done {
+				if misses > 0 && entry.Offset < previousOffset {
+					ordered = false
+				}
+				previousOffset = entry.Offset
+				misses++
+				buffered = buffered && entry.WriterForRead == nil && entry.ReadCloserForRead == nil
+			}
+		}
+		if expensive && buffered && ordered && misses <= 4 {
+			for i := range vector.Entries {
+				entry := &vector.Entries[i]
+				if entry.done {
+					continue
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				single := &IOVector{FilePath: vector.FilePath, Entries: []IOEntry{*entry},
+					ExpireAt: vector.ExpireAt, Policy: vector.Policy}
+				if err := s.read(ctx, single, true, entry.Offset > *min); err != nil {
+					return err
+				}
+				*entry = single.Entries[0]
+			}
+			return nil
+		}
 	}
 
 	// A range read is timed only when this function drains it.
@@ -1174,6 +1226,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		key := s.pathToKey(path.File)
 		r, err := s.storage.Read(ctx, key, min, max)
 		if err != nil {
+			// The earliest range has already succeeded, so a later 416 is a
+			// short object, just as it is for the original envelope read.
+			if status, ok := objectStorageStatusCode(err); laterSparseRange && ok && status == 416 {
+				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
+			}
 			return nil, err
 		}
 		return &readCloser{
