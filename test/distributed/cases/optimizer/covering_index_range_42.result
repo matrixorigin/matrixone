@@ -1,0 +1,182 @@
+drop database if exists covering_index_range_42;
+create database covering_index_range_42;
+use covering_index_range_42;
+create table t (id int primary key, a int, b int, key ix_ab(a,b), key ix_b(b));
+create table control (id int primary key, a int, b int);
+insert into t values (1,1,5),(2,1,5),(3,1,6),(4,1,null),(5,null,5),(6,2,5),(7,1,0),(8,1,10);
+insert into control select * from t;
+explain select count(distinct b) from t force index(ix_b) where b between 5 and 6;
+-- @regex("Index Table Scan.*ix_b", true)
+-- @regex("prefix_between", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: count(#[0,0])  𝄀
+        ->  Aggregate  𝄀
+              Group Key: serial_extract(__mo_index_idx_col, 0, INT))  𝄀
+              ->  Index Table Scan on t.ix_b  𝄀
+                    Filter Cond: prefix_between(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_between(__mo_index_idx_col)
+select count(distinct b) from t force index(ix_b) where b between 5 and 6;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from control where b between 5 and 6;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from t force index(ix_b) where b>5;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from control where b>5;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from t force index(ix_b) where b<=5;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from control where b<=5;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from t force index(ix_b) where in_range(b,5,6,4);
+➤ count(distinct b)[-5,64,0]  𝄀
+0
+select count(distinct b) from control where in_range(b,5,6,4);
+➤ count(distinct b)[-5,64,0]  𝄀
+0
+select count(distinct b) from t force index(ix_b) where in_range(b,5,6,0);
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from control where in_range(b,5,6,0);
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+explain select count(distinct b) from t force index(ix_b) where b>=5 and b<7;
+-- @regex("Index Table Scan.*ix_b", true)
+-- @regex("prefix_in_range", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: count(#[0,0])  𝄀
+        ->  Aggregate  𝄀
+              Group Key: serial_extract(__mo_index_idx_col, 0, INT))  𝄀
+              ->  Index Table Scan on t.ix_b  𝄀
+                    Filter Cond: prefix_in_range(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, INT)) < 7)  𝄀
+                    Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+select count(distinct b) from t force index(ix_b) where b>=5 and b<7;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+select count(distinct b) from control where b>=5 and b<7;
+➤ count(distinct b)[-5,64,0]  𝄀
+2
+explain select sum(b) from t force index(ix_ab) where a=1 and b>5;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("prefix_in_range", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(serial_extract(__mo_index_idx_col, 1, INT)))  𝄀
+        ->  Index Table Scan on t.ix_ab  𝄀
+              Filter Cond: prefix_in_range(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 1, INT)) > 5)  𝄀
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+select id from t force index(ix_ab) where a=1 and b>5 and b<10 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from control where a=1 and b>5 and b<10 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t force index(ix_ab) where a=1 and b>=5 and b<7 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from control where a=1 and b>=5 and b<7 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t force index(ix_ab) where a=1 and b between 10 and 5 order by id;
+➤ id[4,32,0]
+select id from control where a=1 and b between 10 and 5 order by id;
+➤ id[4,32,0]
+select id from t force index(ix_b) where b<=5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5  𝄀
+6  𝄀
+7
+select id from control where b<=5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5  𝄀
+6  𝄀
+7
+create table nc (id int primary key, a int, b int, payload int, key ix_ab(a,b));
+create table nc_control (id int primary key, a int, b int, payload int);
+insert into nc values (1,1,5,10),(2,1,6,20),(3,1,7,30),(4,2,5,40);
+insert into nc_control select * from nc;
+explain select sum(payload) from nc force index(ix_ab) where a=1 and b>=5 and b<7;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("prefix_in_range", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(nc.payload)  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (nc.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on covering_index_range_42.nc [ForceOneCN]  𝄀
+                    Filter Cond: (nc.a = 1), (nc.b >= 5), (nc.b < 7)  𝄀
+                    Block Filter Cond: (nc.a = 1), (nc.b >= 5), (nc.b < 7)  𝄀
+                    Runtime Filter Probe: nc.id  𝄀
+              ->  Index Table Scan on nc.ix_ab [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in_range(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 1, INT)) >= 5), (serial_extract(__mo_index_idx_col, 1, INT)) < 7)  𝄀
+                    Block Filter Cond: prefix_in_range(__mo_index_idx_col), prefix_in_range(__mo_index_idx_col), prefix_in_range(__mo_index_idx_col)
+select sum(payload) from nc force index(ix_ab) where a=1 and b>=5 and b<7;
+➤ sum(payload)[-5,64,0]  𝄀
+30
+select sum(payload) from nc_control where a=1 and b>=5 and b<7;
+➤ sum(payload)[-5,64,0]  𝄀
+30
+create table u (id int primary key, a int, b int, c int, unique key ix_abc(a,b,c));
+create table uc (id int primary key, a int, b int, c int);
+insert into u values (1,1,5,null),(2,1,6,null),(3,1,7,1),(4,1,8,2);
+insert into uc select * from u;
+select id from u force index(ix_abc) where a=1 and b>4 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from uc where a=1 and b>4 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+create table s (id int primary key, a varbinary(16), b int, key ix_ab(a,b));
+create table sc (id int primary key, a varbinary(16), b int);
+insert into s values (1,cast('a' as binary),91),(2,cast('a\0' as binary),92),(3,cast('a\0z' as binary),93),(4,cast('a' as binary),90);
+insert into sc select * from s;
+select id,hex(a),b from s force index(ix_ab) where a=cast('a' as binary) and b>=90 order by id;
+➤ id[4,32,0]  ¦  hex(a)[12,-1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  61  ¦  91  𝄀
+4  ¦  61  ¦  90
+select id,hex(a),b from sc where a=cast('a' as binary) and b>=90 order by id;
+➤ id[4,32,0]  ¦  hex(a)[12,-1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  61  ¦  91  𝄀
+4  ¦  61  ¦  90
+prepare p from 'select id from t force index(ix_ab) where a=? and b>? order by id';
+set @a=1,@b=5;
+execute p using @a,@b;
+➤ id[4,32,0]  𝄀
+3  𝄀
+8
+set @b=null;
+execute p using @a,@b;
+➤ id[4,32,0]
+set @b=9;
+execute p using @a,@b;
+➤ id[4,32,0]  𝄀
+8
+deallocate prepare p;
+drop database covering_index_range_42;
