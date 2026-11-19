@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +114,7 @@ func TestConvertedParameterReuse(t *testing.T) {
 					MustFixedColWithTypeCheck[types.Decimal128](input)[0] = types.Decimal128{B0_63: 250}
 				}
 				if !constant {
-					nulls.Add(input.GetNulls(), 1)
+					input.GetNulls().Add(1)
 				}
 				check(tc.changed, !constant)
 				nullToValue()

@@ -21,7 +21,7 @@ type Iterator interface {
 }
 
 type Bitmap struct {
-	// popCount is the number of set bits. Version 1 stored an int32 emptyFlag here.
+	// popCount is the number of set bits.
 	popCount int64
 	// numBits is the logical length in bits. Bits at or beyond numBits are
 	// never read; words missing from data read as zero.

@@ -45,7 +45,7 @@ func checkIntegerWidening[T1, T2 constraints.Integer | constraints.Float](t *tes
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[T2](result.GetResultVector()))
 	require.Equal(t, len(values), result.GetResultVector().Length())
 	require.Equal(t, target.ToType(), *result.GetResultVector().GetType())
-	require.True(t, result.GetResultVector().GetNulls().EmptyByFlag())
+	require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 	after, err := input.MarshalBinary()
 	require.NoError(t, err)
 	require.Equal(t, before, after)

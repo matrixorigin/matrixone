@@ -210,7 +210,7 @@ func serialWithCompacted(
 		}
 		values, area := vector.MustVarlenaRawData(v)
 		for i := range values {
-			if nulls.Contains(v.GetNulls(), uint64(i)) {
+			if v.GetNulls().Contains(uint64(i)) {
 				continue
 			}
 			if err := types.ValidateCollationValue(*v.GetType(), values[i].GetByteSlice(area)); err != nil {
@@ -239,8 +239,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[bool](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeBool(b)
 					}
@@ -253,8 +253,8 @@ func serialWithCompacted(
 		case types.T_bit:
 			s := vector.MustFixedColNoTypeCheck[uint64](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
+				if v.GetNulls().Contains(uint64(i)) {
+					bitMap.Add(uint64(i))
 				} else {
 					ps[i].EncodeUint64(b)
 				}
@@ -263,8 +263,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[int8](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeInt8(b)
 					}
@@ -278,8 +278,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[int16](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeInt16(b)
 					}
@@ -293,8 +293,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[int32](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeInt32(b)
 					}
@@ -308,8 +308,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[int64](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeInt64(b)
 					}
@@ -323,8 +323,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[uint8](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeUint8(b)
 					}
@@ -338,8 +338,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[uint16](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeUint16(b)
 					}
@@ -353,8 +353,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[uint32](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeUint32(b)
 					}
@@ -368,8 +368,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[uint64](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeUint64(b)
 					}
@@ -383,8 +383,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[float32](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeFloat32(b)
 					}
@@ -398,8 +398,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[float64](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeFloat64(b)
 					}
@@ -413,8 +413,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Date](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeDate(b)
 					}
@@ -428,8 +428,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Time](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeTime(b)
 					}
@@ -443,8 +443,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Datetime](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeDatetime(b)
 					}
@@ -458,8 +458,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Timestamp](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeTimestamp(b)
 					}
@@ -473,8 +473,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Enum](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeEnum(b)
 					}
@@ -488,8 +488,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeMoYear(b)
 					}
@@ -503,8 +503,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeDecimal64(b)
 					}
@@ -518,8 +518,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeDecimal128(b)
 					}
@@ -533,8 +533,8 @@ func serialWithCompacted(
 			s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
 			if hasNull {
 				for i, b := range s {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeDecimal256(b)
 					}
@@ -554,8 +554,8 @@ func serialWithCompacted(
 			vs, area := vector.MustVarlenaRawData(v)
 			if hasNull {
 				for i := range vs {
-					if nulls.Contains(vNull, uint64(i)) {
-						nulls.Add(bitMap, uint64(i))
+					if vNull.Contains(uint64(i)) {
+						bitMap.Add(uint64(i))
 					} else {
 						ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
 					}
@@ -569,7 +569,7 @@ func serialWithCompacted(
 	}
 
 	for i := 0; i < length; i++ {
-		if !nulls.Contains(bitMap, uint64(i)) {
+		if !bitMap.Contains(uint64(i)) {
 			val = append(val, ps[i].GetBuf())
 		}
 	}
@@ -645,7 +645,7 @@ func compactSingleIndexCol(
 		values, area := vector.MustVarlenaRawData(v)
 		compact := make([][]byte, 0, len(values))
 		for i := range values {
-			if nulls.Contains(v.GetNulls(), uint64(i)) {
+			if v.GetNulls().Contains(uint64(i)) {
 				continue
 			}
 			key, keyErr := types.PhysicalCollationKey(*v.GetType(), values[i].GetByteSlice(area))
@@ -669,7 +669,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[bool](v)
 		ns := make([]bool, 0, length)
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -678,7 +678,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
 		ns := make([]uint64, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -687,7 +687,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[int8](v)
 		ns := make([]int8, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -696,7 +696,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[int16](v)
 		ns := make([]int16, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -705,7 +705,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[int32](v)
 		ns := make([]int32, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -714,7 +714,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[int64](v)
 		ns := make([]int64, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -723,7 +723,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[uint8](v)
 		ns := make([]uint8, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -732,7 +732,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[uint16](v)
 		ns := make([]uint16, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -741,7 +741,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[uint32](v)
 		ns := make([]uint32, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -751,7 +751,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
 		ns := make([]uint64, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -760,7 +760,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[float32](v)
 		ns := make([]float32, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -769,7 +769,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[float64](v)
 		ns := make([]float64, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -779,7 +779,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Date](v)
 		ns := make([]types.Date, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -789,7 +789,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Time](v)
 		ns := make([]types.Time, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -798,7 +798,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Datetime](v)
 		ns := make([]types.Datetime, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -807,7 +807,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Timestamp](v)
 		ns := make([]types.Timestamp, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -816,7 +816,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Enum](v)
 		ns := make([]types.Enum, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -825,7 +825,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
 		ns := make([]types.MoYear, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -834,7 +834,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -843,7 +843,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
 		ns := make([]types.Decimal128, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -852,7 +852,7 @@ func compactSingleIndexCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
 		ns := make([]types.Decimal256, 0, len(s))
 		for i, b := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -862,7 +862,7 @@ func compactSingleIndexCol(
 		s, area := vector.MustVarlenaRawData(v)
 		ns := make([][]byte, 0, len(s))
 		for i := range s {
-			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+			if !v.GetNulls().Contains(uint64(i)) {
 				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
@@ -889,7 +889,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[bool](v)
 		ns := make([]bool, 0, length)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -898,7 +898,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
 		ns := make([]uint64, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -907,7 +907,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[int8](v)
 		ns := make([]int8, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -916,7 +916,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[int16](v)
 		ns := make([]int16, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -925,7 +925,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[int32](v)
 		ns := make([]int32, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -934,7 +934,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[int64](v)
 		ns := make([]int64, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -943,7 +943,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[uint8](v)
 		ns := make([]uint8, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -952,7 +952,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[uint16](v)
 		ns := make([]uint16, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -961,7 +961,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[uint32](v)
 		ns := make([]uint32, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -970,7 +970,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
 		ns := make([]uint64, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -979,7 +979,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[float32](v)
 		ns := make([]float32, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -988,7 +988,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[float64](v)
 		ns := make([]float64, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -997,7 +997,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Date](v)
 		ns := make([]types.Date, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1006,7 +1006,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Time](v)
 		ns := make([]types.Time, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1015,7 +1015,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Datetime](v)
 		ns := make([]types.Datetime, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1024,7 +1024,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Timestamp](v)
 		ns := make([]types.Timestamp, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1033,7 +1033,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Enum](v)
 		ns := make([]types.Enum, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1042,7 +1042,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
 		ns := make([]types.MoYear, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1051,7 +1051,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1060,7 +1060,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
 		ns := make([]types.Decimal128, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1069,7 +1069,7 @@ func compactPrimaryCol(
 		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
 		ns := make([]types.Decimal256, 0)
 		for i, b := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
@@ -1079,7 +1079,7 @@ func compactPrimaryCol(
 		s, area := vector.MustVarlenaRawData(v)
 		ns := make([][]byte, 0, len(s))
 		for i := range s {
-			if !nulls.Contains(bitMap, uint64(i)) {
+			if !bitMap.Contains(uint64(i)) {
 				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
@@ -1099,7 +1099,7 @@ func CompactRowIdCol(
 ) error {
 	sels := vector.GetSels()
 	for i := 0; i < v.Length(); i++ {
-		if !nulls.Contains(bitMap, uint64(i)) {
+		if !bitMap.Contains(uint64(i)) {
 			sels = append(sels, int64(i))
 		}
 	}

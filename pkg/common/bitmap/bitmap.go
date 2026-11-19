@@ -401,15 +401,6 @@ func (n *Bitmap) Size() (res int) {
 	return /*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ len(n.data) * 8
 }
 
-// EmptyByFlag is a quick and dirty way to check if the Bitmap is empty.
-// If it retruns true, the Bitmap is empty.  Otherwise, it may or may not be empty.
-// @ requires n != nil ==> acc(n.Inv(), _)
-// @ decreases
-// @ pure
-func (n *Bitmap) EmptyByFlag() bool {
-	return n == nil || /*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ (n.popCount == 0 || len(n.data) == 0)
-}
-
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 // @ requires acc(n.Inv(), _)
 // @ decreases

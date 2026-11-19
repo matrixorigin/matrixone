@@ -23,7 +23,7 @@ func BitmapEqual(v1, v2 *nulls.Nulls) bool {
 	if v1 == nil || v2 == nil {
 		return v1 == v2
 	}
-	if v1.GetCardinality() != v2.GetCardinality() {
+	if v1.Count() != v2.Count() {
 		return false
 	}
 	vals1 := v1.ToArray()

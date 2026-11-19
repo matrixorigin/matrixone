@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -766,7 +765,7 @@ func insertAutoValues[T constraints.Integer](
 		col.lockDo(func() {
 			for i, v := range vs {
 				// vector maybe has some invalid value, must use null bitmap to check the manual value
-				if !nulls.Contains(vec.GetNulls(), uint64(i)) && v > 0 {
+				if !vec.GetNulls().Contains(uint64(i)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}
@@ -811,7 +810,7 @@ func insertAutoValues[T constraints.Integer](
 		skipped,
 		func(i int) bool {
 			filter := autoCount < rows &&
-				!nulls.Contains(vec.GetNulls(), uint64(i))
+				!vec.GetNulls().Contains(uint64(i))
 			// Only positive explicit values advance the positive sequence. A
 			// signed negative converted to uint64 would discard every skipped
 			// range, including candidates preceding a later positive manual ID.

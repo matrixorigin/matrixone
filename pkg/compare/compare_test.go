@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -522,7 +521,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 			constant := vector.NewConstNull(types.T_any.ToType(), 3, mp)
 			flat := vector.NewVec(types.T_any.ToType())
 			flat.SetLength(3)
-			nulls.AddRange(flat.GetNulls(), 0, 3)
+			flat.GetNulls().AddRange(0, 3)
 			defer func() { constant.Free(mp); flat.Free(mp); require.Zero(t, mp.CurrNB()) }()
 			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 			for _, desc := range []bool{false, true} {
@@ -537,7 +536,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 				require.True(t, flat.IsNull(1))
 				require.Equal(t, types.StringSourceLiteral, flat.GetStringSourceAt(1))
 				// ANY has no non-NULL value domain; don't broaden unsupported values.
-				nulls.Del(flat.GetNulls(), 0)
+				flat.GetNulls().Del(0)
 				require.True(t, moerr.IsMoErrCode(c.Copy(1, 0, 0, 0, proc), moerr.ErrNotSupported))
 				func() {
 					defer func() {
@@ -547,7 +546,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 					}()
 					c.Compare(1, 0, 0, 0)
 				}()
-				nulls.Add(flat.GetNulls(), 0)
+				flat.GetNulls().Add(0)
 			}
 		})
 	}

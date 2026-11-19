@@ -3081,7 +3081,7 @@ func processStringToFixedWithTrim[T any](
 
 	for i := 0; i < numRows; i++ {
 		if nc.isNull(i) {
-			nulls.Add(vec.GetNulls(), uint64(i+length))
+			vec.GetNulls().Add(uint64(i + length))
 			ret[i+length] = zeroVal
 			continue
 		}
@@ -4847,7 +4847,7 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	j := 0
 	for i := 0; i < n; i++ {
 		if !noNulls && levels[i] != mp.maxDefinitionLevel {
-			nulls.Add(vec.GetNulls(), uint64(i+length))
+			vec.GetNulls().Add(uint64(i + length))
 		} else {
 			ret[i+length] = itee(data[j])
 			j++
@@ -5010,7 +5010,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 						"malformed BOOLEAN page: reader returned NULL value"))
 				}
 				ret[row] = false
-				nulls.Add(vec.GetNulls(), uint64(row))
+				vec.GetNulls().Add(uint64(row))
 			} else {
 				if v.Kind() != parquet.Boolean {
 					return rollback(moerr.NewInvalidInputf(proc.Ctx,
@@ -5076,7 +5076,7 @@ func copyBoolDictPageToVec(
 	for i := 0; i < n; i++ {
 		if levels[i] != maxDefinitionLevel {
 			ret[i+length] = false
-			nulls.Add(vec.GetNulls(), uint64(i+length))
+			vec.GetNulls().Add(uint64(i + length))
 			continue
 		}
 		ret[i+length] = values[indices[j]]

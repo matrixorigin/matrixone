@@ -1473,7 +1473,7 @@ func TestFlushTabletail(t *testing.T) {
 				defer view.Close()
 				viewDel := 0
 				if view.Deletes != nil {
-					viewDel = view.Deletes.GetCardinality()
+					viewDel = view.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				view.Compact()
@@ -1515,7 +1515,7 @@ func TestFlushTabletail(t *testing.T) {
 
 				viewDel := 0
 				if views.Deletes != nil {
-					viewDel = views.Deletes.GetCardinality()
+					viewDel = views.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				views.Compact()
@@ -2356,7 +2356,7 @@ func TestADA(t *testing.T) {
 			err := blk.HybridScan(ctx, &view, uint16(j), []int{schema.GetSingleSortKeyIdx()}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			assert.Equal(t, 4, view.Length())
-			assert.Equal(t, 3, view.Deletes.GetCardinality())
+			assert.Equal(t, 3, view.Deletes.Count())
 			view.Close()
 
 		}
@@ -2525,7 +2525,7 @@ func TestChaos1(t *testing.T) {
 	mask := view.Deletes
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
+	assert.Equal(t, int(deleteCnt), mask.Count())
 }
 
 // Testing Steps

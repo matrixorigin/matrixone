@@ -992,7 +992,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
 		}
 		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
+		if !vec.GetNulls().IsEmpty() {
 			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
 		}
 		if nullBytes > math.MaxUint32 {

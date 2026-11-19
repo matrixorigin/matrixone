@@ -57,7 +57,7 @@ func TestIntegerWideningBoundExpressionSelection(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{16384, 0, 16129}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Equal(t, 3, result.Length())
-		require.True(t, result.GetNulls().EmptyByFlag())
+		require.True(t, result.GetNulls().IsEmpty())
 	}
 	require.Equal(t, 3, calls)
 	after, err := bat.Vecs[0].MarshalBinary()

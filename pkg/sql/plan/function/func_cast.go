@@ -1500,7 +1500,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 // precision needs no per-row validation. Other shapes use the checked path.
 func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.Decimal256], target types.Type, length int) bool {
 	source := from.GetType()
-	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().EmptyByFlag() {
+	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().IsEmpty() {
 		return false
 	}
 	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
@@ -4020,7 +4020,7 @@ func floatNumToFixFloat[T1 constraints.Float](
 func widenIntegerBatch[T1, T2 constraints.Integer | constraints.Float](
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) bool {
 	source := from.GetSourceVector()
-	if length <= 0 || source.IsConst() || !source.GetNulls().EmptyByFlag() ||
+	if length <= 0 || source.IsConst() || !source.GetNulls().IsEmpty() ||
 		selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() {
 		return false
 	}
@@ -6668,7 +6668,7 @@ func decimalCastAllNull(source *vector.Vector, length uint64) bool {
 		return true
 	}
 	ns := source.GetNulls()
-	return !ns.EmptyByFlag() && ns.Contains(0) &&
+	return !ns.IsEmpty() && ns.Contains(0) &&
 		(length == 1 || (ns.Contains(length-1) && ns.CountRange(0, length) == int(length)))
 }
 
@@ -6698,7 +6698,7 @@ func decimal64ToDecimal64(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -6918,7 +6918,7 @@ func decimal64ToDecimal256Array(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7104,7 +7104,7 @@ func decimal128ToDecimal128(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7172,7 +7172,7 @@ func decimal128ToDecimal256(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7334,7 +7334,7 @@ func decimal256ToDecimal256(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal256](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {

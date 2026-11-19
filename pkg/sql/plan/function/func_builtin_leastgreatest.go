@@ -1199,7 +1199,7 @@ func leastGreatestSetNullResult(result vector.FunctionResultWrapper, length int)
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
-	nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+	result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 	return nil
 }
 

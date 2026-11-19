@@ -139,7 +139,7 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 	nullsInited := false
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -156,7 +156,7 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 	for _, v := range ivecs {
 		if v.IsConst() {
 			if v.IsConstNull() {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 		} else {

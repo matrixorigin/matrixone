@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -117,7 +116,7 @@ func TestDecodeDatabaseDefaults(t *testing.T) {
 				}
 				r = defaultsResult(t, mp, ids, revisions, versions)
 				if tc.null {
-					nulls.Add(r.Batches[0].Vecs[0].GetNulls(), 0)
+					r.Batches[0].Vecs[0].GetNulls().Add(0)
 				}
 			}
 			defer r.Close()

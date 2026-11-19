@@ -509,7 +509,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
 ) {
 	if isNull {
-		nulls.Add(vec.GetNulls(), uint64(row))
+		vec.GetNulls().Add(uint64(row))
 	} else {
 		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
 		if err != nil {
@@ -525,7 +525,7 @@ func GenericUpdateBytes(
 	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
 ) {
 	if isNull {
-		nulls.Add(vec.GetNulls(), uint64(row))
+		vec.GetNulls().Add(uint64(row))
 	} else {
 		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
 		if err != nil {

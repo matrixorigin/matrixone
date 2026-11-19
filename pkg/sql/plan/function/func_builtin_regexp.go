@@ -26,7 +26,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -939,7 +938,7 @@ func optimizeRuleForLike(ctx context.Context, p1, p2 vector.FunctionParameterWra
 	specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
-		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+		rs.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return true, nil
 	}
 	pat = specialFnForV(pat)

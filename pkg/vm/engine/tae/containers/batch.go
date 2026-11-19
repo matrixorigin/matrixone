@@ -129,7 +129,7 @@ func (bat *Batch) DeleteCnt() int {
 	if !bat.HasDelete() {
 		return 0
 	}
-	return int(bat.Deletes.GetCardinality())
+	return int(bat.Deletes.Count())
 }
 
 func (bat *Batch) Compact() {

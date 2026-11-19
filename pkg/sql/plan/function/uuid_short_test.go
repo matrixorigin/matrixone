@@ -17,15 +17,15 @@ package function
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 type uuidShortClient struct {
@@ -78,7 +78,7 @@ func TestUUIDShort(t *testing.T) {
 			next := uint64(math.MaxUint64)
 			for i := 0; i < tc.length; i++ {
 				ignored := tc.mask.IgnoreAllRow() || (!tc.mask.ShouldEvalAllRow() && tc.mask.Contains(uint64(i)))
-				require.Equal(t, ignored, nulls.Contains(result.GetResultVector().GetNulls(), uint64(i)))
+				require.Equal(t, ignored, result.GetResultVector().GetNulls().Contains(uint64(i)))
 				if !ignored {
 					require.Equal(t, next, vector.GetFixedAtNoTypeCheck[uint64](result.GetResultVector(), i))
 					next--

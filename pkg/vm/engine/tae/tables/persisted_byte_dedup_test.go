@@ -288,7 +288,7 @@ func BenchmarkPersistedByteDedup(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				nulls.AddRange(rows.NullMask(), 0, uint64(rows.Length()))
+				rows.NullMask().AddRange(0, uint64(rows.Length()))
 				op := containers.MakeForeachVectorOp(types.T_varchar, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
 				if err := containers.ForeachVector(keys, op, nil); err != nil {
 					b.Fatal(err)

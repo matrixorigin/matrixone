@@ -9015,7 +9015,7 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9031,13 +9031,13 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			resultVal, ok := inetAtonValue(ipStr)
 			if !ok {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -9453,7 +9453,7 @@ func executeIPPredicate[T ipPredicateResult](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9469,7 +9469,7 @@ func executeIPPredicate[T ipPredicateResult](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			var resultVal T
 			if predicate(v1) {
@@ -10289,7 +10289,7 @@ func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
-				nulls.AddRange(resultNulls, 0, uint64(length))
+				resultNulls.AddRange(0, uint64(length))
 			} else {
 				resultNulls.Add(uint64(row))
 			}

@@ -22,7 +22,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -103,7 +102,7 @@ func TestDecimalMulSubExpression(t *testing.T) {
 		got, err := ex.Eval(p, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(4), got.GetType().Scale)
-		nulls.Add(input.Vecs[1].GetNulls(), 1)
+		input.Vecs[1].GetNulls().Add(1)
 		got, err = ex.Eval(p, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.True(t, got.IsNull(1))
@@ -257,7 +256,7 @@ func BenchmarkDecimalMulSubExpression(b *testing.B) {
 				}
 				input.SetRowCount(n)
 				if strings.HasSuffix(mode, "_null") && n > 0 {
-					nulls.Add(input.Vecs[1].GetNulls(), 0)
+					input.Vecs[1].GetNulls().Add(0)
 				}
 				var mask []bool
 				if strings.HasSuffix(mode, "_mask") {
@@ -332,7 +331,7 @@ func TestDecimalMulSubRepresentations(t *testing.T) {
 				input.Vecs[1] = vector.NewConstNull(types.New(types.T_decimal64, 15, 2), 3, p.Mp())
 			}
 			if shape == "flat_null" {
-				nulls.Add(input.Vecs[1].GetNulls(), 1)
+				input.Vecs[1].GetNulls().Add(1)
 			}
 			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
 				got, err := ex.Eval(p, []*batch.Batch{input}, mask)

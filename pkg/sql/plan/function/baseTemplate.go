@@ -93,14 +93,14 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	if c1 {
 		_, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			rsVec.GetNulls().AddRange(0, uint64(length))
 			return nil
 		}
 	}
 	if c2 {
 		_, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			rsVec.GetNulls().AddRange(0, uint64(length))
 			return nil
 		}
 	}
@@ -112,7 +112,7 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -182,7 +182,7 @@ func opBinaryFixedFixedToFixed[
 		var allMasked bool
 		rsAnyNull, allMasked = applyFunctionSelection(rsNull, selectList, length)
 		if allMasked {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 	}
@@ -191,7 +191,7 @@ func opBinaryFixedFixedToFixed[
 		right, okRight := vector.TryResolveFixedReadView[T2](parameters[1])
 		if okLeft && okRight {
 			if left.AllNull || right.AllNull {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 			hasNull := left.Nulls.Any() || right.Nulls.Any() || rsAnyNull
@@ -216,7 +216,7 @@ func opBinaryFixedFixedToFixed[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := resultFn(v1, v2)
 			rowCount := uint64(length)
@@ -230,7 +230,7 @@ func opBinaryFixedFixedToFixed[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -256,7 +256,7 @@ func opBinaryFixedFixedToFixed[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			rsVec.GetNulls().AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
@@ -322,7 +322,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -339,7 +339,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1, v2)
 			if err != nil {
@@ -356,7 +356,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -390,7 +390,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -472,7 +472,7 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -489,11 +489,11 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1, v2)
 			if err != nil {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -507,7 +507,7 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -543,7 +543,7 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -628,7 +628,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -645,7 +645,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
 			if err != nil {
@@ -662,7 +662,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -698,7 +698,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -781,7 +781,7 @@ func opTernaryStrFixedStrToFixed[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -800,7 +800,7 @@ func opTernaryStrFixedStrToFixed[
 	if parameters[0].IsConst() {
 		_, isNull := p1.GetStrValue(0)
 		if isNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		}
 	} else if p1.WithAnyNullValue() {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -808,7 +808,7 @@ func opTernaryStrFixedStrToFixed[
 	if parameters[1].IsConst() {
 		_, isNull := p2.GetValue(0)
 		if isNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		}
 	} else if p2.WithAnyNullValue() {
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -816,7 +816,7 @@ func opTernaryStrFixedStrToFixed[
 	if parameters[2].IsConst() {
 		_, isNull := p3.GetStrValue(0)
 		if isNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		}
 	} else if p3.WithAnyNullValue() {
 		nulls.Or(rsNull, parameters[2].GetNulls(), rsNull)
@@ -1032,7 +1032,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1049,7 +1049,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1, functionUtil.QuickBytesToStr(v2))
 			if err != nil {
@@ -1066,7 +1066,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1100,7 +1100,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			rv2 := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() || rsAnyNull {
@@ -1181,7 +1181,7 @@ func specialTemplateForModFunction[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1198,12 +1198,12 @@ func specialTemplateForModFunction[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else if v2 == 0 {
 			if checkDivisionByZeroBehavior(proc, selectList) {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := modFn(v1, v2)
 			rowCount := uint64(length)
@@ -1217,7 +1217,7 @@ func specialTemplateForModFunction[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			shouldError := checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
@@ -1261,7 +1261,7 @@ func specialTemplateForModFunction[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -1273,7 +1273,7 @@ func specialTemplateForModFunction[
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
 				}
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 			if p1.WithAnyNullValue() || rsAnyNull {
@@ -1441,7 +1441,7 @@ func specialTemplateForDivFunction[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1458,14 +1458,14 @@ func specialTemplateForDivFunction[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				// Return NULL (MySQL 8.0 behavior: SELECT always returns NULL, INSERT/UPDATE returns NULL if not strict+ERROR_FOR_DIVISION_BY_ZERO)
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 			r, err := divFn(v1, v2)
@@ -1483,7 +1483,7 @@ func specialTemplateForDivFunction[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1533,7 +1533,7 @@ func specialTemplateForDivFunction[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -1546,7 +1546,7 @@ func specialTemplateForDivFunction[
 					return moerr.NewDivByZeroNoCtx()
 				}
 				// Return NULL (MySQL 8.0 behavior)
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 			if p1.WithAnyNullValue() || rsAnyNull {
@@ -1642,7 +1642,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1659,7 +1659,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := arithFn(v1, v2)
 			rowCount := uint64(length)
@@ -1673,7 +1673,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1699,7 +1699,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -1763,7 +1763,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1780,7 +1780,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := fn(v1, v2)
 			if err != nil {
@@ -1798,7 +1798,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1830,7 +1830,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -2074,7 +2074,7 @@ func compareVarlenaEqual(parameters []*vector.Vector, result vector.FunctionResu
 
 	v1, v2 := parameters[0], parameters[1]
 	if v1.IsConstNull() || v2.IsConstNull() {
-		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		rsVec.GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	col1 := vector.MustVarlenaToInt64Slice(v1)
@@ -2123,7 +2123,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2140,7 +2140,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := arithFn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			rowCount := uint64(length)
@@ -2154,7 +2154,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			x := functionUtil.QuickBytesToStr(v1)
 			if p2.WithAnyNullValue() || rsAnyNull {
@@ -2181,7 +2181,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			y := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() || rsAnyNull {
@@ -2419,13 +2419,13 @@ func opUnaryFixedToFixed[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := resultFn(v1)
 			rowCount := uint64(length)
@@ -2475,13 +2475,13 @@ func opUnaryBytesToFixed[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := resultFn(v1)
 			rowCount := uint64(length)
@@ -3194,13 +3194,13 @@ func opUnaryFixedToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
@@ -3275,17 +3275,17 @@ func opUnaryFixedToFixedWithNullCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, invalid := resultFn(v1)
 			if invalid {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -3343,13 +3343,13 @@ func opUnaryBytesToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
@@ -3411,17 +3411,17 @@ func opUnaryBytesToFixedWithNullOnError[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 			rowCount := uint64(length)
@@ -3480,13 +3480,13 @@ func opUnaryStrToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
 	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
 			if err != nil {

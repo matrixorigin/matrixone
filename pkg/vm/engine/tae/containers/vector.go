@@ -200,7 +200,7 @@ func (vec *vectorWrapper) IsNull(i int) bool {
 	if inner.IsConst() {
 		return false
 	}
-	return nulls.Contains(inner.GetNulls(), uint64(i))
+	return inner.GetNulls().Contains(uint64(i))
 }
 
 func (vec *vectorWrapper) NullMask() *nulls.Nulls {
@@ -434,7 +434,7 @@ func (vec *vectorWrapper) NullCount() int {
 		return 0
 	}
 	if vec.NullMask() != nil {
-		return vec.NullMask().GetCardinality()
+		return vec.NullMask().Count()
 	}
 	return 0
 }

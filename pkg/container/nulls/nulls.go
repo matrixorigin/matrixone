@@ -68,7 +68,7 @@ func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 
 // Or performs union operation on Nulls nsp,m and store the result in r
 func Or(nsp, m, r *Nulls) {
-	if nsp.EmptyByFlag() && m.EmptyByFlag() {
+	if nsp.IsEmpty() && m.IsEmpty() {
 		r.Reset()
 		return
 	}
@@ -82,7 +82,7 @@ func Or(nsp, m, r *Nulls) {
 }
 
 func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
-	if src == nil || src.EmptyByFlag() || src == &dst.np {
+	if src == nil || src.IsEmpty() || src == &dst.np {
 		return
 	}
 	dst.np.Or(src)
@@ -90,21 +90,13 @@ func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
 
 func (nsp *Nulls) Build(size int, rows ...uint64) {
 	nsp.InitWithSize(size)
-	Add(nsp, rows...)
+	nsp.Add(rows...)
 }
 
 func Build(size int, rows ...uint64) *Nulls {
 	var n Nulls
 	n.Build(size, rows...)
 	return &n
-}
-
-// Any returns true if any bit in the Nulls is set, otherwise it will return false.
-func Any(nsp *Nulls) bool {
-	if nsp == nil {
-		return false
-	}
-	return nsp.Any()
 }
 
 func Ptr(nsp *Nulls) *uint64 {
@@ -138,7 +130,7 @@ func Size(nsp *Nulls) int {
 }
 
 func String(nsp *Nulls) string {
-	if nsp == nil || nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return "[]"
 	}
 	return fmt.Sprintf("%v", nsp.ToArray())
@@ -153,11 +145,7 @@ func (nsp *Nulls) Contains(row uint64) bool {
 	if nsp == nil {
 		return false
 	}
-	return !nsp.np.EmptyByFlag() && nsp.np.Contains(row)
-}
-
-func Contains(nsp *Nulls, row uint64) bool {
-	return nsp.Contains(row)
+	return !nsp.np.IsEmpty() && nsp.np.Contains(row)
 }
 
 func (nsp *Nulls) Add(sels ...uint64) {
@@ -168,20 +156,12 @@ func (nsp *Nulls) Add(sels ...uint64) {
 	nsp.np.AddMany(sels)
 }
 
-func Add(nsp *Nulls, sels ...uint64) {
-	nsp.Add(sels...)
-}
-
+// AddRange sets rows [start, end).
 func (nsp *Nulls) AddRange(start, end uint64) {
 	if nsp != nil {
 		TryExpand(nsp, int(end))
 		nsp.np.AddRange(start, end)
 	}
-}
-
-// AddRange add bits [start, end) to nsp
-func AddRange(nsp *Nulls, start, end uint64) {
-	nsp.AddRange(start, end)
 }
 
 func (nsp *Nulls) Del(sels ...uint64) {
@@ -200,21 +180,10 @@ func (nsp *Nulls) DelI64(rows ...int64) {
 	}
 }
 
-func Del(nsp *Nulls, sels ...uint64) {
-	nsp.Del(sels...)
-}
-
-// Set performs union operation on Nulls nsp,m and store the result in nsp
-func Set(nsp, other *Nulls) {
-	if other != nil {
-		orBitmapInto(nsp, other.GetBitmap())
-	}
-}
-
 // FilterCount returns the number count that appears in both nsp and sel
 func FilterCount(nsp *Nulls, sels []int64) int {
 	var count int
-	if nsp.EmptyByFlag() || len(sels) == 0 {
+	if nsp.IsEmpty() || len(sels) == 0 {
 		return 0
 	}
 
@@ -230,7 +199,7 @@ func FilterCount(nsp *Nulls, sels []int64) int {
 }
 
 func RemoveRange(nsp *Nulls, start, end uint64) {
-	if !nsp.np.EmptyByFlag() {
+	if !nsp.np.IsEmpty() {
 		nsp.np.RemoveRange(start, end)
 	}
 }
@@ -239,7 +208,7 @@ func RemoveRange(nsp *Nulls, start, end uint64) {
 // `bias` represents the starting offset used for the Range Output
 // Always update in place.
 func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return
 	}
 
@@ -253,7 +222,7 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 
 // XXX old API returns nsp, which is broken -- we update in place.
 func Filter(nsp *Nulls, sels []int64, negate bool) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return
 	}
 
@@ -301,7 +270,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 // FilterInPlaceOrdered preserves Filter semantics for Vector.Shrink's ordered
 // selection contract without allocating a second row-scaled bitmap.
 func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return
 	}
 	Filter(nsp, sels, negate)
@@ -315,7 +284,7 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // offset. The selection bitmap is relative to a window of the owning vector,
 // while the null bitmap remains in the full vector's row domain.
 func FilterByMaskWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return
 	}
 	length := sels.Count()
@@ -372,24 +341,20 @@ func FilterByMaskInPlace(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // FilterByMaskInPlaceWithOffset is FilterByMaskInPlace for a selection whose
 // row indexes are relative to a window beginning at offset.
 func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return
 	}
 	FilterByMaskWithOffset(nsp, sels, negate, offset)
 }
 
-// XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
-// Make any an alias of EmptyByFlag, otherwise there will be hell lots of race conditions.
+// Any reports whether at least one row is set. It is exactly !IsEmpty().
 func (nsp *Nulls) Any() bool {
-	return nsp != nil && !nsp.np.EmptyByFlag()
+	return !nsp.IsEmpty()
 }
 
+// IsEmpty reports whether no row is set. A nil *Nulls is empty.
 func (nsp *Nulls) IsEmpty() bool {
 	return nsp == nil || nsp.np.IsEmpty()
-}
-
-func (nsp *Nulls) EmptyByFlag() bool {
-	return nsp == nil || nsp.np.EmptyByFlag()
 }
 
 func (nsp *Nulls) Set(row uint64) {
@@ -429,21 +394,21 @@ func (nsp *Nulls) Len() int64 {
 }
 
 func (nsp *Nulls) Show() ([]byte, error) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return nil, nil
 	}
 	return nsp.np.Marshal(), nil
 }
 
 func (nsp *Nulls) MarshalSize() int {
-	if nsp == nil || nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return 0
 	}
 	return nsp.np.MarshalSize()
 }
 
 func (nsp *Nulls) MarshalTo(w io.Writer) error {
-	if nsp == nil || nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return nil
 	}
 	return nsp.np.MarshalTo(w)
@@ -451,7 +416,7 @@ func (nsp *Nulls) MarshalTo(w io.Writer) error {
 
 // ShowV1 in version 1, bitmap is v1
 func (nsp *Nulls) ShowV1() ([]byte, error) {
-	if nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return nil, nil
 	}
 	return nsp.np.MarshalV1(), nil
@@ -506,21 +471,17 @@ func (nsp *Nulls) IsSame(m *Nulls) bool {
 }
 
 func (nsp *Nulls) ToArray() []uint64 {
-	if nsp == nil || nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return []uint64{}
 	}
 	return nsp.np.ToArray()
 }
 
 func (nsp *Nulls) ToI64Array() []int64 {
-	if nsp == nil || nsp.EmptyByFlag() {
+	if nsp.IsEmpty() {
 		return []int64{}
 	}
 	return nsp.np.ToI64Array(nil)
-}
-
-func (nsp *Nulls) GetCardinality() int {
-	return nsp.Count()
 }
 
 func (nsp *Nulls) Foreach(fn func(uint64) bool) {
@@ -533,12 +494,6 @@ func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 		if !fn(row) {
 			break
 		}
-	}
-}
-
-func (nsp *Nulls) Merge(other *Nulls) {
-	if other != nil {
-		orBitmapInto(nsp, other.GetBitmap())
 	}
 }
 

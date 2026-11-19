@@ -285,7 +285,7 @@ func selectExactOrdered[T, C exactOrdered](s *ExactScanState, v *vector.Vector, 
 		count = len(rows)
 	}
 	nulls := v.GetNulls()
-	hasNulls := !nulls.EmptyByFlag()
+	hasNulls := !nulls.IsEmpty()
 	switch p.Op {
 	case ExactScanEQ:
 		for i := 0; i < count; i++ {

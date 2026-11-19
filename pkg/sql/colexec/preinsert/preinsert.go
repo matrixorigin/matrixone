@@ -850,7 +850,7 @@ func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {
 func convertZeroToNullFixed[T constraints.Integer](vals []T, nsp *nulls.Nulls) {
 	for i, v := range vals {
 		if v == 0 {
-			nulls.Add(nsp, uint64(i))
+			nsp.Add(uint64(i))
 		}
 	}
 }

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -300,7 +299,7 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 			continue
 		}
 		vec := bat.Vecs[j]
-		if vec.IsConstNull() || nulls.Any(vec.GetNulls()) {
+		if vec.IsConstNull() || vec.GetNulls().Any() {
 			return moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
 		}
 	}
@@ -354,7 +353,7 @@ func (insert *Insert) detachAliasedFillDestinations(bat *batch.Batch, proc *proc
 	}
 	shared := make(map[*vector.Vector]int, len(bat.Vecs))
 	for _, v := range bat.Vecs {
-		if v != nil && !v.IsConst() && nulls.Any(v.GetNulls()) {
+		if v != nil && !v.IsConst() && v.GetNulls().Any() {
 			shared[v]++
 		}
 	}

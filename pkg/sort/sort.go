@@ -183,12 +183,12 @@ func sortByVector(
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
 			var cursor int
-			for cursor < sz && !nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
+			for cursor < sz && !vec.GetNulls().Contains(uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor < sz {
 				for i := cursor; i < sz; i++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
+					if !vec.GetNulls().Contains(uint64(os[i])) {
 						os[cursor], os[i] = os[i], os[cursor]
 						cursor++
 					}
@@ -197,14 +197,14 @@ func sortByVector(
 			}
 		} else { // move null rows to the head
 			var cursor int
-			for cursor < sz && nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
+			for cursor < sz && vec.GetNulls().Contains(uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor == sz {
 				return
 			}
 			for i := cursor; i < sz; i++ {
-				if nulls.Contains(vec.GetNulls(), uint64(os[i])) {
+				if vec.GetNulls().Contains(uint64(os[i])) {
 					os[cursor], os[i] = os[i], os[cursor]
 					cursor++
 				}
@@ -911,7 +911,7 @@ func prepareJSONOrderValues(
 	}
 	for _, selector := range os {
 		index := int(selector)
-		if nsp != nil && nulls.Contains(nsp, uint64(index)) {
+		if nsp != nil && nsp.Contains(uint64(index)) {
 			continue
 		}
 		if values[index].prepared {

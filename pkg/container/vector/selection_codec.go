@@ -150,8 +150,8 @@ func (v *Vector) marshalSelectedRowsTo(
 	var firstKind PrepareParamKind
 	kindSeen := false
 	kindMixed := false
-	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.EmptyByFlag() &&
-		v.gsp.EmptyByFlag() && len(v.prepareParamKinds) == 0 {
+	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.IsEmpty() &&
+		v.gsp.IsEmpty() && len(v.prepareParamKinds) == 0 {
 		// Every selected row has uniform metadata, but selection bounds still
 		// need validation before passing rows to a specialized writer.
 		for _, row := range rows {

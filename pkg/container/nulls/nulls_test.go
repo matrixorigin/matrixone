@@ -63,12 +63,12 @@ func TestReset(t *testing.T) {
 func TestAny(t *testing.T) {
 	t.Run("Any test", func(t *testing.T) {
 		var n Nulls
-		assert.EqualValues(t, false, Any(&n))
+		assert.EqualValues(t, false, n.Any())
 		n.InitWithSize(2000)
 		for i := uint64(0); i < 2000; i += 7 {
 			n.Add(i)
 		}
-		assert.EqualValues(t, true, Any(&n))
+		assert.EqualValues(t, true, n.Any())
 	})
 }
 
@@ -129,21 +129,21 @@ func TestString(t *testing.T) {
 func TestContains(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
 		var n Nulls
-		assert.EqualValues(t, false, Contains(&n, 2))
+		assert.EqualValues(t, false, n.Contains(2))
 		n.InitWithSize(16)
 		for i := uint64(0); i < 16; i += 2 {
 			n.Add(i)
 		}
-		assert.EqualValues(t, true, Contains(&n, 2))
+		assert.EqualValues(t, true, n.Contains(2))
 	})
 }
 
 func TestAdd(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
 		n := Nulls{}
-		assert.EqualValues(t, false, Contains(&n, 2))
-		Add(&n, 2)
-		assert.EqualValues(t, true, Contains(&n, 2))
+		assert.EqualValues(t, false, n.Contains(2))
+		n.Add(2)
+		assert.EqualValues(t, true, n.Contains(2))
 	})
 }
 
@@ -170,20 +170,20 @@ func TestRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
 func TestDel(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
 		n := &Nulls{}
-		Add(n, 2)
-		assert.EqualValues(t, true, Contains(n, 2))
-		Del(n, 2)
-		assert.EqualValues(t, false, Contains(n, 2))
+		n.Add(2)
+		assert.EqualValues(t, true, n.Contains(2))
+		n.Del(2)
+		assert.EqualValues(t, false, n.Contains(2))
 	})
 }
 
 func TestSet(t *testing.T) {
 	t.Run("set test", func(t *testing.T) {
 		n := &Nulls{}
-		Add(n, 2)
+		n.Add(2)
 		m := &Nulls{}
-		Add(m, 5)
-		Set(n, m)
+		m.Add(5)
+		n.Or(m)
 		assert.Equal(t, 2, n.Count())
 	})
 }
@@ -191,7 +191,7 @@ func TestSet(t *testing.T) {
 func TestFilterCount(t *testing.T) {
 	t.Run("FilterCount test", func(t *testing.T) {
 		var n Nulls
-		Add(&n, 2, 3, 5, 8)
+		n.Add(2, 3, 5, 8)
 		assert.Equal(t, 2, FilterCount(&n, []int64{2, 3}))
 	})
 }
@@ -384,7 +384,7 @@ func TestMerge(t *testing.T) {
 		}
 		assert.Equal(t, 16, n.Count())
 		assert.Equal(t, 16, m.Count())
-		n.Merge(&m)
+		n.Or(&m)
 		assert.Equal(t, 24, n.Count())
 	})
 }
