@@ -611,6 +611,36 @@ FROM t_bit_count_float o WHERE o.id = 1
 ) s;
 ➤ IN empty filter[12,15,0]  ¦  bits[-5,64,0]  𝄀
 IN empty filter  ¦  1
+SELECT 'IN numeric true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN numeric true[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN numeric true  ¦  2
+SELECT 'IN null test true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1 IS NOT NULL) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN null test true[12,17,0]  ¦  bits[-5,64,0]  𝄀
+IN null test true  ¦  2
+SELECT 'IN boolean true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1=1 OR 1=2) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN boolean true[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN boolean true  ¦  2
+SELECT 'IN numeric cast true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE CAST(1 AS SIGNED)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN numeric cast true[12,20,0]  ¦  bits[-5,64,0]  𝄀
+IN numeric cast true  ¦  2
+SELECT 'IN null filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE NULL) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN null filter[12,14,0]  ¦  bits[-5,64,0]  𝄀
+IN null filter  ¦  1
 SELECT 'IN one-row VALUES', BIT_COUNT(x) AS bits FROM (
 SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1)) AS z
 FROM t_bit_count_float o WHERE o.id = 1
@@ -651,6 +681,26 @@ SELECT id, bits FROM t_bit_count_float_saved WHERE id IN (1,4,5) ORDER BY id;
 4  ¦  64  𝄀
 5  ¦  null
 DROP TABLE t_bit_count_float_saved;
+SELECT id, BIT_COUNT(d+0) AS added, BIT_COUNT(ABS(d)) AS magnitude, BIT_COUNT(-d) AS negated,
+BIT_COUNT(POWER(d,1)) AS power_bits, BIT_COUNT(IFNULL(d,0)) AS ifnull_bits, BIT_COUNT(ROUND(d,1)) AS round_bits,
+BIT_COUNT(CAST(d AS DOUBLE)) AS cast_bits FROM t_bit_count_float WHERE id IN (1,4) ORDER BY id;
+➤ id[4,32,0]  ¦  added[-5,64,0]  ¦  magnitude[-5,64,0]  ¦  negated[-5,64,0]  ¦  power_bits[-5,64,0]  ¦  ifnull_bits[-5,64,0]  ¦  round_bits[-5,64,0]  ¦  cast_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  62  ¦  1  ¦  1  ¦  1  ¦  2  𝄀
+4  ¦  64  ¦  1  ¦  1  ¦  64  ¦  64  ¦  64  ¦  0
+INSERT INTO t_bit_count_float VALUES (100, 1e19, 1e19), (101, 1e20, 1e20), (102, 9223372036854774784, 9223372036854774784);
+SELECT id, BIT_COUNT(f) AS float_bits, BIT_COUNT(d) AS double_bits, BIT_COUNT(+d) AS plus_bits
+FROM t_bit_count_float WHERE id >= 100 ORDER BY id;
+➤ id[4,32,0]  ¦  float_bits[-5,64,0]  ¦  double_bits[-5,64,0]  ¦  plus_bits[-5,64,0]  𝄀
+100  ¦  1  ¦  63  ¦  63  𝄀
+101  ¦  1  ¦  63  ¦  63  𝄀
+102  ¦  1  ¦  63  ¦  63
+SELECT BIT_COUNT(d+0) FROM t_bit_count_float WHERE id = 100;
+Data truncation: data out of range: data type int64, value '1e+19'
+SELECT id, IF(id < 100, BIT_COUNT(d+0), 0) AS masked_bits
+FROM t_bit_count_float WHERE id IN (1,100) ORDER BY id;
+➤ id[4,32,0]  ¦  masked_bits[3,21,0]  𝄀
+1  ¦  1  𝄀
+100  ¦  0
 DROP TABLE t_bit_count_float;
 PREPARE bit_count_field FROM 'SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(? AS DOUBLE) AS x) s';
 SET @bit_count_field = 3.9;

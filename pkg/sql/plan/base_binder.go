@@ -333,7 +333,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
-		if bitCountFloatFieldOverload(types.T(typ.Id)) >= 0 && b.GetContext().Value(releasedBitCountDumpBindingKey{}) != nil {
+		if releasedBitCountFloatOverload(types.T(typ.Id)) >= 0 && b.GetContext().Value(releasedBitCountDumpBindingKey{}) != nil {
 			// The released SQL binder used the ordinary CAST overload for
 			// FLOAT/DOUBLE. Rebuild that input tree during dump verification.
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
@@ -5174,8 +5174,11 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			return nil, err
 		}
 	}
-	if name == "bit_count" && len(args) == 1 && bitCountFloatFieldOverload(types.T(args[0].Typ.Id)) >= 0 && b.bitCountReadsFloatField(args[0]) {
-		return bindBitCountFloatField(b.GetContext(), args)
+	if name == "bit_count" && len(args) == 1 && releasedBitCountFloatOverload(types.T(args[0].Typ.Id)) >= 0 &&
+		b.GetContext().Value(releasedBitCountDumpBindingKey{}) == nil {
+		if overload := b.bitCountFloatOverload(args[0]); overload >= 0 {
+			return bindBitCountFloatOverload(b.GetContext(), args, overload)
+		}
 	}
 	var integerInputs []uint32
 	if b.builder != nil && b.builder.integerPrecision != nil {
@@ -7940,8 +7943,9 @@ func bindFuncExprImplByPlanExpr(
 	if name == "bit_count" && len(args) == 1 && args[0] != nil {
 		if fn := originalBoundExpr.GetF(); fn != nil && fn.Func != nil {
 			fid, overload := function.DecodeOverloadID(fn.Func.Obj)
-			if fid == function.BIT_COUNT && overload == bitCountFloatFieldOverload(types.T(args[0].Typ.Id)) {
-				return bindBitCountFloatField(ctx, args)
+			if fid == function.BIT_COUNT && len(fn.Args) == 1 && fn.Args[0].Typ.Id == args[0].Typ.Id &&
+				function.IsBitCountFloatOverload(overload) {
+				return bindBitCountFloatOverload(ctx, args, overload)
 			}
 		}
 	}
@@ -8917,7 +8921,7 @@ func bindFuncExprImplByPlanExpr(
 		if coerced, ok := fGet.ShouldDoImplicitTypeCast(); ok {
 			oid = coerced[0].Oid
 		}
-		if overload := bitCountFloatFieldOverload(oid); overload >= 0 {
+		if overload := releasedBitCountFloatOverload(oid); overload >= 0 {
 			fGet, err = function.GetFunctionByNameWithOverload(ctx, name, lookupTypes, overload)
 		}
 	}
