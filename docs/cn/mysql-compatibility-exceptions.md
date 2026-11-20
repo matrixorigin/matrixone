@@ -102,6 +102,25 @@ SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 
 ---
 
+## Administration statements (Issue #30468)
+
+### `FLUSH TABLES`
+
+MatrixOne rejects MySQL's `FLUSH TABLES` syntax, including the table-list and
+`WITH READ LOCK` forms. MySQL administration scripts must skip these statements
+when targeting MatrixOne. If a maintenance procedure relies on the flush or
+the read lock, adapt that procedure before running it on MatrixOne.
+
+### `RESOURCE GROUP`
+
+MatrixOne rejects MySQL's `CREATE RESOURCE GROUP`, `ALTER RESOURCE GROUP`,
+`DROP RESOURCE GROUP`, and `SET RESOURCE GROUP` statements. MySQL resource group
+definitions, thread assignments, and `VCPU` settings must be omitted from
+scripts that target MatrixOne. Review any workload isolation requirements
+before migrating those scripts.
+
+---
+
 ## 📋 Related Issues
 
 | Issue ID | Description | Status |

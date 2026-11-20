@@ -31,8 +31,8 @@ func (hashJoin *HashJoin) AcceptsDictionary(child int) bool {
 	return child == 0 && hashJoin.dictionaryInputSupported()
 }
 
-// Results stay owned and flat. Recursive marker forwarding still declares its
-// possible representation so unknown destinations retain the boundary contract.
+// Eligible identity results can forward existing probe dictionaries. Other
+// modes and recursive markers keep the existing representation boundary.
 func (hashJoin *HashJoin) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
 	return hashJoin.dictionaryInputSupported(), hashJoin.resultAllocation
 }
@@ -43,9 +43,9 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 	return hashJoin.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
 }
 
-// Supported probe joins copy matching values into their owned result buffers;
-// retaining per-input-column dictionaries is unnecessary for that lifetime.
-// This preference does not weaken capability: retained inputs remain supported.
+// Identity outputs share the original child Call lifetime. Keep the existing
+// owned-input preference: no upstream immutable selector is needed merely to
+// forward these headers, and retained inputs remain mechanically supported.
 func (hashJoin *HashJoin) PrefersOwnedDictionaryInput(child int) bool {
 	return child == 0 && hashJoin.dictionaryInputSupported()
 }

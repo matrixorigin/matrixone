@@ -138,6 +138,7 @@ type container struct {
 	sels               [][]int32
 	buf                *batch.Batch
 	pendingBat         *batch.Batch
+	partitionViews     *shufflePartitionViews
 	// Mixed input saves a visit ordinal; whole input saves its physical bucket.
 	pendingPosition      int
 	pendingOffset        int
@@ -306,6 +307,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
+	shuffle.freePartitionViews(proc)
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0
@@ -378,6 +380,7 @@ func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.freeKeyScratch(proc)
 	shuffle.ctr.buf = nil
+	shuffle.freePartitionViews(proc)
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0
