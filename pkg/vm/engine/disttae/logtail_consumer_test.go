@@ -787,14 +787,19 @@ func TestBlockInfoSlice(t *testing.T) {
 
 func TestDca(t *testing.T) {
 	pClient := &PushClient{}
+	var applied []int
 
-	signalCnt := 0
-	assert.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
-	assert.True(t, pClient.dcaTryDelay(false, func() { signalCnt++ })) // delay
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, -1) }))
+	pClient.dcaReset()
+	assert.Nil(t, pClient.dca.flist, "reset must release queued closures")
+	assert.True(t, pClient.dcaTryDelay(true, func() { applied = append(applied, -2) }))
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, 1) }))
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, 2) }))
 	pClient.dcaConfirmAndApply()
-	assert.Equal(t, 1, signalCnt)
-	assert.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
-
+	assert.Nil(t, pClient.dca.flist, "confirmation must release applied closures")
+	pClient.dcaConfirmAndApply()
+	assert.Equal(t, []int{1, 2}, applied)
+	assert.False(t, pClient.dcaTryDelay(false, func() {}))
 }
 
 type testHAKeeperClient struct {
