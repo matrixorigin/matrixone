@@ -523,7 +523,8 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 			return nil, err
 		}
 	}
-	return c.disk.openDir(ctx, name, diskPath, files)
+	var deadline time.Time
+	return c.disk.openDir(ctx, name, diskPath, files, &deadline)
 }
 
 // openEntryFile opens file of entry name for a read, through the file kept open for the
@@ -552,7 +553,7 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 		d.cache.Get(ctx, diskPath)
 		opened.file = kept.file
 	} else {
-		files, err := d.openDir(ctx, name, diskPath, []string{file})
+		files, err := d.openDir(ctx, name, diskPath, []string{file}, &deadline)
 		if err != nil {
 			d.paths.endRead(diskPath, generation)
 			return nil, nil, err
@@ -1022,9 +1023,10 @@ func (d *DiskCache) moveCacheDirFile(ctx context.Context, from, to string) (int6
 	return fileSize(stat), nil
 }
 
-func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, files []string) ([]*os.File, error) {
-	var deadline time.Time
-	generation, ok := d.paths.startRead(ctx, diskPath, &deadline)
+// openDir opens files of the entry directory diskPath; its wait for the path shares
+// deadline with the caller's.
+func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, files []string, deadline *time.Time) ([]*os.File, error) {
+	generation, ok := d.paths.startRead(ctx, diskPath, deadline)
 	if !ok {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1050,8 +1052,8 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 		}
 	}
 	for i, file := range files {
-		if i > 0 && d.hooks.beforeCacheDirFileOpen != nil {
-			d.hooks.beforeCacheDirFileOpen()
+		if i > 0 {
+			runHook(d.hooks.beforeCacheDirFileOpen)
 		}
 		f, err := root.Open(file)
 		if err != nil {

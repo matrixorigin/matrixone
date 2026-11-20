@@ -117,6 +117,12 @@ func runHook(hook func()) {
 	}
 }
 
+func runPathHook(hook func(path string), path string) {
+	if hook != nil {
+		hook(path)
+	}
+}
+
 func NewDiskCache(
 	ctx context.Context,
 	path string,
@@ -225,9 +231,7 @@ func newDiskCache(
 		capacityBytes.Set(float64(capacityFunc()))
 	}
 	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
-		if ret.hooks.beforeEvictionStart != nil {
-			ret.hooks.beforeEvictionStart(path)
-		}
+		runPathHook(ret.hooks.beforeEvictionStart, path)
 		owner, ok := ret.paths.evict(path, size)
 		if !ok {
 			return nil
@@ -299,9 +303,7 @@ func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileI
 			objectPath = filepath.Join(dir, "full"+name)
 		}
 	}
-	if d.hooks.beforeLoadFile != nil {
-		d.hooks.beforeLoadFile(diskPath)
-	}
+	runPathHook(d.hooks.beforeLoadFile, diskPath)
 	stripe := d.deletes.stripe(objectPath)
 	stripe.RLock()
 	defer stripe.RUnlock()
@@ -881,9 +883,7 @@ func (d *DiskCache) writeFile(
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
-	if d.hooks.beforeLoadDirectoryCleanup != nil {
-		d.hooks.beforeLoadDirectoryCleanup(path)
-	}
+	runPathHook(d.hooks.beforeLoadDirectoryCleanup, path)
 	d.directoryMu.Lock()
 	defer d.directoryMu.Unlock()
 	// os.Remove will not delete a non-empty directory.

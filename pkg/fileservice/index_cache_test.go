@@ -1270,3 +1270,24 @@ func TestIndexFileCacheRemovalLeavesNoDirectories(t *testing.T) {
 	require.Equal(t, []byte("z"), readAllFile(t, files[0]))
 	closeFiles(files)
 }
+
+func TestIndexFileCacheOpenDirSharesCallerDeadline(t *testing.T) {
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 10 * time.Second
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+	ctx := context.Background()
+	c := newTestIndexFileCache(t, t.TempDir(), 1<<20)
+	name := "1/abcd/0/sum"
+	_, err := c.Put(ctx, name, indexCacheEntry([]byte("x")))
+	require.NoError(t, err)
+	diskPath, err := c.disk.pathForDir(name)
+	require.NoError(t, err)
+	release := c.disk.startUpdate(diskPath)
+	defer release()
+	// The caller's wait spent its deadline: the open of the entry does not wait again.
+	deadline := time.Now().Add(-time.Millisecond)
+	started := time.Now()
+	_, err = c.disk.openDir(ctx, name, diskPath, []string{"data"}, &deadline)
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
+}
