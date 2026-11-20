@@ -1,0 +1,81 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package colexec
+
+import (
+	"context"
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
+
+// GrowMetadataOutput admits retained metadata and new backing before allocation.
+// The existing four-copy allowance also covers encoding and output materialization.
+func GrowMetadataOutput(ctx context.Context, slot *rscthrottler.InputLease, retained, growth int64) error {
+	if slot == nil {
+		return nil
+	}
+	capacity, err := MetadataOutputCapacity(retained, growth)
+	if err != nil {
+		return err
+	}
+	return slot.TryGrow(ctx, capacity)
+}
+
+// MetadataOutputCapacity includes old/new backing, encoding and output copies.
+func MetadataOutputCapacity(retained, growth int64) (int64, error) {
+	if retained < 0 || growth < 0 || retained > math.MaxInt64/4 || growth > math.MaxInt64/4-retained {
+		return 0, moerr.NewInternalErrorNoCtx("metadata memory envelope overflow")
+	}
+	return 4 * (retained + growth), nil
+}
+
+// InsertMetadataOutputEnvelope bounds a complete flush's fixed object metadata,
+// independently of source-row width and of unrelated shared output-slot users.
+// Both controlled Insert and MultiUpdate flush before crossing the common byte
+// unit. A legal wider singleton contributes one block, not its raw payload.
+// Each projection can contribute partial blocks; full blocks have 8192 rows
+// and every physical row consumes at least one byte. ObjectStats count cannot
+// exceed block count. The per-entry allowance covers both encoded varlena
+// headers and the fixed BlockInfo/ObjectStats payloads.
+func InsertMetadataOutputEnvelope(unit int64, tableCount int) (int64, error) {
+	if unit <= 0 || tableCount < 0 {
+		return 0, moerr.NewInternalErrorNoCtx("invalid insert metadata envelope")
+	}
+	// Compute floor(2*unit/BlockMaxRows) without overflowing 2*unit.
+	blocks := 2*(unit/objectio.BlockMaxRows) + 2*(unit%objectio.BlockMaxRows)/objectio.BlockMaxRows
+	if int64(tableCount) > (math.MaxInt64-blocks-2)/4 {
+		return 0, moerr.NewInternalErrorNoCtx("insert metadata block count overflows")
+	}
+	blocks += 4*int64(tableCount) + 2
+	entry := int64(objectio.BlockInfoSize + objectio.ObjectStatsLen + 4*64)
+	// Keep the existing four-copy serializer/growth allowance and fixed
+	// overhead. The data unit only derives item count; it is not itself a
+	// metadata payload or a reason to copy a raw JSON singleton into I.
+	if blocks > (math.MaxInt64-(1<<20))/(4*entry) {
+		return 0, moerr.NewInternalErrorNoCtx("insert metadata envelope overflows")
+	}
+	return 4*blocks*entry + (1 << 20), nil
+}
+
+// InsertMetadataFrameLimit is the protocol limit used before serialization and
+// propagated to metadata consumers. A larger raw join/delete output lease must
+// not enlarge this INSERT-only frame contract.
+func InsertMetadataFrameLimit(unit int64, tableCount int) (int64, error) {
+	output, err := InsertMetadataOutputEnvelope(unit, tableCount)
+	return output / 4, err
+}

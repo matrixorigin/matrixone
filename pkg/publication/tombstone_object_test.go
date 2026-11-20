@@ -873,8 +873,9 @@ func TestCoverageBoost2_FilterObject_ValidLengthAppendable(t *testing.T) {
 	objectio.WithAppendable()(&stats)
 	statsBytes := stats.Marshal()
 
+	ctx, _ := publicationTestMemory(t, 1<<30)
 	_, err := FilterObject(
-		context.Background(), statsBytes, types.TS{}, nil, false, nil, nil, nil, nil, "", "", nil, nil, nil, nil,
+		ctx, statsBytes, types.TS{}, nil, false, nil, nil, nil, nil, "", "", nil, nil, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get object from upstream")

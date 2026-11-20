@@ -116,7 +116,8 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				stats.blkRowCnt++
 				stats.objRowCnt++
 
-				if stats.blkRowCnt == int(maxRowCnt) {
+				bigblk := stats.isBlockOversized(buffer)
+				if stats.blkRowCnt == int(maxRowCnt) || bigblk {
 					if writer == nil {
 						writer = host.PrepareNewWriter()
 					}
@@ -131,7 +132,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 					buffer.CleanOnlyData()
 
-					if stats.needNewObject() {
+					if stats.needNewObject() || bigblk {
 						if err := syncObject(ctx, writer, host); err != nil {
 							return err
 						}

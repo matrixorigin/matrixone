@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -417,6 +418,15 @@ func ApplyObjects(
 	// Check TTL before starting
 	if ttlChecker != nil && !ttlChecker() {
 		return ErrSyncProtectionTTLExpired
+	}
+
+	// Resolve the CN owner at the common entry, including direct Apply callers.
+	if ctx.Value(publicationMemoryKey{}) == nil && cnEngine != nil {
+		if rt := runtime.ServiceRuntime(cnEngine.GetService()); rt != nil {
+			if memory, ok := rt.GetGlobalVariables(runtime.CNMemoryThrottler); ok {
+				ctx = context.WithValue(ctx, publicationMemoryKey{}, memory)
+			}
+		}
 	}
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo

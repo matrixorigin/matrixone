@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -452,4 +455,69 @@ func TestRewriteTombstoneRowidsBatch_WithRowOffsetMapRewrite(t *testing.T) {
 	assert.Equal(t, uint32(99), rowids[0].GetRowOffset())
 
 	rowidVec.Free(mp)
+}
+
+func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
+	ctx := context.Background()
+	newFS := func() *fileservice.LocalFS {
+		fs, err := fileservice.NewLocalFS(ctx, "SHARED", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { fs.Close(ctx) })
+		return fs
+	}
+	sourceFS, targetFS := newFS(), newFS()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	pkType := types.T_varchar.ToType()
+	attrs, typs := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+	input := batch.NewWithSchema(false, attrs, typs)
+	t.Cleanup(func() { input.Clean(mp) })
+	const rows = 2000
+	dataID := objectio.NewObjectid()
+	blockID := objectio.NewBlockidWithObjectID(&dataID, 0)
+	require.NoError(t, objectio.ConstructRowidColumnTo(input.Vecs[0], &blockID, 0, rows, mp))
+	suffix := strings.Repeat("x", (32<<10)-8)
+	for row := 0; row < rows; row++ {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(fmt.Sprintf("%08d", row)+suffix), false, mp))
+	}
+	input.SetRowCount(rows)
+	name := objectio.BuildObjectNameWithObjectID(&dataID)
+	source := newTombstoneFSinkerFactoryWithName(name, objectio.HiddenColumnSelection_None)(mp, sourceFS)
+	t.Cleanup(func() { require.NoError(t, source.Close()) })
+	require.NoError(t, source.Sink(ctx, input))
+	original, err := source.Sync(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, original.BlkCnt())
+	file, err := sourceFS.StatFile(ctx, name.String())
+	require.NoError(t, err)
+	content := fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Offset: 0, Size: file.Size}}}
+	t.Cleanup(func() { objectio.ReleaseIOVector(&content) })
+	require.NoError(t, sourceFS.Read(ctx, &content))
+	rewritten, err := rewriteNonAppendableTombstoneWithSinker(ctx, content.Entries[0].Data, original, targetFS, mp, NewAObjectMap())
+	require.NoError(t, err)
+	require.EqualValues(t, rows, rewritten.Rows())
+	require.True(t, rewritten.GetCNCreated())
+	require.Equal(t, name, rewritten.ObjectName(), "publication preserves the source object name")
+	seen := make(map[uint32]bool, rows)
+	objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+		func() {
+			loc := objectio.Location(info.MetaLoc[:])
+			reader, err := ioutil.NewObjectReader(targetFS, loc)
+			require.NoError(t, err)
+			got, release, err := reader.LoadColumns(ctx, []uint16{0, 1}, typs, loc.ID(), mp)
+			require.NoError(t, err)
+			defer release()
+			require.EqualValues(t, got.RowCount(), loc.Rows(), "rewritten tombstone locations must match actual blocks")
+			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](got.Vecs[0])
+			for row, id := range rowids {
+				offset := id.GetRowOffset()
+				require.Less(t, offset, uint32(rows))
+				require.False(t, seen[offset])
+				seen[offset] = true
+				require.Equal(t, fmt.Sprintf("%08d", offset)+suffix, string(got.Vecs[1].GetBytesAt(row)))
+			}
+		}()
+		return true
+	}, rewritten)
+	require.Len(t, seen, rows)
 }

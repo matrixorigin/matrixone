@@ -179,7 +179,11 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 				counterSet,
 			},
 		)
-		optFs := testutil.WithFileService(fs)
+		local, err := fileservice.NewLocalFS(ctx, defines.LocalFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		services, err := fileservice.NewFileServices(defines.SharedFileServiceName, fs, local)
+		require.NoError(t, err)
+		optFs := testutil.WithFileService(services)
 		proc = testutil.NewProc(t, optFs)
 	} else {
 		proc = testutil.NewProc(t)

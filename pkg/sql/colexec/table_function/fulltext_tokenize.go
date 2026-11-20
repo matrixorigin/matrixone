@@ -56,6 +56,7 @@ func (u *tokenizeState) end(tf *TableFunction, proc *process.Process) error {
 }
 
 func (u *tokenizeState) reset(tf *TableFunction, proc *process.Process) {
+	tf.memoryOutputRows = 0
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -67,13 +68,23 @@ func (u *tokenizeState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	// write the batch
 	n := 0
-	for i := u.offset; i < len(u.doc.Words) && n < 8192; i++ {
+	rows := 8192
+	if tf.memoryOutputRows > 0 {
+		rows = tf.memoryOutputRows
+	}
+	for i := u.offset; i < len(u.doc.Words) && n < rows; i++ {
 		// type of id follow primary key column
-		vector.AppendAny(u.batch.Vecs[0], u.doc.Words[i].DocId, false, proc.Mp())
+		if err := vector.AppendAny(u.batch.Vecs[0], u.doc.Words[i].DocId, false, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
 		// pos
-		vector.AppendFixed[int32](u.batch.Vecs[1], u.doc.Words[i].Pos, false, proc.Mp())
+		if err := vector.AppendFixed[int32](u.batch.Vecs[1], u.doc.Words[i].Pos, false, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
 		// word
-		vector.AppendBytes(u.batch.Vecs[2], []byte(u.doc.Words[i].Word), false, proc.Mp())
+		if err := vector.AppendBytes(u.batch.Vecs[2], []byte(u.doc.Words[i].Word), false, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
 
 		n++
 	}
@@ -91,7 +102,14 @@ func (u *tokenizeState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
+		u.batch = nil
 	}
+	// Drop document backing and old string/interface references before the
+	// enclosing statement returns its complete producer promise.
+	u.doc = Document{}
+	u.offset = 0
+	u.inited = false
+	tf.memoryOutputRows = 0
 }
 
 func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -123,6 +141,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	// reset slice
+	clear(u.doc.Words)
 	u.doc.Words = u.doc.Words[:0]
 	u.offset = 0
 

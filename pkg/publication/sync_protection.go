@@ -486,3 +486,34 @@ func RegisterSyncProtectionWithRetry(
 		}
 	}
 }
+
+// withSyncProtection retires blocked Apply work when protection expires. One
+// timer follows the authoritative expiration; any TTL update wakes it.
+func withSyncProtection(ctx context.Context, worker Worker, jobID string) (context.Context, func()) {
+	if worker == nil || jobID == "" {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(0)
+		defer timer.Stop()
+		for {
+			expires, changed := worker.WatchSyncProtection(jobID)
+			now := time.Now().UnixNano()
+			if expires <= now {
+				cancel(ErrSyncProtectionTTLExpired)
+				return
+			}
+			timer.Reset(time.Duration(expires - now))
+			select {
+			case <-ctx.Done():
+				return
+			case <-changed:
+			case <-timer.C:
+			}
+		}
+	}()
+	return ctx, func() { cancel(context.Canceled); <-done }
+}

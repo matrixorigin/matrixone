@@ -2120,7 +2120,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
-	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || builder.returningRequested) {
+	if onDupAction == plan.Node_FAIL && (len(irregularIndexes) > 0 || builder.returningRequested) {
 		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
@@ -2835,7 +2835,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	delColName2Idx := make(map[string][2]int32)
 	valueChangeMarkerPosByGroup := make(map[string]int32, len(irregularValueChangeFilters))
 
-	if newProjLen > len(selectNode.ProjectList) {
+	if newProjLen > len(selectNode.ProjectList) || onDupAction == plan.Node_IGNORE && len(irregularIndexes) > 0 {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
 		finalProjTag := builder.genNewBindTag()
 		pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
@@ -3130,6 +3130,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}, bindCtx)
 				selectNode = builder.qry.Nodes[lastNodeID]
 			}
+		}
+		if onDupAction == plan.Node_IGNORE && len(irregularIndexes) > 0 {
+			// Index maintenance must consume only the rows surviving dedup.
+			sinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, finalProjTag)
+			step := builder.appendStep(sinkID)
+			maintTableDef := *tableDef
+			maintTableDef.Indexes = irregularIndexes
+			builder.irregularMaintSourceStep = step
+			builder.irregularMaintIndexes = irregularIndexes
+			builder.irregularMaintTableDef = &maintTableDef
+			builder.irregularMaintObjRef = dmlCtx.objRefs[0]
+			lastNodeID = builder.appendTaggedSinkScan(bindCtx, step, finalProjTag)
+			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 		if onDupAction == plan.Node_UPDATE && len(irregularIndexes) > 0 {
 			// ODKU cannot change the PK, so the stale entries are keyed by the same

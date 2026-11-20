@@ -163,10 +163,13 @@ func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
 		}
 	}
 
-	ls := strings.ToLower(string(bs))
+	// Unicode lowercasing can increase UTF-8 byte length (for example,
+	// U+023A becomes U+2C65). Bound the normalized bytes as well as the
+	// source prefix, retaining only complete runes in the fixed token store.
+	bs = truncateUTF8([]byte(strings.ToLower(string(bs))), MAX_TOKEN_SIZE)
 	token := Token{}
-	token.TokenBytes[0] = byte(len(ls))
-	copy(token.TokenBytes[1:], []byte(ls))
+	token.TokenBytes[0] = byte(len(bs))
+	copy(token.TokenBytes[1:], bs)
 	token.TokenPos = st.currTokenPos
 	token.BytePos = int32(st.begin)
 	if !yield(token, nil) {

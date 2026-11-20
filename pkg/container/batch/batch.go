@@ -271,6 +271,10 @@ type batchPrimitiveWriter interface {
 }
 
 func writeBatchMarshalUint32(w io.Writer, value uint32) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint32(buffer.AvailableBuffer(), uint32(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteUint32(value)
 	}
@@ -280,6 +284,10 @@ func writeBatchMarshalUint32(w io.Writer, value uint32) error {
 }
 
 func writeBatchMarshalInt32(w io.Writer, value int32) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint32(buffer.AvailableBuffer(), uint32(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteInt32(value)
 	}
@@ -289,6 +297,10 @@ func writeBatchMarshalInt32(w io.Writer, value int32) error {
 }
 
 func writeBatchMarshalInt64(w io.Writer, value int64) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint64(buffer.AvailableBuffer(), uint64(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteInt64(value)
 	}
@@ -1234,6 +1246,24 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 		}
 	}
 	bat.rowCount += cnt
+	return nil
+}
+
+// UnionWholeBatchWithPayloadSizes appends the complete logical batch. A
+// nonnegative size must be the exact number of non-null, non-inline payload
+// bytes in that source column; it is used only to preallocate destination
+// storage. A negative size selects the ordinary copy path. Sizes are consumed
+// during this call and must describe the unchanged source batch.
+func (bat *Batch) UnionWholeBatchWithPayloadSizes(bat2 *Batch, sizes []int, m *mpool.MPool) error {
+	if len(sizes) != len(bat.Vecs) {
+		return bat.UnionWindow(bat2, 0, bat2.RowCount(), m)
+	}
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionWholeWithPayloadSize(bat2.Vecs[i], bat2.RowCount(), sizes[i], m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount += bat2.RowCount()
 	return nil
 }
 
