@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   fingerprint:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '03ebf6bd3850c50ff4acbe593ab19ac6de202111' && github.run_attempt == 1
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == 'e1a4b968664a16ebe8868f686f449db700dd47d4' && github.run_attempt == 1
     strategy:
       fail-fast: false
       matrix:
@@ -16,6 +16,17 @@ jobs:
     runs-on: ${{ format('cs-jed-nc-n{0}-pr-v1', matrix.node) }}
     timeout-minutes: 10
     steps:
+      - name: Match Coverage UT build dependencies in the ephemeral runner filesystem only
+        run: |
+          set -euo pipefail
+          test "$CS_CACHE_ENV" = jed
+          if ! (command -v gcc && command -v g++ && command -v make && command -v pkg-config && command -v cmake && command -v python); then
+            for p in /usr /etc/apt /var/lib/dpkg /var/lib/apt /var/cache/apt; do
+              test "$(findmnt -T "$p" -n -o TARGET,FSTYPE | xargs)" = "/ overlay"
+            done
+            sudo apt-get -o Acquire::ForceIPv4=true update
+            sudo apt-get -o Acquire::ForceIPv4=true install -y build-essential cmake pkg-config python3 python-is-python3
+          fi
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: c33ce3ff8e7555c8053c85693e55e93e73d898b7
