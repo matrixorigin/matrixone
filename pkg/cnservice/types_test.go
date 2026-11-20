@@ -110,6 +110,27 @@ func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
 	}
 }
 
+func TestCatalogSubscriptionMode(t *testing.T) {
+	const serviceID = "catalog-mode-config"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(serviceID, rt) })
+	for _, mode := range []string{"", "lazy", "full", "auto"} {
+		cfg := Config{UUID: serviceID}
+		_, err := toml.Decode("[Engine]\ncatalog-subscription-mode = \""+mode+"\"", &cfg)
+		require.NoError(t, err)
+		if mode == "auto" {
+			require.ErrorContains(t, cfg.Validate(), "catalog-subscription-mode")
+			continue
+		}
+		require.NoError(t, cfg.Validate())
+		if mode == "" {
+			mode = "lazy"
+		}
+		require.Equal(t, mode, cfg.Engine.CatalogSubscriptionMode)
+	}
+}
+
 func TestValidateHeartbeatDurations(t *testing.T) {
 	for name, interval := range map[string]time.Duration{
 		"negative interval":       -time.Nanosecond,

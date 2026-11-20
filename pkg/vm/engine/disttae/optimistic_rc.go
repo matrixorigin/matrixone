@@ -54,7 +54,7 @@ func (txn *Transaction) validateOptimisticWritesLocked(ctx context.Context) erro
 		rel, err := func() (engine.Relation, error) {
 			txn.Unlock()
 			defer txn.Lock()
-			return txn.getTable(ctx, key.accountId, name[0], name[1])
+			return txn.getTable(ctx, key.accountId, key.databaseId, name[0], name[1])
 		}()
 		if err != nil {
 			return err

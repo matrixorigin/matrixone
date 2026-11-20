@@ -652,6 +652,8 @@ create database test13_new clone test13;
 -- The cloned HNSW indexes initialize with asynchronous ALTER REINDEX.
 -- Finish that phase before testing the next clone of their source schema.
 -- @session
+set @acc_id = (select account_id from mo_catalog.mo_account where account_name = 'acc05');
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
 -- @wait_expect(1, 60)
 select count(distinct t.rel_id) = 2 as clone_indexes_ready
 from mo_catalog.mo_iscp_log j

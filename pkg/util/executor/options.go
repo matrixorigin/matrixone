@@ -275,7 +275,20 @@ func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	opts.accountId = accountID
 	opts.hasAccountID = true
+	opts.requireTenantCatalog = false
 	return opts
+}
+
+// WithTenantCatalog executes against an existing account whose catalog must
+// be available on this CN even if the account has never logged in here.
+func (opts StatementOption) WithTenantCatalog(accountID uint32) StatementOption {
+	opts = opts.WithAccountID(accountID)
+	opts.requireTenantCatalog = accountID != 0
+	return opts
+}
+
+func (opts StatementOption) RequiresTenantCatalog() bool {
+	return opts.requireTenantCatalog
 }
 
 func (opts StatementOption) WithAlterCopyOpt(opt *plan.AlterCopyOpt) StatementOption {

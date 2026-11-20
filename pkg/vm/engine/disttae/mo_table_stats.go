@@ -1639,8 +1639,16 @@ func buildTablePairFromCache(
 	snapshot types.TS,
 	onlyUpdateTS bool,
 ) (tbl tablePair, ok bool) {
+	distEng := eng.(*Engine)
+	ccache := distEng.GetLatestCatalogCache()
+	snapshotTS := snapshot.ToTimestamp()
+	if distEng.pClient.lazyCatalog != nil && distEng.pClient.lazyCatalog.isEnabled() {
+		if !ccache.CanServe(snapshot) || !distEng.PushClient().CanServeAccount(uint32(accId), snapshotTS) {
+			return
+		}
+	}
 
-	item := eng.(*Engine).GetLatestCatalogCache().GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshot.ToTimestamp())
+	item := ccache.GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshotTS)
 	return buildTablePairFromItem(item, accId, dbId, tblId, snapshot, onlyUpdateTS)
 }
 
@@ -1697,10 +1705,18 @@ func buildTablePairsFromCache(
 		key := [2]uint64{accs[i], dbs[i]}
 		groups[key] = append(groups[key], i)
 	}
-	cc := eng.(*Engine).GetLatestCatalogCache()
+	distEng := eng.(*Engine)
+	cc := distEng.GetLatestCatalogCache()
 	ts := snapshot.ToTimestamp()
+	lazyCatalogEnabled := distEng.pClient.lazyCatalog != nil && distEng.pClient.lazyCatalog.isEnabled()
+	if lazyCatalogEnabled && !cc.CanServe(snapshot) {
+		return nil
+	}
 	items := make([]*cache.TableItem, len(tbls))
 	for key, indices := range groups {
+		if lazyCatalogEnabled && !distEng.pClient.CanServeAccount(uint32(key[0]), ts) {
+			continue
+		}
 		if len(indices) == 1 {
 			i := indices[0]
 			items[i] = cc.GetTableByIdAndTime(uint32(key[0]), key[1], tbls[i], ts)

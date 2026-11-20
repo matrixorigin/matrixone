@@ -75,6 +75,8 @@ func TestIssue29414PublicationWaitsForPhysicalDatabaseDrop(t *testing.T) {
 			"select account_id from mo_catalog.mo_account where account_name = ?", accountName,
 		).Scan(&accountID))
 		tenant := openDB(t, cn0.GetServiceConfig().CN.Frontend.Port, accountName+"#admin#accountadmin")
+		// The sys fixture below reads the tenant's catalog directly on CN1.
+		execSQLRequire(t, ctx, sys1, fmt.Sprintf("select mo_ctl('cn','ActivateTenantCatalog','%d')", accountID))
 
 		for _, arm := range []string{"rollback", "commit", "replace", "cancel"} {
 			t.Run(arm, func(t *testing.T) {

@@ -33,6 +33,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type unavailableCatalogEngine struct {
+	engine.Engine
+	accountID uint32
+	err       error
+}
+
+func (e *unavailableCatalogEngine) ActivateTenantCatalog(_ context.Context, accountID uint32) error {
+	e.accountID = accountID
+	return e.err
+}
+
+func TestISCPActivationFailurePrecedesIterationSnapshot(t *testing.T) {
+	eng := &unavailableCatalogEngine{err: errors.New("catalog unavailable")}
+	iter := &IterationContext{accountID: 17}
+	err := ExecuteIteration(t.Context(), "", eng, nil, iter, nil)
+	require.ErrorIs(t, err, eng.err)
+	require.Equal(t, iter.accountID, eng.accountID)
+}
+
 type iterationChangesHandle struct {
 	next func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error)
 }

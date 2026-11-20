@@ -507,6 +507,13 @@ func publicationSystemRelationAvailable(
 		}
 	}
 
+	for _, target := range targetAccountIDs {
+		if target != publicationTargetAnyGeneralAccount {
+			if err := activatePublicationCatalog(ctx, bh, target); err != nil {
+				return false, err
+			}
+		}
+	}
 	sql := fmt.Sprintf(
 		getPublicationSystemRelationFormat,
 		sanitizeSQLInput(database), sanitizeSQLInput(relation))

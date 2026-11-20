@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +84,7 @@ func insertTempCatalogDatabase(t *testing.T, eng *Engine, txn *Transaction, ts t
 	t.Cleanup(func() { bat.Clean(txn.proc.Mp()) })
 }
 
-func insertTempCatalogTable(t *testing.T, eng *Engine, txn *Transaction, item catalog.Table, ts types.TS) {
+func insertCatalogTableForTest(t *testing.T, eng *Engine, txn *Transaction, item catalog.Table, ts types.TS) {
 	t.Helper()
 	packer := types.NewPacker()
 	defer packer.Close()
@@ -94,6 +95,20 @@ func insertTempCatalogTable(t *testing.T, eng *Engine, txn *Transaction, item ca
 	vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = ts
 	eng.GetLatestCatalogCache().InsertTable(bat)
 	t.Cleanup(func() { bat.Clean(txn.proc.Mp()) })
+	columns, err := catalog.GenColumnsFromDefs(item.AccountId, item.TableName, item.DatabaseName,
+		item.TableId, item.DatabaseId, []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "id", Type: types.T_uint64.ToType()}},
+		})
+	require.NoError(t, err)
+	columnBatch, err := catalog.GenCreateColumnTuples(columns, txn.proc.Mp(), packer)
+	require.NoError(t, err)
+	t.Cleanup(func() { columnBatch.Clean(txn.proc.Mp()) })
+	_, err = fillRandomRowidAndZeroTs(columnBatch, txn.proc.Mp())
+	require.NoError(t, err)
+	for i := range columnBatch.RowCount() {
+		vector.MustFixedColWithTypeCheck[types.TS](columnBatch.GetVector(cache.MO_TIMESTAMP_IDX))[i] = ts
+	}
+	eng.GetLatestCatalogCache().InsertColumns(columnBatch)
 }
 
 func tempCatalogRoot(session uuid.UUID, childID uint64) catalog.Table {
@@ -133,8 +148,8 @@ func TestCommittedTemporaryIndexCatalogVisibility(t *testing.T) {
 	eng, op, txn, ctx := newTempCatalogFixture(t)
 	insertTempCatalogDatabase(t, eng, txn, tempCatalogSnapshot)
 	indexName := defines.GenTempTableName(tempCatalogSession, tempCatalogDatabase, "unique_index")
-	insertTempCatalogTable(t, eng, txn, tempCatalogRoot(tempCatalogSession, tempCatalogChildID), tempCatalogCommit)
-	insertTempCatalogTable(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", catalog.SystemIndexRel), tempCatalogCommit)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogRoot(tempCatalogSession, tempCatalogChildID), tempCatalogCommit)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", catalog.SystemIndexRel), tempCatalogCommit)
 
 	db := &txnDatabase{
 		op: op, accountId: tempCatalogAccountID,
@@ -160,10 +175,10 @@ func TestTemporaryIndexIDLookupRejectsSnapshotNameIdentityMismatch(t *testing.T)
 	name := defines.GenTempTableName(tempCatalogSession, tempCatalogDatabase, "unique_index")
 	newID := tempCatalogChildID + 1
 
-	insertTempCatalogTable(t, eng, txn, tempCatalogRoot(tempCatalogSession, tempCatalogChildID), tempCatalogSnapshot)
-	insertTempCatalogTable(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", catalog.SystemIndexRel), tempCatalogSnapshot)
-	insertTempCatalogTable(t, eng, txn, tempCatalogRoot(tempCatalogSession, newID), tempCatalogCommit)
-	insertTempCatalogTable(t, eng, txn, tempCatalogIndex(tempCatalogSession, newID, "unique_index", catalog.SystemIndexRel), tempCatalogCommit)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogRoot(tempCatalogSession, tempCatalogChildID), tempCatalogSnapshot)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", catalog.SystemIndexRel), tempCatalogSnapshot)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogRoot(tempCatalogSession, newID), tempCatalogCommit)
+	insertCatalogTableForTest(t, eng, txn, tempCatalogIndex(tempCatalogSession, newID, "unique_index", catalog.SystemIndexRel), tempCatalogCommit)
 
 	db := &txnDatabase{
 		op: op, accountId: tempCatalogAccountID,
@@ -195,8 +210,8 @@ func TestTemporaryIndexFallbackRejectsOutOfScopeItems(t *testing.T) {
 			eng, op, txn, ctx := newTempCatalogFixture(t)
 			insertTempCatalogDatabase(t, eng, txn, tempCatalogSnapshot)
 			name := defines.GenTempTableName(tempCatalogSession, tempCatalogDatabase, "unique_index")
-			insertTempCatalogTable(t, eng, txn, tempCatalogRoot(tc.parentSession, tempCatalogChildID), tempCatalogCommit)
-			insertTempCatalogTable(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", tc.childKind), tempCatalogCommit)
+			insertCatalogTableForTest(t, eng, txn, tempCatalogRoot(tc.parentSession, tempCatalogChildID), tempCatalogCommit)
+			insertCatalogTableForTest(t, eng, txn, tempCatalogIndex(tempCatalogSession, tempCatalogChildID, "unique_index", tc.childKind), tempCatalogCommit)
 
 			db := &txnDatabase{
 				op: op, accountId: tempCatalogAccountID,

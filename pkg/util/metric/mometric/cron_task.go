@@ -494,8 +494,9 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 }
 
 const (
-	MOMetricResetTaskLabel = "mo_metric_reset_task_labels"
-	MOMetricTaskLabel      = "mo_metric_task_labels"
+	MOMetricResetTaskLabel         = "mo_metric_reset_task_labels"
+	MOMetricResetStorageUsageLabel = "mo_metric_reset_storage_usage_label"
+	MOMetricTaskLabel              = "mo_metric_task_labels"
 )
 
 const (
@@ -531,7 +532,8 @@ func checkAndResetTaskLabels(ctx context.Context, logger *log.MOLogger, service 
 		labels = s.(map[string]string)
 	}
 
-	if !reset {
+	storageOnly, _ := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricResetStorageUsageLabel)
+	if !reset && storageOnly != true {
 		logger.Info("skip reset task labels")
 		return false, nil
 	}
@@ -539,6 +541,9 @@ func checkAndResetTaskLabels(ctx context.Context, logger *log.MOLogger, service 
 	opts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
 	executor := sqlExecutor()
 	sql := getQueryCronTaskRecord()
+	if !reset {
+		sql = "select cron_task_id, task_metadata_id, task_metadata_option from mo_task.sys_cron_task where task_metadata_id='StorageUsage'"
+	}
 	logger.Info("query", zap.String("sql", sql))
 	result := executor.Query(ctx, sql, opts)
 

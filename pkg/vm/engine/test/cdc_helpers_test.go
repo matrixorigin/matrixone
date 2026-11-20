@@ -163,7 +163,9 @@ func exec_sql(
 	ctx context.Context,
 	sql string,
 ) (err error) {
-
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return err
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")

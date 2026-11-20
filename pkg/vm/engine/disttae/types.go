@@ -177,6 +177,10 @@ type IDGenerator interface {
 
 type EngineOptions func(*Engine)
 
+func WithFullCatalogSubscription(full bool) EngineOptions {
+	return func(e *Engine) { e.config.fullCatalogSubscription = full }
+}
+
 // WithWorkspaceAccountingChecksForTest enables workspace invariant checks
 // independently of the process logger. It is intended for test engines only.
 func WithWorkspaceAccountingChecksForTest() EngineOptions {
@@ -275,6 +279,7 @@ type Engine struct {
 
 	config struct {
 		checkWorkspaceAccounting bool
+		fullCatalogSubscription  bool
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	moengine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,28 @@ func SQLCleanupTimeout(statement string) time.Duration {
 		return 2 * time.Minute
 	}
 	return 30 * time.Second
+}
+
+// activateTenantCatalogIfNeeded activates the lazy catalog for the given
+// account on the CN. The frontend normally activates during login; tests
+// that bypass the frontend by calling cnservice.GetSQLExecutor directly
+// must activate explicitly before issuing tenant-scoped SQL.
+func activateTenantCatalogIfNeeded(
+	ctx context.Context,
+	cn embed.ServiceOperator,
+	account int32,
+) error {
+	if account <= 0 {
+		return nil
+	}
+	eng := cn.RawService().(cnservice.Service).GetEngine()
+	if activator, ok := eng.(moengine.TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, uint32(account))
+	}
+	if ee, ok := eng.(*moengine.EntireEngine); ok {
+		return ee.ActivateTenantCatalog(ctx, uint32(account))
+	}
+	return nil
 }
 
 func CreateTableAndWaitCNApplied(
@@ -99,6 +122,7 @@ func CreateTestDatabaseWithAccount(
 	defer cancel()
 
 	ctx = defines.AttachAccountId(ctx, uint32(account))
+	require.NoError(t, activateTenantCatalogIfNeeded(ctx, cn, account))
 	res, err := sql.Exec(
 		ctx,
 		fmt.Sprintf("create database %s", name),
@@ -247,6 +271,7 @@ func ExecSQLWithReadResultAndAccount(
 		moerr.CauseExecSQL,
 	)
 	defer cancel()
+	require.NoError(t, activateTenantCatalogIfNeeded(ctx, cn, account))
 
 	var txnOp client.TxnOperator
 	err := exec.ExecTxn(
@@ -321,6 +346,7 @@ func ExecSQLWithMinCommittedTSAndAccount(
 		moerr.CauseExecSQLWithMinCommittedTS,
 	)
 	defer cancel()
+	require.NoError(t, activateTenantCatalogIfNeeded(ctx, cn, account))
 
 	var txnOp client.TxnOperator
 	err := exec.ExecTxn(
@@ -418,6 +444,9 @@ func DBExistsWithAccountE(
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	if err := activateTenantCatalogIfNeeded(ctx, cn, account); err != nil {
+		return false, err
+	}
 	res, err := exec.Exec(
 		ctx,
 		"show databases",
@@ -472,6 +501,9 @@ func TableExistsWithAccountE(
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	if err := activateTenantCatalogIfNeeded(ctx, cn, account); err != nil {
+		return false, err
+	}
 	res, err := exec.Exec(
 		ctx,
 		"show tables",

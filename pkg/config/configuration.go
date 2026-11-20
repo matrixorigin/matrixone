@@ -1072,6 +1072,8 @@ type ObservabilityParameters struct {
 	// TaskLabel
 	TaskLabel      map[string]string `toml:"task-label"`
 	ResetTaskLabel bool              `toml:"reset-task-label"`
+	// ResetStorageUsageLabel applies TaskLabel to StorageUsage alone.
+	ResetStorageUsageLabel bool `toml:"reset-storage-usage-label"`
 
 	// estimate tcp network packet cost
 	TCPPacket bool `toml:"tcp-packet"`

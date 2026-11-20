@@ -49,6 +49,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
+func TestInternalExecutorTenantCatalogActivationFailure(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	const tenantID uint32 = 42
+	wantErr := errors.New("catalog activation failed")
+	eng := &remoteCatalogTestEngine{activate: func(ctx context.Context, id uint32) error {
+		require.Equal(t, tenantID, id)
+		accountID, err := defines.GetAccountId(ctx)
+		require.NoError(t, err)
+		require.Equal(t, tenantID, accountID)
+		return wantErr
+	}}
+	tx := &txnExecutor{s: &sqlExecutor{eng: eng}, ctx: ctx}
+	_, err := tx.Exec("select 1", executor.StatementOption{}.WithTenantCatalog(tenantID))
+	require.ErrorIs(t, err, wantErr)
+	require.Same(t, ctx, tx.ctx)
+}
+
 func TestInternalExecutorCommittedLogWaitHonorsCallerCancellation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)

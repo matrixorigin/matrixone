@@ -265,6 +265,15 @@ func TestParseTablePathWithAccount(t *testing.T) {
 	}
 }
 
+type tableStatsCatalogEngine struct {
+	*mock_frontend.MockEngine
+	activate func(context.Context, uint32) error
+}
+
+func (e *tableStatsCatalogEngine) ActivateTenantCatalog(ctx context.Context, id uint32) error {
+	return e.activate(ctx, id)
+}
+
 func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -302,7 +311,14 @@ func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, tt.currentAccount)
 			originalCtx := proc.Ctx
 
-			eng := mock_frontend.NewMockEngine(ctrl)
+			var activated []uint32
+			eng := &tableStatsCatalogEngine{mock_frontend.NewMockEngine(ctrl), func(ctx context.Context, id uint32) error {
+				accountID, err := defines.GetAccountId(ctx)
+				require.NoError(t, err)
+				require.Equal(t, id, accountID)
+				activated = append(activated, id)
+				return nil
+			}}
 			db := mock_frontend.NewMockDatabase(ctrl)
 			rel := mock_frontend.NewMockRelation(ctrl)
 			if tt.expectError {
@@ -310,6 +326,7 @@ func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
 				key, targetCtx, err := resolveTableStatsKey(eng, proc, tt.path)
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "only sys account can query stats for other accounts")
+				require.Empty(t, activated)
 				require.Equal(t, pb.StatsInfoKey{}, key)
 				require.Nil(t, targetCtx)
 				return
@@ -317,6 +334,11 @@ func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
 
 			eng.EXPECT().Database(gomock.Any(), "tenant_db", proc.GetTxnOperator()).
 				DoAndReturn(func(ctx context.Context, _ string, _ client.TxnOperator) (engine.Database, error) {
+					if tt.currentAccount == tt.targetAccount {
+						require.Empty(t, activated)
+					} else {
+						require.Equal(t, []uint32{tt.targetAccount}, activated)
+					}
 					accountID, err := defines.GetAccountId(ctx)
 					require.NoError(t, err)
 					require.Equal(t, tt.targetAccount, accountID)

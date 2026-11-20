@@ -70,6 +70,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      - ../../test:${MO_REPO_ROOT}/test  # BVT test data (LOAD DATA + INTO OUTFILE)
       # Note: Local mo-service mount removed due to GLIBC version mismatch
       # Use image-built binary or build inside container for compatibility
     environment:
@@ -106,6 +107,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      - ../../test:${MO_REPO_ROOT}/test  # BVT test data (LOAD DATA + INTO OUTFILE)
       # Note: Local mo-service mount removed due to GLIBC version mismatch
       # Use image-built binary or build inside container for compatibility
     environment:
@@ -140,6 +142,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      - ../../test:${MO_REPO_ROOT}/test  # BVT test data (LOAD DATA + INTO OUTFILE)
       # Note: Local mo-service mount removed due to GLIBC version mismatch
       # Use image-built binary or build inside container for compatibility
     environment:
@@ -174,6 +177,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      - ../../test:${MO_REPO_ROOT}/test  # BVT test data (LOAD DATA + INTO OUTFILE)
       # Note: Local mo-service mount removed due to GLIBC version mismatch
       # Use image-built binary or build inside container for compatibility
     environment:
@@ -200,6 +204,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      - ../../test:${MO_REPO_ROOT}/test  # BVT test data (LOAD DATA + INTO OUTFILE)
       # Note: Local mo-service mount removed due to GLIBC version mismatch
       # Use image-built binary or build inside container for compatibility
     environment:

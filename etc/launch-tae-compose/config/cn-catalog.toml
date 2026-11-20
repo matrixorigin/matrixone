@@ -1,0 +1,74 @@
+service-type = "CN"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+[[fileservice]]
+backend = "DISK-V2"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "SHARED"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+cert-files = ["/etc/ssl/cert.pem"]
+
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "3GB"
+disk-path = "mo-data/file-service-cache"
+disk-min-evict-interval = "7m"
+disk-evict-target = 0.8
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/etl"
+
+[hakeeper-client]
+service-addresses = ["logservice:32001"]
+
+[observability]
+reset-storage-usage-label = true
+task-label = { account = "bvt_catalog_full" }
+
+# Fresh BVT cluster opt-in; all CN/TN images must support AUTO_ID_CACHE.
+[cn.auto-increment]
+enable-auto-id-cache = true
+
+[cn]
+uuid = "dd1dccb5-4d3c-41f9-b482-5251dc7a41bf"
+port-base = 18300
+service-host = "cn-catalog"
+sql-address = "cn-catalog:6001"
+
+# Exercise the real periodic index path at BVT cadence.
+[cn.iscp]
+sync-task-interval = "1s"
+index-flush-watermark-interval = "1s"
+
+[cn.Engine]
+catalog-subscription-mode = "full"
+type = "distributed-tae"
+
+[cn.frontend]
+port = 6001
+proxy-enabled = true
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true

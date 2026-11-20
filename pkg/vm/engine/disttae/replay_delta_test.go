@@ -119,7 +119,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 					workspace = cli.op.GetWorkspace().(*Transaction)
 					t.Cleanup(workspace.proc.Free)
 				}
-				if query == catalog.MoColumnsBatchQuery {
+				if query == catalog.BuildMoColumnsBatchQuery([]uint32{0}) {
 					if replayErr != nil {
 						if tc.canceled {
 							cancel()
@@ -141,7 +141,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			var replayResult error
 			go func() {
 				defer close(finished)
-				replayResult = e.pClient.replayCatalogCache(ctx, e)
+				replayResult = e.pClient.replayCatalogCache(ctx, e, []uint32{0})
 			}()
 			defer func() {
 				cancel()

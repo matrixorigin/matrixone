@@ -57,6 +57,21 @@ func snapshotScanTestNode(ts *timestamp.Timestamp) *plan.Node {
 	}
 }
 
+func TestRemoteSnapshotAdmitsSourceBeforeOpeningRelation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = &scanSnapshotTestTxn{ts: timestamp.Timestamp{PhysicalTime: 20}}
+	sentinel := errors.New("source activation failed")
+	calls := 0
+	c := &Compile{proc: proc, e: &remoteCatalogTestEngine{activate: func(ctx context.Context, accountID uint32) error {
+		calls++
+		require.Equal(t, uint32(7), accountID)
+		return sentinel
+	}}}
+	_, _, _, err := c.handleDbRelContext(snapshotScanTestNode(&timestamp.Timestamp{PhysicalTime: 10}), true)
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, 1, calls)
+}
+
 func TestScanSnapshotTransactionsAreRelationLocal(t *testing.T) {
 	for _, path := range []string{"datasource", "local-relation", "remote-relation", "preinsert"} {
 		t.Run(path, func(t *testing.T) {

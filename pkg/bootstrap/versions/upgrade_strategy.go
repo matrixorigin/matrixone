@@ -300,7 +300,7 @@ func UpgradeStatementOption(accountID uint32) executor.StatementOption {
 		roleID = accountAdminRoleID
 	}
 	return executor.StatementOption{}.
-		WithAccountID(accountID).
+		WithTenantCatalog(accountID).
 		WithUserID(userID).
 		WithRoleID(roleID)
 }
@@ -354,7 +354,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
             WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
             AND attname != '__mo_rowid'%s
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, systemAccountFilter, schema, tableName, columnName)
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId).WithDisableLog())
 	if err != nil {
 		return colInfo, err
 	}
@@ -397,7 +397,7 @@ var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schem
 	}
 	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND %stbl.reldatabase = '%s'  AND  tbl.relname = '%s'", accountFilter, schema, viewName)
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId).WithDisableLog())
 	if err != nil {
 		return false, "", err
 	}
@@ -445,7 +445,7 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
 
 	sql := tableDefinitionProbeSQL(accountId, schema, tableName, false)
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId).WithDisableLog())
 	if err != nil {
 		return false, err
 	}
@@ -469,7 +469,7 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 
 	sql := tableDefinitionProbeSQL(accountId, schema, tableName, true)
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId))
 	if err != nil {
 		return false, "", err
 	}
@@ -493,7 +493,7 @@ func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string)
 		return false, moerr.NewInternalErrorNoCtx("check table data sql is empty")
 	}
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId))
 	if err != nil {
 		return false, err
 	}
@@ -524,7 +524,7 @@ func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 		"where %s`tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
 		accountFilter, schema, tableName, indexName)
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithTenantCatalog(accountId))
 	if err != nil {
 		return false, err
 	}

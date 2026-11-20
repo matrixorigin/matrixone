@@ -77,9 +77,29 @@ password: minio123
 mysql -h 127.0.0.1 -P 6001 -udump -p111
 ```
 
-Port `6001` is the Proxy entrypoint. CN SQL ports are intentionally not
-published to the host; clients should enter through Proxy so that both CNs are
-eligible backends.
+Port `6001` is the Proxy entrypoint. The two ordinary CNs remain eligible
+backends. The dedicated `cn-catalog` uses full catalog subscription and a
+reserved account label, so normal BVT logins do not select it through Proxy.
+Only its SQL and debug endpoints are published on ephemeral loopback ports.
+
+On fresh startup, `catalog-placement` waits for the StorageUsage cron worker
+to apply its label and for a labeled instance to run on `cn-catalog`, before
+the ordinary CNs start. `observability.reset-storage-usage-label` applies
+`task-label` to StorageUsage only; the existing `reset-task-label` still
+applies to both StorageUsage and ETLMergeTask.
+
+In the grouped Compose BVT, files containing `SHOW ACCOUNTS` use the full CN
+for the entire file (including session variables and `RESULT_SCAN`); other
+files use the original tester configuration, in the original order. The runner
+requires Python 3 and PyYAML. To opt into this routing in a local group run:
+
+```bash
+compose=etc/launch-tae-compose/compose.yaml
+export BVT_FULL_CATALOG_ADDR=$(docker compose -f "$compose" --profile launch-multi-cn port cn-catalog 6001)
+debug=$(docker compose -f "$compose" --profile launch-multi-cn port cn-catalog 12345)
+export BVT_FULL_CATALOG_DEBUG_PORT=${debug##*:}
+bash optools/run_bvt_group.sh /path/to/mo-tester test/distributed/cases 0
+```
 
 ## down
 

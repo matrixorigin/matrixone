@@ -82,6 +82,7 @@ func (s *service) initDistributedTAE(
 			s.cfg.Engine.PrefetchOnSubscribed,
 		),
 		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
+		disttae.WithFullCatalogSubscription(s.cfg.Engine.CatalogSubscriptionMode == "full"),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
 		disttae.WithMoServerStateChecker(func() bool {
 			return frontend.MoServerIsStarted(s.cfg.UUID)
@@ -112,6 +113,7 @@ func (s *service) initDistributedTAE(
 		statusServer := ss.(*status.Server)
 		statusServer.SetTxnClient(s.cfg.UUID, client)
 		statusServer.SetLogTailClient(s.cfg.UUID, cnEngine.PushClient())
+		statusServer.SetEngine(s.cfg.UUID, cnEngine)
 	}
 
 	s.initProcessCodecService()

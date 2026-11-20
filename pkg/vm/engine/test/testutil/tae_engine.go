@@ -78,6 +78,30 @@ func (ts *TestTxnStorage) Close(destroy bool) error {
 	return firstErr
 }
 func (ts *TestTxnStorage) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	if request.CNRequest.OpCode != uint32(apipb.OpCode_OpGetLogTail) {
+		return moerr.NewNotSupportedf(ctx, "unknown read op: %v", request.CNRequest.OpCode)
+	}
+	var req apipb.SyncLogTailReq
+	if err := req.UnmarshalBinary(request.CNRequest.Payload); err != nil {
+		return err
+	}
+	var tail apipb.SyncLogTailResp
+	closeCB, err := ts.txnHandler.HandleGetLogTail(ctx, request.Txn, &req, &tail)
+	if closeCB != nil {
+		defer closeCB()
+	}
+	if err != nil {
+		return err
+	}
+	payload, err := tail.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	response.Method = request.Method
+	response.Flag = request.Flag
+	response.RequestID = request.RequestID
+	response.Txn = &request.Txn
+	response.CNOpResponse = &txn.CNOpResponse{Payload: payload}
 	return nil
 }
 func (ts *TestTxnStorage) Write(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) (err error) {

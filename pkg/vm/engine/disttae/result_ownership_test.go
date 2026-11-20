@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,8 +36,100 @@ import (
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIncompleteCatalogDefinitionFallsBackToStorage(t *testing.T) {
+	wantErr := moerr.NewInternalErrorNoCtx("catalog storage unavailable")
+	calls := 0
+	exec := executor.NewMemExecutor(func(string) (executor.Result, error) {
+		calls++
+		return executor.Result{}, wantErr
+	})
+	eng, db, txn, ctx := newResultOwnershipFixture(t, exec, false)
+	txn.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1}).AnyTimes()
+	eng.catalog.Store(cache.NewCatalog())
+	eng.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+	packer := types.NewPacker()
+	defer packer.Close()
+	bat, err := catalog.GenCreateTableTuple(catalog.Table{
+		AccountId: 1, DatabaseId: 7, DatabaseName: "db", TableId: 42, TableName: "tbl",
+	}, txn.proc.Mp(), packer)
+	require.NoError(t, err)
+	t.Cleanup(func() { bat.Clean(txn.proc.Mp()) })
+	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	require.NoError(t, err)
+	eng.GetLatestCatalogCache().InsertTable(bat)
+
+	item, err := db.getTableItem(ctx, 1, "tbl", eng)
+	require.Nil(t, item)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 1, calls)
+}
+
+func TestTransactionCreatedDatabaseRelationLookup(t *testing.T) {
+	for _, name := range []string{"new database", "existing database", "other account", "other database identity", "rolled back creation", "removed workspace", "canceled lookup"} {
+		t.Run(name, func(t *testing.T) {
+			lookupErr := errors.New("unexpected catalog storage read")
+			calls := 0
+			exec := executor.NewMemExecutor(func(string) (executor.Result, error) {
+				calls++
+				return executor.Result{}, lookupErr
+			})
+			eng, db, txn, ctx := newResultOwnershipFixture(t, exec, false)
+			eng.catalog.Store(cache.NewCatalog())
+			eng.GetLatestCatalogCache().UpdateDuration(types.BuildTS(200, 0), types.MaxTs())
+			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 100}).AnyTimes()
+			created := *db
+			accountID := uint32(1)
+			if name == "other account" {
+				accountID++
+			}
+			if name == "other database identity" {
+				created.databaseId++
+			}
+			if name != "existing database" {
+				txn.databaseOps.addCreateDatabase(genDatabaseKey(accountID, "db"), 1, &created)
+			}
+			switch name {
+			case "rolled back creation":
+				txn.databaseOps.rollbackLastStatement(1)
+			case "removed workspace":
+				txn.removed = true
+			case "canceled lookup":
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
+			rel, err := db.Relation(ctx, "tbl", nil)
+			require.Nil(t, rel)
+			switch name {
+			case "new database":
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+				key := genTableKey(1, "tbl", 7, "db")
+				table := &txnTable{eng: eng, db: db, accountId: 1, tableId: 42, tableName: "tbl"}
+				txn.tableOps.addCreateTable(key, 2, table)
+				rel, err = db.Relation(ctx, "tbl", nil)
+				require.NoError(t, err)
+				require.Same(t, table, rel)
+				txn.tableOps.addDeleteTable(key, 3, table.tableId)
+				rel, err = db.Relation(ctx, "tbl", nil)
+				require.Nil(t, rel)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+				require.Zero(t, calls)
+			case "removed workspace":
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+				require.Zero(t, calls)
+			case "canceled lookup":
+				require.ErrorIs(t, err, context.Canceled)
+			default:
+				require.ErrorIs(t, err, lookupErr)
+				require.Equal(t, 1, calls)
+			}
+		})
+	}
+}
 
 func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 	t.Run("delete table releases zero one and two acquired results", func(t *testing.T) {

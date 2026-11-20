@@ -586,7 +586,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 
 		if ap.DbName == "" {
 			var databaseAccountID uint32
-			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
+			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId, pub.PubAccountId, pub.SubAccountsStr); err != nil {
 				return err
 			}
 			// The inherited source database keeps its physical owner; the
@@ -2462,6 +2462,11 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 		// If table_list is "*", query all tables from mo_tables
 		// For account level, we don't query tables since dbName is "*"
 		if !isAccountLevel {
+			if tenantInfo.TenantID != pubInfo.PubAccountId {
+				if err := activateAccountCatalogIfNeeded(ctx, ses, pubInfo.PubAccountId); err != nil {
+					return err
+				}
+			}
 			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 			querySQL := fmt.Sprintf(
 				`SELECT relname FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND account_id = %d AND relkind != '%s' ORDER BY relname`,
@@ -2508,36 +2513,31 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 	if err != nil {
 		return 0, "", err
 	}
+	row, err := publicationDatabaseRow(ctx, bh, dbName, accountId)
+	if err != nil {
+		return 0, "", err
+	}
+	return databaseIDAndType(ctx, row, dbName)
+}
 
+func publicationDatabaseRow(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (ExecResult, error) {
 	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountId))
 	if err != nil {
-		return
+		return nil, err
 	}
+	return publicationCatalogRow(ctx, bh, sql)
+}
 
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
+func databaseIDAndType(ctx context.Context, row ExecResult, dbName string) (uint64, string, error) {
+	if row == nil {
+		return 0, "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 	}
-
-	erArray, err := getResultSet(ctx, bh)
+	id, err := row.GetUint64(ctx, 0, 0)
 	if err != nil {
-		return
+		return 0, "", err
 	}
-
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
-		return
-	}
-
-	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
-		return
-	}
-
-	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
-		return
-	}
-
-	return
+	typ, err := row.GetString(ctx, 0, 1)
+	return id, typ, err
 }
 
 // publicationSourceOwnerAuthorized reports whether publisherAccountID may
@@ -2613,28 +2613,59 @@ func resolvePublicationDatabaseByName(
 	targetAccountIDs []uint32,
 ) (databaseCtx context.Context, dbId uint64, dbType string, err error) {
 	databaseCtx = ctx
-	dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
-	if err == nil {
+	publisherAccountID, err := defines.GetAccountId(ctx)
+	if err != nil {
 		return
 	}
-
-	publisherAccountID, pubErr := defines.GetAccountId(ctx)
-	if pubErr != nil {
-		err = pubErr
+	row, err := publicationDatabaseRow(ctx, bh, dbName, publisherAccountID)
+	if err != nil {
 		return
 	}
+	if row != nil {
+		dbId, dbType, err = databaseIDAndType(ctx, row, dbName)
+		return
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	for _, accountID := range targetAccountIDs {
-		dbId, dbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, accountID)
-		if err == nil {
+		if err = activatePublicationCatalog(ctx, bh, accountID); err != nil {
+			return
+		}
+		row, err = publicationDatabaseRow(systemCtx, bh, dbName, accountID)
+		if err != nil {
+			return
+		}
+		if row != nil {
 			if !publicationSourceOwnerAuthorized(publisherAccountID, accountID, targetAccountIDs) {
 				err = publicationForeignSourceUnauthorizedError(ctx, publisherAccountID, accountID, dbName)
 				return
 			}
 			databaseCtx = defines.AttachAccountId(ctx, accountID)
-			return
+			break
 		}
 	}
+	dbId, dbType, err = databaseIDAndType(ctx, row, dbName)
 	return
+}
+
+func activatePublicationCatalog(ctx context.Context, bh BackgroundExec, accountID uint32) error {
+	if back, ok := bh.(*backExec); ok {
+		return activateAccountCatalogIfNeeded(ctx, back.backSes, accountID)
+	}
+	return nil
+}
+
+// An empty result is a catalog miss; SQL and decoding errors must not be
+// mistaken for a reason to search another account.
+func publicationCatalogRow(ctx context.Context, bh BackgroundExec, sql string) (ExecResult, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil || !execResultArrayHasData(rows) {
+		return nil, err
+	}
+	return rows[0], nil
 }
 
 // lockPublicationDatabase pins the resolved physical source until the
@@ -2691,6 +2722,8 @@ func getDbAccountIdAndTypeById(
 	bh BackgroundExec,
 	dbName string,
 	dbId uint64,
+	publisherID uint32,
+	targetAccounts string,
 ) (accountId uint32, dbType string, err error) {
 	if err = inputNameIsInvalid(ctx, dbName); err != nil {
 		return
@@ -2698,27 +2731,56 @@ func getDbAccountIdAndTypeById(
 
 	sql := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, dbId, sanitizeSQLInput(dbName))
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(systemCtx, sql); err != nil {
-		return
+	row, err := publicationCatalogRow(systemCtx, bh, sql)
+	lookupAfterActivation := func(id uint32) (ExecResult, error) {
+		if err := activatePublicationCatalog(ctx, bh, id); err != nil {
+			return nil, err
+		}
+		return publicationCatalogRow(systemCtx, bh, sql)
 	}
-
-	erArray, err := getResultSet(systemCtx, bh)
+	if err == nil && row == nil && publisherID != sysAccountID {
+		row, err = lookupAfterActivation(publisherID)
+	}
+	// On a lazy CN a foreign source can be cold even when both publisher
+	// and subscriber are active. Only explicit targets are candidate owners;
+	// always recheck the persisted database ID, never just its name.
+	if err == nil && row == nil && targetAccounts != pubsub.AccountAll {
+		for _, name := range pubsub.SplitAccounts(targetAccounts) {
+			account, lookupErr := publicationCatalogRow(systemCtx, bh, subscriptionPublisherAccountLookupSQL([]string{name}))
+			if lookupErr != nil {
+				return 0, "", lookupErr
+			}
+			if account == nil {
+				continue
+			}
+			id, lookupErr := account.GetUint64(systemCtx, 0, 0)
+			if lookupErr != nil {
+				return 0, "", lookupErr
+			}
+			if id == uint64(sysAccountID) || id == uint64(publisherID) {
+				continue
+			}
+			row, err = lookupAfterActivation(uint32(id))
+			if err != nil || row != nil {
+				break
+			}
+		}
+	}
 	if err != nil {
 		return 0, "", err
 	}
-	if !execResultArrayHasData(erArray) {
+	if row == nil {
 		return 0, "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 	}
 
-	accountIdValue, err := erArray[0].GetUint64(systemCtx, 0, 0)
+	accountIdValue, err := row.GetUint64(systemCtx, 0, 0)
 	if err != nil {
 		return 0, "", err
 	}
 	if accountIdValue > uint64(^uint32(0)) {
 		return 0, "", moerr.NewInternalErrorf(ctx, "invalid account id %d for database '%s'", accountIdValue, dbName)
 	}
-	if dbType, err = erArray[0].GetString(systemCtx, 0, 1); err != nil {
+	if dbType, err = row.GetString(systemCtx, 0, 1); err != nil {
 		return 0, "", err
 	}
 	return uint32(accountIdValue), dbType, nil
@@ -2726,37 +2788,12 @@ func getDbAccountIdAndTypeById(
 
 // getDbIdAndTypeForAccount tries to find database in the specified account
 func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (dbId uint64, dbType string, err error) {
-	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountId))
-	if err != nil {
-		return
-	}
-
-	// Use System_Account context to query mo_catalog.mo_database, as it's a system table
-	// but filter by the specified accountId in SQL
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-
-	erArray, err := getResultSet(ctx, bh)
+	row, err := publicationDatabaseRow(ctx, bh, dbName, accountId)
 	if err != nil {
 		return
 	}
-
-	if !execResultArrayHasData(erArray) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
-	}
-
-	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
-		return
-	}
-
-	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
-		return
-	}
-
-	return
+	return databaseIDAndType(ctx, row, dbName)
 }
 
 func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (tables map[string]bool, err error) {
@@ -3120,6 +3157,12 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		Tables:      pubInfo.TablesStr,
 	}
 	if pubInfo.DbId != 0 {
+		// On a lazy CN the subscriber is active, but the publisher may not be.
+		// Prepare its catalog before looking up the persisted physical database
+		// identity. Activation is not proof that the publisher owns that database.
+		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(accId)); err != nil {
+			return nil, err
+		}
 		// The subscription must resolve its published objects in the account
 		// that physically owns the published database - the same identity
 		// CREATE, ALTER and subscription admission validate. It coincides
@@ -3134,7 +3177,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		// owner, and any other general-publisher row is rejected with the
 		// stable authorization error instead of silently resolving a
 		// same-named publisher database.
-		sourceAccountID, _, dbErr := getDbAccountIdAndTypeById(newCtx, bh, pubInfo.DbName, pubInfo.DbId)
+		sourceAccountID, _, dbErr := getDbAccountIdAndTypeById(newCtx, bh, pubInfo.DbName, pubInfo.DbId, uint32(accId), pubInfo.SubAccountsStr)
 		if dbErr != nil {
 			err = dbErr
 			return
@@ -3216,7 +3259,7 @@ func checkSubscriptionValidForCreate(
 	}
 	sourceAccountID := uint32(subMeta.AccountId)
 	if pubInfo.DbId != 0 {
-		physicalAccountID, _, dbErr := getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId)
+		physicalAccountID, _, dbErr := getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId, uint32(publisherAccountID), pubInfo.SubAccountsStr)
 		if dbErr != nil {
 			err = dbErr
 			return
@@ -3303,7 +3346,7 @@ func resolveSubscriptionSourceAccounts(
 		owner, ok := owners[pubInfo.DbId]
 		if !ok {
 			var dbErr error
-			owner, _, dbErr = getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId)
+			owner, _, dbErr = getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId, publisherAccountID, pubInfo.SubAccountsStr)
 			if dbErr != nil {
 				return nil, dbErr
 			}
