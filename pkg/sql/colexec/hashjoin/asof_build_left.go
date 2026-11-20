@@ -80,6 +80,10 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
+				hashJoin.prepareBuildOutputAreaCheck()
+				if !hashJoin.IsShuffle && !ctr.checkBuildArea && ctr.asofBuildLeftBestRight != nil {
+					ctr.checkBuildArea = needsOutputAreaCheck(hashJoin.ResultCols, ctr.asofBuildLeftBestRight, 1, false)
+				}
 				ctr.state = Finalize
 				continue
 			}
@@ -425,14 +429,13 @@ func (ctr *container) asofBuildLeftTemporalValue(ordinal int32) (int64, bool) {
 	if ordinal < 0 {
 		return 0, false
 	}
-	leftBatch := int(ordinal) / colexec.DefaultBatchSize
-	leftRow := int(ordinal) % colexec.DefaultBatchSize
-	if leftBatch < 0 || leftBatch >= len(ctr.rightBats) ||
-		leftRow >= ctr.rightBats[leftBatch].RowCount() {
+	leftBatch, leftRow := ctr.locateBuildRow(int64(ordinal))
+	if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
+		leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 		return 0, false
 	}
 	return asofTemporalValue(
-		ctr.rightBats[leftBatch].Vecs[ctr.asofLeftCol], int64(leftRow))
+		ctr.rightBats[leftBatch].Vecs[ctr.asofLeftCol], leftRow)
 }
 
 func (ctr *container) probeAsofBuildLeft(hashJoin *HashJoin, proc *process.Process) error {
@@ -530,10 +533,9 @@ func (ctr *container) updateAsofBuildLeftCandidate(
 	}
 	leftTime, valid := ctr.asofBuildLeftTemporalValue(leftOrdinal)
 	if !valid {
-		leftBatch := int(leftOrdinal) / colexec.DefaultBatchSize
-		leftRow := int(leftOrdinal) % colexec.DefaultBatchSize
-		if leftBatch < 0 || leftBatch >= len(ctr.rightBats) ||
-			leftRow >= ctr.rightBats[leftBatch].RowCount() {
+		leftBatch, leftRow := ctr.locateBuildRow(int64(leftOrdinal))
+		if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
+			leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 			return moerr.NewInternalErrorNoCtx("ASOF logical-left build row is out of range")
 		}
 		return nil
@@ -873,12 +875,23 @@ func (ctr *container) finalizeAsofBuildLeft(
 		return err
 	}
 	outputRows := 0
+	outputLimit := ctr.maxOutputRows()
+	var localAreas [8]outputArea
+	areas := ctr.outputAreas(localAreas[:0], ctr.checkBuildArea)
+	if ctr.pendingOutput.left != nil {
+		row := ctr.pendingOutput
+		ctr.pendingOutput = outputRow{}
+		areas.reserve(hashJoin.ResultCols, row, outputRow{}, false)
+		if err := ctr.appendOutputRow(hashJoin, proc, row); err != nil {
+			return err
+		}
+		outputRows++
+	}
 	for ctr.asofBuildLeftFinalRow < ctr.rightRowCnt &&
-		outputRows < colexec.DefaultBatchSize {
+		outputRows < outputLimit {
 		ordinal := ctr.asofBuildLeftFinalRow
 		ctr.asofBuildLeftFinalRow++
-		leftBatch := ordinal / colexec.DefaultBatchSize
-		leftRow := ordinal % colexec.DefaultBatchSize
+		leftBatch, leftRow := ctr.locateBuildRow(ordinal)
 		if leftBatch < 0 || leftBatch >= int64(len(ctr.rightBats)) ||
 			leftRow >= int64(ctr.rightBats[leftBatch].RowCount()) {
 			return moerr.NewInternalErrorNoCtx("ASOF logical-left finalize row is out of range")
@@ -901,26 +914,16 @@ func (ctr *container) finalizeAsofBuildLeft(
 		if !matched && hashJoin.JoinType == plan.Node_ASOF {
 			continue
 		}
-		for output, resultPos := range hashJoin.ResultCols {
-			switch resultPos.Rel {
-			case 0:
-				if err := ctr.resBat.Vecs[output].UnionOne(
-					ctr.rightBats[leftBatch].Vecs[resultPos.Pos], leftRow, proc.Mp()); err != nil {
-					return err
-				}
-			case 1:
-				if matched {
-					if resultPos.Pos < 0 || int(resultPos.Pos) >= len(ctr.asofBuildLeftBestRight.Vecs) {
-						return moerr.NewInternalErrorNoCtx("ASOF finalized right column is out of range")
-					}
-					if err := ctr.resBat.Vecs[output].UnionOne(
-						ctr.asofBuildLeftBestRight.Vecs[resultPos.Pos], candidateSlot, proc.Mp()); err != nil {
-						return err
-					}
-				} else if err := ctr.resBat.Vecs[output].UnionNull(proc.Mp()); err != nil {
-					return err
-				}
-			}
+		row := outputRow{left: ctr.rightBats[leftBatch], leftRow: leftRow}
+		if matched {
+			row.right, row.rightRow = ctr.asofBuildLeftBestRight, candidateSlot
+		}
+		if len(areas) > 0 && !areas.reserve(hashJoin.ResultCols, row, outputRow{}, outputRows > 0) {
+			ctr.pendingOutput = row
+			break
+		}
+		if err := ctr.appendOutputRow(hashJoin, proc, row); err != nil {
+			return err
 		}
 		outputRows++
 	}
