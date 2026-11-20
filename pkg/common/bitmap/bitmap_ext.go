@@ -17,6 +17,7 @@ package bitmap
 import (
 	"bytes"
 	"encoding"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -33,13 +34,26 @@ import (
 
 const MarshalHeaderSize = 24
 
-func (n *Bitmap) InitWith(m *Bitmap) {
-	if n == m {
-		return
+// InitWithInvertedBits sets n to length bits read LSB-first from src
+// starting at bit offset, each bit inverted. It turns an Arrow validity
+// bitmap (1 = valid) into a null bitmap (1 = null). src must hold at least
+// offset+length bits.
+func (n *Bitmap) InitWithInvertedBits(src []byte, offset, length int) {
+	n.InitWithSize(int64(length))
+	var count int64
+	for w := range n.data {
+		bit := offset + w*64
+		var buf [9]byte
+		copy(buf[:], src[bit>>3:])
+		shift := uint(bit & 7)
+		word := ^(binary.LittleEndian.Uint64(buf[:8])>>shift | uint64(buf[8])<<(64-shift))
+		if rem := length - w*64; rem < 64 {
+			word &= uint64(1)<<uint(rem) - 1
+		}
+		n.data[w] = word
+		count += int64(bits.OnesCount64(word))
 	}
-	n.numBits = m.numBits
-	n.popCount = m.popCount
-	n.data = append([]uint64(nil), m.data...)
+	n.popCount = count
 }
 
 func (n *Bitmap) Clone() *Bitmap {
@@ -75,7 +89,7 @@ func (n *Bitmap) ToI64Array(out *[]int64) []int64 {
 		res = (*out)[:0]
 	}
 
-	if n.EmptyByFlag() {
+	if n == nil || n.IsEmpty() {
 		return res
 	}
 
@@ -202,13 +216,14 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 	return types.WriteFull(w, types.EncodeSlice(n.data))
 }
 
-// MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
+// MarshalV1 encodes the legacy version-1 layout: a 4-byte reserved word
+// (written as zero), the bit length, the byte length, then the words.
 func (n *Bitmap) MarshalV1() []byte {
 	var buf bytes.Buffer
-	empty := int32(0)
+	reserved := int32(0)
 	u1 := uint64(n.numBits)
 	u2 := uint64(len(n.data) * 8)
-	buf.Write(types.EncodeInt32(&empty))
+	buf.Write(types.EncodeInt32(&reserved))
 	buf.Write(types.EncodeUint64(&u1))
 	buf.Write(types.EncodeUint64(&u2))
 	buf.Write(types.EncodeSlice(n.data))
@@ -243,7 +258,8 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	}
 }
 
-// UnmarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
+// UnmarshalV1 decodes the legacy version-1 layout written by MarshalV1. The
+// leading 4-byte reserved word is skipped and popCount is recomputed.
 func (n *Bitmap) UnmarshalV1(data []byte) {
 	data = data[4:]
 	n.numBits = int64(types.DecodeUint64(data[:8]))

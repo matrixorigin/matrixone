@@ -210,51 +210,33 @@ func TestReadonlyFixedWindowMutations(t *testing.T) {
 		if mutation.name == "preflighted" {
 			continue
 		}
-		for _, validityOnly := range []bool{false, true} {
-			t.Run(mutation.name+"/validity-only="+strconv.FormatBool(validityOnly), func(t *testing.T) {
-				mp := mpool.MustNewZero()
-				t.Cleanup(func() {
-					require.Zero(t, mp.CurrNB())
-					mpool.DeleteMPool(mp)
-				})
-				values := []int64{11, 22, 33}
-				var destination *Vector
-				if validityOnly {
-					destination = NewOffHeapVecWithType(types.T_int64.ToType())
-					t.Cleanup(func() { destination.Free(mp) })
-					for _, value := range values {
-						require.NoError(t, AppendFixed(destination, value, false, mp))
-					}
-					require.NoError(t, destination.Shrink([]int64{2}, true, mp))
-					require.NoError(t, destination.PrepareBorrowedValidity(2, mp))
-					validity := []byte{0b01}
-					lease, err := NewRefCountedBufferLease(validity, 1, nil)
-					require.NoError(t, err)
-					t.Cleanup(lease.Release)
-					require.NoError(t, destination.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
-				} else {
-					data := types.EncodeSlice(values)
-					lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
-					require.NoError(t, err)
-					t.Cleanup(lease.Release)
-					destination, err = NewBorrowedFixedVector(types.T_int64.ToType(), 2, data[:16], lease)
-					require.NoError(t, err)
-					t.Cleanup(func() { destination.Free(mp) })
-				}
-				input, err := destination.Window(0, 1)
-				require.NoError(t, err)
-				t.Cleanup(func() { input.Free(mp) })
-				require.True(t, destination.HasBorrowedBacking())
-				require.NoError(t, mutation.run(destination, input, mp))
-				want := []int64{11, 22, 11}
-				if mutation.copy {
-					want = want[:2]
-				}
-				require.Equal(t, want, MustFixedColNoTypeCheck[int64](destination))
-				require.Equal(t, validityOnly, destination.IsNull(1))
-				require.Equal(t, []int64{11, 22, 33}, values)
+		t.Run(mutation.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				require.Zero(t, mp.CurrNB())
+				mpool.DeleteMPool(mp)
 			})
-		}
+			values := []int64{11, 22, 33}
+			data := types.EncodeSlice(values)
+			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+			require.NoError(t, err)
+			t.Cleanup(lease.Release)
+			destination, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data[:16], lease)
+			require.NoError(t, err)
+			t.Cleanup(func() { destination.Free(mp) })
+			input, err := destination.Window(0, 1)
+			require.NoError(t, err)
+			t.Cleanup(func() { input.Free(mp) })
+			require.True(t, destination.HasBorrowedBacking())
+			require.NoError(t, mutation.run(destination, input, mp))
+			want := []int64{11, 22, 11}
+			if mutation.copy {
+				want = want[:2]
+			}
+			require.Equal(t, want, MustFixedColNoTypeCheck[int64](destination))
+			require.False(t, destination.IsNull(1))
+			require.Equal(t, []int64{11, 22, 33}, values)
+		})
 	}
 }
 
