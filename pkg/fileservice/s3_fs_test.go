@@ -3529,14 +3529,21 @@ func (r sparsePatternReader) Read(p []byte) (int, error) {
 type sparseTrackingStorage struct {
 	dummyObjectStorage
 	opens, closes       int
+	offsets             []int64
+	setFileEvents       int
 	bytes               int64
 	firstErr, secondErr error
 	shortSecond         bool
+	bodyErrSecond       bool
 	cancel              context.CancelFunc
 }
 
-func (s *sparseTrackingStorage) Read(_ context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+func (s *sparseTrackingStorage) Read(ctx context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+	if s.opens == 0 {
+		s.setFileEvents = countLoggedEvents(ctx, str_disk_cache_setfile_begin)
+	}
 	s.opens++
+	s.offsets = append(s.offsets, *min)
 	if s.opens == 1 && s.firstErr != nil {
 		return nil, s.firstErr
 	}
@@ -3548,7 +3555,11 @@ func (s *sparseTrackingStorage) Read(_ context.Context, _ string, min, max *int6
 		n--
 	}
 	s.bytes += n
-	return &readCloser{r: io.LimitReader(sparsePatternReader{value: byte(*min/(16<<20) + 1)}, n), closeFunc: func() error {
+	var body io.Reader = io.LimitReader(sparsePatternReader{value: byte(*min/(16<<20) + 1)}, n)
+	if s.opens == 2 && s.bodyErrSecond {
+		body = readerFunc(func([]byte) (int, error) { return 0, rangeStatusError{} })
+	}
+	return &readCloser{r: body, closeFunc: func() error {
 		s.closes++
 		if s.cancel != nil {
 			s.cancel()
@@ -4008,5 +4019,143 @@ func TestS3FSCacheUpdatesPreserveRetryOrder(t *testing.T) {
 		require.Equal(t, []string{"disk", "memory", "disk", "memory", "vector", "vector"}, got)
 	case <-ctx.Done():
 		t.Fatal("missing cache update")
+	}
+}
+
+// Exercise both real disk-cache fallback paths while another fill owns the file.
+func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
+	for _, mode := range []string{"download declined", "fill admission skipped"} {
+		for _, tc := range []struct {
+			name                    string
+			first, second           int64
+			firstErr, secondErr     error
+			short, cancel, hit      bool
+			stream, writer, convert bool
+			sameOffset, bodyError   bool
+			unexpected              bool
+			opens, closes           int
+		}{
+			{name: "first 416", first: 9 << 20, second: 25 << 20, firstErr: rangeStatusError{}, opens: 1},
+			{name: "later 416", first: 9 << 20, second: 25 << 20, secondErr: rangeStatusError{}, unexpected: true, opens: 2, closes: 1},
+			{name: "lower 416", first: 25 << 20, second: 9 << 20, secondErr: rangeStatusError{}, opens: 2, closes: 1},
+			{name: "cached first 416", first: 9 << 20, second: 25 << 20, firstErr: rangeStatusError{}, hit: true, opens: 1},
+			{name: "cached later 416", first: 9 << 20, second: 25 << 20, secondErr: rangeStatusError{}, hit: true, unexpected: true, opens: 2, closes: 1},
+			{name: "same offset 416", first: 9 << 20, second: 9 << 20, secondErr: rangeStatusError{}, sameOffset: true, opens: 2, closes: 1},
+			{name: "short", first: 9 << 20, second: 25 << 20, short: true, unexpected: true, opens: 2, closes: 2},
+			{name: "body 416", first: 9 << 20, second: 25 << 20, bodyError: true, opens: 2, closes: 2},
+			{name: "cancel", first: 9 << 20, second: 25 << 20, cancel: true, opens: 1, closes: 1},
+			{name: "converter 416", first: 9 << 20, second: 25 << 20, convert: true, opens: 2, closes: 2},
+			{name: "stream first", first: 9 << 20, second: 25 << 20, stream: true, secondErr: rangeStatusError{}, opens: 2, closes: 1},
+			{name: "writer first", first: 9 << 20, second: 25 << 20, writer: true, secondErr: rangeStatusError{}, opens: 2, closes: 1},
+		} {
+			// Streaming requests do not enter the full-file streaming fill path.
+			if mode == "fill admission skipped" && (tc.stream || tc.writer) {
+				continue
+			}
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(WithEventLogger(t.Context()))
+				defer cancel()
+				rangeReadsCost(t, time.Nanosecond)
+				var disk *DiskCache
+				if mode == "download declined" {
+					disk, _, _ = downloading(t)
+					disk.downloadMaxExtraWait = 0
+				} else {
+					var err error
+					disk, err = NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+					require.NoError(t, err)
+					t.Cleanup(func() { disk.Close(context.Background()) })
+					path := disk.pathForFile("obj")
+					require.True(t, disk.tryReserveAsyncFileFinalize(path))
+					t.Cleanup(func() { disk.releaseAsyncFileFinalizeReservation(path) })
+				}
+				fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+				require.NoError(t, err)
+				fs.diskCache = disk
+				fs.SetAsyncUpdate(true)
+				t.Cleanup(func() { fs.diskCache = nil; fs.Close(context.Background()) })
+				storage := &sparseTrackingStorage{firstErr: tc.firstErr, secondErr: tc.secondErr, shortSecond: tc.short, bodyErrSecond: tc.bodyError}
+				if tc.cancel {
+					storage.cancel = cancel
+				}
+				fs.storage = storage
+				cache := &publicationVectorCache{}
+				hitCache := &sparseFirstEntryCache{}
+				first := IOEntry{Offset: tc.first, Size: 4096}
+				releases := 0
+				if !tc.stream && !tc.writer {
+					first.ToCacheData = func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+						d, err := CacheOriginalData(ctx, r, data, allocator)
+						if err != nil {
+							return nil, err
+						}
+						return &sparseReleaseCountingData{Data: d, releases: &releases}, nil
+					}
+				}
+				var stream io.ReadCloser
+				t.Cleanup(func() {
+					if stream != nil {
+						_ = stream.Close()
+					}
+				})
+				if tc.stream {
+					first.ReadCloserForRead = &stream
+				}
+				var output bytes.Buffer
+				if tc.writer {
+					first.WriterForRead = &output
+				}
+				second := IOEntry{Offset: tc.second, Size: 4096}
+				if tc.convert {
+					second.ToCacheData = func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+						return nil, rangeStatusError{}
+					}
+				}
+				vector := &IOVector{FilePath: "obj", Caches: []IOVectorCache{cache}, Entries: []IOEntry{first, second}}
+				if tc.hit {
+					vector.Caches = []IOVectorCache{hitCache, cache}
+					vector.Entries = append([]IOEntry{{Offset: 0, Size: 4096}}, vector.Entries...)
+				}
+				if tc.sameOffset {
+					vector.Entries = append(vector.Entries, IOEntry{Offset: 25 << 20, Size: 4096})
+				}
+				t.Cleanup(vector.ReleaseReadResultOnError)
+				err = fs.Read(ctx, vector)
+				if stream != nil {
+					closeErr := stream.Close()
+					stream = nil
+					require.NoError(t, closeErr)
+				}
+				require.Error(t, err)
+				if tc.cancel {
+					require.ErrorIs(t, err, context.Canceled)
+				} else if tc.unexpected {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+				} else {
+					status, ok := objectStorageStatusCode(err)
+					require.True(t, ok, "%v", err)
+					require.Equal(t, 416, status)
+				}
+				require.Equal(t, mode == "download declined", vector.downloadDeclined)
+				require.Equal(t, tc.opens, storage.opens)
+				require.Equal(t, tc.closes, storage.closes)
+				wantOffsets := []int64{tc.first}
+				if tc.opens == 2 {
+					wantOffsets = append(wantOffsets, tc.second)
+				}
+				require.Equal(t, wantOffsets, storage.offsets)
+				if mode == "fill admission skipped" {
+					require.Equal(t, 1, storage.setFileEvents)
+				}
+				require.Zero(t, cache.updates.Load())
+				require.Zero(t, hitCache.updates.Load())
+				vector.ReleaseReadResultOnError()
+				if tc.firstErr == nil && !tc.stream && !tc.writer {
+					require.Equal(t, 1, releases)
+				} else {
+					require.Zero(t, releases)
+				}
+			})
+		}
 	}
 }

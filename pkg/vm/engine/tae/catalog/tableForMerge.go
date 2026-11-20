@@ -75,6 +75,7 @@ type MergeTable interface {
 	IterDataItem() iter.Seq[MergeDataItem]
 	IterTombstoneItem() iter.Seq[MergeTombstoneItem]
 	GetNameDesc() string
+	GetBlockMaxRows() uint32
 	ID() uint64
 	HasDropCommitted() bool
 

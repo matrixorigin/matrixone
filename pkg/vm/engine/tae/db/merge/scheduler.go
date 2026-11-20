@@ -1410,7 +1410,7 @@ func (p *launchPad) gatherTombstoneTasks(ctx context.Context,
 	rc rscthrottler.RSCThrottler,
 ) {
 	tasks := GatherTombstoneTasks(ctx, IterStats(p.tombstoneStats), tombstoneOpts, p.lastMergeTime)
-	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1, p.blockMaxRows())...)
+	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1, p.table.GetBlockMaxRows())...)
 }
 
 func (p *launchPad) gatherLnTasks(ctx context.Context,
@@ -1439,7 +1439,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 		)
 		if err == nil {
 			p.revisedResults = append(p.revisedResults,
-				controlTaskMemInPlace(overlapTasks, rc, 2, p.blockMaxRows())...)
+				controlTaskMemInPlace(overlapTasks, rc, 2, p.table.GetBlockMaxRows())...)
 		}
 	}
 }
@@ -1457,7 +1457,7 @@ func (p *launchPad) gatherL0Tasks(ctx context.Context,
 		zap.Int("tasks", len(l0Tasks)),
 	)
 	p.revisedResults = append(p.revisedResults,
-		controlTaskMemInPlace(l0Tasks, rc, 2, p.blockMaxRows())...)
+		controlTaskMemInPlace(l0Tasks, rc, 2, p.table.GetBlockMaxRows())...)
 }
 
 func (p *launchPad) gatherByTrigger(ctx context.Context,
@@ -1493,7 +1493,7 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 	}
 	if len(trigger.assigns) > 0 {
 		p.revisedResults = append(p.revisedResults,
-			controlTaskMemInPlace(trigger.assigns, rc, 1, p.blockMaxRows())...)
+			controlTaskMemInPlace(trigger.assigns, rc, 1, p.table.GetBlockMaxRows())...)
 	}
 	return p.revisedResults
 }
@@ -1504,13 +1504,6 @@ func sumOsize(objs []*objectio.ObjectStats) int {
 		sum += int(obj.OriginSize())
 	}
 	return sum
-}
-
-func (p *launchPad) blockMaxRows() uint32 {
-	if table, ok := p.table.(interface{ GetBlockMaxRows() uint32 }); ok {
-		return table.GetBlockMaxRows()
-	}
-	return 0
 }
 
 func controlTaskMemInPlace(

@@ -1034,15 +1034,13 @@ func TestXxx(t *testing.T) {
 	t.Log(now.UnixNano(), " // ", now)
 }
 
-type blockRowsMergeTable struct {
-	catalog.MergeTable
-	rows uint32
+func mergeTableWithBlockRows(id uint64, rows uint32) catalog.MergeTable {
+	table := promotionTable(id).(catalog.TNMergeTable)
+	table.GetLastestSchema(false).Extra.BlockMaxRows = rows
+	return table
 }
 
-func (t blockRowsMergeTable) GetBlockMaxRows() uint32 { return t.rows }
-
 func TestLaunchPadUsesTableBlockMaxRows(t *testing.T) {
-	base := promotionTable(9511)
 	objects := []*objectio.ObjectStats{
 		newTestObjectStats(t, 1, 2, 16<<20, 16384, 1, nil, 0),
 		newTestObjectStats(t, 3, 4, 16<<20, 16384, 1, nil, 0),
@@ -1055,9 +1053,10 @@ func TestLaunchPadUsesTableBlockMaxRows(t *testing.T) {
 		want  int
 		size  int
 	}{
-		{"large", blockRowsMergeTable{MergeTable: base, rows: 16384}, 2, 93257728},
-		{"small", blockRowsMergeTable{MergeTable: base, rows: 1000}, 4, 119406592},
-		{"default", blockRowsMergeTable{MergeTable: base}, 4, 119406592},
+		{"large", mergeTableWithBlockRows(9511, 16384), 2, 93257728},
+		{"small", mergeTableWithBlockRows(9511, 1000), 4, 119406592},
+		{"standard", mergeTableWithBlockRows(9511, 8192), 4, 119406592},
+		{"default", mergeTableWithBlockRows(9511, 0), 4, 119406592},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pad := newLaunchPad(newFakeClock())
@@ -1071,16 +1070,14 @@ func TestLaunchPadUsesTableBlockMaxRows(t *testing.T) {
 }
 
 func TestLaunchPadCapacityAcrossGatherPaths(t *testing.T) {
-	base := promotionTable(9512)
 	for _, tc := range []struct {
 		name  string
 		table catalog.MergeTable
 		want  int
 		size  int
 	}{
-		{"accessor absent", base, 4, 119406592},
-		{"zero", blockRowsMergeTable{MergeTable: base}, 4, 119406592},
-		{"large", blockRowsMergeTable{MergeTable: base, rows: 16384}, 2, 93257728},
+		{"zero", mergeTableWithBlockRows(9511, 0), 4, 119406592},
+		{"large", mergeTableWithBlockRows(9511, 16384), 2, 93257728},
 	} {
 		for _, path := range []string{"l0", "ln", "tombstone"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {

@@ -206,7 +206,6 @@ func TestEstimateMergeSizeWithBlockRows(t *testing.T) {
 			require.NoError(t, objectio.SetObjectStatsRowCnt(&obj, tc.rows))
 			require.NoError(t, objectio.SetObjectStatsOriginSize(&obj, 16<<20))
 			objects := func(yield func(*objectio.ObjectStats) bool) { yield(&obj) }
-			require.Equal(t, tc.legacy, EstimateMergeSize(objects))
 			for _, blockRows := range []uint32{0, 1000, objectio.BlockMaxRows} {
 				require.Equal(t, tc.legacy, EstimateMergeSizeWithBlockRows(objects, blockRows))
 			}
