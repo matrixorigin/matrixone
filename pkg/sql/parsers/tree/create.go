@@ -2771,26 +2771,13 @@ func NewProperty(k, v string) *Property {
 
 // The PROPERTIES grammar accepts only string literals (property_elem:
 // STRING '=' STRING), so the shared option serializer must emit the key and
-// value as single-quoted SQL literals that reparse (PR 32906 review
-// 5967618815). Mirror the OP_TYPE serializer's owner semantics: escape the
+// value as single-quoted SQL literals that reparse. Mirror the OP_TYPE serializer's owner semantics: escape the
 // backslash-escape mode first so the consumer's backslash-aware parse
 // restores the exact bytes, then single-quote doubling.
 func (node *Property) Format(ctx *FmtCtx) {
-	key := node.Key
-	if !ctx.NoBackslashEscape() {
-		key = FormatString(key)
-	}
-	ctx.WriteByte('\'')
-	ctx.WriteString(strings.ReplaceAll(key, "'", "''"))
-	ctx.WriteByte('\'')
+	writeDecodedSQLString(ctx, node.Key)
 	ctx.WriteString(" = ")
-	value := node.Value
-	if !ctx.NoBackslashEscape() {
-		value = FormatString(value)
-	}
-	ctx.WriteByte('\'')
-	ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
-	ctx.WriteByte('\'')
+	writeDecodedSQLString(ctx, node.Value)
 }
 
 func (node Property) TypeName() string { return "tree.Property" }
@@ -2811,7 +2798,7 @@ type TableOptionEngine struct {
 func (node *TableOptionEngine) Format(ctx *FmtCtx) {
 	if node.Engine == "" {
 		// The grammar needs a value; an empty engine only replays as a STRING
-		// literal (PR 32906 reviews 5985861342/5985871552).
+		// literal.
 		ctx.WriteString("engine = ''")
 		return
 	}
@@ -2845,19 +2832,7 @@ type TableOptionEngineAttr struct {
 }
 
 func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
-	// The engine_attribute grammar accepts only a STRING literal, and the
-	// scanner hands the option its decoded value, so the shared serializer
-	// must re-emit it as a single-quoted SQL literal (PR 32906 review
-	// 5977119308): escape backslash sequences first, then double the quotes,
-	// mirroring the reviewed PROPERTIES serializer.
-	engineAttribute := node.Engine
-	if !ctx.NoBackslashEscape() {
-		engineAttribute = FormatString(engineAttribute)
-	}
-	ctx.WriteString("ENGINE_ATTRIBUTE = ")
-	ctx.WriteByte('\'')
-	ctx.WriteString(strings.ReplaceAll(engineAttribute, "'", "''"))
-	ctx.WriteByte('\'')
+	writeDecodedStringOption(ctx, "ENGINE_ATTRIBUTE", node.Engine)
 }
 
 func (node TableOptionEngineAttr) TypeName() string { return "tree.TableOptionEngineAttr" }
@@ -3068,7 +3043,7 @@ func (node *TableOptionComment) Format(ctx *FmtCtx) {
 	// single-quote-doubles embedded quotes, so serialization must escape
 	// backslashes only (a decoded trailing backslash would otherwise escape
 	// the closing quote and break the catalog's rel_createsql reparse;
-	// PR 32906 review 5977119308). Do not double already-doubled quotes.
+	//Do not double already-doubled quotes.
 	ctx.WriteString("comment = '")
 	if !ctx.NoBackslashEscape() {
 		ctx.WriteString(FormatString(node.Comment))
@@ -3151,19 +3126,31 @@ type TableOptionCompression struct {
 	Compression string
 }
 
-func (node *TableOptionCompression) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	compression := node.Compression
+// writeDecodedSQLString re-emits a DECODED string value as a single-quoted
+// SQL literal: backslashes are escaped in the standard mode and embedded
+// quotes are doubled, so the canonical catalog rel_createsql reparse restores
+// the exact decoded bytes. Options whose grammar stores an ALREADY-ESCAPED
+// representation (COMMENT escapes backslashes only and keeps doubled quotes)
+// must not route through this helper.
+func writeDecodedSQLString(ctx *FmtCtx, value string) {
 	if !ctx.NoBackslashEscape() {
-		compression = FormatString(compression)
+		value = FormatString(value)
 	}
-	ctx.WriteString("compression = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(compression, "'", "''"))
-	ctx.WriteString("'")
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+	ctx.WriteByte('\'')
+}
+
+// writeDecodedStringOption serializes one table option whose grammar accepts
+// only a STRING literal and stores the decoded value.
+func writeDecodedStringOption(ctx *FmtCtx, name, value string) {
+	ctx.WriteString(name)
+	ctx.WriteString(" = ")
+	writeDecodedSQLString(ctx, value)
+}
+
+func (node *TableOptionCompression) Format(ctx *FmtCtx) {
+	writeDecodedStringOption(ctx, "compression", node.Compression)
 }
 
 func (node TableOptionCompression) TypeName() string { return "tree.TableOptionCompression" }
@@ -3188,18 +3175,7 @@ type TableOptionConnection struct {
 }
 
 func (node *TableOptionConnection) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	connection := node.Connection
-	if !ctx.NoBackslashEscape() {
-		connection = FormatString(connection)
-	}
-	ctx.WriteString("connection = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(connection, "'", "''"))
-	ctx.WriteString("'")
+	writeDecodedStringOption(ctx, "connection", node.Connection)
 }
 
 func (node TableOptionConnection) TypeName() string { return "tree.TableOptionConnection" }
@@ -3224,18 +3200,7 @@ type TableOptionPassword struct {
 }
 
 func (node *TableOptionPassword) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	password := node.Password
-	if !ctx.NoBackslashEscape() {
-		password = FormatString(password)
-	}
-	ctx.WriteString("password = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(password, "'", "''"))
-	ctx.WriteString("'")
+	writeDecodedStringOption(ctx, "password", node.Password)
 }
 
 func (node TableOptionPassword) TypeName() string { return "tree.TableOptionPassword" }
@@ -3339,8 +3304,7 @@ type TableOptionDelayKeyWrite struct {
 
 func (node *TableOptionDelayKeyWrite) Format(ctx *FmtCtx) {
 	// DELAY_KEY_WRITE is the grammar-visible option name and its value is an
-	// INTEGRAL, so only the misspelled option name needs correcting (PR 32906
-	// reviews 5983418028/5983638763).
+	// INTEGRAL, so only the misspelled option name needs correcting.
 	ctx.WriteString("delay_key_write = ")
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
@@ -3448,17 +3412,7 @@ type TableOptionSecondaryEngineAttr struct {
 }
 
 func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
-	// Same STRING-literal contract as ENGINE_ATTRIBUTE (PR 32906 review
-	// 5977119308): the scanner stores the decoded value, so serialize it as
-	// an escaped single-quoted literal that reparses to the same bytes.
-	secondaryEngineAttribute := node.Attr
-	if !ctx.NoBackslashEscape() {
-		secondaryEngineAttribute = FormatString(secondaryEngineAttribute)
-	}
-	ctx.WriteString("SECONDARY_ENGINE_ATTRIBUTE = ")
-	ctx.WriteByte('\'')
-	ctx.WriteString(strings.ReplaceAll(secondaryEngineAttribute, "'", "''"))
-	ctx.WriteByte('\'')
+	writeDecodedStringOption(ctx, "SECONDARY_ENGINE_ATTRIBUTE", node.Attr)
 }
 
 func (node TableOptionSecondaryEngineAttr) TypeName() string {
@@ -3574,14 +3528,14 @@ type TableOptionTablespace struct {
 
 func (node *TableOptionTablespace) Format(ctx *FmtCtx) {
 	// TABLESPACE ident and storage_opt (STORAGE DISK/STORAGE MEMORY) are two
-	// different grammar productions (PR 32906 reviews 5983418028/5983638763):
+	// different grammar productions:
 	// replay exactly the production that was parsed instead of concatenating
 	// both halves into an unparsable hybrid.
 	if node.Name != "" {
 		ctx.WriteString("tablespace = ")
 		// The canonical catalog context quotes identifiers, so reserved words
 		// and spaced names replay through the ident production; plain contexts
-		// keep the historical bare form (PR 32906 reviews 5985861342/5985871552).
+		// keep the historical bare form.
 		ctx.WriteIdentifier(Identifier(node.Name))
 		return
 	}
@@ -3611,18 +3565,7 @@ type TableOptionDataDirectory struct {
 }
 
 func (node *TableOptionDataDirectory) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	dir := node.Dir
-	if !ctx.NoBackslashEscape() {
-		dir = FormatString(dir)
-	}
-	ctx.WriteString("data directory = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(dir, "'", "''"))
-	ctx.WriteString("'")
+	writeDecodedStringOption(ctx, "data directory", node.Dir)
 }
 
 func (node TableOptionDataDirectory) TypeName() string { return "tree.TableOptionDataDirectory" }
@@ -3647,18 +3590,7 @@ type TableOptionIndexDirectory struct {
 }
 
 func (node *TableOptionIndexDirectory) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	dir := node.Dir
-	if !ctx.NoBackslashEscape() {
-		dir = FormatString(dir)
-	}
-	ctx.WriteString("index directory = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(dir, "'", "''"))
-	ctx.WriteString("'")
+	writeDecodedStringOption(ctx, "index directory", node.Dir)
 }
 
 func (node TableOptionIndexDirectory) TypeName() string { return "tree.TableOptionIndexDirectory" }
@@ -3765,18 +3697,7 @@ type TableOptionEncryption struct {
 }
 
 func (node *TableOptionEncryption) Format(ctx *FmtCtx) {
-	// The grammar accepts only a STRING literal for this option, so the shared
-	// serializer must re-emit the decoded value as a single-quoted SQL literal
-	// (PR 32906 reviews 5983418028/5983638763), mirroring the reviewed
-	// ENGINE_ATTRIBUTE/COMMENT serializers.
-	encryption := node.Encryption
-	if !ctx.NoBackslashEscape() {
-		encryption = FormatString(encryption)
-	}
-	ctx.WriteString("encryption = ")
-	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(encryption, "'", "''"))
-	ctx.WriteString("'")
+	writeDecodedStringOption(ctx, "encryption", node.Encryption)
 }
 
 func (node TableOptionEncryption) TypeName() string { return "tree.TableOptionEncryption" }

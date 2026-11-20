@@ -179,5 +179,120 @@ func TestReview5977119308ExportAndCTASCatalogRoundtripSQL(t *testing.T) {
 				}
 			}
 		})
+		t.Run("ctas_decoded_option_both_sql_modes_catalog_roundtrip", func(t *testing.T) {
+			// Both session literal modes must reach one canonical catalog
+			// roundtrip: NO_BACKSLASH_ESCAPES keeps backslashes literal and
+			// doubles only quotes, the default mode decodes escapes, and the
+			// canonical rel_createsql always serializes through the standard
+			// mode, so both input spellings reparse to the same decoded
+			// values. COMMENT keeps its distinct already-escaped contract and
+			// is checked through canonical-reparse stability.
+			readRelCreate := func(t *testing.T, table string) string {
+				t.Helper()
+				var createSQL string
+				require.NoError(t, conn.QueryRowContext(ctx, "SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 0 AND reldatabase = ? AND relname = ?", testDB, table).Scan(&createSQL), table)
+				return createSQL
+			}
+			var currentMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "SELECT @@sql_mode").Scan(&currentMode))
+			defer func() {
+				_, rerr := conn.ExecContext(ctx, "SET sql_mode = ?", currentMode)
+				require.NoError(t, rerr, "restore the session sql_mode")
+			}()
+			for _, tc := range []struct {
+				name        string
+				modeLiteral string
+				table       string
+				ctas        string
+			}{
+				{"default_mode", "''", "bothm_default", "CREATE TABLE bothm_default ENGINE_ATTRIBUTE 'q\\\\t''z\\\\' PROPERTIES ('k y'='va\\\\l''u') COMMENT 'd''q\\\\' AS SELECT id, tag FROM export_src; CREATE TABLE bothm_default_ctl AS SELECT id FROM export_src"},
+				{"no_backslash_mode", "'NO_BACKSLASH_ESCAPES'", "bothm_nb", "CREATE TABLE bothm_nb ENGINE_ATTRIBUTE 'q\\t''z\\' PROPERTIES ('k y'='va\\l''u') COMMENT 'd''q\\' AS SELECT id, tag FROM export_src; CREATE TABLE bothm_nb_ctl AS SELECT id FROM export_src"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, serr := conn.ExecContext(ctx, "SET sql_mode = "+tc.modeLiteral)
+					require.NoError(t, serr, "select the session literal mode")
+					_, err := conn.ExecContext(ctx, tc.ctas)
+					require.NoError(t, err, "multi-statement CTAS under %s", tc.name)
+					var populated int
+					require.NoError(t, conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+tc.table).Scan(&populated))
+					require.Equal(t, 2, populated, "the CTAS must populate the real source rows under %s", tc.name)
+					ctSQL := readRelCreate(t, tc.table)
+					require.Contains(t, ctSQL, "ENGINE_ATTRIBUTE = 'q\\\\t''z\\\\'", ctSQL)
+					require.Contains(t, ctSQL, "'k y' = 'va\\\\l''u'", ctSQL)
+					stmt, parseErr := parsers.ParseOne(t.Context(), dialect.MYSQL, ctSQL, 1)
+					require.NoError(t, parseErr, "the canonical rel_createsql must reparse under %s: %s", tc.name, ctSQL)
+					create, ok := stmt.(*tree.CreateTable)
+					require.True(t, ok, ctSQL)
+					t.Cleanup(func() { stmt.Free() })
+					var hasAttr, hasProp, hasComment bool
+					for _, opt := range create.Options {
+						switch option := opt.(type) {
+						case *tree.TableOptionEngineAttr:
+							hasAttr = true
+							require.Equal(t, "q\\t'z\\", option.Engine, "the decoded ENGINE_ATTRIBUTE must survive the %s roundtrip: %s", tc.name, ctSQL)
+						case *tree.TableOptionProperties:
+							hasProp = true
+							require.Len(t, option.Preperties, 1, ctSQL)
+							require.Equal(t, "k y", option.Preperties[0].Key, ctSQL)
+							require.Equal(t, "va\\l'u", option.Preperties[0].Value, "the decoded property value must survive the %s roundtrip: %s", tc.name, ctSQL)
+						case *tree.TableOptionComment:
+							hasComment = true
+							// DealCommentString doubles embedded quotes when
+							// it stores a comment and keeps the decoded
+							// trailing backslash, so the catalog AST form of
+							// the input d'q\ is d''q plus the one trailing
+							// backslash.
+							require.Equal(t, "d''q\\", option.Comment, "the distinct COMMENT AST encoding must be the derived quote-doubled form through %s: %s", tc.name, ctSQL)
+						}
+					}
+					require.True(t, hasAttr, "the ENGINE_ATTRIBUTE option must be present: %s", ctSQL)
+					require.True(t, hasProp, "the PROPERTIES option must be present: %s", ctSQL)
+					require.True(t, hasComment, "the COMMENT option must be present: %s", ctSQL)
+					// Actual catalog replay: rewrite only the created table
+					// identifier inside the stored canonical DDL - its first
+					// occurrence, validated to sit in the CREATE header,
+					// never reserializing the option literals under test -
+					// and execute that DDL through the same real frontend
+					// under the canonical default literal mode. The replayed
+					// CTAS must re-populate the real source rows and
+					// re-derive identical options through its own catalog
+					// row.
+					idx := strings.Index(ctSQL, tc.table)
+					require.True(t, idx > 0 && strings.HasPrefix(strings.ToLower(ctSQL[:idx]), "create table") && !strings.Contains(ctSQL[:idx], string(byte(39))), "the canonical DDL must name the created table in its create header: %s", ctSQL)
+					_, merr := conn.ExecContext(ctx, "SET sql_mode = ''")
+					require.NoError(t, merr, "the replay runs in the canonical default literal mode")
+					_, rerr := conn.ExecContext(ctx, ctSQL[:idx]+tc.table+"_replay"+ctSQL[idx+len(tc.table):])
+					require.NoError(t, rerr, "the stored canonical DDL must replay: %s", ctSQL)
+					var replayed int
+					require.NoError(t, conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+tc.table+"_replay").Scan(&replayed))
+					require.Equal(t, 2, replayed, "the replayed CTAS must re-populate the real source rows and verify the replay schema and data")
+					replaySQL := readRelCreate(t, tc.table+"_replay")
+					stmt3, p3 := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+					require.NoError(t, p3, "the replayed table's own rel_createsql must reparse: %s", replaySQL)
+					t.Cleanup(func() { stmt3.Free() })
+					replayCreate, ok3 := stmt3.(*tree.CreateTable)
+					require.True(t, ok3, replaySQL)
+					var rAttr, rProp, rComment bool
+					for _, opt := range replayCreate.Options {
+						switch option := opt.(type) {
+						case *tree.TableOptionEngineAttr:
+							rAttr = true
+							require.Equal(t, "q\\t'z\\", option.Engine, "the replay must keep the decoded ENGINE_ATTRIBUTE: %s", replaySQL)
+						case *tree.TableOptionProperties:
+							rProp = true
+							require.Len(t, option.Preperties, 1, replaySQL)
+							require.Equal(t, "va\\l'u", option.Preperties[0].Value, "the replay must keep the decoded property value: %s", replaySQL)
+						case *tree.TableOptionComment:
+							rComment = true
+							require.Equal(t, "d''q\\", option.Comment, "the replay must keep the derived distinct COMMENT AST encoding: %s", replaySQL)
+						}
+					}
+					require.True(t, rAttr, "the replayed ENGINE_ATTRIBUTE must be present: %s", replaySQL)
+					require.True(t, rProp, "the replayed PROPERTIES must be present: %s", replaySQL)
+					require.True(t, rComment, "the replayed COMMENT must be present: %s", replaySQL)
+				})
+			}
+		})
+
 	})
 }

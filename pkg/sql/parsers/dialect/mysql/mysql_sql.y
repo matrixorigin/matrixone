@@ -965,7 +965,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt db_name_ident
+%type <cstr> ident as_name_opt db_name_ident ident_or_end
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -4626,7 +4626,7 @@ alter_option:
         opt := tree.NewAlterTableModifyColumnClause(typ, newColumn, position)
 	    $$ = tree.AlterTableOption(opt)
     }
-|   CHANGE column_keyword_opt column_name column_def column_position
+|   CHANGE column_keyword_opt column_decl_name column_def column_position
     {
         // Type OldColumnName NewColumn Position
         var typ = tree.AlterTableChangeColumn
@@ -4636,7 +4636,7 @@ alter_option:
         opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
     	$$ = tree.AlterTableOption(opt)
     }
-|  RENAME COLUMN column_name TO column_name
+|  RENAME COLUMN column_decl_name TO column_decl_name
     {
         var typ = tree.AlterTableRenameColumn
         var oldColumnName = $3
@@ -4644,7 +4644,7 @@ alter_option:
         opt := tree.NewAlterTableRenameColumnClause(typ, oldColumnName, newColumnName)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
+|  ALTER column_keyword_opt column_decl_name SET DEFAULT bit_expr
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4654,7 +4654,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET visibility
+|  ALTER column_keyword_opt column_decl_name SET visibility
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4664,7 +4664,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name DROP DEFAULT
+|  ALTER column_keyword_opt column_decl_name DROP DEFAULT
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4808,7 +4808,7 @@ column_position:
         var relativeColumn *tree.UnresolvedName
         $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
-|   AFTER column_name
+|   AFTER column_decl_name
     {
         var typ = tree.ColumnPositionAfter;
         var relativeColumn = $2
@@ -4840,6 +4840,16 @@ alter_table_rename:
         $$ = tree.NewAlterOptionTableName(name)
     }
 
+ident_or_end:
+    ident
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
+
 alter_table_drop:
     INDEX ident
     {
@@ -4853,13 +4863,13 @@ alter_table_drop:
         var name = tree.Identifier($2.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   ident
+|   ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($1.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   COLUMN ident
+|   COLUMN ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($2.Compare());
@@ -10527,8 +10537,7 @@ index_column:
     {
         // A bare END column name is already accepted at declaration sites
         // (column_def) and by inline primary keys; extend the same name
-        // resolution to the unambiguous table-level key position (PR 32906
-        // review 5967618815). END stays a block terminator everywhere else.
+        // resolution to the unambiguous table-level key position. END stays a block terminator everywhere else.
         var ColName = tree.NewUnresolvedName(tree.NewCStr($1, 1))
         var Length = int($2)
         var Direction = $3
@@ -12888,8 +12897,7 @@ column_def:
 
 // The bare END declaration name shares one owner rule across the ordinary
 // column_type alternative and the SERIAL alias alternative, so `end SERIAL`
-// parses exactly like the quoted name and the expanded type (PR 32906 reviews
-// 5983418028/5983638763). END outside a declaration position is untouched.
+// parses exactly like the quoted name and the expanded type. END outside a declaration position is untouched.
 column_decl_name:
     column_name
     {
