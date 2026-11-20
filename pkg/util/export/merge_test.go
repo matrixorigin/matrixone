@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"reflect"
 	"strings"
@@ -568,6 +569,40 @@ func TestInitMerge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.wantErr(t, InitMerge(tt.args.ctx, tt.args.SV), fmt.Sprintf("InitMerge(%v, %v)", tt.args.ctx, tt.args.SV))
+		})
+	}
+}
+
+func TestContentReaderBoundedRecords(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		input       string
+		limit       int64
+		rows        [][]string
+		expectLimit bool
+	}{
+		{"comments and quoted newline", "#" + strings.Repeat("x", 8192) + "\n\r\n  a,\"b\n#c\"\r\nd,e", 16, [][]string{{"a", "b\n#c"}, {"d", "e"}}, false},
+		{"exact EOF", "12345678", 8, [][]string{{"12345678"}}, false},
+		{"exact newline", "1234567\nnext", 8, [][]string{{"1234567"}, {"next"}}, false},
+		{"above limit", "123456789\n", 8, nil, true},
+		{"above limit spanning read blocks", "\"" + strings.Repeat("x", 8192), 5000, nil, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := newContentReader(t.Context(), io.NopCloser(strings.NewReader(test.input)))
+			reader.recordLimit = test.limit
+			defer reader.Close()
+			for _, want := range test.rows {
+				row, err := reader.ReadLine()
+				require.NoError(t, err)
+				require.Equal(t, want, row)
+			}
+			row, err := reader.ReadLine()
+			require.Nil(t, row)
+			if test.expectLimit {
+				require.ErrorContains(t, err, "exceeds the input byte limit")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

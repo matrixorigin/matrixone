@@ -143,7 +143,6 @@ var (
 	TraceETLMergeExistFailedCounter  = traceETLMergeCounter.WithLabelValues("exist_failed")
 	TraceETLMergeOpenFailedCounter   = traceETLMergeCounter.WithLabelValues("open_failed")
 	TraceETLMergeReadFailedCounter   = traceETLMergeCounter.WithLabelValues("read_failed")
-	TraceETLMergeParseFailedCounter  = traceETLMergeCounter.WithLabelValues("parse_failed")
 	TraceETLMergeWriteFailedCounter  = traceETLMergeCounter.WithLabelValues("write_failed")
 	TraceETLMergeDeleteFailedCounter = traceETLMergeCounter.WithLabelValues("delete_failed")
 
