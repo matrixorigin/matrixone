@@ -117,139 +117,153 @@ else
 fi
 
 DIR="$OCF_RESKEY_dirpath"
-PRE="$(echo ${DIR##*/} | tr A-Z a-z | sed 's/[^a-z0-9]//g')"
 YML="$OCF_RESKEY_ymlfile"
+case "$YML" in
+	/*) CONFIG_FILE=$YML ;;
+	*)  CONFIG_FILE=$DIR/$YML ;;
+esac
 
-# 枚举本 compose 项目的容器 ID：
-# - YML 可读时交给 compose（ps -aq 列出项目全部容器，含已停止的），
-#   能覆盖 container_name 固定命名、compose v2 连字符命名等情况；
-# - YML 缺失时按命名约定匹配：compose v1 为 <pre>_<service>_<n>，
-#   compose v2 为 <pre>-<service>-<n>。
-# 枚举本身失败（dockerd/compose 报错）必须返回非 0，调用方不得把
-# “枚举失败”当成“没有容器在跑”——否则 stop/monitor 会在容器仍存活时
-# 上报成功/已停止，违反 Pacemaker 的资源所有权约定，在 DRBD 双活防护上
-# 等同于放行脑裂。
+run_compose()
+(
+	CDPATH= cd "$DIR" || exit 1
+	"$COMMAND" -f "$YML" "$@"
+)
+
 container_ids()
 {
-	if [ -r "$DIR/$YML" ]; then
-		(cd $DIR || exit 1; $COMMAND -f $YML ps -aq)
-	else
-		ps_out=$(docker ps --all --format '{{.ID}} {{.Names}}') || return $OCF_ERR_GENERIC
-		printf '%s\n' "$ps_out" | awk '$NF ~ /^'"${PRE}"'[_-].*[_-][0-9]+$/ {print $1}'
+	if [ -r "$CONFIG_FILE" ]; then
+		compose_ids=$(run_compose ps "$1") || return "$OCF_ERR_GENERIC"
+		if [ -n "$compose_ids" ] || [ "$1" = -aq ]; then
+			printf '%s\n' "$compose_ids"
+			return
+		fi
 	fi
+
+	# Compose labels retain the config path after the file disappears or
+	# its project name changes. An empty Compose result alone is inconclusive.
+	project_dir=$(CDPATH= cd "$(dirname "$CONFIG_FILE")" && pwd) || return "$OCF_ERR_GENERIC"
+	config_path=${project_dir%/}/${CONFIG_FILE##*/}
+	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}'
+	containers=$(docker ps --all --no-trunc --format "$format") || return "$OCF_ERR_GENERIC"
+
+	# Names only flag possible ownership conflicts. They cannot authorize
+	# stopping a container, even when it has the template name "matrixone".
+	if ! ids=$(printf '%s\n' "$containers" | 		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" awk -F '\t' '
+		BEGIN {
+			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
+			gsub(/[^a-z0-9_-]/, "", prefix)
+			legacy = prefix
+			gsub(/[_-]/, "", legacy)
+		}
+		tolower($5) == "true" { next }
+		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
+			if (project != "" && project != $3) ambiguous = 1
+			project = $3
+			print $1
+			next
+		}
+		$2 == "matrixone" ||
+		($2 ~ /[_-][0-9]+$/ && (index($2, prefix "-") == 1 ||
+			index($2, prefix "_") == 1 || index($2, legacy "-") == 1 ||
+			index($2, legacy "_") == 1)) { ambiguous = 1 }
+		END { exit ambiguous }
+	'); then
+		ocf_log err "cannot verify container ownership for $config_path"
+		return "$OCF_ERR_GENERIC"
+	fi
+	printf '%s\n' "$ids"
 }
 
-docker_kill()
+remove_containers()
 {
-	RTV=true
-	if ! ids=$(container_ids); then
-		ocf_log err "failed to enumerate docker containers"
-		RTV=false
-		return $OCF_ERR_GENERIC
-	fi
-	for i in $ids; do
-		docker kill $i >/dev/null 2>&1
-		docker rm $i >/dev/null 2>&1 || RTV=false
+	ids=$(container_ids -aq) || {
+		ocf_log err "failed to enumerate Docker containers for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	}
+	failed=0
+	for id in $ids; do
+		# kill can fail for an already stopped container. rm without --force
+		# succeeds only when Docker can remove the container safely.
+		docker kill "$id" >/dev/null 2>&1
+		if ! docker rm "$id" >/dev/null; then
+			ocf_log err "failed to remove Docker container $id"
+			failed=$OCF_ERR_GENERIC
+		fi
 	done
-	if [ "$RTV" = false ]; then
-		ocf_log err "failed to kill docker"
-		return $OCF_ERR_GENERIC
-	else
-		RUN=false
-	fi
+	return "$failed"
 }
 
 docker_compose_status()
 {
-	# use docker-compose ps if YML found, otherwise try docker ps and kill containers
-	if [ -r "$DIR/$YML" ]; then
-		DKPS=$(cd $DIR; $COMMAND -f $YML ps -q)
-
-		# get number of all containers
-		[ -n "$DKPS" ] && PSNU=$(echo "$DKPS" | wc -l)
-		# get number of running containers
-		for UUID in $DKPS; do
-			UP=$(docker inspect --format='{{.State.Running}}' "$UUID")
-			[ "$UP" = "true" ] && UPNU=$((UPNU+1))
-		done
-		
-		if [ "${PSNU:-0}" -ne 0 ]; then
-			if [ ${UPNU:-0} -eq 0 ]; then
-				ocf_log info "docker service is running but not in up state."
-				return $OCF_NOT_RUNNING
-			elif [ "$PSNU" -eq $UPNU ]; then
-				ocf_log info "docker service is up and running"
-				return $OCF_SUCCESS
-			else
-				ocf_log err "docker service is running with partial up state"
-				return $OCF_ERR_GENERIC
-			fi
-		else
-			RUN=false
-		fi
-	else
-		if ! ids=$(container_ids); then
-			ocf_log err "failed to enumerate docker containers"
-			return $OCF_ERR_GENERIC
-		fi
-		if [ -z "$ids" ]; then
-			RUN=false
-		else
-			ocf_log log "docker service is running without docker-compose, try to kill..."
-			docker_kill
-		fi
-	fi
-	[ "$RUN" = false ] && {
-		ocf_log info "docker service is not running"
-		return $OCF_NOT_RUNNING
+	ids=$(container_ids -q) || {
+		ocf_log err "failed to enumerate Docker containers for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
 	}
+
+	running=0
+	stopped=0
+	for id in $ids; do
+		state=$(docker inspect --format='{{.State.Running}}' "$id") || {
+			ocf_log err "failed to inspect Docker container $id"
+			return "$OCF_ERR_GENERIC"
+		}
+		case "$state" in
+			true) running=1 ;;
+			false) stopped=1 ;;
+			*)
+				ocf_log err "invalid running state for Docker container $id"
+				return "$OCF_ERR_GENERIC"
+				;;
+		esac
+	done
+
+	if [ "$running" = 0 ]; then
+		return "$OCF_NOT_RUNNING"
+	fi
+	if [ "$stopped" = 1 ]; then
+		ocf_log err "only some Compose containers are running"
+		return "$OCF_ERR_GENERIC"
+	fi
+	return "$OCF_SUCCESS"
 }
 
 docker_compose_start()
 {
 	docker_compose_validate_all
-	docker_compose_status >/dev/null 2>&1
-	retVal=$?
-	# return success if docker service is running
-	[ $retVal -eq $OCF_SUCCESS ] && exit $OCF_SUCCESS
+	docker_compose_status
+	case "$?" in
+		"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
+		"$OCF_NOT_RUNNING") ;;
+		*) return "$OCF_ERR_GENERIC" ;;
+	esac
 
-	cd $DIR
-	$COMMAND -f $YML up -d || {
-		ocf_log err "Error. docker-compose returned error $?."
-		exit $OCF_ERR_GENERIC
-	}
-
-	ocf_log info "docker service started."
-	exit $OCF_SUCCESS
+	if ! run_compose up -d; then
+		ocf_log err "docker compose up failed"
+		return "$OCF_ERR_GENERIC"
+	fi
+	if ! docker_compose_status; then
+		ocf_log err "Compose containers could not be confirmed running after up"
+		return "$OCF_ERR_GENERIC"
+	fi
+	return "$OCF_SUCCESS"
 }
 
 docker_compose_stop()
 {
-	# use docker-compose down if YML found, otherwise try docker kill and rm
-	if [ -r "$DIR/$YML" ]; then
+	if [ -r "$CONFIG_FILE" ]; then
 		docker_compose_validate_all
-		cd $DIR
-		$COMMAND -f $YML down || {
-			ocf_log err "Error on shutting down docker service, try docker kill..."
-			RUN_KILL=true
-		}
-	else
-		RUN_KILL=true
 	fi
-	if [ "$RUN_KILL" = true ]; then
-		docker_kill
-		[ "$RTV" = false ] && {
-			ocf_log err "Error. Could not stop docker services."
-			return $OCF_ERR_GENERIC
-		}
+	if [ ! -r "$DIR/$YML" ] || ! run_compose down; then
+		ocf_log warn "Compose down unavailable or failed, trying container removal"
+		remove_containers || return "$OCF_ERR_GENERIC"
 	fi
-	ocf_log info "docker service stopped."
-	exit $OCF_SUCCESS
-}
 
-docker_compose_monitor()
-{
 	docker_compose_status
+	case "$?" in
+		"$OCF_NOT_RUNNING") return "$OCF_SUCCESS" ;;
+	esac
+	ocf_log err "Compose containers could not be confirmed stopped"
+	return "$OCF_ERR_GENERIC"
 }
 
 docker_compose_validate_all()
@@ -265,8 +279,8 @@ docker_compose_validate_all()
 		ocf_log err "diretory $OCF_RESKEY_dirpath is not a directory."
 		exit $OCF_ERR_ARGS
 	fi
-	if [ ! -e "$OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile" ]; then
-		ocf_log err "yaml file $OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile is not found."
+	if [ ! -r "$CONFIG_FILE" ]; then
+		ocf_log err "cannot read Compose file $CONFIG_FILE"
 		exit $OCF_ERR_ARGS
 	fi
 
@@ -292,12 +306,8 @@ case $1 in
 		docker_compose_stop
 		;;
 
-	status)	
+	status|monitor)
 		docker_compose_status
-		;;
-
-	monitor)
-		docker_compose_monitor
 		;;
 
 	validate-all)
