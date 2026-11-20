@@ -340,7 +340,7 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 			return err
 		}
 	}
-	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, false)
+	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, true)
 	if source.IsConstNull() {
 		dst.nsp.AddRange(0, uint64(len(rows)))
 	} else if !source.IsConst() && source.HasNull() {

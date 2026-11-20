@@ -2128,14 +2128,14 @@ func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
 	return false
 }
 
-func finalizeStringSourcePreflights(vecs []*vector.Vector) {
+func normalizeStringSources(vecs []*vector.Vector) {
 	for _, vec := range vecs {
-		vec.FinalizeStringSourcePreflight()
+		vec.NormalizeStringSources()
 	}
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
+	defer normalizeStringSources(bat.Vecs)
 	// Provenance can require an allocation even when every payload vector is
 	// already pre-sized. Admit that state for every column before the first
 	// column publishes rows, so a provenance OOM cannot split batch lengths.
@@ -2159,7 +2159,7 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
+	defer normalizeStringSources(bat.Vecs)
 	for i, vec := range bat.Vecs {
 		if err := vec.PreflightUnionBatchStringSources(
 			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
@@ -2180,7 +2180,7 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
+	defer normalizeStringSources(bat.Vecs)
 	for i, vec := range bat.Vecs {
 		if err := vec.PreflightUnionOneStringSources(bat2.Vecs[i], pos, m); err != nil {
 			return err
@@ -2220,7 +2220,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer finalizeStringSourcePreflights(bat.Vecs)
+	defer normalizeStringSources(bat.Vecs)
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].PreflightUnionBatchStringSources(
@@ -2252,7 +2252,7 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer finalizeStringSourcePreflights(bat.Vecs)
+	defer normalizeStringSources(bat.Vecs)
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].PreflightUnionBatchStringSources(

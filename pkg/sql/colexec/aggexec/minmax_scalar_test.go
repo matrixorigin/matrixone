@@ -146,10 +146,9 @@ func TestFixedMinMaxScalarFillMetadataAdmission(t *testing.T) {
 			require.Equal(t, types.StringSourceExpression, target.GetStringSourceAt(0))
 
 			if metadata == "source" {
-				// A skipped NULL still finalizes a retained source reservation.
+				// A skipped NULL still normalizes a reserved source sidecar.
 				require.NoError(t, target.SetStringSource(types.StringSourceLiteral))
 				require.NoError(t, target.PreflightSetStringSourceAt(0, types.StringSourceExpression, f.mp))
-				target.RetainStringSourcePreflight()
 				require.NotNil(t, target.GetStringSources())
 				null := f.intInput(t, []int64{0}, []bool{true})
 				require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{null}))
@@ -252,11 +251,9 @@ func TestFixedMinMaxScalarClosesSourceReservation(t *testing.T) {
 						target := f.base.state[0].vecs[0]
 						require.NoError(t, target.SetStringSource(types.StringSourceLiteral))
 						require.NoError(t, target.PreflightSetStringSourceAt(0, types.StringSourceExpression, f.mp))
-						target.RetainStringSourcePreflight()
 						require.NotNil(t, target.GetStringSources())
 						if collapsed {
-							// SetStringSource releases the sidecar but does not close
-							// its retained preflight flag. The work unit still must.
+							// SetStringSource releases the sidecar.
 							require.NoError(t, target.SetStringSource(types.StringSourceExpression))
 							require.True(t, hasDefaultFixedMinMaxMetadata(target))
 						}
@@ -276,11 +273,14 @@ func TestFixedMinMaxScalarClosesSourceReservation(t *testing.T) {
 						require.False(t, f.controller.rejected)
 						f.controller.failAt = 0
 						if collapsed {
-							// Subsequent setters must normalize normally; a stale
-							// preflight flag would retain this now-uniform sidecar.
+							// Row source writes leave a now-uniform sidecar in place
+							// until the owner normalizes it.
 							require.NoError(t, target.SetStringSourceAtWithMP(0, types.StringSourceLiteral, f.mp))
 							require.NoError(t, target.SetStringSourceAtWithMP(0, types.StringSourceExpression, f.mp))
+							require.Equal(t, types.StringSourceExpression, target.GetStringSource())
+							target.NormalizeStringSources()
 							require.Nil(t, target.GetStringSources())
+							require.Equal(t, types.StringSourceExpression, target.GetStringSource())
 						} else if null {
 							require.Nil(t, target.GetStringSources())
 							require.Equal(t, types.StringSourceLiteral, target.GetStringSourceAt(0))

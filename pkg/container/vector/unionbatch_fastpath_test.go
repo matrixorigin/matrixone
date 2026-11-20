@@ -593,8 +593,9 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					// The preflight API requires explicit flags, so this also
 					// checks the unchanged flagged-copy control.
 					flags := []uint8{1, 1, 1}
-					require.NoError(t, destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp))
-					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, mp))
+					preflight, err := destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp)
+					require.NoError(t, err)
+					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, &preflight, mp))
 				} else {
 					require.NoError(t, destination.UnionBatch(source, 2, 3, nil, mp))
 				}
@@ -879,9 +880,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			require.NoError(t, dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp))
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp)
+			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, mp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1
@@ -922,10 +924,11 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			b.SetBytes(int64(selected * 128))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp); err != nil {
+				preflight, err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp)
+				if err != nil {
 					b.Fatal(err)
 				}
-				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, mp); err != nil {
+				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, &preflight, mp); err != nil {
 					b.Fatal(err)
 				}
 				dst.CleanOnlyData()

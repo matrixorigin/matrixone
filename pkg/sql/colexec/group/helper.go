@@ -267,7 +267,7 @@ func (publication *groupKeySourcePublication) addDestination(destination *vector
 
 func (publication *groupKeySourcePublication) finalize() {
 	for _, destination := range publication.destinations {
-		destination.FinalizeStringSourcePreflight()
+		destination.NormalizeStringSources()
 	}
 }
 
@@ -411,10 +411,8 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
 				return err
 			}
-			// Existing-row preflight has finalLength == Length and therefore does
-			// not infer a deferred publication. Keep both current and standby
-			// reservations alive until groupKeySourcePublication.finalize.
-			destination.RetainStringSourcePreflight()
+			// Row source writes do not normalize, so both current and standby
+			// reservations stay until groupKeySourcePublication.finalize.
 			return nil
 		},
 	); err != nil {

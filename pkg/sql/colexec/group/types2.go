@@ -294,9 +294,13 @@ type container struct {
 	aggArgEvaluate []colexec.ExprEvalVector
 
 	// group by columns
-	groupByTypes                 []types.Type
-	groupByBatches               []*batch.Batch
-	groupByStandby               *batch.Batch
+	groupByTypes   []types.Type
+	groupByBatches []*batch.Batch
+	groupByStandby *batch.Batch
+	// groupByPreflights holds, for the current (last) group-by batch and the
+	// standby batch, each column's SelectedBatchPreflight for the next
+	// append into that batch.
+	groupByPreflights            [2]groupByPreflight
 	groupingRollup               []*vector.Vector
 	groupByHashKey               []int32
 	hashKeyVecs                  []*vector.Vector
@@ -705,7 +709,44 @@ func (ctr *container) freeGroupByBatches() {
 		ctr.groupByStandby.Clean(ctr.mp)
 		ctr.groupByStandby = nil
 	}
+	ctr.clearGroupByPreflights()
 	ctr.currBatchIdx = 0
+}
+
+// groupByPreflight is the per-column preflight of one group-by batch.
+type groupByPreflight struct {
+	batch *batch.Batch
+	vecs  []vector.SelectedBatchPreflight
+}
+
+func (p *groupByPreflight) reset(b *batch.Batch) {
+	p.batch = b
+	if b == nil {
+		p.vecs = p.vecs[:0]
+		return
+	}
+	if cap(p.vecs) < len(b.Vecs) {
+		p.vecs = make([]vector.SelectedBatchPreflight, len(b.Vecs))
+		return
+	}
+	p.vecs = p.vecs[:len(b.Vecs)]
+	clear(p.vecs)
+}
+
+// groupByPreflightsFor returns the preflights retained for batch b, or nil.
+func (ctr *container) groupByPreflightsFor(b *batch.Batch) []vector.SelectedBatchPreflight {
+	for i := range ctr.groupByPreflights {
+		if p := &ctr.groupByPreflights[i]; b != nil && p.batch == b {
+			return p.vecs
+		}
+	}
+	return nil
+}
+
+func (ctr *container) clearGroupByPreflights() {
+	for i := range ctr.groupByPreflights {
+		ctr.groupByPreflights[i].reset(nil)
+	}
 }
 
 func (ctr *container) freeGroupingRollups() {

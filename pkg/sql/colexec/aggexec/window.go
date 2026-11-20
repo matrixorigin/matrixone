@@ -1068,6 +1068,8 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 		}
 	}
 
+	// Row source writes do not normalize; collapse a uniform sidecar once.
+	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1121,6 +1123,8 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 		}
 	}
 
+	// Row source writes do not normalize; collapse a uniform sidecar once.
+	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1155,6 +1159,8 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 		}
 	}
 
+	// Row source writes do not normalize; collapse a uniform sidecar once.
+	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1189,6 +1195,8 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 		}
 	}
 
+	// Row source writes do not normalize; collapse a uniform sidecar once.
+	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
