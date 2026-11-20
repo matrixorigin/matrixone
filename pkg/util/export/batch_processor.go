@@ -17,7 +17,6 @@ package export
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -36,19 +35,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/ring"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-// defaultRingBufferSize need 2^N value
+// defaultCollectQueueSize is the capacity of MOCollector.awakeQueue.
 // OLD Case: defaultQueueSize default length for collect Channel (value = 1310720)
 // NEW Case:
 // 1. [consume] one goroutine collect items ~= 1s / 50us = 20_000
 // 2. [generate] statement_info << query qps
 // 3. [generate] rawlog qps ~= [1000, 3000]
 // 4. [generate] metric 1ps = 60s / 15s = 4
-const defaultRingBufferSize = 2 << 13
+const defaultCollectQueueSize = 2 << 13
 
 const LoggerNameMOCollector = "MOCollector"
 
@@ -379,8 +377,8 @@ type MOCollector struct {
 	mux sync.RWMutex
 	// buffers maintain working buffer for each type
 	buffers map[string]*bufferHolder
-	// awakeCollect handle collect signal
-	awakeQueue *ring.RingBuffer[batchpipe.HasName]
+	// awakeQueue carries collected items to the doCollect workers
+	awakeQueue chan batchpipe.HasName
 	// awakeGenerate handle generate signal
 	awakeGenerate chan generateReq
 	// awakeBatch handle export signal
@@ -422,7 +420,7 @@ func NewMOCollector(
 		ctx:            ctx,
 		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize, ring.WithGoScheduleThreshold(1e5 /*~=1ms/10ns*/)),
+		awakeQueue:     make(chan batchpipe.HasName, defaultCollectQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
@@ -533,17 +531,11 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 			c.stopDrop.Add(1)
 			ctx = errutil.ContextWithNoReport(ctx, true)
 			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		case c.awakeQueue <- item:
+			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
+			return nil
 		default:
-			ok, err := c.awakeQueue.Offer(item)
-			if ok {
-				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
-				return nil
-			}
-			if err != nil {
-				v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
-			} else {
-				v2.GetTraceCollectorCollectHungCounter(item.GetName(), "retry").Inc()
-			}
+			v2.GetTraceCollectorCollectHungCounter(item.GetName(), "retry").Inc()
 			time.Sleep(time.Millisecond)
 		}
 	}
@@ -559,11 +551,10 @@ func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.Has
 			c.stopDrop.Add(1)
 			ctx = errutil.ContextWithNoReport(ctx, true)
 			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		case c.awakeQueue <- item:
+			return nil
 		default:
-			ok, _ := c.awakeQueue.Offer(item)
-			if ok {
-				return nil
-			} else if time.Since(now) > discardCollectTimeout {
+			if time.Since(now) > discardCollectTimeout {
 				v2.GetTraceCollectorDiscardItemCounter(item.GetName()).Inc()
 				return nil
 			}
@@ -632,22 +623,8 @@ func (c *MOCollector) doCollect(idx int) {
 loop:
 	for {
 		select {
-		default:
-			i, got, err := c.awakeQueue.Pop()
-			if !got {
-				if errors.Is(err, ring.ErrDisposed) {
-					v2.TraceCollectorDisposedCounter.Inc()
-				}
-				if errors.Is(err, ring.ErrTimeout) {
-					v2.TraceCollectorTimeoutCounter.Inc()
-				}
-				if errors.Is(err, ring.ErrEmpty) {
-					v2.TraceCollectorEmptyCounter.Inc()
-				}
-				time.Sleep(time.Millisecond)
-				continue
-			}
-			v2.GetTraceCollectorMOLoggerQueueLength().Set(float64(c.awakeQueue.Len()))
+		case i := <-c.awakeQueue:
+			v2.GetTraceCollectorMOLoggerQueueLength().Set(float64(len(c.awakeQueue)))
 			start := time.Now()
 			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
 			c.mux.RLock()
@@ -808,7 +785,7 @@ loop:
 			fields := make([]zap.Field, 0, 16)
 			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
-			fields = append(fields, zap.Int("QueueLength", int(c.awakeQueue.Len())))
+			fields = append(fields, zap.Int("QueueLength", len(c.awakeQueue)))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sDiscardCnt", b.name), b.discardCnt.Load()))
@@ -825,8 +802,8 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var err error
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
-		for c.awakeQueue.Len() > 0 && graceful {
-			c.logger.Debug(fmt.Sprintf("doCollect left %d job", c.awakeQueue.Len()))
+		for len(c.awakeQueue) > 0 && graceful {
+			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeQueue)))
 			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()

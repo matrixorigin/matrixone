@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -36,7 +37,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -2915,11 +2915,11 @@ type mapBasedTxnHolder struct {
 	mu             struct {
 		sync.RWMutex
 		// remoteServices known remote service
-		remoteServices map[string]*list.Element[remote]
+		remoteServices map[string]*list.Element // Value is *remote
 		// remoteLockBinds records the last heartbeat seen for a specific remote service + bind.
 		remoteLockBinds map[string]time.Time
 		// head(oldest) -> tail (newest)
-		dequeue list.Deque[remote]
+		dequeue *list.List // of *remote
 	}
 }
 
@@ -2941,9 +2941,9 @@ func newMapBasedTxnHandler(
 	for i := range h.activeTxns {
 		h.activeTxns[i].txns = make(map[string]activeTxnEntry, 64)
 	}
-	h.mu.remoteServices = make(map[string]*list.Element[remote])
+	h.mu.remoteServices = make(map[string]*list.Element)
 	h.mu.remoteLockBinds = make(map[string]time.Time)
-	h.mu.dequeue = list.New[remote]()
+	h.mu.dequeue = list.New()
 	return h
 }
 
@@ -3033,7 +3033,7 @@ func (h *mapBasedTxnHolder) getActiveTxnInternal(
 	if remoteService != "" {
 		h.mu.Lock()
 		if _, ok := h.mu.remoteServices[remoteService]; !ok {
-			h.mu.remoteServices[remoteService] = h.mu.dequeue.PushBack(remote{
+			h.mu.remoteServices[remoteService] = h.mu.dequeue.PushBack(&remote{
 				id:   remoteService,
 				time: time.Now(),
 			})
@@ -3192,7 +3192,7 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if e, ok := h.mu.remoteServices[remoteService]; ok {
-		e.Value.time = time.Now()
+		e.Value.(*remote).time = time.Now()
 		h.mu.dequeue.MoveToBack(e)
 	}
 }
@@ -3239,14 +3239,13 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 			delete(h.mu.remoteLockBinds, key)
 		}
 	}
-	h.mu.dequeue.Iter(0, func(r remote) bool {
-		v := now.Sub(r.time)
-		if v < maxKeepInterval {
-			return false
+	for e := h.mu.dequeue.Front(); e != nil; e = e.Next() {
+		r := e.Value.(*remote)
+		if now.Sub(r.time) < maxKeepInterval {
+			break
 		}
 		timeoutServices[r.id] = struct{}{}
-		return true
-	})
+	}
 	h.mu.Unlock()
 
 	var cannotCommit []pb.OrphanTxn

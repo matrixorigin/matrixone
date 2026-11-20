@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -119,7 +121,7 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 			}
 		}
 	} else {
-		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(coldef *ColDef) bool {
+		tableDef.Cols = slices.DeleteFunc(tableDef.Cols, func(coldef *ColDef) bool {
 			return coldef.Hidden && pkey.PkeyColName == coldef.Name
 		})
 	}

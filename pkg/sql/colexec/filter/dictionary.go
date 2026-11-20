@@ -42,7 +42,7 @@ func (filter *Filter) SetAllocationAccount(account *mpool.AllocationAccount) err
 	if filter.ctr.buf != nil || len(filter.ctr.executors)+len(filter.ctr.runtimeExecutors) > 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 5, 6, 7, 8)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 5, 6)
 	if err != nil {
 		return err
 	}
