@@ -724,18 +724,18 @@ func TestHasNewVersionInRange(t *testing.T) {
 	analyzer := process.NewTempAnalyzer()
 	bat := batch.New(nil)
 
-	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(2)).Return("", "", nil, assert.AnError)
-	changed, err = hasNewVersionInRange(proc, nil, analyzer, 2, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 2, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.Error(t, err)
 	require.False(t, changed)
 
 	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(3)).Return("", "", rel, nil)
 	rel.EXPECT().PrimaryKeysMayBeModified(gomock.Any(), gomock.Any(), gomock.Any(), bat, int32(0), int32(-1)).Return(true, nil)
-	changed, err = hasNewVersionInRange(proc, nil, analyzer, 3, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 3, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.NoError(t, err)
 	require.True(t, changed)
 }
@@ -2798,7 +2798,7 @@ func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
 		return idx == 7, nil
 	}
 
-	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1}, nil)(
 		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -2813,7 +2813,7 @@ func TestLockOpMergedTargetsUseDefaultVersionRangeChecker(t *testing.T) {
 	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
 	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
 
-	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1}, nil)(
 		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
 	require.NoError(t, err)
 	require.False(t, changed)
