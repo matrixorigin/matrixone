@@ -9193,38 +9193,6 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 }
 
-func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
-	switch kind {
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(string(value), 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaReal(floating)
-	case vector.PrepareParamDecimal:
-		integer, err := roundPreparedDecimalIntegerString(string(value))
-		if err != nil {
-			return "", err
-		}
-		number, err := strconv.ParseInt(integer, 10, 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaSigned(number)
-	case vector.PrepareParamBoolean:
-		switch strings.ToLower(string(value)) {
-		case "true", "1":
-			return inetNtoaUnsigned(1)
-		case "false", "0":
-			return inetNtoaUnsigned(0)
-		default:
-			return inetNtoaUnsigned(0)
-		}
-	default:
-		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
-	}
-}
-
 // InetNtoaDynamic owns the source families whose numeric representation is
 // decided by the value domain rather than by a fixed numeric vector. Keeping
 // this dispatch at the batch boundary preserves the allocation-free native
@@ -9389,10 +9357,6 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			value, null := p.GetStrValue(i)
 			if null {
 				return "", true, nil
-			}
-			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
-				text, err := inetNtoaPreparedText(value, kind)
-				return text, err != nil, err
 			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}
@@ -10734,41 +10698,10 @@ func randomBytesTextLength(
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	kind := param.GetPrepareParamKindAt(int(row))
-	switch kind {
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		// SQL PREPARE stores the value in a text transport vector. The source
-		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
-		if kind == vector.PrepareParamDecimal {
-			integer, err := roundPreparedDecimalIntegerString(text)
-			if err != nil {
-				return 0, randomBytesRangeError(proc)
-			}
-			return randomBytesRoundedDecimalIntegerString(integer, proc)
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		return randomBytesRoundedFloat(floating, proc)
-	case vector.PrepareParamBoolean:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		boolean, err := strconv.ParseBool(text)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		if boolean {
-			return 1, nil
-		}
-		return 0, nil
-	default:
-		// Keep ordinary character values byte-oriented. In particular, MySQL
-		// only ignores ASCII whitespace before the numeric prefix; using
-		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
-		return parseMySQLIntegerPrefix(value), nil
-	}
+	// Keep ordinary character values byte-oriented. In particular, MySQL
+	// only ignores ASCII whitespace before the numeric prefix; using
+	// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+	return parseMySQLIntegerPrefix(value), nil
 }
 
 func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {

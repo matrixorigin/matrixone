@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,20 +42,6 @@ func (w *groupShortWriter) Write(value []byte) (int, error) {
 	w.remaining -= n
 	return n, w.err
 }
-
-type prepareAccessor struct {
-	vectors []*vector.Vector
-}
-
-func (a *prepareAccessor) PrepareParamKindChunkCount() int { return len(a.vectors) }
-func (a *prepareAccessor) PrepareParamKindVectorForChunk(chunk int) *vector.Vector {
-	if chunk < 0 || chunk >= len(a.vectors) {
-		return nil
-	}
-	return a.vectors[chunk]
-}
-
-var _ aggexec.PrepareParamKindStateAccessor = (*prepareAccessor)(nil)
 
 func TestGroupSpillRowCodecAndWriterEdges(t *testing.T) {
 	require.ErrorIs(t, appendSpillGroupByRows(nil, nil, nil), io.ErrClosedPipe)
@@ -121,81 +106,6 @@ func TestGroupSpillRowCodecAndWriterEdges(t *testing.T) {
 
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
-}
-
-func TestPrepareParamKindRowsCodecEdges(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer func() { require.Zero(t, mp.CurrNB()) }()
-
-	source, err := newPrepareParamKindRowsSource(nil, nil)
-	require.NoError(t, err)
-	require.False(t, source.summary.seen)
-	vec := vector.NewVec(types.T_varchar.ToType())
-	for _, value := range []string{"a", "b", "c"} {
-		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
-	}
-	require.NoError(t, vec.SetPrepareParamKindAtWithMP(0, vector.PrepareParamInteger, mp))
-	require.NoError(t, vec.SetPrepareParamKindAtWithMP(1, vector.PrepareParamFloat, mp))
-	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
-	_, err = newPrepareParamKindRowsSource(vec, []uint8{1})
-	require.Error(t, err)
-	_, err = newPrepareParamKindRowsSource(vec, []uint8{1, 2, 1})
-	require.Error(t, err)
-	_, err = newPrepareParamKindSelectedRowsSource(vec, []int32{-1})
-	require.Error(t, err)
-	_, err = newPrepareParamKindSelectedRowsSource(vec, []int32{3})
-	require.Error(t, err)
-	source, err = newPrepareParamKindRowsSource(vec, []uint8{1, 1, 0})
-	require.NoError(t, err)
-	require.Equal(t, 2, source.rowCount)
-	require.True(t, source.summary.rows)
-	require.True(t, source.summary.binaryString)
-
-	var encoded bytes.Buffer
-	require.NoError(t, source.writeRows(&encoded, true))
-	require.Len(t, encoded.Bytes(), 2)
-	require.NoError(t, (*prepareParamKindRowsSource)(nil).writeRows(io.Discard, false))
-	invalidSource := source
-	invalidSource.vec = nil
-	require.Error(t, invalidSource.writeRows(io.Discard, false))
-	invalidSource = source
-	invalidSource.vec.SetPrepareParamKindAt(0, vector.PrepareParamKind(255))
-	require.Error(t, invalidSource.writeRows(io.Discard, false))
-	invalidSource.vec.SetPrepareParamKindAt(0, vector.PrepareParamInteger)
-	require.Error(t, invalidSource.writeRows(&groupShortWriter{remaining: 0}, false))
-
-	target := prepareParamKindRowsTarget{expectedRows: 2}
-	_, err = target.restore(bytes.NewReader(encoded.Bytes()), 2, mp, true)
-	require.NoError(t, err)
-	_, err = target.restore(bytes.NewReader([]byte{255, 0}), 2, mp, false)
-	require.Error(t, err)
-	_, err = target.restore(bytes.NewReader([]byte{0}), 2, mp, false)
-	require.Error(t, err)
-	_, err = (*prepareParamKindRowsTarget)(nil).restore(bytes.NewReader(nil), 1, mp, false)
-	require.Error(t, err)
-
-	restoreVec := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(restoreVec, []byte("x"), false, mp))
-	require.NoError(t, vector.AppendBytes(restoreVec, []byte("y"), false, mp))
-	accessor := &prepareAccessor{vectors: []*vector.Vector{restoreVec}}
-	chunkTarget := prepareParamKindChunkTarget(accessor, 0)
-	summary, err := chunkTarget.restore(bytes.NewReader(encoded.Bytes()), 2, mp, true)
-	require.NoError(t, err)
-	require.True(t, summary.binaryString)
-	require.Equal(t, vector.PrepareParamInteger, restoreVec.GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamFloat, restoreVec.GetPrepareParamKindAt(1))
-
-	flatTarget := prepareParamKindFlatTarget(accessor)
-	require.Equal(t, 2, flatTarget.expectedRows)
-	flatTarget.setBinarySummary(true)
-	require.True(t, restoreVec.GetIsBinaryString())
-	flatTarget.expectedRows = 3
-	_, err = flatTarget.restore(bytes.NewReader([]byte{0, 0, 0}), 3, mp, false)
-	require.Error(t, err)
-	(*prepareParamKindRowsTarget)(nil).setBinarySummary(true)
-
-	vec.Free(mp)
-	restoreVec.Free(mp)
 }
 
 func TestGroupSpillReaderWriterBoundaryMatrix(t *testing.T) {

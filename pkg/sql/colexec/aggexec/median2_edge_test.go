@@ -263,9 +263,6 @@ func TestMedianAccountedPolicyAndLegacyBranches(t *testing.T) {
 	SyncAggregatorsToChunkSize([]AggFuncExec{accounted}, AggBatchSize)
 	accountedGroup := accounted.(GroupAggFuncExec)
 
-	require.Zero(t, accountedGroup.PrepareParamKindChunkCount())
-	require.Nil(t, accountedGroup.PrepareParamKindVectorForChunk(0))
-	accountedGroup.SetPrepareParamKind(vector.PrepareParamNone)
 	require.Zero(t, accountedGroup.AdditionalMemorySize())
 	require.Zero(t, accountedGroup.GetNumGroups())
 	require.Error(t, accounted.SaveIntermediateResult(-1, nil, io.Discard))

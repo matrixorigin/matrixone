@@ -73,7 +73,7 @@ func annotateStringLengthSource(expr *Expr, proc *process.Process) {
 			if warned || vec == nil {
 				return
 			}
-			lit := rule.GetConstantValue(vec, false, 0)
+			lit := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(fn.Args[index], proc))
 			if lit == nil {
 				return
 			}

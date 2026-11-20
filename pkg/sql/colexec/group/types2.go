@@ -300,11 +300,10 @@ type container struct {
 	// groupByPreflights holds, for the current (last) group-by batch and the
 	// standby batch, each column's SelectedBatchPreflight for the next
 	// append into that batch.
-	groupByPreflights            [2]groupByPreflight
-	groupingRollup               []*vector.Vector
-	groupByHashKey               []int32
-	hashKeyVecs                  []*vector.Vector
-	groupKeyStringSourceMetadata bool
+	groupByPreflights [2]groupByPreflight
+	groupingRollup    []*vector.Vector
+	groupByHashKey    []int32
+	hashKeyVecs       []*vector.Vector
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -323,8 +322,7 @@ type container struct {
 	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
 	sortRollup                  *sortRollupState
-	prepareParamKind            aggexec.PrepareParamKindStates
-	prepareParamKindWireV1      bool
+	rowMetadataTrailerWire      bool
 	legacyTextMinMax            bool
 	legacyVarianceState         bool
 	legacyDecimalSumState       bool
@@ -705,7 +703,6 @@ func (ctr *container) freeGroupByBatches() {
 		}
 	}
 	ctr.groupByBatches = nil
-	ctr.groupKeyStringSourceMetadata = false
 	if ctr.groupByStandby != nil {
 		ctr.groupByStandby.Clean(ctr.mp)
 		ctr.groupByStandby = nil
@@ -788,9 +785,8 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	}
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
-	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
-	ctr.prepareParamKindWireV1 = false
+	ctr.rowMetadataTrailerWire = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
 	if ctr.distinctSpill != nil {

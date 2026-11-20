@@ -1331,15 +1331,9 @@ func (exec *medianColumnExecSelf[T, R]) ClearAllocationAccount(
 	return nil
 }
 
-func (*medianColumnExecSelf[T, R]) PrepareParamKindChunkCount() int {
-	return 0
-}
-
-func (*medianColumnExecSelf[T, R]) PrepareParamKindVectorForChunk(int) *vector.Vector {
+func (*medianColumnExecSelf[T, R]) ResultVectorForChunk(int) *vector.Vector {
 	return nil
 }
-
-func (*medianColumnExecSelf[T, R]) SetPrepareParamKind(vector.PrepareParamKind) {}
 
 func (exec *medianColumnExecSelf[T, R]) GetNumGroups() int {
 	if exec == nil {

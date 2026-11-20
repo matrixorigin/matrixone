@@ -93,10 +93,6 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 					} else {
 						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 					}
-					require.True(t, result.HasPrepareParamKind(), "ordinary winners observe None")
-					require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind())
-					require.Nil(t, result.GetPrepareParamKinds())
-					require.False(t, result.HasStringSourceMetadata())
 				}
 				require.True(t, results[0].IsNull(1))
 			})
@@ -104,67 +100,38 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 	}
 }
 
-func TestFixedMinMaxScalarFillMetadataAdmission(t *testing.T) {
-	for _, metadata := range []string{"kind", "source"} {
-		t.Run(metadata, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			batch := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			require.NoError(t, f.exec.GroupGrow(2))
-			require.NoError(t, batch.exec.GroupGrow(2))
-			plain := f.intInput(t, []int64{8, 5, 3}, nil)
-			used, calls := f.account.Snapshot().Used, f.controller.calls
-			f.controller.failAt = calls + 1
-			require.NoError(t, f.exec.PreflightBatchFill(0, []uint64{1}, []*vector.Vector{plain}))
-			require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{plain}))
-			require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{plain}), "ordinary tie")
-			require.NoError(t, batch.exec.BatchFill(0, []uint64{1}, []*vector.Vector{plain}))
-			require.NoError(t, batch.exec.BatchFill(0, []uint64{1}, []*vector.Vector{plain}))
-			require.Equal(t, snapshotFixedMetadataPreflight(batch), snapshotFixedMetadataPreflight(f))
-			require.Equal(t, calls, f.controller.calls)
-			require.Equal(t, used, f.account.Snapshot().Used)
-			f.controller.failAt = 0
+func TestFixedMinMaxScalarFillAdmission(t *testing.T) {
+	f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
+	batch := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
+	require.NoError(t, f.exec.GroupGrow(2))
+	require.NoError(t, batch.exec.GroupGrow(2))
+	plain := f.intInput(t, []int64{8, 5, 3}, nil)
+	used, calls := f.account.Snapshot().Used, f.controller.calls
+	f.controller.failAt = calls + 1
+	require.NoError(t, f.exec.PreflightBatchFill(0, []uint64{1}, []*vector.Vector{plain}))
+	require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{plain}))
+	require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{plain}), "ordinary tie")
+	require.NoError(t, batch.exec.BatchFill(0, []uint64{1}, []*vector.Vector{plain}))
+	require.NoError(t, batch.exec.BatchFill(0, []uint64{1}, []*vector.Vector{plain}))
+	require.Equal(t, snapshotFixedMetadataPreflight(batch), snapshotFixedMetadataPreflight(f))
+	require.Equal(t, calls, f.controller.calls)
+	require.Equal(t, used, f.account.Snapshot().Used)
+	f.controller.failAt = 0
 
-			rich := f.intInput(t, []int64{5, 5}, nil)
-			if metadata == "kind" {
-				rich.SetPrepareParamKind(vector.PrepareParamFloat)
-			} else {
-				require.NoError(t, rich.SetStringSource(types.StringSourceLiteral))
-			}
-			// Rich input must use the existing metadata path, including admission
-			// before the representative changes. Then an ordinary input must also
-			// fall back when only the destination carries rich metadata.
-			for _, step := range []struct {
-				input *vector.Vector
-				row   int
-			}{{rich, 0}, {plain, 1}, {plain, 2}} {
-				vectors := []*vector.Vector{step.input}
-				require.NoError(t, f.exec.PreflightBatchFill(step.row, []uint64{1}, vectors))
-				require.NoError(t, batch.exec.PreflightBatchFill(step.row, []uint64{1}, vectors))
-				calls = f.controller.calls
-				f.controller.failAt = calls + 1
-				require.NoError(t, f.exec.Fill(0, step.row, vectors))
-				require.Equal(t, calls, f.controller.calls, "Fill cannot allocate after admission")
-				require.NoError(t, batch.exec.BatchFill(step.row, []uint64{1}, vectors))
-				require.Equal(t, snapshotFixedMetadataPreflight(batch), snapshotFixedMetadataPreflight(f))
-				f.controller.failAt = 0
-			}
-			target := f.base.state[0].vecs[0]
-			require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](target, 0))
-			require.Equal(t, vector.PrepareParamNone, target.GetPrepareParamKindAt(0))
-			require.Equal(t, types.StringSourceExpression, target.GetStringSourceAt(0))
-
-			if metadata == "source" {
-				// A skipped NULL still normalizes a reserved source sidecar.
-				require.NoError(t, target.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, target.PreflightSetStringSourceAt(0, types.StringSourceExpression, f.mp))
-				require.NotNil(t, target.GetStringSources())
-				null := f.intInput(t, []int64{0}, []bool{true})
-				require.NoError(t, f.exec.Fill(0, 0, []*vector.Vector{null}))
-				require.Nil(t, target.GetStringSources())
-				require.Equal(t, types.StringSourceLiteral, target.GetStringSourceAt(0))
-			}
-		})
+	for _, row := range []int{1, 2} {
+		vectors := []*vector.Vector{plain}
+		require.NoError(t, f.exec.PreflightBatchFill(row, []uint64{1}, vectors))
+		require.NoError(t, batch.exec.PreflightBatchFill(row, []uint64{1}, vectors))
+		calls = f.controller.calls
+		f.controller.failAt = calls + 1
+		require.NoError(t, f.exec.Fill(0, row, vectors))
+		require.Equal(t, calls, f.controller.calls, "Fill cannot allocate after admission")
+		require.NoError(t, batch.exec.BatchFill(row, []uint64{1}, vectors))
+		require.Equal(t, snapshotFixedMetadataPreflight(batch), snapshotFixedMetadataPreflight(f))
+		f.controller.failAt = 0
 	}
+	target := f.base.state[0].vecs[0]
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](target, 0))
 }
 
 func TestFixedMinMaxScalarMerge(t *testing.T) {
@@ -243,63 +210,6 @@ func TestFixedMinMaxScalarMerge(t *testing.T) {
 				require.Equal(t, compactBefore, snapshot(compact, 1))
 			})
 		}
-	}
-}
-
-func TestFixedMinMaxScalarClosesSourceReservation(t *testing.T) {
-	for _, op := range []string{"fill", "merge"} {
-		t.Run(op, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			require.NoError(t, f.exec.GroupGrow(2))
-			input := f.intInput(t, []int64{7, 0}, []bool{false, true})
-			source := f.mergeSource(t, []int64{7, 0}, []bool{false, true})
-			for _, collapsed := range []bool{false, true} {
-				for _, null := range []bool{false, true} {
-					t.Run(fmt.Sprintf("collapsed=%t/null=%t", collapsed, null), func(t *testing.T) {
-						target := f.base.state[0].vecs[0]
-						require.NoError(t, target.SetStringSource(types.StringSourceLiteral))
-						require.NoError(t, target.PreflightSetStringSourceAt(0, types.StringSourceExpression, f.mp))
-						require.NotNil(t, target.GetStringSources())
-						if collapsed {
-							// SetStringSource releases the sidecar.
-							require.NoError(t, target.SetStringSource(types.StringSourceExpression))
-							require.True(t, hasDefaultFixedMinMaxMetadata(target))
-						}
-						row := 0
-						if null {
-							row = 1
-						}
-						calls := f.controller.calls
-						f.controller.failAt = calls + 1
-						defer func() { f.controller.failAt = 0 }()
-						if op == "fill" {
-							require.NoError(t, f.exec.Fill(0, row, []*vector.Vector{input}))
-						} else {
-							require.NoError(t, f.exec.Merge(source.exec, 0, row))
-						}
-						require.Equal(t, calls, f.controller.calls, "reserved publication does not allocate")
-						require.False(t, f.controller.rejected)
-						f.controller.failAt = 0
-						if collapsed {
-							// Row source writes leave a now-uniform sidecar in place
-							// until the owner normalizes it.
-							require.NoError(t, target.SetStringSourceAtWithMP(0, types.StringSourceLiteral, f.mp))
-							require.NoError(t, target.SetStringSourceAtWithMP(0, types.StringSourceExpression, f.mp))
-							require.Equal(t, types.StringSourceExpression, target.GetStringSource())
-							target.NormalizeStringSources()
-							require.Nil(t, target.GetStringSources())
-							require.Equal(t, types.StringSourceExpression, target.GetStringSource())
-						} else if null {
-							require.Nil(t, target.GetStringSources())
-							require.Equal(t, types.StringSourceLiteral, target.GetStringSourceAt(0))
-						} else {
-							require.Equal(t, types.StringSourceExpression, target.GetStringSourceAt(0))
-							require.Equal(t, types.StringSourceLiteral, target.GetStringSourceAt(1))
-						}
-					})
-				}
-			}
-		})
 	}
 }
 
