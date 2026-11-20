@@ -43,10 +43,17 @@ create procedure issue_27103_live_src.p_control() 'begin select count(*) as answ
 create procedure issue_27103_live_src.p_external() 'begin select count(*) as answer from issue_27103_live_src.ext_t; end';
 create procedure issue_27103_live_src.p_transitive() 'begin call issue_27103_live_src.p_external(); end';
 create procedure issue_27103_live_src.p_view() 'begin select count(*) as answer from issue_27103_live_src.ext_v; end';
+create procedure issue_27103_live_src.p_starlark_control() language 'starlark'
+$$
+rows, err = mo.sql("select 1")
+$$;
 select count(*) as source_external_rows from issue_27103_live_src.ext_t;
 source_external_rows
 3
 create database issue_27103_live_dst clone issue_27103_live_src;
+show warnings;
+Level    Code    Message
+Warning    1235    omitted Starlark procedure `p_starlark_control` because its dependencies on omitted objects cannot be verified
 select count(*) as live_target_database from mo_catalog.mo_database
 where datname = 'issue_27103_live_dst';
 live_target_database
@@ -99,6 +106,9 @@ live_independent_procedures
 select count(*) as live_external_procedures from mo_catalog.mo_stored_procedure
 where db = 'issue_27103_live_dst' and name in ('p_external', 'p_transitive', 'p_view');
 live_external_procedures
+0
+select count(*) as omitted_starlark_procedures from mo_catalog.mo_stored_procedure where db = 'issue_27103_live_dst' and name = 'p_starlark_control';
+omitted_starlark_procedures
 0
 select count(*) as source_external_rows_after_clone from issue_27103_live_src.ext_t;
 source_external_rows_after_clone

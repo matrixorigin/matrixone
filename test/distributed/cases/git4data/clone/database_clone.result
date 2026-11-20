@@ -150,9 +150,18 @@ create database db_alter_clone_source;
 create table db_alter_clone_source.parent (id int primary key);
 create table db_alter_clone_source.child (parent_id int);
 create procedure db_alter_clone_source.p_add_fk() 'begin alter table db_alter_clone_source.child add constraint fk_child_parent foreign key (parent_id) references db_alter_clone_source.parent(id); end';
+create procedure db_alter_clone_source.`order`() 'begin insert into db_alter_clone_source.child values (null); end';
+create procedure db_alter_clone_source.p_quoted_call() language 'starlark'
+$$
+rows, err = mo.sql("call db_alter_clone_source.`order`()")
+$$;
 create database db_alter_clone_copy clone db_alter_clone_source;
 drop database db_alter_clone_source;
 call db_alter_clone_copy.p_add_fk();
+call db_alter_clone_copy.p_quoted_call();
+select count(*) as quoted_call_rows from db_alter_clone_copy.child;
+quoted_call_rows
+1
 drop database db_alter_clone_copy;
 
 create database db_clone_unaudited;
@@ -171,6 +180,16 @@ target_tables
 0
 select count(*) as target_procedures from mo_catalog.mo_stored_procedure where db = 'db_clone_unaudited_copy';
 target_procedures
+0
+drop procedure db_clone_unaudited.p;
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("select * from metadata_scan('fixture.probe', '*')")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+not supported: cannot safely rewrite SQL passed to mo.sql in cloned Starlark routine at line 2: not supported: cloned SQL routine contains a statement whose database references cannot be safely remapped
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
+target_databases
 0
 drop database db_clone_unaudited;
 drop database if exists db_snapshot_udf;

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -34,7 +35,9 @@ type remapDbContext struct {
 	// control-flow branches, and assigning one database to every unqualified
 	// reference would risk both false omission and an unsafe persisted body.
 	rejectUseStateChanges bool
-	rejectExecute         bool
+	// Starlark SQL must not execute SQL or resolve relations hidden from the
+	// syntax tree used to rewrite the literal.
+	starlarkSQL bool
 	// cteNames is populated while dependency collection/remapping walks a
 	// WITH-bearing statement. It prevents an unqualified CTE reference from being collected as
 	// a source table while preserving qualified references such as db.cte.
@@ -163,7 +166,7 @@ func remapCloneRoutineStatements(
 	stmts []tree.Statement,
 	remap map[string]string,
 	lowerCaseTableNames int64,
-	rejectExecute bool,
+	starlarkSQL bool,
 ) error {
 	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
 	if err != nil {
@@ -172,7 +175,7 @@ func remapCloneRoutineStatements(
 	unsupported := false
 	if !remapDbInStatements(stmts, remapDbContext{
 		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
-		remapUseDatabase: true, rejectExecute: rejectExecute, unsupported: &unsupported,
+		remapUseDatabase: true, starlarkSQL: starlarkSQL, unsupported: &unsupported,
 	}) || unsupported {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
@@ -461,7 +464,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		// fields, where present, are handled by their dedicated cases above.
 	case *tree.Execute:
 		// A session's prepared SQL is not available to the clone-time walker.
-		if remap.rejectExecute {
+		if remap.starlarkSQL {
 			remap.markUnsupported()
 		}
 	case *tree.Use:
@@ -804,6 +807,15 @@ func remapDbInTableExpr(te tree.TableExpr, remap remapDbContext) {
 		}
 	case *tree.TableFunction:
 		if t.Func != nil {
+			if remap.starlarkSQL {
+				// These functions consume values, not SQL or relation names
+				// encoded as values. Function arguments are still walked.
+				switch t.Id() {
+				case "json_table", "unnest", "generate_series", "generate_random_int64", "generate_random_float64":
+				default:
+					remap.markUnsupported()
+				}
+			}
 			remapDbInExpr(t.Func, remap)
 		}
 		if t.SelectStmt != nil {
@@ -1062,6 +1074,14 @@ func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
 		remapDbInExpr(e.Expr, remap)
 	case *tree.FuncExpr:
 		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			if remap.starlarkSQL && name.NumParts == 1 {
+				// These builtins resolve storage objects from evaluated
+				// arguments rather than qualified AST references.
+				switch strings.ToLower(name.ColName()) {
+				case "mo_table_rows", "mo_table_size", "mo_table_col_max", "mo_table_col_min", "internal_auto_increment", "mo_ctl":
+					remap.markUnsupported()
+				}
+			}
 			if remap.collectFunctionName != nil {
 				remap.collectFunctionName(name)
 			}

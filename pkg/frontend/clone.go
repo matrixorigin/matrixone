@@ -1454,6 +1454,7 @@ func handleCloneDatabaseWithSource(
 	if err != nil {
 		return
 	}
+	originalProcedures := source.storedProcedures
 	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
 
 	if len(source.viewMap) != 0 {
@@ -1532,6 +1533,21 @@ func handleCloneDatabaseWithSource(
 		// same clone transaction and can bind newly restored functions.
 		if err = restoreViews(withResolveUdfInCallerTxn(ctx1), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
+		}
+	}
+
+	for _, definition := range originalProcedures {
+		if !strings.EqualFold(definition.lang, "starlark") {
+			continue
+		}
+		key := cloneRoutineFamilyKey(
+			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
+		)
+		if _, omitted := omissions.procedures[key]; omitted {
+			ses.appendWarningDiagnostic(moerr.ER_NOT_SUPPORTED_YET, fmt.Sprintf(
+				"omitted Starlark procedure %s because its dependencies on omitted objects cannot be verified",
+				quoteIdentifierForSQL(definition.name),
+			))
 		}
 	}
 

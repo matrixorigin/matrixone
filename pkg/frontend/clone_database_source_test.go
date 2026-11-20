@@ -498,7 +498,7 @@ func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rewritten, 1)
 	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
-	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Contains(t, rewritten[0].body, "call `target_db`.`p_inner`()")
 	require.Contains(t, rewritten[0].body, "from `other_db`.`control_t`")
 	require.Contains(t, rewritten[0].body, "'source_db'")
 	require.NotContains(t, rewritten[0].body, "source_db.control_t")
@@ -535,7 +535,7 @@ func TestRewriteCloneStoredProcedureBodiesRewritesNestedControlFlow(t *testing.T
 		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
 		require.NotContains(t, rewritten[0].body, "source_db."+table)
 	}
-	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Contains(t, rewritten[0].body, "call `target_db`.`p_inner`()")
 	require.Equal(t, procedures[0].body, `begin
 			if exists (select 1 from source_db.if_table) then
 				select id from source_db.then_table;
@@ -826,6 +826,16 @@ rows, err = run_sql("select 1")
 			want: "cannot be safely remapped",
 		},
 		{
+			name: "table function with opaque relation arguments",
+			body: `rows, err = mo.sql("select * from metadata_scan('fixture.probe', '*')")`,
+			want: "cannot be safely remapped",
+		},
+		{
+			name: "scalar function with opaque relation arguments",
+			body: `rows, err = mo.sql("select MO_TABLE_ROWS('fixture', 'probe')")`,
+			want: "cannot be safely remapped",
+		},
+		{
 			name: "multiple SQL statements",
 			body: `rows, err = mo.sql("select 1; select 2")`,
 			want: "requires a single SQL statement",
@@ -850,6 +860,24 @@ rows, err = run_sql("select 1")
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
+}
+
+func TestRewriteCloneStarlarkSQLPreservesQuotedProcedureNames(t *testing.T) {
+	rewritten, err := rewriteCloneSQLBody(
+		context.Background(), "call `source_db`.`order`()",
+		"", "source_db", "target_db", 1, true,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "call `target_db`.`order`()", rewritten)
+}
+
+func TestRewriteCloneStarlarkSQLAllowsValueTableFunctions(t *testing.T) {
+	const query = "select * from generate_series(1, 2) as values_only"
+	rewritten, err := rewriteCloneSQLBody(
+		context.Background(), query, "", "source_db", "target_db", 1, true,
+	)
+	require.NoError(t, err)
+	require.Equal(t, query, rewritten)
 }
 
 func TestCloneStarlarkWalkerCoversLanguageForms(t *testing.T) {

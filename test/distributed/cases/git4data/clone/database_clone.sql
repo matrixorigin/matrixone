@@ -100,9 +100,16 @@ create database db_alter_clone_source;
 create table db_alter_clone_source.parent (id int primary key);
 create table db_alter_clone_source.child (parent_id int);
 create procedure db_alter_clone_source.p_add_fk() 'begin alter table db_alter_clone_source.child add constraint fk_child_parent foreign key (parent_id) references db_alter_clone_source.parent(id); end';
+create procedure db_alter_clone_source.`order`() 'begin insert into db_alter_clone_source.child values (null); end';
+create procedure db_alter_clone_source.p_quoted_call() language 'starlark'
+$$
+rows, err = mo.sql("call db_alter_clone_source.`order`()")
+$$;
 create database db_alter_clone_copy clone db_alter_clone_source;
 drop database db_alter_clone_source;
 call db_alter_clone_copy.p_add_fk();
+call db_alter_clone_copy.p_quoted_call();
+select count(*) as quoted_call_rows from db_alter_clone_copy.child;
 drop database db_alter_clone_copy;
 
 -- Rejected SQL must roll back the cloned database and all copied metadata.
@@ -116,6 +123,13 @@ create database db_clone_unaudited_copy clone db_clone_unaudited;
 select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
 select count(*) as target_tables from mo_catalog.mo_tables where reldatabase = 'db_clone_unaudited_copy';
 select count(*) as target_procedures from mo_catalog.mo_stored_procedure where db = 'db_clone_unaudited_copy';
+drop procedure db_clone_unaudited.p;
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("select * from metadata_scan('fixture.probe', '*')")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
 drop database db_clone_unaudited;
 
 -- View dependency sorting runs before the restore loop. Its UDF lookup must
