@@ -104,6 +104,25 @@ union select o.id from outer_keys b where b.id = o.id
 ➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
 1  ¦  1  𝄀
 2  ¦  0
+select o.id from outer_keys o where exists (
+(select o.id from outer_keys a where a.id = o.id)
+union (select o.id from outer_keys a where a.id = o.id)
+limit 0
+) order by o.id;
+➤ id[4,32,0]
+select o.id from outer_keys o where exists (
+(select o.id from outer_keys a where a.id = o.id)
+union (select o.id from outer_keys b where b.id = o.id)
+limit 0
+) order by o.id;
+➤ id[4,32,0]
+select o.id, 2 in (
+(select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+union (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
 create table medium_keys (k mediumint, i int);
 insert into medium_keys values (1, 2), (3, 4);
 select o.k, 1 in (

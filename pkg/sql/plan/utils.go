@@ -1677,10 +1677,12 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
-func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
+func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType, allowFold bool) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
-		err := getUnionSelects(ctx, leftStmt, selects, unionTypes)
+		// An intermediate set operation cannot use the caller's single-branch
+		// DISTINCT fallback: that fallback only applies to an entire set.
+		err := getUnionSelects(ctx, leftStmt, selects, unionTypes, false)
 		if err != nil {
 			return err
 		}
@@ -1697,7 +1699,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if stmt.Type == tree.UNION && !stmt.All {
+		if allowFold && stmt.Type == tree.UNION && !stmt.All {
 			rightStr := tree.String(rightStmt, dialect.MYSQL)
 			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
 				return nil
@@ -1708,7 +1710,9 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		if stmt.Type == tree.UNION && !stmt.All {
+		// A branch's LIMIT must run before set DISTINCT, not after it.
+		if allowFold && stmt.Type == tree.UNION && !stmt.All &&
+			rightStmt.Select.Limit == nil && len(rightStmt.Select.OrderBy) == 0 && rightStmt.Select.RankOption == nil {
 			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
 			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
 				return nil

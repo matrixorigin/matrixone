@@ -4808,7 +4808,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
+	// Folding replaces the set boundary with branch DISTINCT. Keep the
+	// original set node when it owns ordering or pagination.
+	allowFold := len(astOrderBy) == 0 && astLimit == nil && astRankOption == nil
+	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes, allowFold)
 	if err != nil {
 		return 0, err
 	}

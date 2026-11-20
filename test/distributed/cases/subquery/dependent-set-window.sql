@@ -69,6 +69,22 @@ select o.id, 1 in (
     select o.id from outer_keys a where a.id = o.id
     union select o.id from outer_keys b where b.id = o.id
 ) as v from outer_keys o order by o.id;
+-- Set pagination runs after deduplication, even for identical branches.
+select o.id from outer_keys o where exists (
+    (select o.id from outer_keys a where a.id = o.id)
+    union (select o.id from outer_keys a where a.id = o.id)
+    limit 0
+) order by o.id;
+select o.id from outer_keys o where exists (
+    (select o.id from outer_keys a where a.id = o.id)
+    union (select o.id from outer_keys b where b.id = o.id)
+    limit 0
+) order by o.id;
+-- Branch pagination sees duplicate rows before the set removes them.
+select o.id, 2 in (
+    (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+    union (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+) as v from outer_keys o order by o.id;
 -- A capture keeps its declared type even when the set output widens it.
 create table medium_keys (k mediumint, i int);
 insert into medium_keys values (1, 2), (3, 4);
