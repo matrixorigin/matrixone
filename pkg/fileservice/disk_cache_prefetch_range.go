@@ -610,39 +610,39 @@ func (d *DiskCache) fetchRange(
 	return out, true, o.caches(), nil
 }
 
-// run reads the range of fl, registered, through its opener, caches the range when fl
-// caches, and forgets fl. It is canceled by a delete of the object or the closing of the
+// run reads the range of f, registered, through its opener, caches the range when f
+// caches, and forgets f. It is canceled by a delete of the object or the closing of the
 // cache.
-func (fl *memoryPrefetchObject) run() {
-	d := fl.d
+func (f *memoryPrefetchObject) run() {
+	d := f.d
 	defer d.prefetchObjects.reads.Done()
-	defer fl.cancelRead()
-	defer context.AfterFunc(fl.closing, fl.cancelRead)()
-	err := fl.readHeld()
-	content := fl.content()
+	defer f.cancelRead()
+	defer context.AfterFunc(f.closing, f.cancelRead)()
+	err := f.readHeld()
+	content := f.content()
 	if err == nil && len(content) == 0 {
 		err = io.ErrUnexpectedEOF
 	}
-	fl.fail(err)
-	if err == nil && !fl.skipCache {
-		err = d.Update(context.WithoutCancel(fl.ctx), &IOVector{
-			FilePath: fl.filePath,
-			Policy:   fl.policy,
-			Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content, readDeletes: fl.readDeletes}},
+	f.fail(err)
+	if err == nil && !f.skipCache {
+		err = d.Update(context.WithoutCancel(f.ctx), &IOVector{
+			FilePath: f.filePath,
+			Policy:   f.policy,
+			Entries:  []IOEntry{{Offset: f.start, Size: int64(len(content)), Data: content, readDeletes: f.readDeletes}},
 		}, false)
 	}
-	fl.cacheErr = err
-	d.endPrefetch(fl.diskPath, fl)
-	fl.release()
+	f.cacheErr = err
+	d.endPrefetch(f.diskPath, f)
+	f.release()
 }
 
-// readHeld reads the range of fl through its opener, and frees the download connection
-// fl holds, when it holds one.
-func (fl *memoryPrefetchObject) readHeld() error {
-	if fl.needs.conn {
-		defer fl.d.releaseDownloadConns(1)
+// readHeld reads the range of f through its opener, and frees the download connection
+// f holds, when it holds one.
+func (f *memoryPrefetchObject) readHeld() error {
+	if f.needs.conn {
+		defer f.d.releaseDownloadConns(1)
 	}
-	return fl.read(fl.ctx, fl.open)
+	return f.read(f.ctx, f.open)
 }
 
 // errPrefetchDeleted is the error of a prefetch of an object deleted before it read all its
@@ -951,34 +951,34 @@ func admit(ctx context.Context, o waitingObject) (prefetchObject, error) {
 	}
 }
 
-// registerLocked charges the buffer of fl and registers it, joinable. It outlives the read
+// registerLocked charges the buffer of f and registers it, joinable. It outlives the read
 // that registers it, not the cache, closing once closing is done, or a delete of the
 // object.
-func (fl *memoryPrefetchObject) registerLocked(ctx, closing context.Context, now time.Time) {
-	f := &fl.d.prefetchObjects
-	fl.began, fl.closing = now, closing
-	fl.owner, fl.charge = f, flightBufSize(fl.end-fl.start)
-	f.bytes += fl.charge
-	fl.readDeletes = fl.d.readDeletes()
-	fl.ctx, fl.cancelRead = context.WithCancel(context.WithoutCancel(ctx))
-	f.registerLocked(fl.diskPath, fl)
-	f.reads.Add(1)
+func (f *memoryPrefetchObject) registerLocked(ctx, closing context.Context, now time.Time) {
+	objs := &f.d.prefetchObjects
+	f.began, f.closing = now, closing
+	f.owner, f.charge = objs, flightBufSize(f.end-f.start)
+	objs.bytes += f.charge
+	f.readDeletes = f.d.readDeletes()
+	f.ctx, f.cancelRead = context.WithCancel(context.WithoutCancel(ctx))
+	objs.registerLocked(f.diskPath, f)
+	objs.reads.Add(1)
 }
 
-// joinLocked returns the fastest prefetch object reads can join holding the range of fl,
-// one that caches when fl caches.
-func (fl *memoryPrefetchObject) joinLocked(now time.Time) prefetchObject {
-	return fl.d.prefetchObjects.fastestLocked(fl.diskPath, fl.start, fl.end, now, fl.d.downloadMaxExtraWait, fl.needs.caching)
+// joinLocked returns the fastest prefetch object reads can join holding the range of f,
+// one that caches when f caches.
+func (f *memoryPrefetchObject) joinLocked(now time.Time) prefetchObject {
+	return f.d.prefetchObjects.fastestLocked(f.diskPath, f.start, f.end, now, f.d.downloadMaxExtraWait, f.needs.caching)
 }
 
-// abandon ends fl, never registered.
-func (fl *memoryPrefetchObject) abandon() {}
+// abandon ends f, never registered.
+func (f *memoryPrefetchObject) abandon() {}
 
-// fitsLocked reports whether the buffer of fl fits in the bytes of the flights under way,
+// fitsLocked reports whether the buffer of f fits in the bytes of the flights under way,
 // or none is under way.
-func (fl *memoryPrefetchObject) fitsLocked() bool {
-	f := &fl.d.prefetchObjects
-	return f.bytes == 0 || f.bytes+flightBufSize(fl.end-fl.start) <= fl.d.flightBytes()
+func (f *memoryPrefetchObject) fitsLocked() bool {
+	objs := &f.d.prefetchObjects
+	return objs.bytes == 0 || objs.bytes+flightBufSize(f.end-f.start) <= f.d.flightBytes()
 }
 
 // readFromFlights fills the entries of vector not done, of the object at filePath, from the
