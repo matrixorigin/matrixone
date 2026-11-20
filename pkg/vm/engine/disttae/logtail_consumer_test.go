@@ -1539,6 +1539,14 @@ func TestLogTailSubscriberWaitReadyReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestCatalogSubscribeAfterTransportRemoved(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	subscriber.swapClient(&service.LogtailClient{})
+	subscriber.swapClient(nil)
+	err := subscriber.subscribeCatalogTable(t.Context(), api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID}, []uint32{catalog.System_Account})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+}
+
 func TestLogTailSubscriberWaitReadyClientDoesNotExposeInitializingClient(t *testing.T) {
 	subscriber := newLogTailSubscriber()
 	subscriber.swapClient(&service.LogtailClient{})

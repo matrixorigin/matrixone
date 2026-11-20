@@ -2852,7 +2852,11 @@ func (s *logTailSubscriber) subscribeTable(
 func (s *logTailSubscriber) subscribeCatalogTable(
 	ctx context.Context, tblId api.TableID, initialActiveAccounts []uint32,
 ) error {
-	err := s.logTailClient.SubscribeCatalogTable(ctx, tblId, initialActiveAccounts)
+	client := s.client()
+	if client == nil {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	err := client.SubscribeCatalogTable(ctx, tblId, initialActiveAccounts)
 	return moerr.AttachCause(ctx, err)
 }
 
