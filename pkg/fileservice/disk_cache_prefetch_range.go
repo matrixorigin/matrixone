@@ -946,12 +946,18 @@ func waitFlights(ctx context.Context, objects []prefetchObject) error {
 	return nil
 }
 
-// dropPrefetches cancels the prefetch objects of the object at diskPath and waits for
-// them and their cache writes to end, or ctx.
+// dropPrefetches cancels the prefetch objects of the object at diskPath, wakes the
+// prefetches waiting for room, and waits for the objects and their cache writes to end,
+// or ctx.
 func (d *DiskCache) dropPrefetches(ctx context.Context, diskPath string) error {
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	objects := slices.Clone(f.m[diskPath])
+	// Prefetches waiting for room see the delete.
+	if f.freed != nil {
+		close(f.freed)
+		f.freed = nil
+	}
 	f.mu.Unlock()
 	for _, o := range objects {
 		o.stop()
