@@ -1190,7 +1190,7 @@ func (txn *Transaction) dumpWorkspaceTablesLocked(ctx context.Context, fs filese
 		}
 	}
 	stages := make([]*stagedWorkspaceRecord, 0, len(groups))
-	var anchors []int
+	anchors := make([]int, 0, len(groups))
 	var persisted []string
 	var retired []int
 	defer func() {

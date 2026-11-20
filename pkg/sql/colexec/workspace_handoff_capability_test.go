@@ -208,8 +208,9 @@ func TestWorkspaceHandoffFailureSettlementIsPerObjectAndCancelable(t *testing.T)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
 	defer bat.Clean(mp)
-	var names []string
-	for range 3 {
+	const objectCount = 3
+	names := make([]string, 0, objectCount)
+	for range objectCount {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		stats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, false, true)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats[:], false, mp))

@@ -30,8 +30,9 @@ func TestWorkspaceHandoffOutputNames(t *testing.T) {
 	proc := testutil.NewProc(t)
 	out := makeS3OutputBatch()
 	defer out.Clean(proc.Mp())
-	var expected []string
-	for _, attrs := range [][]string{{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}, {catalog.ObjectMeta_ObjectStats}} {
+	formats := [][]string{{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}, {catalog.ObjectMeta_ObjectStats}}
+	expected := make([]string, 0, len(formats))
+	for _, attrs := range formats {
 		inner := batch.NewOffHeapWithSize(len(attrs))
 		inner.Attrs = attrs
 		for i := range inner.Vecs {

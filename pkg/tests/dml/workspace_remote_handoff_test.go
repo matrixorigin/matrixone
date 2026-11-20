@@ -135,15 +135,17 @@ func TestWorkspaceRemoteHandoffSQLRollbackAndCommit(t *testing.T) {
 	oldForce := plan.GetForceScanOnMultiCN()
 	plan.SetForceScanOnMultiCN(true)
 	defer plan.SetForceScanOnMultiCN(oldForce)
-	planRows, err := conn.QueryContext(ctx, "explain insert into dst select id, v, pad from src")
-	require.NoError(t, err)
-	for planRows.Next() {
-		var line string
-		require.NoError(t, planRows.Scan(&line))
-		t.Log(line)
-	}
-	require.NoError(t, planRows.Err())
-	require.NoError(t, planRows.Close())
+	func() {
+		planRows, err := conn.QueryContext(ctx, "explain insert into dst select id, v, pad from src")
+		require.NoError(t, err)
+		defer planRows.Close()
+		for planRows.Next() {
+			var line string
+			require.NoError(t, planRows.Scan(&line))
+			t.Log(line)
+		}
+		require.NoError(t, planRows.Err())
+	}()
 
 	exec("begin")
 	exec("insert into dst select id, v, pad from src")

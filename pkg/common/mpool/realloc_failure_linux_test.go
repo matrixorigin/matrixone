@@ -126,10 +126,17 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			require.NoError(t, err)
 			var limit unix.Rlimit
 			require.NoError(t, unix.Getrlimit(unix.RLIMIT_AS, &limit))
+			// Leave room for Go runtime mappings, including race instrumentation.
+			// The replacement still exceeds that headroom and keeps the pool
+			// below the first GiB boundary, where it logs the new high watermark.
+			const replacementSize = 768 << 20
 			restricted := limit
-			restricted.Cur = pages*uint64(os.Getpagesize()) + 64<<20
+			restricted.Cur = pages*uint64(os.Getpagesize()) + 512<<20
 			require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &restricted))
-			next, resizeErr := mp.ReallocZero(old, 1<<30, true)
+			next, resizeErr := mp.ReallocZero(old, replacementSize, true)
+			if resizeErr == nil {
+				old = next // Cleanup must follow ownership if the injection fails.
+			}
 			// Restore before assertions or other test work can allocate memory.
 			restoreErr := unix.Setrlimit(unix.RLIMIT_AS, &limit)
 			require.NoError(t, restoreErr)
