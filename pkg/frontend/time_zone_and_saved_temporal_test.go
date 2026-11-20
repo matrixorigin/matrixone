@@ -50,13 +50,16 @@ func TestConvertRowsIntoBatchTemporalText(t *testing.T) {
 		"2024-01-01 00:00:00.123456", "2024-01-01 00:00:00.999"})
 	mrs.AddRow([]any{nil, nil, nil, nil, nil})
 
-	session := time.FixedZone("session", 0)
+	// Keep the session and process offsets distinct at the fixture timestamp.
+	_, processOffset := time.Date(2024, 1, 1, 0, 0, 0, 0, time.Local).Zone()
+	sessionOffset := 0
+	if processOffset == 0 {
+		sessionOffset = 8 * 3600
+	}
+	session := time.FixedZone("session", sessionOffset)
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	// Use a process-local zone that differs from the session zone.
-	oldLocal := time.Local
-	time.Local = time.FixedZone("process", 8*3600)
-	defer func() { time.Local = oldLocal }()
+	t.Cleanup(func() { mpool.DeleteMPool(pool) })
 
 	data, colDefs, err := convertRowsIntoBatchInLocation(pool, mrs.Columns, mrs.Data, session)
 	require.NoError(t, err)

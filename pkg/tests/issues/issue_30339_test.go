@@ -157,8 +157,8 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 					exec(t, "insert into u_auto(s) values('Beta')")
 				})
 				runScenario("repeated_target_update_ignore", func(t *testing.T) {
-					// Preserve the two existing alias-stage warnings; both must render the rejected spelling.
-					warning(t, "update ignore u_single a join u_single b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'", "ALPHA", "uk_named", 0, 2)
+					// The unchanged owner is not rejected; only b's conflicting update warns.
+					warning(t, "update ignore u_single a join u_single b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'", "ALPHA", "uk_named", 0, 1)
 				})
 				runScenario("prepared_reuse", func(t *testing.T) {
 					stmt, err := conn.PrepareContext(ctx, "insert into u_single values(?,?,7)")

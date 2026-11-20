@@ -1378,7 +1378,36 @@ func (ctr *container) processOrderFuncRange(
 ) (*vector.Vector, error) {
 	n := ctr.bat.RowCount()
 	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
-	// Each ranking implementation builds one eight-byte value per output row
+	if funcName == "row_number" {
+		if err := checkCanceled(proc, 0); err != nil {
+			return nil, err
+		}
+		count := outputEnd - outputStart
+		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		if err != nil {
+			return nil, err
+		}
+		if err = vec.PreExtend(count, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(count)
+		values := vector.MustFixedColNoTypeCheck[uint64](vec)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				vec.Free(proc.Mp())
+				return nil, err
+			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = uint64(j - partitionStart + 1)
+		}
+		return vec, nil
+	}
+
+	// The remaining ranking implementations build one eight-byte value per output row
 	// before copying into its owned vector. Include that simultaneous scratch.
 	scratch := uint64(outputEnd-outputStart) * 8
 	if err := ctr.allocation.ReserveMetadata(proc, scratch); err != nil {
@@ -1420,27 +1449,6 @@ func (ctr *container) processOrderFuncRange(
 		return vec, nil
 	}
 	switch funcName {
-	case "row_number":
-		values := make([]uint64, outputEnd-outputStart)
-		for j := outputStart; j < outputEnd; j++ {
-			if err := checkCanceled(proc, j-outputStart); err != nil {
-				return nil, err
-			}
-			partitionStart := 0
-			if ctr.ps != nil {
-				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
-			}
-			values[j-outputStart] = uint64(j - partitionStart + 1)
-		}
-		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
-		if err != nil {
-			return nil, err
-		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
-			vec.Free(proc.Mp())
-			return nil, err
-		}
-		return vec, nil
 	case "ntile":
 		values := make([]int64, outputEnd-outputStart)
 		bucketCount, err := ctr.ntileBucketCount(idx)

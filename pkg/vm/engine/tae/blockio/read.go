@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +105,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = util.RemoveIf(sels, func(i int64) bool {
+			sels = slices.DeleteFunc(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
@@ -337,6 +336,7 @@ func blockDataRead(
 	if applyFilter != nil && applyFilter.Exact != nil &&
 		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
 		cacheVectors.Free(mp)
+		applyFilter.FreeMembership(mp)
 		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
 	}
 
@@ -1025,6 +1025,11 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
+	if !stageMembership {
+		applyFilter.FreeMembership(mp)
+	}
 	if len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
@@ -1084,6 +1089,18 @@ func blockDataReadWithFilter(
 		if tombstoneErr != nil {
 			tombstones.Release()
 			return tombstoneErr
+		}
+		if stageMembership {
+			if tombstones.IsEmpty() {
+				handled, memberErr := blockDataReadMembership(ctx, info, columns, colTypes, earlyColumns,
+					policy, outputBat, mp, fs, applyFilter, preFilterRows)
+				if handled || memberErr != nil {
+					tombstones.Release()
+					return memberErr
+				}
+			} else {
+				applyFilter.FreeMembership(mp)
+			}
 		}
 
 		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {

@@ -333,7 +333,7 @@ func TestAggregateAllocationBindingBoundaryMatrix(t *testing.T) {
 	secondAccount, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	sites := AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4,
+		VectorData: 1, VectorArea: 2,
 		ArgumentCount: 5, ArgumentArena: 6,
 	}
 	first, err := NewAllocationAccount(firstAccount, mpool.AllocationOwnerGroup, sites)

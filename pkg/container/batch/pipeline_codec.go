@@ -88,12 +88,8 @@ func (bat *Batch) UnmarshalBinaryForPipeline(data []byte, mp *mpool.MPool) error
 		grouping = data[start:end]
 		data = data[:start]
 	}
-	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
+	if err := bat.unmarshalBinaryWithPrepareParamKindsAtPrefix(data, prefix, mp); err != nil {
 		return err
-	}
-	// A receiver reused after a grouping batch must not inherit its markers.
-	for _, vec := range bat.Vecs {
-		vec.GetGrouping().Reset()
 	}
 	if grouping == nil {
 		return nil

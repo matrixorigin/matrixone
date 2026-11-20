@@ -103,10 +103,6 @@ func UnsafeSliceCastToLength[B any, A any](from []A, length int) []B {
 	)[:length]
 }
 
-func UnsafeUintptr[P *T, T any](p P) uintptr {
-	return uintptr(unsafe.Pointer(p))
-}
-
 func UnsafePointer[P *T, T any](p P) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }

@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -956,7 +955,7 @@ func runLCAProbeWithReaderFallback(
 				return executor.Result{}, err
 			}
 			for _, rowIdx := range missedRows {
-				nulls.Add(out.Vecs[targetIdx+1].GetNulls(), rowIdx)
+				out.Vecs[targetIdx+1].GetNulls().Add(rowIdx)
 			}
 		}
 	}
@@ -1404,7 +1403,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseDeleteBatches = plan2.RemoveIf(baseDeleteBatches, func(t batchWithKind) bool {
+		baseDeleteBatches = slices.DeleteFunc(baseDeleteBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true
@@ -1416,7 +1415,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseUpdateBatches = plan2.RemoveIf(baseUpdateBatches, func(t batchWithKind) bool {
+		baseUpdateBatches = slices.DeleteFunc(baseUpdateBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true

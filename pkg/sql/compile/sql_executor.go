@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -63,7 +62,6 @@ type sqlExecutor struct {
 	qc          qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
 	us          udf.Service
-	buf         *buffer.Buffer
 	taskservice taskservice.TaskService
 }
 
@@ -140,7 +138,6 @@ func NewSQLExecutor(
 		hakeeper:    hakeeper,
 		us:          us,
 		mp:          mp,
-		buf:         buffer.New(),
 		taskservice: taskService,
 	}
 }
@@ -646,7 +643,6 @@ func (exec *txnExecutor) exec(
 	// SQL file admission and all downstream execution paths observe them.
 	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.Role = statementOption.SessionIdentity()
 	proc.Base.SessionInfo.User = statementOption.SessionUser()
-	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
 	defer func() {
@@ -1028,7 +1024,6 @@ func (exec *txnExecutor) LockTable(table string) error {
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
 	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()

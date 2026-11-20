@@ -27,7 +27,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1113,7 +1112,6 @@ type FeSession interface {
 	GetProc() *process.Process
 	GetLastInsertID() uint64
 	GetSqlHelper() *SqlHelper
-	GetBuffer() *buffer.Buffer
 	GetStmtProfile() *process.StmtProfile
 	CopySeqToProc(proc *process.Process)
 	getQueryId(internal bool) []string
@@ -1365,7 +1363,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.Cou
 
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
 	txnHandler    *TxnHandler
@@ -1530,10 +1527,6 @@ func (ses *feSessionImpl) Reset() {
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
-	}
 	ses.upstream = nil
 	ses.fromRealUser = false
 }
@@ -1566,10 +1559,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
-	return ses.buf
 }
 
 func (ses *feSessionImpl) GetStmtProfile() *process.StmtProfile {

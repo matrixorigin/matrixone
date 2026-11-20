@@ -26,7 +26,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -483,7 +482,6 @@ func newCrFixtureWindow(t *testing.T, sql string, window time.Duration) *crFixtu
 	f.cancel = cancel
 	proc := testutil.NewProcess(t)
 	f.proc = proc
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.InitSeq()
 	// Sequence names resolve in the session's current database (the
 	// documented one-argument nextval surface): pin it like `USE testdb`.
@@ -537,7 +535,6 @@ func newCrFixtureWindow(t *testing.T, sql string, window time.Duration) *crFixtu
 		}
 		restore()
 		c.Release()
-		proc.GetSessionInfo().Buf.Free()
 	})
 	return f
 }

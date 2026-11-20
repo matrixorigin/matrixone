@@ -68,7 +68,7 @@ func comparePreparedJSON(
 	resultNulls := result.GetResultVector().GetNulls()
 
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(resultNulls, 0, uint64(length))
+		resultNulls.AddRange(0, uint64(length))
 		return nil
 	}
 	if paramType != types.T_any {
@@ -300,7 +300,7 @@ func compareJSONBoolean(
 	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 	resultNulls := result.GetResultVector().GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(resultNulls, 0, uint64(length))
+		resultNulls.AddRange(0, uint64(length))
 		return nil
 	}
 
@@ -827,7 +827,7 @@ func opBinaryJSONBytesBytesToFixed(
 	rsAnyNull := false
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -844,7 +844,7 @@ func opBinaryJSONBytesBytesToFixed(
 		left, null1 := prepareJSONComparisonAt(p1, 0)
 		right, null2 := prepareJSONComparisonAt(p2, 0)
 		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			r := cmpFn(compareJSONComparisonValues(left, right))
 			for row := 0; row < length; row++ {
@@ -857,7 +857,7 @@ func opBinaryJSONBytesBytesToFixed(
 	if c1 {
 		left, null1 := prepareJSONComparisonAt(p1, 0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else if p2.WithAnyNullValue() || rsAnyNull {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -884,7 +884,7 @@ func opBinaryJSONBytesBytesToFixed(
 	if c2 {
 		right, null2 := prepareJSONComparisonAt(p2, 0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else if p1.WithAnyNullValue() || rsAnyNull {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -1372,7 +1372,7 @@ func valueDecimalCompare[T valueDecimalCompareType](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1388,7 +1388,7 @@ func valueDecimalCompare[T valueDecimalCompareType](
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
 		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, length)
+			rsNull.AddRange(0, length)
 		} else {
 			if m >= 0 {
 				x, err := scaleValue(v1, m)
@@ -1414,7 +1414,7 @@ func valueDecimalCompare[T valueDecimalCompareType](
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, length)
+			rsNull.AddRange(0, length)
 		} else {
 			if m >= 0 {
 				x, err := scaleValue(v1, m)
@@ -1470,7 +1470,7 @@ func valueDecimalCompare[T valueDecimalCompareType](
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, length)
+			rsNull.AddRange(0, length)
 		} else {
 			if m >= 0 {
 				if p1.WithAnyNullValue() || rsAnyNull {

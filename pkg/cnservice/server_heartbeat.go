@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.uber.org/zap"
@@ -29,6 +30,33 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
+
+// ViewMetadataWithdrawalError identifies a failed final admission withdrawal.
+// Close still returns the underlying diagnostic through Unwrap.
+type ViewMetadataWithdrawalError struct{ Err error }
+
+func (e *ViewMetadataWithdrawalError) Error() string { return e.Err.Error() }
+func (e *ViewMetadataWithdrawalError) Unwrap() error { return e.Err }
+
+// IsOnlyViewMetadataWithdrawalTimeout rejects mixed and unknown close errors.
+func IsOnlyViewMetadataWithdrawalTimeout(err error) bool {
+	if e, ok := err.(*ViewMetadataWithdrawalError); ok {
+		return errors.Is(e.Err, context.DeadlineExceeded)
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsOnlyViewMetadataWithdrawalTimeout(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
 
 var cnCommandPollFailed = logutil.Event{
 	Name:    "cn.schedule-command.poll.failed",
@@ -257,13 +285,13 @@ func (s *service) withdrawViewMetadataAdmission() error {
 		err = moerr.AttachCause(ctx, err)
 		s.logger.Error("failed to publish final view metadata withdrawal",
 			zap.Bool("clean_handoff", false), zap.Error(err))
-		return err
+		return &ViewMetadataWithdrawalError{Err: err}
 	}
 	if ctx.Err() != nil {
 		err = moerr.AttachCause(ctx, ctx.Err())
 		s.logger.Error("final view metadata withdrawal timed out",
 			zap.Bool("clean_handoff", false), zap.Error(err))
-		return err
+		return &ViewMetadataWithdrawalError{Err: err}
 	}
 	s.logger.Info("published final view metadata withdrawal",
 		zap.Bool("clean_handoff", true),

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +47,15 @@ type leaseHolderIDQuery struct{}
 type indexQuery struct{}
 type truncatedLsnQuery struct{}
 type leaseHistoryQuery struct{ lsn uint64 }
+type userEntryStateQuery struct{ first, last uint64 }
+type leaseTransition struct{ index, holder uint64 }
+type userEntryState struct {
+	truncatedLSN    uint64
+	lease           uint64
+	transitions     []leaseTransition
+	recoveryBaseLSN uint64
+	recoveryLastLSN uint64
+}
 type requiredLsnQuery struct{}
 type requiredLsnStateQuery struct{}
 type walTruncateStateQuery struct{}
@@ -135,10 +145,17 @@ func parseWALRecoveryLeaseCmd(cmd []byte) (string, uint64) {
 	return digest, entryCount
 }
 
-func getSetTruncatedLsnCmd(lsn uint64) []byte {
-	cmd := make([]byte, headerSize+8)
+func getSetTruncatedLsnCmd(lsn uint64, tnID ...uint64) []byte {
+	size := headerSize + 8
+	if len(tnID) != 0 {
+		size += 8
+	}
+	cmd := make([]byte, size)
 	binaryEnc.PutUint32(cmd, uint32(pb.TruncateLSNUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], lsn)
+	if len(tnID) != 0 {
+		binaryEnc.PutUint64(cmd[headerSize+8:], tnID[0])
+	}
 	return cmd
 }
 
@@ -177,19 +194,27 @@ func getClaimRequiredLsnCmd(expectedLsn, revision, owner, leaderTerm, leaderID u
 	return cmd
 }
 
-func getWALTruncateCmd(psn, checkpointedDSN uint64) []byte {
-	cmd := make([]byte, headerSize+16)
+func getWALTruncateCmd(psn, checkpointedDSN uint64, tnID ...uint64) []byte {
+	size := headerSize + 16
+	if len(tnID) != 0 {
+		size += 8
+	}
+	cmd := make([]byte, size)
 	binaryEnc.PutUint32(cmd, uint32(pb.WALTruncateUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], psn)
 	binaryEnc.PutUint64(cmd[headerSize+8:], checkpointedDSN)
+	if len(tnID) != 0 {
+		binaryEnc.PutUint64(cmd[headerSize+16:], tnID[0])
+	}
 	return cmd
 }
 
 type stateMachine struct {
-	shardID   uint64
-	replicaID uint64
-	state     pb.RSMState
-	entryTerm func(uint64) (uint64, error)
+	shardID      uint64
+	replicaID    uint64
+	state        pb.RSMState
+	leaseIndexes []uint64 // sorted cache of the persisted LeaseHistory keys
+	entryTerm    func(uint64) (uint64, error)
 }
 
 var _ sm.IStateMachine = (*stateMachine)(nil)
@@ -212,6 +237,32 @@ func (s *stateMachine) truncateLeaseHistory(lsn uint64) {
 		if key < lsn {
 			delete(s.state.LeaseHistory, key)
 		}
+	}
+	cut := sort.Search(len(s.leaseIndexes), func(i int) bool { return s.leaseIndexes[i] >= lsn })
+	if cut > 0 {
+		s.leaseIndexes = append([]uint64(nil), s.leaseIndexes[cut:]...)
+	}
+}
+
+func (s *stateMachine) rebuildLeaseIndexes() {
+	s.leaseIndexes = make([]uint64, 0, len(s.state.LeaseHistory))
+	for index := range s.state.LeaseHistory {
+		s.leaseIndexes = append(s.leaseIndexes, index)
+	}
+	sort.Slice(s.leaseIndexes, func(i, j int) bool {
+		return s.leaseIndexes[i] < s.leaseIndexes[j]
+	})
+}
+
+func (s *stateMachine) recordLease() {
+	if s.state.LeaseHistory == nil {
+		s.state.LeaseHistory = make(map[uint64]uint64)
+	}
+	s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+	if n := len(s.leaseIndexes); n == 0 || s.leaseIndexes[n-1] < s.state.Index {
+		s.leaseIndexes = append(s.leaseIndexes, s.state.Index)
+	} else {
+		s.rebuildLeaseIndexes()
 	}
 }
 
@@ -252,7 +303,7 @@ func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
 		}
 		if s.state.LeaseHolderID != walRecoveryLeaseHolderID {
 			s.state.LeaseHolderID = walRecoveryLeaseHolderID
-			s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+			s.recordLease()
 		}
 		return sm.Result{Value: s.state.Index}
 	}
@@ -272,7 +323,7 @@ func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
 		s.state.WALRecoveryComplete = true
 		if s.state.LeaseHolderID != s.state.WALRecoveryOriginalLeaseHolderID {
 			s.state.LeaseHolderID = s.state.WALRecoveryOriginalLeaseHolderID
-			s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+			s.recordLease()
 		}
 		return sm.Result{Value: s.state.Index}
 	}
@@ -283,7 +334,7 @@ func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
 		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
 	}
 	s.state.LeaseHolderID = leaseHolderID
-	s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+	s.recordLease()
 	return sm.Result{}
 }
 
@@ -294,6 +345,14 @@ func rejectedLeaseHolderResult(leaseHolderID uint64) sm.Result {
 }
 
 func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
+	if len(cmd) != headerSize+8 && len(cmd) != headerSize+16 {
+		return sm.Result{Value: s.state.Index}
+	}
+	if len(cmd) == headerSize+16 && s.state.LeaseHolderID != 0 &&
+		(s.state.LeaseHolderID == walRecoveryLeaseHolderID ||
+			binaryEnc.Uint64(cmd[headerSize+8:]) != s.state.LeaseHolderID) {
+		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+	}
 	lsn := parseTruncatedLsn(cmd)
 	// Once a WAL shard uses the checkpoint boundary, a legacy truncation
 	// cannot advance its physical prefix without the matching DSN proof.
@@ -315,6 +374,14 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleWALTruncate(cmd []byte) sm.Result {
+	if len(cmd) != headerSize+16 && len(cmd) != headerSize+24 {
+		return sm.Result{Value: s.state.Index}
+	}
+	if len(cmd) == headerSize+24 && s.state.LeaseHolderID != 0 &&
+		(s.state.LeaseHolderID == walRecoveryLeaseHolderID ||
+			binaryEnc.Uint64(cmd[headerSize+16:]) != s.state.LeaseHolderID) {
+		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+	}
 	psn := binaryEnc.Uint64(cmd[headerSize:])
 	dsn := binaryEnc.Uint64(cmd[headerSize+8:])
 	if psn == 0 || dsn == 0 || psn <= s.state.TruncatedLsn || dsn < s.state.CheckpointedDSN {
@@ -482,6 +549,23 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	} else if v, ok := query.(leaseHistoryQuery); ok {
 		lease, _ := s.getLeaseHistory(v.lsn)
 		return lease, nil
+	} else if v, ok := query.(userEntryStateQuery); ok {
+		result := userEntryState{
+			truncatedLSN:    s.state.TruncatedLsn,
+			recoveryBaseLSN: s.state.WALRecoveryBaseLsn,
+			recoveryLastLSN: s.state.WALRecoveryLastLsn,
+		}
+		first := sort.Search(len(s.leaseIndexes), func(i int) bool {
+			return s.leaseIndexes[i] >= v.first
+		})
+		if first > 0 {
+			result.lease = s.state.LeaseHistory[s.leaseIndexes[first-1]]
+		}
+		for i := first; i < len(s.leaseIndexes) && s.leaseIndexes[i] <= v.last; i++ {
+			index := s.leaseIndexes[i]
+			result.transitions = append(result.transitions, leaseTransition{index, s.state.LeaseHistory[index]})
+		}
+		return result, nil
 	} else if _, ok := query.(requiredLsnQuery); ok {
 		return s.state.RequiredLsn, nil
 	} else if _, ok := query.(requiredLsnStateQuery); ok {
@@ -532,5 +616,6 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 		recovered.RequiredLsnRevision = recovered.RequiredLsn
 	}
 	s.state = recovered
+	s.rebuildLeaseIndexes()
 	return nil
 }

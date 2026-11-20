@@ -207,7 +207,9 @@ func TestScopedSubstringUnprovedShapeKeepsBank(t *testing.T) {
 	}
 }
 
-func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
+// NULL bitmaps are Go-owned and not charged to the account, so scoped NULL
+// metadata binds without falling back to an owned gather.
+func TestScopedSubstringNullMetadataBindsScope(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -219,7 +221,7 @@ func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.New(types.T_char, 15, 0)
 	input := batch.NewWithSize(1)
@@ -239,19 +241,10 @@ func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
 	frame := &DictionaryInputFrame{}
 	t.Cleanup(func() { frame.Free(proc.Mp()) })
 	frame.Begin(input, allocation, proc.Mp())
-	stale, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-	require.NoError(t, err)
-	frame.predicateVectors = []*vector.Vector{stale}
-	require.NoError(t, stale.PreExtend(4, proc.Mp()))
-	require.EqualValues(t, 112, account.Snapshot().Used)
-	// Scoped NULL metadata cannot fit until the optional old bank yields.
 	selected, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1}, allocation)
 	require.NoError(t, err)
-	require.False(t, borrowed)
-	t.Cleanup(func() { selected.Clean(proc.Mp()) })
-	require.False(t, selected.HasDictionary())
+	require.True(t, borrowed, "the frame owns the scoped batch")
 	require.True(t, selected.Vecs[0].IsNull(0))
-	require.Nil(t, frame.predicateVectors[0])
 	out, err := executor.Eval(proc, []*batch.Batch{selected}, nil)
 	require.NoError(t, err)
 	require.True(t, out.IsNull(0))

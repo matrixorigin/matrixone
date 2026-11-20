@@ -10916,7 +10916,7 @@ func TestModernMultiTargetGeneratedColumns(t *testing.T) {
 	require.Equal(t, 1, multiUpdates)
 }
 
-func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing.T) {
+func TestUpdateIgnoreChecksRepeatedPhysicalAliasesAtMergedCandidate(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tests := []struct {
 		name string
@@ -10950,25 +10950,28 @@ func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing
 			for nodeID, node := range query.Nodes {
 				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
 					node.OnDuplicateAction == plan.Node_IGNORE {
+					require.NotNil(t, node.DedupJoinCtx)
+					require.NotNil(t, node.DedupJoinCtx.AuxiliaryRowIdCol,
+						"a repeated target must not retain a separate alias-local UNIQUE validator")
 					ignoreDedupIDs = append(ignoreDedupIDs, int32(nodeID))
 				}
 			}
-			require.NotEmpty(t, ignoreDedupIDs)
+			require.Len(t, ignoreDedupIDs, 1, "only one alias in this fixture mutates the UNIQUE key")
 
-			finalMergeAfterIgnore := false
+			arbitrationAfterMerge := false
 			for nodeID, node := range query.Nodes {
 				if node.NodeType != plan.Node_AGG {
 					continue
 				}
 				for _, dedupID := range ignoreDedupIDs {
-					if planNodeDependsOn(query, int32(nodeID), dedupID, make(map[int32]struct{})) {
-						finalMergeAfterIgnore = true
+					if planNodeDependsOn(query, dedupID, int32(nodeID), make(map[int32]struct{})) {
+						arbitrationAfterMerge = true
 						break
 					}
 				}
 			}
-			require.True(t, finalMergeAfterIgnore,
-				"repeated physical aliases must pass alias-level IGNORE checks before RowID merge")
+			require.True(t, arbitrationAfterMerge,
+				"UNIQUE arbitration must consume the merged physical candidate source")
 		})
 	}
 }

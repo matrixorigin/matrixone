@@ -147,6 +147,10 @@ func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 		}
 		comparison = true
 	case function.BETWEEN:
+	case function.PREFIX_BETWEEN:
+		if len(expr.parameterResults) != 3 || int32(expr.overloadID) != 0 {
+			return false
+		}
 	case function.IN, function.NOT_IN:
 		// The kernel caches list membership, including its NULL bit. A
 		// per-batch or unproven list cannot establish a non-NULL cache result.
@@ -165,7 +169,9 @@ func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 			return false
 		}
 	}
-	if logical {
+	// The byte-prefix range kernel can set a NULL bit only from a NULL
+	// argument. This proof does not opt it into dictionary execution.
+	if logical || expr.fid == function.PREFIX_BETWEEN {
 		return true
 	}
 	if comparison && numericComparisonDomain(expr.parameterResults) {

@@ -98,6 +98,19 @@ func (v *Vector) DictionaryRetainedBytes() int64 {
 	return v.dictionaryState().AccountedBytes()
 }
 
+// DictionaryBaseRetainedBytes reports the backing that a new selection would
+// retain. The existing selection's indices are replaced when composing a view.
+func (v *Vector) DictionaryBaseRetainedBytes() int64 {
+	if !v.IsDictionary() {
+		return 0
+	}
+	backing := v.dictionaryState()
+	if backing.refs.Load() < 0 {
+		return 0 // scoped views do not own a retained base
+	}
+	return backing.base.RetainedBytes()
+}
+
 func (v *Vector) requirePhysical() {
 	if v.class == DICTIONARY {
 		panic(errDictionaryPhysicalAccess)
@@ -329,7 +342,7 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 	}
 	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, false)
 	if source.IsConstNull() {
-		nulls.AddRange(&dst.nsp, 0, uint64(len(rows)))
+		dst.nsp.AddRange(0, uint64(len(rows)))
 	} else if !source.IsConst() && source.HasNull() {
 		for i, row := range rows {
 			if source.nsp.Contains(uint64(row)) {

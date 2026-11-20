@@ -285,12 +285,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	})
 
 	leafByTag := make(map[int32]int32)
+	allTags := make(map[int32]bool)
 
 	for i, leaf := range subTrees {
 		tags := builder.enumerateTags(leaf.NodeId)
 
 		for _, tag := range tags {
 			leafByTag[tag] = int32(i)
+			allTags[tag] = true
 		}
 	}
 
@@ -299,10 +301,18 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	adjMat := make([]bool, nLeaf*nLeaf)
 	firstConnected := nLeaf
 	visited := make([]bool, nLeaf)
+	var joinEdges [][]int32
 
 	for _, cond := range conds {
 		hyperEdge := make(map[int32]bool)
 		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
+		if len(hyperEdge) > 1 && getJoinSideWithOuterScope(cond, allTags, nil, -1) == JoinSideLeft && !builder.filterPushdownBarrier(cond) {
+			edge := make([]int32, 0, len(hyperEdge))
+			for leaf := range hyperEdge {
+				edge = append(edge, leaf)
+			}
+			joinEdges = append(joinEdges, edge)
+		}
 
 		for i := range hyperEdge {
 			if i < firstConnected {
@@ -321,13 +331,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
 
 		for {
-			nextSibling := nLeaf
-			for i := range eligible {
-				if !visited[i] && eligible[i] {
-					nextSibling = int32(i)
-					break
-				}
-			}
+			nextSibling := chooseNextJoinLeaf(eligible, visited, joinEdges)
 
 			if nextSibling == nLeaf {
 				break
@@ -385,6 +389,36 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			fmt.Sprintf("determineJoinOrder:after (nodeID: %d, no change, remainingConds: %d)", nodeID, len(conds)))
 	}
 	return nodeID
+}
+
+// A hyperedge makes its inputs connected, but cannot constrain a join until all
+// inputs are available. Prefer the cheapest leaf that closes a predicate now;
+// retain the original connectivity fallback for unavoidable Cartesian products.
+func chooseNextJoinLeaf(eligible, visited []bool, joinEdges [][]int32) int32 {
+	next := int32(len(eligible))
+	for _, edge := range joinEdges {
+		missing := int32(-1)
+		for _, leaf := range edge {
+			if !visited[leaf] {
+				if missing != -1 {
+					missing = -1
+					break
+				}
+				missing = leaf
+			}
+		}
+		if missing != -1 && eligible[missing] && missing < next {
+			next = missing
+		}
+	}
+	if next == int32(len(eligible)) {
+		for i := range eligible {
+			if !visited[i] && eligible[i] {
+				return int32(i)
+			}
+		}
+	}
+	return next
 }
 
 // Flattening this join would change its logical activation inputs and lose ON

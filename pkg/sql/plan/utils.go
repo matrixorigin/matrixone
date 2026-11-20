@@ -31,7 +31,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1658,10 +1657,16 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
+		if leaf, ok := leafByTag[exprImpl.Col.RelPos]; ok {
+			hyperEdge[leaf] = true
+		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
@@ -8570,11 +8575,6 @@ func (set UnorderedSet[T]) Find(val T) bool {
 		return ok
 	}
 	return false
-}
-
-// RemoveIf removes the elements that pred is true.
-func RemoveIf[T any](data []T, pred func(t T) bool) []T {
-	return commonutil.RemoveIf(data, pred)
 }
 
 func Find[T ~string | ~int, S any](data map[T]S, val T) bool {

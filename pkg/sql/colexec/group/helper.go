@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1408,9 +1407,6 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
-		if ctr.spillBkts == nil {
-			ctr.spillBkts = list.New[*spillBucket]()
-		}
 		for i, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
 				if err, canceled := vm.CancelCheck(proc); canceled {
@@ -1421,7 +1417,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
-				ctr.spillBkts.PushBack(bkt)
+				ctr.spillBkts = append(ctr.spillBkts, bkt)
 			} else {
 				bkt.free()
 			}
@@ -1436,13 +1432,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 
 	// then, if there is no spill bucket in the queue, done.
-	if ctr.spillBkts == nil || ctr.spillBkts.Len() == 0 {
+	if len(ctr.spillBkts) == 0 {
 		// done
 		return false, nil
 	}
 
 	// popped bkt must be defer freed.
-	bkt := ctr.spillBkts.PopBack().Value
+	last := len(ctr.spillBkts) - 1
+	bkt := ctr.spillBkts[last]
+	ctr.spillBkts[last] = nil
+	ctr.spillBkts = ctr.spillBkts[:last]
 	defer func() {
 		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {

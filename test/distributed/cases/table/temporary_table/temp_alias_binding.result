@@ -4,32 +4,149 @@ use tmp_alias_binding;
 create temporary table t1(a int, b int);
 insert into t1 values (1, 2), (3, 4);
 select t1.a from t1 where t1.b > 2;
-a
+➤ a[4,32,0]  𝄀
 3
 select x.a from (select * from t1) as x where x.b > 2;
-a
+➤ a[4,32,0]  𝄀
 3
 create table t2(a int, b int);
 insert into t2 values (3, 5);
 select t1.a, t2.b from t1 join t2 on t1.a = t2.a where t1.b > 2;
-a    b
-3    5
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+3  ¦  5
 select count(*), sum(b) from t1;
-count(*)    sum(b)
-2    6
+➤ count(*)[-5,64,0]  ¦  sum(b)[-5,64,0]  𝄀
+2  ¦  6
 select a, b from t1 where b > 1 order by b desc;
-a    b
-3    4
-1    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+3  ¦  4  𝄀
+1  ¦  2
 select a from t1 where a in (select a from t1 where b > 2);
-a
+➤ a[4,32,0]  𝄀
 3
 select l.a, r.b from t1 as l join t1 as r on l.a = r.a order by l.a;
-a    b
-1    2
-3    4
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+3  ¦  4
 with c as (select * from t1 where b > 2)
 select a from c;
-a
+➤ a[4,32,0]  𝄀
 3
+create view v(c) as select b + 1 from t2;
+create view qualified_v as select b from tmp_alias_binding.t2;
+create view nested_v as select c from v;
+prepare read_view from 'select c from tmp_alias_binding.nested_v order by c';
+execute read_view;
+➤ c[-5,12,0]  𝄀
+6
+create temporary table t2(a int, b bigint);
+select count(*) from t2;
+➤ count(*)[-5,64,0]  𝄀
+0
+select c from v order by c;
+➤ c[-5,12,0]  𝄀
+6
+select b from qualified_v order by b;
+➤ b[4,32,0]  𝄀
+5
+execute read_view;
+➤ c[-5,12,0]  𝄀
+6
+insert into t2 values (10, 90);
+select b from t2;
+➤ b[-5,64,0]  𝄀
+90
+select v.c, t2.b from v cross join t2;
+➤ c[-5,12,0]  ¦  b[-5,64,0]  𝄀
+6  ¦  90
+select t2.b, v.c from t2 cross join v;
+➤ b[-5,64,0]  ¦  c[-5,12,0]  𝄀
+90  ¦  6
+select c from nested_v order by c;
+➤ c[-5,12,0]  𝄀
+6
+execute read_view;
+➤ c[-5,12,0]  𝄀
+6
+desc qualified_v;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show columns from nested_v;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+c  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
+select table_name, column_name, data_type from information_schema.columns
+where table_schema = 'tmp_alias_binding' and table_name in ('v', 'qualified_v', 'nested_v')
+order by table_name, ordinal_position;
+➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+nested_v  ¦  c  ¦  bigint  𝄀
+qualified_v  ¦  b  ¦  int  𝄀
+v  ¦  c  ¦  bigint
+create table view_copy as select b from qualified_v;
+desc view_copy;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+select b from view_copy;
+➤ b[4,32,0]  𝄀
+5
+create view invalid_v as select b from t2;
+-- @regex(".*temporary table.*", true)
+View's SELECT refers to a temporary table 't2'
+alter view qualified_v as select b from t2;
+-- @regex(".*temporary table.*", true)
+View's SELECT refers to a temporary table 't2'
+create view through_view as select b from qualified_v;
+select b from through_view;
+➤ b[4,32,0]  𝄀
+5
+select b from t2;
+➤ b[-5,64,0]  𝄀
+90
+select b from tmp_alias_binding.t2;
+➤ b[4,32,0]  𝄀
+5
+select c from tmp_alias_binding.nested_v;
+➤ c[-5,12,0]  𝄀
+6
+alter table tmp_alias_binding.t2 modify column b smallint;
+desc qualified_v;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+b  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦  
+select b from qualified_v;
+➤ b[5,16,0]  𝄀
+5
+select b from t2;
+➤ b[-5,64,0]  𝄀
+90
+drop table tmp_alias_binding.t2;
+select c from v;
+-- @regex(".*does not exist.*", true)
+SQL parser error: table "t2" does not exist
+select b from t2;
+➤ b[-5,64,0]  𝄀
+90
+create table tmp_alias_binding.t2(a int, b smallint);
+insert into tmp_alias_binding.t2 values (3, 5);
+execute read_view;
+➤ c[-5,7,0]  𝄀
+6
+drop temporary table t2;
+execute read_view;
+➤ c[-5,7,0]  𝄀
+6
+select b from t2;
+➤ b[5,16,0]  𝄀
+5
+deallocate prepare read_view;
+create temporary table v(c bigint);
+insert into v values (99);
+select c from v;
+➤ c[-5,64,0]  𝄀
+99
+select c from nested_v;
+➤ c[-5,7,0]  𝄀
+6
+drop temporary table v;
+select c from nested_v;
+➤ c[-5,7,0]  𝄀
+6
 drop database if exists tmp_alias_binding;

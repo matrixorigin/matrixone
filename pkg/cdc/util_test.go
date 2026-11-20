@@ -32,7 +32,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -447,31 +446,6 @@ func Test_convertColIntoSql(t *testing.T) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "convertColIntoSql(%v, %v, %v, %v)", tt.args.ctx, tt.args.data, tt.args.typ, tt.args.sqlBuff)
-		})
-	}
-}
-
-func Test_copyBytes(t *testing.T) {
-	type args struct {
-		src []byte
-	}
-	tests := []struct {
-		name string
-		args args
-		want []byte
-	}{
-		{
-			args: args{src: []byte{}},
-			want: []byte{},
-		},
-		{
-			args: args{src: []byte{'a', 'b', 'c'}},
-			want: []byte{'a', 'b', 'c'},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, commonutil.CloneBytes(tt.args.src), "copyBytes(%v)", tt.args.src)
 		})
 	}
 }

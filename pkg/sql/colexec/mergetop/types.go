@@ -167,8 +167,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopRetainedData,
 		topsites.MergeTopRetainedArea,
-		topsites.MergeTopRetainedNulls,
-		topsites.MergeTopRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -178,8 +176,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopExpressionData,
 		topsites.MergeTopExpressionArea,
-		topsites.MergeTopExpressionNulls,
-		topsites.MergeTopExpressionGrouping,
 	)
 	if err != nil {
 		return err

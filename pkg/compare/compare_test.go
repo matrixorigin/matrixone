@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -364,14 +363,14 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 				require.NoError(t, err)
 				account, err := registry.Open(1 << 20)
 				require.NoError(t, err)
-				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 				require.NoError(t, err)
 
 				destination := vector.NewOffHeapVecWithType(tc.typ)
 				require.NoError(t, destination.SetAllocationAccount(selection))
 				require.NoError(t, tc.append(destination, false, mp))
-				require.Zero(t, destination.GetNulls().GetBitmap().ExternalStorageCapacity())
-				require.Zero(t, destination.GetGrouping().GetBitmap().ExternalStorageCapacity())
+				require.Zero(t, destination.GetNulls().GetBitmap().CapWords())
+				require.Zero(t, destination.GetGrouping().GetBitmap().CapWords())
 
 				var source *vector.Vector
 				if metadata == "const-null" {
@@ -406,14 +405,16 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 	}
 }
 
-func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
+// Null bitmaps are Go-owned, so copying a NULL into an accounted vector
+// succeeds without charging the allocation account.
+func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 
 	destination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
@@ -427,10 +428,9 @@ func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
 	cmp.Set(0, source)
 	cmp.Set(1, destination)
 
-	err = cmp.Copy(0, 1, 0, 0, proc)
-	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
-	require.False(t, destination.GetNulls().Contains(0))
-	require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](destination)[0])
+	require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
+	require.True(t, destination.GetNulls().Contains(0))
+	require.Equal(t, 1, destination.Length())
 	require.Equal(t, used, account.Snapshot().Used)
 
 	source.Free(mp)
@@ -521,7 +521,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 			constant := vector.NewConstNull(types.T_any.ToType(), 3, mp)
 			flat := vector.NewVec(types.T_any.ToType())
 			flat.SetLength(3)
-			nulls.AddRange(flat.GetNulls(), 0, 3)
+			flat.GetNulls().AddRange(0, 3)
 			defer func() { constant.Free(mp); flat.Free(mp); require.Zero(t, mp.CurrNB()) }()
 			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 			for _, desc := range []bool{false, true} {
@@ -536,7 +536,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 				require.True(t, flat.IsNull(1))
 				require.Equal(t, types.StringSourceLiteral, flat.GetStringSourceAt(1))
 				// ANY has no non-NULL value domain; don't broaden unsupported values.
-				nulls.Del(flat.GetNulls(), 0)
+				flat.GetNulls().Del(0)
 				require.True(t, moerr.IsMoErrCode(c.Copy(1, 0, 0, 0, proc), moerr.ErrNotSupported))
 				func() {
 					defer func() {
@@ -546,7 +546,7 @@ func TestDomainlessNullCompare(t *testing.T) {
 					}()
 					c.Compare(1, 0, 0, 0)
 				}()
-				nulls.Add(flat.GetNulls(), 0)
+				flat.GetNulls().Add(0)
 			}
 		})
 	}

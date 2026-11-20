@@ -773,7 +773,6 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	)
 	require.NoError(t, err)
 	g.ctr.groupingRollup = []*vector.Vector{rollup}
-	require.Greater(t, allocation.account.Snapshot().Used, before)
 
 	g.ctr.resetForSpill()
 	require.Nil(t, g.ctr.groupingRollup)
@@ -889,8 +888,6 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
 			GroupAllocationSiteKeyArea,
-			GroupAllocationSiteKeyNulls,
-			GroupAllocationSiteKeyGrouping,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(
@@ -1127,11 +1124,11 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	destination := g.ctr.groupByBatches[0].Vecs[0]
 	requiredWords := (rows + 63) / 64
 	require.GreaterOrEqual(t,
-		destination.GetNulls().GetBitmap().ExternalStorageCapacity(),
+		destination.GetNulls().GetBitmap().CapWords(),
 		requiredWords,
 	)
 	require.GreaterOrEqual(t,
-		destination.GetGrouping().GetBitmap().ExternalStorageCapacity(),
+		destination.GetGrouping().GetBitmap().CapWords(),
 		requiredWords,
 	)
 
@@ -2542,7 +2539,7 @@ func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
 	require.Nil(t, result.Batch)
 	require.Nil(t, g.ctr.currentSpillBkt)
 	require.Positive(t, nonEmptyBuckets)
-	require.Equal(t, nonEmptyBuckets, g.ctr.spillBkts.Len())
+	require.Equal(t, nonEmptyBuckets, len(g.ctr.spillBkts))
 	require.Positive(t, allocation.generation.SpillDiskUsed())
 	require.Zero(t, allocation.generation.SpillFDUsed())
 }
@@ -3527,7 +3524,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 									partial.ctr.spillMem = 256
 								}
 							} else if index == 2 {
-								require.Zero(t, partial.ctr.spillBkts.Len(), "drain before resuming input")
+								require.Zero(t, len(partial.ctr.spillBkts), "drain before resuming input")
 							}
 						}))
 						require.NoError(t, partial.Prepare(proc))
@@ -3541,7 +3538,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 						result, err := vm.Exec(partial, proc)
 						require.NoError(t, err)
 						require.NotNil(t, result.Batch)
-						require.Positive(t, partial.ctr.spillBkts.Len())
+						require.Positive(t, len(partial.ctr.spillBkts))
 						require.NotNil(t, partial.ctr.distinctSpill)
 						cancel()
 						result, err = vm.Exec(partial, proc)
@@ -3568,7 +3565,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 					}
 					require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
 					require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillKeys"])
-					require.Zero(t, partial.ctr.spillBkts.Len())
+					require.Zero(t, len(partial.ctr.spillBkts))
 					require.Nil(t, partial.ctr.distinctSpill)
 				}()
 			}

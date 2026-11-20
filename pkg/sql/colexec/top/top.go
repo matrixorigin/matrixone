@@ -1320,6 +1320,12 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	} else {
 		vec = ctr.cmps[ctr.poses[0]].Vector()
 	}
+	if vec.IsNull(uint64(x)) {
+		// A NULL heap root has no comparable key, and its raw slot bytes
+		// are not a pruning bound. Publish nothing and let every reader
+		// fail open to the unpruned exact scan.
+		return nil, false
+	}
 	if vec.GetType().IsVarlen() {
 		return vec.GetBytesAt(x), true
 	}

@@ -645,6 +645,39 @@ func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
 	require.Empty(t, irregularIndexes[1])
 }
 
+func TestCoalesceRepeatedPhysicalTargetUniqueChecks(t *testing.T) {
+	uniqueA := &IndexDef{IndexName: "uk_a", IndexTableName: "uk_a_table", Unique: true}
+	uniqueB := &IndexDef{IndexName: "uk_b", IndexTableName: "uk_b_table", Unique: true}
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	indexes := []*IndexDef{uniqueA, uniqueB, regular}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b", "c"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: indexes},
+			{TblId: 100, Indexes: indexes},
+			{TblId: 200, Indexes: indexes},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"x": nil},
+			{"x": nil},
+		},
+	}
+
+	checks := [][]bool{
+		{false, false, false},
+		{true, true, true},
+		{true, false, false},
+	}
+	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, checks)
+
+	// All unique checks for one physical table are evaluated once by its owner.
+	require.Equal(t, []bool{true, true, false}, checks[0])
+	require.Equal(t, []bool{false, false, true}, checks[1])
+	// Another physical table keeps its own independent check.
+	require.Equal(t, []bool{true, false, false}, checks[2])
+}
+
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {
 	tests := []struct {
 		name       string

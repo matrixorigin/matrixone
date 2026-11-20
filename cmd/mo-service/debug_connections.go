@@ -18,9 +18,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -30,11 +30,13 @@ import (
 )
 
 const (
-	connsThreshold = 1024
+	connsThreshold         = 1024
+	conntrackRetryInterval = 5 * time.Second
 )
 
 var (
 	conntrackReportInterval = time.Second * 5
+	errConntrackClose       = errors.New("conntrack socket close failed")
 )
 
 type conntrackClient interface {
@@ -53,42 +55,129 @@ func startConnectionTracking() (err error) {
 		}
 	}()
 
-	c, err := dialConntrack()
+	// Capture the factory once; every replacement has the same owner and policy.
+	dial := dialConntrack
+	listener, err := listenConntrack(dial)
 	if err != nil {
 		return err
 	}
+	// Keep the existing process lifetime. Runtime replacement only happens after
+	// the worker reports a fatal error; it is then safe to join that worker.
+	go runConnectionTracking(context.Background(), listener, dial)
+	return nil
+}
 
+// A listener owns one socket and its queues. Replacements never share queues
+// or the consumer's map, so an old generation cannot update the new one.
+type conntrackListener struct {
+	client conntrackClient
+	events chan conntrack.Event
+	errors chan error
+}
+
+func listenConntrack(dial func() (conntrackClient, error)) (*conntrackListener, error) {
+	c, err := dial()
+	if err != nil {
+		return nil, err
+	}
 	events := make(chan conntrack.Event, 65536)
-	errorChan, err := c.Listen(events, uint8(max(runtime.NumCPU(), 16)), []netfilter.NetlinkGroup{
+	// Keep receive, decode and delivery ordered. Concurrent conntrack workers
+	// can deliver DESTROY before NEW, leaving a destroyed flow in activeConns.
+	errorChan, err := c.Listen(events, 1, []netfilter.NetlinkGroup{
 		netfilter.GroupCTNew,
 		netfilter.GroupCTDestroy,
 	})
 	if err != nil {
-		_ = c.Close()
-		return err
+		if closeErr := c.Close(); closeErr != nil {
+			return nil, errors.Join(err, errConntrackClose, closeErr)
+		}
+		return nil, err
 	}
-
-	go func() {
-		defer c.Close()
-		logConnTrack(context.Background(), events, errorChan)
-	}()
-
-	return nil
+	return &conntrackListener{client: c, events: events, errors: errorChan}, nil
 }
 
-func logConnTrack(ctx context.Context, events chan conntrack.Event, errorChan chan error) {
+func (l *conntrackListener) close() error {
+	// conntrack.Close closes the socket, then waits for its worker. The worker
+	// may be blocked publishing an event/error, which closing the fd cannot
+	// interrupt. Keep draining both queues until Close has joined the worker.
+	done := make(chan error, 1)
+	go func() {
+		done <- l.client.Close()
+	}()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case _, ok := <-l.events:
+			if !ok {
+				l.events = nil
+			}
+		case _, ok := <-l.errors:
+			if !ok {
+				l.errors = nil
+			}
+		}
+	}
+}
+
+func runConnectionTracking(ctx context.Context, listener *conntrackListener, dial func() (conntrackClient, error)) {
+	for {
+		err := logConnTrack(ctx, listener.events, listener.errors)
+		closeErr := listener.close()
+		if closeErr != nil {
+			// Do not accumulate replacements when the old socket cannot be closed.
+			logutil.Error("conntrack: tracking stopped", zap.Error(closeErr))
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		logutil.Warn("conntrack: tracking interrupted; previous statistics invalid", zap.Error(err))
+		for {
+			// This is optional diagnostics, not a service admission gate. Retry at
+			// most once per interval, including repeated Dial/Listen failures.
+			timer := time.NewTimer(conntrackRetryInterval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			listener, err = listenConntrack(dial)
+			if err == nil {
+				break
+			}
+			logutil.Error("conntrack: restart failed", zap.Error(err))
+			if errors.Is(err, errConntrackClose) {
+				return
+			}
+		}
+	}
+}
+
+func logConnTrack(ctx context.Context, events chan conntrack.Event, errorChan chan error) error {
 
 	activeConns := make(map[uint32]*conntrack.Flow)
 	ticker := time.NewTicker(conntrackReportInterval)
 	defer ticker.Stop()
+	startedAt := time.Now()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 
-		case ev := <-events:
+		case ev, ok := <-events:
+			if !ok {
+				return errors.New("conntrack event channel closed")
+			}
 			switch ev.Type {
 
 			case conntrack.EventNew:
@@ -99,12 +188,20 @@ func logConnTrack(ctx context.Context, events chan conntrack.Event, errorChan ch
 
 			}
 
-		case err := <-errorChan:
-			logutil.Error("conntrack: error", zap.Error(err))
+		case err, ok := <-errorChan:
+			if !ok || err == nil {
+				return errors.New("conntrack listener stopped without an error")
+			}
+			// Listen has one worker, and every reported error terminates it.
+			// Do not keep publishing stale counts after that worker exits.
+			return err
 
 		case <-ticker.C:
 			logutil.Info("conntrack: stats",
 				zap.Any("connections", len(activeConns)),
+				zap.String("scope", "since_listener_start"),
+				zap.Bool("complete", false),
+				zap.Time("listener_started_at", startedAt),
 			)
 
 			logConnectionStats(activeConns)
@@ -143,6 +240,8 @@ func logHostPortStats(stats map[string]int, what string) {
 		logutil.Info("conntrack: "+what,
 			zap.Any("host port", hostPort),
 			zap.Any("connections", conns),
+			zap.String("scope", "since_listener_start"),
+			zap.Bool("complete", false),
 		)
 	}
 }

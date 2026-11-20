@@ -104,3 +104,83 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 	t.Cleanup(func() { output.Clean(mp) })
 	require.ErrorContains(t, output.UnmarshalBinaryForPipeline(bad, mp), "exceeds vector length")
 }
+
+func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	input := NewWithSize(1)
+	t.Cleanup(func() { input.Clean(mp) })
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"one", "two", "three"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, mp))
+	}
+	input.SetRowCount(3)
+	input.ExtraBuf = []byte(pipelineGroupingMagic)
+	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	require.NoError(t, err)
+	prefix, err := stableBatchPayloadLength(plain)
+	require.NoError(t, err)
+	require.Equal(t, len(plain), prefix)
+	// Magic at the footer candidate position is part of ExtraBuf, not a footer.
+	end := len(plain) - pipelineGroupingFooterSize
+	require.Equal(t, pipelineGroupingMagic, string(plain[end:end+8]))
+	output := NewOffHeapEmpty()
+	t.Cleanup(func() { output.Clean(mp) })
+	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
+	require.Equal(t, input.ExtraBuf, output.ExtraBuf)
+
+	input.Vecs[0].GetGrouping().Add(2)
+	groupOnly, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	require.NoError(t, err)
+	prefix, err = stableBatchPayloadLength(groupOnly)
+	require.NoError(t, err)
+	end = len(groupOnly) - pipelineGroupingFooterSize
+	require.Equal(t, prefix, end-int(binary.LittleEndian.Uint64(groupOnly[end+8:])))
+	require.NoError(t, output.UnmarshalBinaryForPipeline(groupOnly, mp))
+	require.True(t, output.Vecs[0].GetGrouping().Contains(2))
+
+	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceSQLPrepare))
+	for _, tc := range []struct {
+		name          string
+		includeSource bool
+		version       byte
+	}{
+		{"v1", false, prepareParamKindBatchVersionV1},
+		{"v2", true, prepareParamKindBatchVersion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, tc.includeSource)
+			require.NoError(t, err)
+			prefix, err := stableBatchPayloadLength(encoded)
+			require.NoError(t, err)
+			require.Equal(t, tc.version, encoded[prefix+3])
+			require.NoError(t, output.UnmarshalBinaryForPipeline(encoded, mp))
+			require.True(t, output.Vecs[0].GetGrouping().Contains(2))
+			require.Equal(t, vector.PrepareParamFloat, output.Vecs[0].GetPrepareParamKindAt(0))
+			if tc.includeSource {
+				require.Equal(t, types.StringSourceSQLPrepare, output.Vecs[0].GetStringSourceAt(0))
+			}
+			end := len(encoded) - pipelineGroupingFooterSize
+			size := binary.LittleEndian.Uint64(encoded[end+8:])
+			crossesStable := bytes.Clone(encoded)
+			binary.LittleEndian.PutUint64(crossesStable[end+8:], uint64(end-prefix)+1)
+			require.ErrorContains(t, output.UnmarshalBinaryForPipeline(crossesStable, mp), "invalid pipeline grouping payload size")
+			cutsTrailer := bytes.Clone(encoded)
+			binary.LittleEndian.PutUint64(cutsTrailer[end+8:], size+1)
+			require.Error(t, output.UnmarshalBinaryForPipeline(cutsTrailer, mp))
+			badBoth := bytes.Clone(encoded)
+			badBoth[prefix] = 'X'
+			binary.LittleEndian.PutUint64(badBoth[end-int(size):], 4)
+			require.ErrorContains(t, output.UnmarshalBinaryForPipeline(badBoth, mp), "invalid prepared parameter batch trailer")
+			badFrameAndFooter := bytes.Clone(encoded)
+			binary.NativeEndian.PutUint64(badFrameAndFooter[:8], ^uint64(0))
+			binary.LittleEndian.PutUint64(badFrameAndFooter[end+8:], ^uint64(0))
+			require.ErrorContains(t, output.UnmarshalBinaryForPipeline(badFrameAndFooter, mp), "invalid batch row count")
+		})
+	}
+	require.Error(t, output.UnmarshalBinaryForPipeline(plain[:len(plain)-1], mp))
+	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
+	require.False(t, output.HasGrouping())
+	require.Equal(t, vector.PrepareParamNone, output.Vecs[0].GetPrepareParamKindAt(0))
+}

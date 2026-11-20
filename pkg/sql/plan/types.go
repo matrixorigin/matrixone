@@ -366,9 +366,10 @@ type Rule interface {
 
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules
 type BaseOptimizer struct {
-	qry   *Query
-	rules []Rule
-	ctx   CompilerContext
+	skipLocalDomains bool
+	qry              *Query
+	rules            []Rule
+	ctx              CompilerContext
 }
 
 type ViewData struct {

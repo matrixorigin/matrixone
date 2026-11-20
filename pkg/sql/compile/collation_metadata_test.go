@@ -12,6 +12,7 @@ package compile
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -112,4 +113,41 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	// The transport codec can retain a known domain without admitting it.
 	runtime := types.MustTypeFromPlan(typ)
 	require.Equal(t, []types.Type{runtime}, convertToTypes(convertToPlanTypes([]types.Type{runtime})))
+}
+
+func TestDecodeBatchReleasesProvenanceOnGroupingFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) })
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"one", "two"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
+	}
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone}, mp))
+	source.Vecs[0].GetGrouping().Add(1)
+	source.SetRowCount(2)
+	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	require.NoError(t, err)
+	const groupingFooterSize = 16
+	end := len(encoded) - groupingFooterSize
+	start := end - int(binary.LittleEndian.Uint64(encoded[end+8:]))
+	before := mp.CurrNB()
+	// The same provenance prefix must allocate before the later grouping error.
+	func() {
+		probe := batch.NewOffHeapEmpty()
+		defer probe.Clean(mp)
+		err = probe.UnmarshalBinaryWithPrepareParamKinds(encoded[:start], mp)
+		require.NoError(t, err)
+		require.NotEmpty(t, probe.Vecs[0].GetPrepareParamKinds())
+		require.Greater(t, mp.CurrNB(), before)
+	}()
+	require.Equal(t, before, mp.CurrNB())
+	binary.LittleEndian.PutUint64(encoded[start:], 3)
+	decoded, err := decodeBatch(mp, encoded)
+	if decoded != nil {
+		defer decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "pipeline grouping row count mismatch")
+	require.Nil(t, decoded)
+	require.Equal(t, before, mp.CurrNB(), "decoder must release allocated provenance on failure")
 }

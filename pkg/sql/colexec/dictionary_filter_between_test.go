@@ -43,7 +43,7 @@ func dateSelectionFixture(t testing.TB, values []types.Date, lower, upper types.
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_date.ToType()
 	input := batch.NewWithSize(1)

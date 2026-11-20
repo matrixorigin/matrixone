@@ -246,7 +246,9 @@ func TestReplayReadStopsOnCallerCancellation(t *testing.T) {
 	d := NewLogServiceDriver(&cfg)
 	defer func() { require.NoError(t, d.Close()) }()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	cancelErr := errors.New("stop replay")
 	result := make(chan error, 1)
 	go func() {
 		result <- d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
@@ -260,14 +262,23 @@ func TestReplayReadStopsOnCallerCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("replay did not reach Read")
 	}
-	cancel()
+	cancel(cancelErr)
 	select {
 	case err := <-result:
-		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, cancelErr)
 	case <-time.After(time.Second):
 		t.Fatal("replay Read retry ignored caller cancellation")
 	}
 	require.EqualValues(t, 1, client.calls.Load())
+
+	// Cancellation can also win before the read borrows a backend client.
+	_, _, err := d.readFromBackend(ctx, 1, 1024)
+	require.ErrorIs(t, err, cancelErr)
+	require.EqualValues(t, 1, client.calls.Load())
+
+	require.NoError(t, d.Close())
+	_, _, err = d.readFromBackend(t.Context(), 1, 1024)
+	require.ErrorIs(t, err, ErrClientPoolClosed)
 }
 
 type failFirstReadClient struct {

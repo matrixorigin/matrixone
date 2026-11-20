@@ -4789,7 +4789,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
-			} else if function.IntegerArgumentSourceDependent(name, idx) {
+			} else if function.IntegerArgumentSourceDependent(name, idx) &&
+				!function.IntegerArgumentKeepsOperandBinding(name, idx) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				if function.IntegerArgumentUsesBitSources(name, idx) {

@@ -868,13 +868,17 @@ func normalizeQCloudContextError(ctx context.Context, err error) error {
 	// lose its cancellation identity even when its only child is ctx.Err().
 	// Do not collapse mixed or unrelated storage errors.
 	retryErr, ok := err.(*cos.RetryError)
-	if !ok ||
-		len(retryErr.Errs) != 1 ||
-		!errors.Is(retryErr.Errs[0], contextErr) {
+	if !ok || len(retryErr.Errs) != 1 {
 		return err
 	}
-
-	return contextErr
+	// Follow single-error wrappers only. A match inside an aggregate can
+	// hide a sibling storage failure.
+	for child := retryErr.Errs[0]; child != nil; child = errors.Unwrap(child) {
+		if child == contextErr {
+			return contextErr
+		}
+	}
+	return err
 }
 
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {

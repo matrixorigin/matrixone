@@ -270,6 +270,24 @@ func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool)
 	return CteBindState{}, false
 }
 
+// initStmtInBinding reports whether the exact CTE declaration is currently
+// being bound as the initial statement of a recursive CTE somewhere in the
+// BindContext chain. bindRecursiveCte records that state only while it binds
+// the anchor, so a reference that resolves to the same declaration inside the
+// anchor re-enters bindCte before the declaration is published and rebinds the
+// anchor again without bound. Only the resolved declaration counts: the same
+// word bound to a different CTE (an inner WITH) or used as a derived-table
+// alias resolves to a different declaration and stays resolvable.
+func (bc *BindContext) initStmtInBinding(cte *CTERef) bool {
+	for cur := bc; cur != nil; cur = cur.parent {
+		state := cur.cteState
+		if state.cte == cte && state.cteBindType == CteBindTypeInitStmt {
+			return true
+		}
+	}
+	return false
+}
+
 func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
 	cur := bc
 	pair := [2]string{schema, name}

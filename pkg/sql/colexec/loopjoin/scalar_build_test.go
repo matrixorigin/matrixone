@@ -82,8 +82,7 @@ func TestLoopJoinScalarBuildDoesNotPublishOnFailure(t *testing.T) {
 				require.NoError(t, err)
 				selection, err := vector.NewAllocationAccountSelection(account,
 					mpool.AllocationOwnerHashBuild, loopJoinAllocationSiteResultData,
-					loopJoinAllocationSiteResultArea, loopJoinAllocationSiteResultNulls,
-					loopJoinAllocationSiteResultGrouping)
+					loopJoinAllocationSiteResultArea)
 				require.NoError(t, err)
 				// Refuse the second column after the first column has copied.
 				require.NoError(t, join.ctr.resBat.Vecs[1].SetAllocationAccount(selection))

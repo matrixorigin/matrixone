@@ -522,9 +522,9 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	totalRowCnt := bat.Length()
 	if isTombstone {
-		task.aTombstoneDeletesCnt += bat.Deletes.GetCardinality()
+		task.aTombstoneDeletesCnt += bat.Deletes.Count()
 	} else {
-		task.aObjDeletesCnt += bat.Deletes.GetCardinality()
+		task.aObjDeletesCnt += bat.Deletes.Count()
 	}
 
 	var sortMapping []int64
@@ -819,6 +819,9 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 		metas = task.aTombstoneMetas
 	} else {
 		metas = task.aObjMetas
+		// The snapshot file replaces the in-memory node under the same
+		// object ID. Older readers still address its original row offsets.
+		ctx = tables.WithPreservePhysicalRows(ctx)
 	}
 
 	subtasks = make([]*flushObjTask, len(metas))

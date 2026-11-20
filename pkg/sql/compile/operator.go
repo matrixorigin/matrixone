@@ -197,6 +197,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
 		op.DedupColName = t.DedupColName
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -725,6 +726,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.HasODKUAffectedRows = t.HasODKUAffectedRows
@@ -1678,6 +1680,9 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AuxiliaryRowIdCol != nil {
+			arg.AuxiliaryRowIdColIdx = node.DedupJoinCtx.AuxiliaryRowIdCol.ColPos + 1
+		}
 		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
 			arg.HasODKUAffectedRows = true
 			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
@@ -3300,6 +3305,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -3371,6 +3377,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
