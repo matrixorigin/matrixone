@@ -91,6 +91,17 @@ chooses the supported OS library/loader form, and gives temporary test
 executables absolute rpaths. It is a local CPU-test entry point; GPU and static
 cross-builds have different toolchain contracts and remain explicit workflows.
 
+Embedded-cluster runs (`embed.RunBaseClusterTests` and the authenticated
+suites in `pkg/tests`) create the cluster workdir with
+`os.MkdirTemp(os.TempDir(), "mo-cluster-test-")` (`pkg/embed/cluster.go`) and
+each CN frontend listens on `<cluster-dir>/mysql<N>.sock`. `sun_path` caps the
+socket path at 108 bytes, so keep `TMPDIR` short — the default `/tmp` is fine.
+Exporting a deep directory as `TMPDIR` (for evidence containment) made the
+socket path 110 bytes and the run panicked at cluster startup with
+`listen unix .../mysql1.sock: bind: invalid argument` before any test logic
+executed. Treat that panic as an environment signature, not a candidate
+failure.
+
 ### Why test rpaths differ from packaged binaries
 
 `go test` runs an executable under a temporary `go-build...` directory.
