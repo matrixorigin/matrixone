@@ -450,14 +450,14 @@ var (
 	FSPrefetchObjectWaitingBuffer     = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
 	FSPrefetchObjectWaitingConnection = FSPrefetchObjectWaitingGauge.WithLabelValues("connection")
 
-	// FSPrefetchObjectWaitDuration is how long the prefetch objects of runs that waited for
-	// their resources waited before they registered.
+	// FSPrefetchObjectWaitDuration is how long the prefetch objects of runs waited for their
+	// resources, each wait, however it ended.
 	FSPrefetchObjectWaitDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "fs",
 			Name:      "prefetch_object_wait_duration_seconds",
-			Help:      "Time prefetch objects of runs that waited for their resources waited before they registered",
+			Help:      "Time prefetch objects of runs waited for their resources, each wait",
 			Buckets:   getDurationBuckets(),
 		})
 

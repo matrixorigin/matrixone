@@ -193,6 +193,9 @@ func (d *DiskCache) prefetchRead(
 	if (windowEnd-windowStart)/block > prefetchWindowBlocks {
 		return nil, 0, false, nil
 	}
+	// No run of the read starts after a delete of the object counted since it began, and
+	// no bytes it read across one are returned.
+	deletes := d.deletes.now()
 	key := d.rangeObjectKey(filePath)
 	diskPath := d.pathForFile(filePath)
 	ranges := d.ranges.of(key)
@@ -232,8 +235,6 @@ func (d *DiskCache) prefetchRead(
 	// bytes, otherwise the parts of the run, each a FilePrefetchObject the reads of its
 	// bytes share. The read holds no prefetch object while it waits for one of its own to
 	// be admitted: it holds the one reading a block it joined only to copy the block.
-	// No run of the read starts after a delete of the object counted since it began.
-	deletes := d.deletes.now()
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	if _, ok := f.openLocked(); !ok {
@@ -365,7 +366,7 @@ func (d *DiskCache) prefetchRead(
 			} else {
 				// The read chose to join it: it is joined however long its bytes take.
 				f.mu.Lock()
-				if o = f.coveringLocked(diskPath, b.start, b.end); o != nil {
+				if o = f.coveringLocked(diskPath, b.start, b.end, time.Now()); o != nil {
 					o.hold()
 				}
 				f.mu.Unlock()
@@ -820,9 +821,10 @@ func setStateLocked(o waitingObject, s objectState) {
 			if t.waitedFrom.IsZero() {
 				t.waitedFrom = now
 			}
-		}
-		if s == objectRegistered && !t.waitedFrom.IsZero() {
+		} else if !t.waitedFrom.IsZero() {
+			// A wait ends, whatever it ends with.
 			metric.FSPrefetchObjectWaitDuration.Observe(now.Sub(t.waitedFrom).Seconds())
+			t.waitedFrom = time.Time{}
 		}
 		t.state, t.since = s, now
 	}
@@ -1395,10 +1397,11 @@ func (f *prefetchObjects) fastestLocked(diskPath string, lo, hi int64, now time.
 }
 
 // coveringLocked returns a prefetch object of diskPath reads can join that caches the
-// bytes [lo, hi).
-func (f *prefetchObjects) coveringLocked(diskPath string, lo, hi int64) prefetchObject {
+// bytes [lo, hi), and whose bytes are not out of reach, however long they take.
+func (f *prefetchObjects) coveringLocked(diskPath string, lo, hi int64, now time.Time) prefetchObject {
 	for _, o := range f.m[diskPath] {
-		if start, end := o.span(); start <= lo && hi <= end && o.joinable() && o.caches() {
+		if start, end := o.span(); start <= lo && hi <= end && o.joinable() && o.caches() &&
+			o.eta(now, lo, hi) != time.Duration(math.MaxInt64) {
 			return o
 		}
 	}

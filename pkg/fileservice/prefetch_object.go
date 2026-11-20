@@ -115,8 +115,13 @@ func (p *filePrefetchObject) hold() {
 }
 
 // release stops one a read started when no read uses it and its download is not
-// registered yet.
+// registered yet. It stops it under the lock joins take, so no join takes one that stops.
 func (p *filePrefetchObject) release() {
+	if p.readStarted {
+		f := &p.d.prefetchObjects
+		f.mu.Lock()
+		defer f.mu.Unlock()
+	}
 	p.mu.Lock()
 	p.holds--
 	stop := p.readStarted && p.holds == 0 && p.download == nil

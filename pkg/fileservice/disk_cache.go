@@ -1173,9 +1173,6 @@ func (d *DiskCache) writeFileTo(
 		var buf []byte
 		put := ioBufferPool.Get(&buf)
 		defer put.Put()
-		if download != nil {
-			download.begin(0)
-		}
 		n, err = io.CopyBuffer(dst, source, buf)
 		if err != nil && source.err != nil {
 			err = &diskCacheSourceError{err: source.err}

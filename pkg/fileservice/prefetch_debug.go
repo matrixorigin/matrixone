@@ -34,37 +34,55 @@ func init() {
 
 // writePrefetchObjects writes the prefetch objects of d, registered or waiting for their
 // resources, one a line: its kind, object, bytes, where it is in its life and for how long,
-// and the bytes and connections the prefetch objects hold.
+// and the bytes and connections the prefetch objects hold. It copies them under the lock
+// and writes them after.
 func (d *DiskCache) writePrefetchObjects(w io.Writer) {
+	type row struct {
+		file           bool
+		diskPath       string
+		start, end     int64
+		state          string
+		since          time.Time
+		joinable, kept bool
+	}
 	f := &d.prefetchObjects
-	now := time.Now()
 	f.mu.Lock()
-	var lines []string
-	line := func(diskPath string, o prefetchObject) {
-		kind := "memory"
-		if _, ok := o.(*filePrefetchObject); ok {
-			kind = "file"
-		}
-		state, age := "registered", ""
+	var rows []row
+	add := func(diskPath string, o prefetchObject) {
+		r := row{diskPath: diskPath, state: "registered", joinable: o.joinable()}
+		_, r.file = o.(*filePrefetchObject)
+		r.start, r.end = o.span()
 		if t, ok := o.(waitingObject); ok && t.target().d != nil {
-			state, age = t.target().state.String(), now.Sub(t.target().since).Round(time.Millisecond).String()
+			r.state, r.since, r.kept = t.target().state.String(), t.target().since, true
 		}
-		if !o.joinable() && state == "registered" {
-			state = "registered, not joinable yet"
-		}
-		start, end := o.span()
-		lines = append(lines, fmt.Sprintf("  %s %s [%d, %d) %s %s", kind, diskPath, start, end, state, age))
+		rows = append(rows, r)
 	}
 	for diskPath, objects := range f.m {
 		for _, o := range objects {
-			line(diskPath, o)
+			add(diskPath, o)
 		}
 	}
 	for o := range f.waiting {
-		line(o.target().diskPath, o)
+		add(o.target().diskPath, o)
 	}
 	bytes := f.bytes
 	f.mu.Unlock()
+
+	now := time.Now()
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		kind, state, age := "memory", r.state, ""
+		if r.file {
+			kind = "file"
+		}
+		if r.kept {
+			age = now.Sub(r.since).Round(time.Millisecond).String()
+		}
+		if state == "registered" && !r.joinable {
+			state = "registered, not joinable yet"
+		}
+		lines = append(lines, fmt.Sprintf("  %s %s [%d, %d) %s %s", kind, r.diskPath, r.start, r.end, state, age))
+	}
 	sort.Strings(lines)
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
