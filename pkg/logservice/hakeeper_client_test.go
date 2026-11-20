@@ -390,11 +390,9 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 		assert.Equal(t, 0, len(cb.Commands))
 
 		sc := pb.ScheduleCommand{
-			UUID:        s.ID(),
-			ServiceType: pb.TNService,
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: "hello world",
-			},
+			UUID:              s.ID(),
+			ServiceType:       pb.TNService,
+			CreateTaskService: &pb.CreateTaskService{},
 		}
 		require.NoError(t, s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{sc}))
 		cb, err = c.SendLogHeartbeat(ctx, hb)
@@ -496,11 +494,9 @@ func TestHAKeeperClientSendTNHeartbeat(t *testing.T) {
 		assert.Equal(t, 0, len(cb.Commands))
 
 		sc := pb.ScheduleCommand{
-			UUID:        s.ID(),
-			ServiceType: pb.TNService,
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: "hello world",
-			},
+			UUID:              s.ID(),
+			ServiceType:       pb.TNService,
+			CreateTaskService: &pb.CreateTaskService{},
 		}
 		require.NoError(t, s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{sc}))
 		cb, err = c.SendTNHeartbeat(ctx, hb)
@@ -535,11 +531,9 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 		assert.Equal(t, 0, len(cb.Commands))
 
 		sc := pb.ScheduleCommand{
-			UUID:        s.ID(),
-			ServiceType: pb.TNService,
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: "hello world",
-			},
+			UUID:              s.ID(),
+			ServiceType:       pb.TNService,
+			CreateTaskService: &pb.CreateTaskService{},
 		}
 		require.NoError(t, s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{sc}))
 		cb, err = c.SendLogHeartbeat(ctx, hb)
