@@ -116,7 +116,7 @@ func (tableScan *TableScan) SetAllocationAccount(account *mpool.AllocationAccoun
 			return mpool.ErrAllocationAccountMismatch
 		}
 	} else {
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 		if err != nil {
 			return err
 		}

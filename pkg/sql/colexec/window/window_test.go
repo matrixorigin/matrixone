@@ -1817,7 +1817,7 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
 	require.NoError(t, err)
 	for col, vec := range bat.Vecs {
 		copied, err := vec.DupOffHeapWithAllocation(proc.Mp(), selection)

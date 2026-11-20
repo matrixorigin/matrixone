@@ -214,7 +214,7 @@ func localRankTestBudget(t *testing.T, limit uint64) (*process.Process, *process
 func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit uint64) (*Window, *process.Process, *process.ExecutionResourceGeneration) {
 	t.Helper()
 	proc, generation, account := localRankTestBudget(t, limit)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
 	require.NoError(t, err)
 	input, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), selection)
 	require.NoError(t, err)

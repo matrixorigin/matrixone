@@ -21,8 +21,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -66,7 +66,7 @@ func TestAdd(t *testing.T) {
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(gotRes, tt.wantF64) {
+				if gotRes, err := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !util.InEpsilonF64Slice(gotRes, tt.wantF64) {
 					t.Errorf("Add() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -114,7 +114,7 @@ func TestSubtract(t *testing.T) {
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				if gotRes, err := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !util.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Subtract() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -167,7 +167,7 @@ func TestMultiply(t *testing.T) {
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				if gotRes, err := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !util.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -239,7 +239,7 @@ func TestDivide(t *testing.T) {
 					if _, gotErr := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); gotErr == nil {
 						t.Errorf("Divide() should throw error")
 					}
-				} else if gotRes, err := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				} else if gotRes, err := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !util.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Divide() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -347,7 +347,7 @@ func TestCast(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil && tt.wantF64 != nil {
-				if gotResF64, err := Cast[float32, float64](tt.args.argF32); err != nil || !assertx.InEpsilonF64Slice(gotResF64, tt.wantF64) {
+				if gotResF64, err := Cast[float32, float64](tt.args.argF32); err != nil || !util.InEpsilonF64Slice(gotResF64, tt.wantF64) {
 					t.Errorf("Cast() = %v, want %v", gotResF64, tt.wantF64)
 				}
 			}
@@ -409,7 +409,7 @@ func TestAbs(t *testing.T) {
 			}
 			if tt.args.argF64 != nil {
 				gotRes, err := Abs[float64](tt.args.argF64)
-				if err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				if err != nil || !util.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF64)
 				}
 				for _, v := range gotRes {
@@ -496,7 +496,7 @@ func TestNormalizeL2(t *testing.T) {
 					if err := NormalizeL2[float64](tt.args.argF64, res); err == nil {
 						t.Errorf("NormalizeL2() should throw error")
 					}
-				} else if err := NormalizeL2[float64](tt.args.argF64, res); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, res) {
+				} else if err := NormalizeL2[float64](tt.args.argF64, res); err != nil || !util.InEpsilonF64Slice(tt.wantF64, res) {
 					t.Errorf("NormalizeL2() = %v, want %v", res, tt.wantF64)
 				}
 			}
@@ -557,7 +557,7 @@ func TestSqrt(t *testing.T) {
 					if _, err := Sqrt[float64](tt.args.argF64); err == nil {
 						t.Errorf("Sqrt() should throw error")
 					}
-				} else if gotRes, err := Sqrt[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				} else if gotRes, err := Sqrt[float64](tt.args.argF64); err != nil || !util.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Sqrt() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -592,12 +592,12 @@ func TestSummation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := Summation[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, err := Summation[float64](tt.args.argF64); err != nil || !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -635,12 +635,12 @@ func TestInnerProduct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("InnerProduct() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := InnerProduct[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := InnerProduct[float64](tt.args.argLeftF64, tt.args.argRightF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("InnerProduct() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -675,12 +675,12 @@ func TestL1Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L1Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L1Norm[float32](tt.args.argF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, _ := L1Norm[float64](tt.args.argF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L1Norm[float64](tt.args.argF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -717,12 +717,12 @@ func TestL2Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Norm[float32](tt.args.argF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, _ := L2Norm[float64](tt.args.argF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Norm[float64](tt.args.argF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -850,12 +850,12 @@ func TestL1Distance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := L1Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L1Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := L1Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L1Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -926,12 +926,12 @@ func TestL2Distance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := L2Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := L2Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -994,12 +994,12 @@ func TestCosineDistance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := CosineDistance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := CosineDistance[float32](tt.args.argLeftF32, tt.args.argRightF32); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("CosineDistance() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := CosineDistance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := CosineDistance[float64](tt.args.argLeftF64, tt.args.argRightF64); !util.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("CosineDistance() = %v, want %v", gotRes, tt.want)
 				}
 			}

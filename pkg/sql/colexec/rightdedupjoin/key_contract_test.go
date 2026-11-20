@@ -49,7 +49,7 @@ type rightDedupKeyContractMode struct {
 func TestRightDedupJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(90), uint8(rightDedupJoinAllocationSiteMatched))
 	require.Equal(t, uint8(114), uint8(rightDedupJoinAllocationSiteResultData))
-	require.Equal(t, uint8(117), uint8(rightDedupJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(115), uint8(rightDedupJoinAllocationSiteResultArea))
 }
 
 func TestRightDedupJoinDoubleSignedZeroContract(t *testing.T) {

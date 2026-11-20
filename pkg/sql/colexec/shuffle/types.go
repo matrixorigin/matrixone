@@ -195,7 +195,7 @@ func (shuffle *Shuffle) SetAllocationAccount(account *mpool.AllocationAccount) e
 	if shuffle.allocationAccount != nil && shuffle.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10)
 	if err != nil {
 		return err
 	}

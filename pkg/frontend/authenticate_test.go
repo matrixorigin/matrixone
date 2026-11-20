@@ -156,6 +156,9 @@ func TestGetTenantInfo(t *testing.T) {
 			{"tenant1#    #r1", "{account tenant1#    #r1 -- 0#0#0}", false},
 			{"     # #r1", "{account      # #r1 -- 0#0#0}", false},
 			{"   tenant1   #   u1   #   r1    ", "{account    tenant1   #   u1   #   r1     -- 0#0#0}", false},
+			{"sys:internal:moadmin", "{account sys:internal:moadmin -- 0:0:0}", false},
+			// a ?k:v connection-attribute suffix is stripped from the user string
+			{"sys:internal:moadmin?k:v", "{account sys:internal:moadmin -- 0:0:0}", false},
 		}
 
 		for _, arg := range args {

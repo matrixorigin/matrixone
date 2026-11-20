@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -285,7 +284,6 @@ func TestSqlTxn(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 
