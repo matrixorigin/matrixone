@@ -1069,23 +1069,31 @@ func (ctr *container) preflightBuildChunk(
 		}
 	}
 	preAllocateVectors := func(
-		destinations []*vector.Vector,
+		slot *groupByPreflight,
+		target *batch.Batch,
 		targetRows int,
 		flags []uint8,
 	) error {
-		for i, destination := range destinations {
+		slot.reset(target)
+		for i, destination := range target.Vecs {
 			if i >= len(vs) || vs[i] == nil {
 				return mpool.ErrAllocationAccountInvariant
 			}
-			if err := destination.PreExtendSelectedBatchValidated(
+			preflight, err := destination.PreExtendSelectedBatchValidated(
 				vs[i], offset, rows, flags, targetRows, ctr.mp,
-			); err != nil {
+			)
+			if err != nil {
 				return err
 			}
+			slot.vecs[i] = preflight
 		}
 		return nil
 	}
-	cancelPreflight := cancelSelectedBatchPreflights
+	cancelPreflight := func(slot *groupByPreflight, target *batch.Batch) {
+		cancelSelectedBatchPreflights(target.Vecs)
+		slot.reset(nil)
+	}
+	currentSlot, standbySlot := &ctr.groupByPreflights[0], &ctr.groupByPreflights[1]
 	var currentFlags, standbyFlags [hashmap.UnitLimit]uint8
 	currentRows, standbyRows := 0, 0
 	for row, flag := range insertList[:rows] {
@@ -1102,7 +1110,8 @@ func (ctr *container) preflightBuildChunk(
 	}
 	if currentRows > 0 {
 		if err := preAllocateVectors(
-			current.Vecs,
+			currentSlot,
+			current,
 			current.RowCount()+currentRows,
 			currentFlags[:rows],
 		); err != nil {
@@ -1110,17 +1119,18 @@ func (ctr *container) preflightBuildChunk(
 			return err
 		}
 	} else {
-		cancelPreflight(current.Vecs)
+		cancelPreflight(currentSlot, current)
 	}
 	if standbyRows == 0 && ctr.groupByStandby != nil {
-		cancelPreflight(ctr.groupByStandby.Vecs)
+		cancelPreflight(standbySlot, ctr.groupByStandby)
 	}
 	if standbyRows > 0 {
 		if ctr.groupByStandby == nil {
 			return mpool.ErrAllocationAccountInvariant
 		}
 		if err := preAllocateVectors(
-			ctr.groupByStandby.Vecs,
+			standbySlot,
+			ctr.groupByStandby,
 			standbyRows,
 			standbyFlags[:rows],
 		); err != nil {
@@ -1137,9 +1147,12 @@ func (ctr *container) preflightBuildChunk(
 	return nil
 }
 
+// cancelSelectedBatchPreflights drops the string-source reservations of an
+// unpublished selection. It never releases admitted backing storage; a later
+// work unit may reuse that capacity.
 func cancelSelectedBatchPreflights(vectors []*vector.Vector) {
 	for _, destination := range vectors {
-		destination.CancelSelectedBatchPreflight()
+		destination.NormalizeStringSources()
 	}
 }
 
@@ -1151,6 +1164,7 @@ func (ctr *container) cancelGroupByPreflights() {
 	if ctr.groupByStandby != nil {
 		cancelSelectedBatchPreflights(ctr.groupByStandby.Vecs)
 	}
+	ctr.clearGroupByPreflights()
 }
 
 func (ctr *container) boundedSpillReloadPreAlloc(bucketRows int64) uint64 {
@@ -1298,18 +1312,23 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	}
 
 	// there is enough space in the current batch to insert thisTime.
+	preflights := ctr.groupByPreflightsFor(currBatch)
 	for i, vec := range currBatch.Vecs {
+		var preflight *vector.SelectedBatchPreflight
+		if i < len(preflights) {
+			preflight = &preflights[i]
+		}
 		var err error
 		if stringSources == nil {
 			err = vec.UnionBatchPreflighted(
-				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
+				vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.mp)
 		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
 			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
 			return mpool.ErrAllocationAccountInvariant
 		} else {
 			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 				vs[i], int64(offset), len(thisTime), thisTime,
-				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
+				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], preflight, ctr.mp)
 		}
 		if err != nil {
 			return err

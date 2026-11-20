@@ -200,10 +200,11 @@ func readonlyAreaMutations() []readonlyAreaMutation {
 		}},
 		{"preflighted", false, func(dst, src *Vector, mp *mpool.MPool) error {
 			flags := []uint8{1}
-			if err := dst.PreExtendSelectedBatch(src, 0, 1, flags, dst.Length()+1, mp); err != nil {
+			preflight, err := dst.PreExtendSelectedBatch(src, 0, 1, flags, dst.Length()+1, mp)
+			if err != nil {
 				return err
 			}
-			return dst.UnionBatchPreflighted(src, 0, 1, flags, mp)
+			return dst.UnionBatchPreflighted(src, 0, 1, flags, &preflight, mp)
 		}},
 	}
 }
@@ -299,15 +300,17 @@ func TestCopyWithReadonlyAreaPreflightWithinCapacity(t *testing.T) {
 	require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 	before := mp.CurrNB()
 	flags := []uint8{0}
-	require.NoError(t, destination.PreExtendSelectedBatch(extra, 0, 1, flags, 2, mp))
-	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, mp))
+	preflight, err := destination.PreExtendSelectedBatch(extra, 0, 1, flags, 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, &preflight, mp))
 	require.Equal(t, before, mp.CurrNB())
 	require.True(t, destination.HasBorrowedBacking(), "an empty selection must not materialize")
 	flags[0] = 1
-	require.NoError(t, destination.PreExtendSelectedBatch(extra, 0, 1, flags, 3, mp))
+	preflight, err = destination.PreExtendSelectedBatch(extra, 0, 1, flags, 3, mp)
+	require.NoError(t, err)
 	require.False(t, destination.HasBorrowedBacking(), "preflight must finish COW even without area growth")
 	before = mp.CurrNB()
-	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, mp))
+	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, &preflight, mp))
 	require.Equal(t, before, mp.CurrNB(), "publication must not repeat admission")
 	require.Equal(t, 3, destination.Length())
 	require.Equal(t, "inline", destination.GetStringAt(2))

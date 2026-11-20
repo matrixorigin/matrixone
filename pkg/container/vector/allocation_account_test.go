@@ -1837,13 +1837,14 @@ func TestSelectedBatchStringSourcePreflightSurvivesLengthPublication(t *testing.
 	require.NoError(t, AppendFixed(source, int64(2), false, mp))
 	require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 
-	require.NoError(t, destination.PreExtendSelectedBatch(
-		source, 0, 1, []uint8{1}, 2, mp))
+	preflight, err := destination.PreExtendSelectedBatch(
+		source, 0, 1, []uint8{1}, 2, mp)
+	require.NoError(t, err)
 	require.Equal(t, 2, cap(destination.GetStringSources()))
 	controller.failAt = controller.calls + 1
 	admitted := account.Snapshot().Used
 	require.NoError(t, destination.UnionBatchPreflighted(
-		source, 0, 1, []uint8{1}, mp))
+		source, 0, 1, []uint8{1}, &preflight, mp))
 	require.False(t, controller.rejected, "publication must not allocate after preflight")
 	require.Equal(t, admitted, account.Snapshot().Used)
 	require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
@@ -1935,13 +1936,13 @@ func TestSelectedBatchBinaryStringPreflightClosesExactCapacity(t *testing.T) {
 			source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
 		destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
 
-		err := destination.PreExtendSelectedBatch(
+		preflight, err := destination.PreExtendSelectedBatch(
 			source, 0, 2, []uint8{1, 1}, 2, mp)
 		admitted := state.account.Snapshot().Used
 		published := false
 		if err == nil {
 			err = destination.UnionBatchPreflighted(
-				source, 0, 2, []uint8{1, 1}, mp)
+				source, 0, 2, []uint8{1, 1}, &preflight, mp)
 			published = err == nil
 			if published {
 				require.Equal(t, admitted, state.account.Snapshot().Used)

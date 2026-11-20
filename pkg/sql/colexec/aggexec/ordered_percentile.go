@@ -444,6 +444,7 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		values.Free(exec.mp)
 		return nil, err
 	}
+	values.NormalizeStringSources()
 	return values, nil
 }
 
