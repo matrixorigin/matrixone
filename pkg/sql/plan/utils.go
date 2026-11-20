@@ -788,6 +788,11 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		// expression, not just a constant. Check the entire remaining subtree.
 		allowed := map[[2]int32]bool{{col.RelPos, col.ColPos}: true}
 		for _, arg := range args[1:] {
+			// Prepared IN keeps its parameters in a list until execution.
+			// Column-bearing lists cannot be rewritten by substituteMatchColumn.
+			if list := arg.GetList(); list != nil && len(list.List) > 0 && isRuntimeConstExpr(arg) {
+				continue
+			}
 			if !exprColRefsSubsetOf(arg, allowed) {
 				return nil
 			}
