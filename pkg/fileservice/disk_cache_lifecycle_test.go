@@ -552,7 +552,7 @@ func TestDiskCacheReindexBeforeEvictionStartKeepsFile(t *testing.T) {
 
 			entered := make(chan struct{})
 			release := make(chan struct{})
-			cache.beforeEvictionStart = func(path string) {
+			cache.hooks.beforeEvictionStart = func(path string) {
 				if path == diskPath {
 					close(entered)
 					<-release
@@ -853,7 +853,7 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed != nil
+		return cache.async.mu.freed.ch != nil
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	cache.async.mu.Lock()
 	require.Empty(t, cache.async.mu.pending)
@@ -996,7 +996,7 @@ func TestDiskCacheAsyncSetFileWaitsForFinalizeCapacity(t *testing.T) {
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed != nil
+		return cache.async.mu.freed.ch != nil
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	require.False(t, readerOpened.Load())
 	require.False(t, cache.isUpdating(cache.pathForFile("foo")))
@@ -1241,7 +1241,7 @@ func TestDiskCacheLoadCacheKeepsForegroundDirectory(t *testing.T) {
 	writerReachedTempFileCreate := make(chan struct{})
 	releaseWriter := make(chan struct{})
 	unblockWriter := sync.OnceFunc(func() { close(releaseWriter) })
-	cache.beforeCacheTempFileCreate = func() {
+	cache.hooks.beforeCacheTempFileCreate = func() {
 		close(writerReachedTempFileCreate)
 		<-releaseWriter
 	}
@@ -1269,7 +1269,7 @@ func TestDiskCacheLoadCacheKeepsForegroundDirectory(t *testing.T) {
 	}
 
 	loaderReachedDirectoryCleanup := make(chan struct{})
-	cache.beforeLoadDirectoryCleanup = func(path string) {
+	cache.hooks.beforeLoadDirectoryCleanup = func(path string) {
 		if path == foregroundDir {
 			close(loaderReachedDirectoryCleanup)
 		}
@@ -1299,7 +1299,7 @@ func TestDiskCacheLoadCacheKeepsForegroundDirectory(t *testing.T) {
 	<-loadDone
 	require.DirExists(t, foregroundDir)
 
-	cache.beforeLoadDirectoryCleanup = nil
+	cache.hooks.beforeLoadDirectoryCleanup = nil
 	staleDir := filepath.Join(cache.path, "stale")
 	require.NoError(t, os.MkdirAll(staleDir, 0o755))
 	cache.loadCache(context.Background())
@@ -1352,7 +1352,7 @@ func TestDiskCacheCloseWinsAtFilePublicationBoundary(t *testing.T) {
 	releasePublication := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(releasePublication) })
 	t.Cleanup(unblock)
-	cache.beforeFilePublication = func() {
+	cache.hooks.beforeFilePublication = func() {
 		close(publicationReached)
 		<-releasePublication
 	}
@@ -1666,7 +1666,7 @@ func TestDiskCacheAsyncUpdateKeepsNoBytes(t *testing.T) {
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed != nil
+		return cache.async.mu.freed.ch != nil
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	cancel()
 	select {
@@ -1689,7 +1689,7 @@ func TestDiskCacheAsyncUpdateKeepsNoBytes(t *testing.T) {
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed != nil
+		return cache.async.mu.freed.ch != nil
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	cache.async.mu.Lock()
 	for len(cache.async.slots) > 0 {
@@ -1837,7 +1837,7 @@ func TestDiskCacheLoadDropsRangeFileOfObjectDeletedMeanwhile(t *testing.T) {
 	require.NoError(t, os.WriteFile(rangePath, []byte{0x11, 0x11, 0x11, 0x11}, 0o644))
 
 	reached, release := make(chan struct{}), make(chan struct{})
-	cache.beforeLoadFile = func(diskPath string) {
+	cache.hooks.beforeLoadFile = func(diskPath string) {
 		if diskPath == rangePath {
 			close(reached)
 			<-release
@@ -1874,7 +1874,7 @@ func TestDiskCacheReadSkipsUnloadedRangeFileOfDeletedObject(t *testing.T) {
 	require.NoError(t, os.WriteFile(rangePath, []byte{0x11, 0x11, 0x11, 0x11}, 0o644))
 
 	reached, release := make(chan struct{}), make(chan struct{})
-	cache.beforeLoadFile = func(diskPath string) {
+	cache.hooks.beforeLoadFile = func(diskPath string) {
 		if diskPath == rangePath {
 			close(reached)
 			<-release

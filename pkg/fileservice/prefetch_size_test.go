@@ -327,7 +327,7 @@ func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return f.freed != nil
+		return f.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the second prefetch waits for room")
 	require.Equal(t, int64(1), storage.reads.Load())
 

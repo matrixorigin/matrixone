@@ -37,7 +37,7 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	otherKey := fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
 	fs.storage = g

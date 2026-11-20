@@ -197,11 +197,11 @@ func TestIndexFileCacheCanceledPutLeavesNothing(t *testing.T) {
 	dir := t.TempDir()
 	c := newTestIndexFileCache(t, dir, 1<<30)
 	ctx, cancel := context.WithCancel(context.Background())
-	c.disk.beforeFilePublication = cancel
+	c.disk.hooks.beforeFilePublication = cancel
 	written, err := c.Put(ctx, "e", indexCacheEntry([]byte("x")))
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, written)
-	c.disk.beforeFilePublication = nil
+	c.disk.hooks.beforeFilePublication = nil
 	requireIndexCacheMiss(t, c, "e")
 	entries, temps, _ := listCacheDirs(t, dir)
 	require.Empty(t, entries)
@@ -214,7 +214,7 @@ func TestIndexFileCacheEntryInvisibleBeforePublication(t *testing.T) {
 	diskPath, err := c.disk.pathForDir("e")
 	require.NoError(t, err)
 	var sawMiss bool
-	c.disk.beforeFilePublication = func() {
+	c.disk.hooks.beforeFilePublication = func() {
 		_, statErr := os.Stat(diskPath)
 		sawMiss = os.IsNotExist(statErr)
 	}
@@ -570,12 +570,12 @@ func TestIndexFileCacheLoadRanksBehindUse(t *testing.T) {
 	}
 	gonePath, err := c.disk.pathForDir("gone")
 	require.NoError(t, err)
-	c.disk.beforeIndexLoadedDirs = func() {
+	c.disk.hooks.beforeIndexLoadedDirs = func() {
 		put(c, "fresh")
 		require.NoError(t, os.RemoveAll(gonePath))
 	}
 	c.disk.loadCache(ctx)
-	c.disk.beforeIndexLoadedDirs = nil
+	c.disk.hooks.beforeIndexLoadedDirs = nil
 	require.False(t, c.disk.cache.Contains(gonePath), "an entry removed while the cache loads is not counted")
 	require.Equal(t, 3*size, c.disk.cache.Used())
 
@@ -972,7 +972,7 @@ func TestIndexFileCacheOpenReturnsOneGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	replaced := false
-	c.disk.beforeCacheDirFileOpen = func() {
+	c.disk.hooks.beforeCacheDirFileOpen = func() {
 		if replaced {
 			return
 		}

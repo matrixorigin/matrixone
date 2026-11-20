@@ -137,7 +137,7 @@ func (d *DiskCache) flightBytes() int64 {
 	if avail, ok := memoryAvailable(); ok {
 		bytes = int64(min(avail/100*flightMemoryPercent, math.MaxInt64))
 	}
-	bytes = max(bytes, flightBufSize(d.memoryPrefetchMax)*max(d.maxDownloadConns, 1))
+	bytes = max(bytes, flightBufSize(d.memoryPrefetchMax)*max(d.conns.max, 1))
 	b.bytes.Store(bytes)
 	b.at.Store(now)
 	return bytes
@@ -640,7 +640,7 @@ func (f *memoryPrefetchObject) run() {
 // f holds, when it holds one.
 func (f *memoryPrefetchObject) readHeld() error {
 	if f.needs.conn {
-		defer f.d.releaseDownloadConns(1)
+		defer f.d.conns.release()
 	}
 	return f.read(f.ctx, f.open)
 }
@@ -685,7 +685,7 @@ func (d *DiskCache) readRanges(
 				runs = append(runs, newReadRun(d.newFileObject(ctx, filePath, part[0], part[1], open, needs), files))
 				continue
 			}
-			needs.conn = d.maxDownloadConns > 0
+			needs.conn = d.conns.max > 0
 			runs = append(runs, newReadRun(d.newFlight(filePath, part[0], part[1], policy, open, needs), nil))
 		}
 	}
@@ -870,7 +870,7 @@ type waitingObject interface {
 func admit(ctx context.Context, o waitingObject) (prefetchObject, error) {
 	t := o.target()
 	d, needs := t.d, t.needs
-	if needs.conn && d.maxDownloadConns < 1 {
+	if needs.conn && d.conns.max < 1 {
 		metric.FSDiskCacheDownloadSkippedCounter.Inc()
 		return nil, nil
 	}
@@ -916,12 +916,12 @@ func admit(ctx context.Context, o waitingObject) (prefetchObject, error) {
 			f.mu.Unlock()
 			return j, nil
 		}
-		var connsFreed chan struct{}
+		var connsFreed <-chan struct{}
 		if needs.conn {
-			connsFreed = d.downloadConnsFreed()
+			connsFreed = d.conns.waitFreed()
 		}
 		fits := o.fitsLocked()
-		if fits && (!needs.conn || d.reserveDownloadConns(1)) {
+		if fits && (!needs.conn || d.conns.tryTake()) {
 			setStateLocked(o, objectRegistered)
 			o.registerLocked(ctx, closing, now)
 			o.hold()
@@ -934,10 +934,7 @@ func admit(ctx context.Context, o waitingObject) (prefetchObject, error) {
 		} else {
 			setStateLocked(o, objectWaitingBuffer)
 		}
-		if f.freed == nil {
-			f.freed = make(chan struct{})
-		}
-		freed := f.freed
+		freed := f.freed.waitLocked()
 		f.mu.Unlock()
 		if needs.waiting != nil {
 			needs.waiting()
@@ -1208,10 +1205,7 @@ func (d *DiskCache) dropPrefetches(ctx context.Context, diskPath string) error {
 	f.mu.Lock()
 	objects := slices.Clone(f.m[diskPath])
 	// Prefetches waiting for room see the delete.
-	if f.freed != nil {
-		close(f.freed)
-		f.freed = nil
-	}
+	f.freed.notifyLocked()
 	f.mu.Unlock()
 	for _, o := range objects {
 		o.stop()
@@ -1337,7 +1331,7 @@ type prefetchObjects struct {
 	// bytes is the size of the buffers of the runs under way or still held by reads;
 	// freed, when set, is closed once it shrinks.
 	bytes  int64
-	freed  chan struct{}
+	freed  freedSignal
 	closed bool
 	// waiting are the prefetch objects of runs waiting for their resources.
 	waiting map[waitingObject]struct{}
@@ -1355,10 +1349,7 @@ func (d *DiskCache) closePrefetches(ctx context.Context) {
 	f.closed = true
 	cancelReads := f.cancelReads
 	// The prefetch objects waiting for room see the cache closed.
-	if f.freed != nil {
-		close(f.freed)
-		f.freed = nil
-	}
+	f.freed.notifyLocked()
 	f.mu.Unlock()
 	if cancelReads != nil {
 		cancelReads()
@@ -1438,8 +1429,5 @@ func (f *prefetchObjects) uncharge(bytes int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bytes -= bytes
-	if f.freed != nil {
-		close(f.freed)
-		f.freed = nil
-	}
+	f.freed.notifyLocked()
 }

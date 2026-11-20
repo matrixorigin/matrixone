@@ -732,7 +732,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	var calls int
 	avail := uint64(20 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{memoryPrefetchMax: 20 << 20, maxDownloadConns: 16}
+	d := &DiskCache{memoryPrefetchMax: 20 << 20, conns: connPool{max: 16}}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
@@ -743,7 +743,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	memoryAvailable = func() (uint64, bool) { return 0, false }
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(16*32<<20), d.flightBytes())
-	d.maxDownloadConns = 0
+	d.conns.max = 0
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
 	d.prefetchFlightBytes = 7
@@ -952,7 +952,7 @@ func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
 // may hold.
 func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.maxDownloadConns = 2
+	fs.diskCache.conns.max = 2
 	g := &gatedOpener{data: data, gate: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
@@ -973,7 +973,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	_, most, total := g.counts()
 	require.Equal(t, 2, most)
 	require.Equal(t, 8, total)
-	require.Zero(t, fs.diskCache.downloadConns.Load())
+	require.Zero(t, fs.diskCache.conns.held.Load())
 }
 
 // A prefetch of ranges to files starts no range once its object was deleted.

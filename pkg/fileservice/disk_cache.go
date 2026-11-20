@@ -66,14 +66,8 @@ type DiskCache struct {
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
 	memoryPrefetchMax int64
 	prefetched        prefetchedObjects
-	// downloadConns counts the object-storage connections whole-object downloads hold,
-	// at most maxDownloadConns.
-	downloadConns    atomic.Int64
-	maxDownloadConns int64
-	// connsFreed, when set, is closed once reserved connections are freed.
-	connsMu         sync.Mutex
-	connsFreed      chan struct{}
-	prefetchObjects prefetchObjects
+	conns             connPool
+	prefetchObjects   prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -88,35 +82,39 @@ type DiskCache struct {
 		cancel context.CancelFunc
 		done   chan struct{}
 	}
-	// beforeLoadDirectoryCleanup and beforeCacheTempFileCreate are test-only
-	// phase barriers. Production instances leave them nil.
-	beforeLoadDirectoryCleanup func(path string)
-	beforeCacheTempFileCreate  func()
-	// beforeIndexLoadedDirs is a test-only phase barrier before the entry directories found
-	// by the load are indexed.
-	beforeIndexLoadedDirs func()
-	// beforeLoadFile is a test-only phase barrier before a file found by the load is
-	// indexed.
-	beforeLoadFile func(diskPath string)
-	// beforeFilePublication is a test-only phase barrier. Production instances
-	// leave it nil, so the publication hot path pays only one predictable branch.
-	beforeFilePublication func()
-	// afterPublicationClaim is a test-only phase barrier between a file's publication
-	// claim and its caching.
-	afterPublicationClaim func()
-	// afterFilePublication is a test-only phase barrier after a file is cached.
-	afterFilePublication func()
-	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
-	beforeCacheDirFileOpen func()
-	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
-	// eviction starting.
-	beforeEvictionStart func(path string)
+	hooks diskCacheHooks
 	// deletes counts the deletes of objects; see objectDeletes.
 	deletes objectDeletes
 	// prefetchFlightBytes, when set, is the most bytes of prefetch range runs under way,
 	// instead of flightBudget.
 	prefetchFlightBytes int64
 	flightBudget        flightBudget
+}
+
+// diskCacheHooks are test-only phase barriers; production instances leave them nil.
+type diskCacheHooks struct {
+	beforeLoadDirectoryCleanup func(path string)
+	beforeCacheTempFileCreate  func()
+	// beforeIndexLoadedDirs runs before the entry directories found by the load are
+	// indexed, beforeLoadFile before a file found by the load is.
+	beforeIndexLoadedDirs func()
+	beforeLoadFile        func(diskPath string)
+	// beforeFilePublication, afterPublicationClaim and afterFilePublication run before a
+	// file's publication claim, between it and its caching, and after its caching.
+	beforeFilePublication func()
+	afterPublicationClaim func()
+	afterFilePublication  func()
+	// beforeCacheDirFileOpen runs between the files of one entry open.
+	beforeCacheDirFileOpen func()
+	// beforeEvictionStart runs between an entry leaving the index and its eviction
+	// starting.
+	beforeEvictionStart func(path string)
+}
+
+func runHook(hook func()) {
+	if hook != nil {
+		hook()
+	}
 }
 
 func NewDiskCache(
@@ -211,7 +209,7 @@ func newDiskCache(
 		objectSplit:          opts.objectSplit,
 		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
 		preloads:             newPreloadUsage(),
-		maxDownloadConns:     int64(maxConnsPerHost / 2),
+		conns:                connPool{max: int64(maxConnsPerHost / 2)},
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
@@ -227,8 +225,8 @@ func newDiskCache(
 		capacityBytes.Set(float64(capacityFunc()))
 	}
 	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
-		if ret.beforeEvictionStart != nil {
-			ret.beforeEvictionStart(path)
+		if ret.hooks.beforeEvictionStart != nil {
+			ret.hooks.beforeEvictionStart(path)
 		}
 		owner, ok := ret.paths.evict(path, size)
 		if !ok {
@@ -301,8 +299,8 @@ func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileI
 			objectPath = filepath.Join(dir, "full"+name)
 		}
 	}
-	if d.beforeLoadFile != nil {
-		d.beforeLoadFile(diskPath)
+	if d.hooks.beforeLoadFile != nil {
+		d.hooks.beforeLoadFile(diskPath)
 	}
 	stripe := d.deletes.stripe(objectPath)
 	stripe.RLock()
@@ -883,8 +881,8 @@ func (d *DiskCache) writeFile(
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
-	if d.beforeLoadDirectoryCleanup != nil {
-		d.beforeLoadDirectoryCleanup(path)
+	if d.hooks.beforeLoadDirectoryCleanup != nil {
+		d.hooks.beforeLoadDirectoryCleanup(path)
 	}
 	d.directoryMu.Lock()
 	defer d.directoryMu.Unlock()
@@ -962,9 +960,7 @@ func (d *DiskCache) createCacheTempFile(dir string) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	if d.beforeCacheTempFileCreate != nil {
-		d.beforeCacheTempFileCreate()
-	}
+	runHook(d.hooks.beforeCacheTempFileCreate)
 	return os.CreateTemp(dir, "*"+cacheFileTempSuffix)
 }
 
@@ -1100,7 +1096,7 @@ func (d *DiskCache) writeFileTo(
 
 	var n int64
 	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
-		n, err = copyParts(ctx, f, download, l.openRange, bounds, d.partConn, releaseConns)
+		n, err = copyParts(ctx, f, download, l.openRange, bounds, d.conns.take, releaseConns)
 	} else {
 		var buf []byte
 		put := ioBufferPool.Get(&buf)
@@ -1200,9 +1196,7 @@ func (d *DiskCache) finalizeFileTo(
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if d.beforeFilePublication != nil {
-		d.beforeFilePublication()
-	}
+	runHook(d.hooks.beforeFilePublication)
 	if claimPublication != nil {
 		if !claimPublication() {
 			return context.Canceled
@@ -1210,15 +1204,11 @@ func (d *DiskCache) finalizeFileTo(
 	} else if err := ctx.Err(); err != nil {
 		return err
 	}
-	if d.afterPublicationClaim != nil {
-		d.afterPublicationClaim()
-	}
+	runHook(d.hooks.afterPublicationClaim)
 	if err := target.publish(ctx, tempPath, size); err != nil {
 		return err
 	}
-	if d.afterFilePublication != nil {
-		d.afterFilePublication()
-	}
+	runHook(d.hooks.afterFilePublication)
 
 	return nil
 }

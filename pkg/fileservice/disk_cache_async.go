@@ -101,7 +101,7 @@ type diskCacheAsyncState struct {
 		dropped         int64
 		idle            chan struct{}
 		// freed, when set, is closed once a slot or pending bytes are released.
-		freed chan struct{}
+		freed freedSignal
 	}
 }
 
@@ -258,10 +258,7 @@ func (d *DiskCache) scheduleAsyncUpdate(
 			a.slots <- struct{}{}
 			break
 		}
-		if a.mu.freed == nil {
-			a.mu.freed = make(chan struct{})
-		}
-		freed := a.mu.freed
+		freed := a.mu.freed.waitLocked()
 		a.mu.Unlock()
 		select {
 		case <-freed:
@@ -337,10 +334,7 @@ func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath strin
 			a.slots <- struct{}{}
 			break
 		}
-		if a.mu.freed == nil {
-			a.mu.freed = make(chan struct{})
-		}
-		freed := a.mu.freed
+		freed := a.mu.freed.waitLocked()
 		a.mu.Unlock()
 		select {
 		case <-freed:
@@ -439,10 +433,7 @@ func (d *DiskCache) finalizeQueuedFile(diskPath string, f *os.File, target fillT
 
 // wakeFreedLocked wakes the updates waiting for a slot or pending bytes.
 func (a *diskCacheAsyncState) wakeFreedLocked() {
-	if a.mu.freed != nil {
-		close(a.mu.freed)
-		a.mu.freed = nil
-	}
+	a.mu.freed.notifyLocked()
 }
 
 func (a *diskCacheAsyncState) dropAsyncUpdateLocked() {

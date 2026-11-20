@@ -123,7 +123,7 @@ func TestDiskCacheTransitionAbandonedStalledDownloadFreesResources(t *testing.T)
 		d.async.mu.Lock()
 		pending := len(d.async.mu.pending)
 		d.async.mu.Unlock()
-		return d.downloadConns.Load() == 0 && !d.isUpdating(diskPath) && d.download(diskPath) == nil &&
+		return d.conns.held.Load() == 0 && !d.isUpdating(diskPath) && d.download(diskPath) == nil &&
 			pending == 0 && len(backgroundFills) == 0
 	}, 5*time.Second, time.Millisecond)
 	require.False(t, d.cache.Contains(diskPath))
@@ -138,7 +138,7 @@ func TestDiskCacheTransitionAsyncEntryPublicationAfterDeleteRewrite(t *testing.T
 	ctx := context.Background()
 	hold, held := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	d.beforeFilePublication = func() {
+	d.hooks.beforeFilePublication = func() {
 		once.Do(func() {
 			close(held)
 			<-hold

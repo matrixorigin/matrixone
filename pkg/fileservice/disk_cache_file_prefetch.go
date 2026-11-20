@@ -180,7 +180,7 @@ func (p *filePrefetchObject) abandon() { p.cancelRead() }
 
 // releaseConn frees the connection p holds, once.
 func (p *filePrefetchObject) releaseConn() {
-	p.connOnce.Do(func() { p.d.releaseDownloadConns(1) })
+	p.connOnce.Do(func() { p.d.conns.release() })
 }
 
 // endFilePrefetch returns the function ending the registered FilePrefetchObject p of the

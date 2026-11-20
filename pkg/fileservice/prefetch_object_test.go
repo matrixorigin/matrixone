@@ -93,8 +93,8 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, unit, 4*unit)
 	d := fs.diskCache
 	d.memoryPrefetchMax = 16 << 10
-	d.maxDownloadConns = 1
-	d.downloadConns.Store(1)
+	d.conns.max = 1
+	d.conns.held.Store(1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -103,17 +103,17 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 		done <- err
 	}()
 	require.Eventually(t, func() bool {
-		d.connsMu.Lock()
-		defer d.connsMu.Unlock()
-		return d.connsFreed != nil
+		d.conns.mu.Lock()
+		defer d.conns.mu.Unlock()
+		return d.conns.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	require.Eventually(t, func() bool { return fileObjects(d) == 0 }, 10*time.Second, time.Millisecond)
 	d.prefetchObjects.reads.Wait()
-	d.releaseDownloadConns(1)
+	d.conns.release()
 	require.Zero(t, storage.reads.Load())
-	require.Zero(t, d.downloadConns.Load())
+	require.Zero(t, d.conns.held.Load())
 }
 
 // A read that leaves caching to the prefetch range does not join a MemoryPrefetchObject

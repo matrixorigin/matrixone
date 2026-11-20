@@ -713,71 +713,80 @@ func (d *DiskCache) downloading() int {
 // downloads may hold: past it more streams share the bandwidth without adding any. It is
 // at least 4, or each connection downloads may hold when fewer, and at least 1.
 func (d *DiskCache) prefetchWorkers() int {
-	limit := d.maxDownloadConns
+	limit := d.conns.max
 	return int(max(limit/4, min(limit, 4), 1))
 }
 
-// waitDownloadConns reserves n of the connections downloads may hold, waiting until they
-// are free or ctx ends.
-func (d *DiskCache) waitDownloadConns(ctx context.Context, n int64) error {
+// connPool counts the object-storage connections downloads hold, at most max, half the
+// connections to the object storage host.
+type connPool struct {
+	max   int64
+	held  atomic.Int64
+	mu    sync.Mutex
+	freed freedSignal
+}
+
+// tryTake takes a connection, or reports that all are held.
+func (c *connPool) tryTake() bool {
 	for {
-		freed := d.downloadConnsFreed()
-		if d.reserveDownloadConns(n) {
-			return nil
+		cur := c.held.Load()
+		if cur >= c.max {
+			return false
+		}
+		if c.held.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+// take takes a connection, waiting for it, and returns the function freeing it.
+func (c *connPool) take(ctx context.Context) (func(), error) {
+	for {
+		freed := c.waitFreed()
+		if c.tryTake() {
+			return c.release, nil
 		}
 		select {
 		case <-freed:
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 }
 
-// releaseDownloadConns frees n connections reserved, and wakes the downloads waiting for
-// them.
-func (d *DiskCache) releaseDownloadConns(n int64) {
-	if n == 0 {
-		return
-	}
-	d.downloadConns.Add(-n)
-	d.connsMu.Lock()
-	if d.connsFreed != nil {
-		close(d.connsFreed)
-		d.connsFreed = nil
-	}
-	d.connsMu.Unlock()
+// release frees a connection and wakes the waiters for one.
+func (c *connPool) release() {
+	c.held.Add(-1)
+	c.mu.Lock()
+	c.freed.notifyLocked()
+	c.mu.Unlock()
 }
 
-func (d *DiskCache) downloadConnsFreed() chan struct{} {
-	d.connsMu.Lock()
-	defer d.connsMu.Unlock()
-	if d.connsFreed == nil {
-		d.connsFreed = make(chan struct{})
-	}
-	return d.connsFreed
+// waitFreed returns a channel closed once a connection is freed.
+func (c *connPool) waitFreed() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.freed.waitLocked()
 }
 
-// partConn takes one of the connections downloads may hold for a part of a download,
-// waiting for it, and returns the function freeing it.
-func (d *DiskCache) partConn(ctx context.Context) (func(), error) {
-	if err := d.waitDownloadConns(ctx, 1); err != nil {
-		return nil, err
-	}
-	return func() { d.releaseDownloadConns(1) }, nil
+// freedSignal wakes the waiters for a resource once some is freed. It is guarded by the
+// lock of the resource.
+type freedSignal struct {
+	ch chan struct{}
 }
 
-// reserveDownloadConns reserves n of the connections downloads may hold, half the
-// connections to the object storage host, or reports that they are taken.
-func (d *DiskCache) reserveDownloadConns(n int64) bool {
-	limit := d.maxDownloadConns
-	for {
-		cur := d.downloadConns.Load()
-		if cur+n > limit {
-			return false
-		}
-		if d.downloadConns.CompareAndSwap(cur, cur+n) {
-			return true
-		}
+// waitLocked returns a channel closed at the next notifyLocked.
+func (s *freedSignal) waitLocked() <-chan struct{} {
+	if s.ch == nil {
+		s.ch = make(chan struct{})
+	}
+	return s.ch
+}
+
+func (s *freedSignal) notifyLocked() {
+	if s.ch != nil {
+		close(s.ch)
+		s.ch = nil
 	}
 }
 

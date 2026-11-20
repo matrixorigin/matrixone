@@ -306,7 +306,7 @@ func TestIndexObjectFillWritesInIndexFileCache(t *testing.T) {
 
 	var published []string
 	objectPath := fs.diskCache.pathForFile("object")
-	fs.diskCache.beforeFilePublication = func() {
+	fs.diskCache.hooks.beforeFilePublication = func() {
 		if o := fs.diskCache.download(objectPath); o != nil {
 			o.mu.Lock()
 			if o.file != nil {

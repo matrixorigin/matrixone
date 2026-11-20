@@ -315,7 +315,7 @@ func TestReplayWriteAsyncFinalizeDoesNotRetainInput(t *testing.T) {
 	var enteredOnce, releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
-	fs.diskCache.beforeFilePublication = func() { enteredOnce.Do(func() { close(entered); <-release }) }
+	fs.diskCache.hooks.beforeFilePublication = func() { enteredOnce.Do(func() { close(entered); <-release }) }
 	source := bytes.Repeat([]byte("async-data"), 4096)
 	want := bytes.Clone(source)
 	vector := IOVector{FilePath: "async", Entries: []IOEntry{{Offset: 0, Size: int64(len(source)), Data: source}}}

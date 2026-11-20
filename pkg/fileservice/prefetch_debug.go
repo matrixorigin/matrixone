@@ -87,5 +87,5 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
 	}
-	fmt.Fprintf(w, "  buffer bytes %d of %d, download connections %d of %d\n", bytes, d.flightBytes(), d.downloadConns.Load(), d.maxDownloadConns)
+	fmt.Fprintf(w, "  buffer bytes %d of %d, download connections %d of %d\n", bytes, d.flightBytes(), d.conns.held.Load(), d.conns.max)
 }

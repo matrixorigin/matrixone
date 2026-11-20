@@ -147,7 +147,7 @@ func TestBlackBoxJoinedColumnReadReturnsWhileRangesWait(t *testing.T) {
 // downloads may hold.
 func TestBlackBoxColumnPrefetchHoldsDownloadConnections(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.maxDownloadConns = 2
+	fs.diskCache.conns.max = 2
 	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
 	fs.storage = g
 	release := sync.OnceFunc(func() { close(g.gate) })
@@ -245,7 +245,7 @@ func foregroundReadOfWaitingRange(t *testing.T, fs *S3FS, ranges []PrefetchRange
 // download connection, reads its own bytes: the range is not joinable before it holds one.
 func TestBlackBoxForegroundReadNotHeldByWaitingConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 4 * flightBufSize(ranges[0].Size)
 	got, offset, err := foregroundReadOfWaitingRange(t, fs, ranges)
@@ -261,7 +261,7 @@ func TestBlackBoxForegroundReadNotHeldByBufferOfWaitingRange(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
@@ -292,7 +292,7 @@ func TestBlackBoxColumnReadNotHeldByPrefetchWaitingForConnection(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
 	fs.storage = g
@@ -328,7 +328,7 @@ func TestBlackBoxColumnReadNotHeldByFilePrefetchWaitingForConnection(t *testing.
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 16<<10)
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	fs.diskCache.memoryPrefetchMax = 16 << 10
 	otherKey := fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
@@ -354,7 +354,7 @@ func TestBlackBoxColumnReadNotHeldByWholeObjectPrefetchWaitingForConnection(t *t
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	otherKey := fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
 	fs.storage = g
@@ -382,7 +382,7 @@ func TestBlackBoxMemoryColumnPrefetchWaitingForConnectionEndsOnDelete(t *testing
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
 	fs.storage = g
@@ -407,7 +407,7 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
 	fs.storage = g
@@ -442,7 +442,7 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 	require.Zero(t, total)
 	release()
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("other") }, 5*time.Second, time.Millisecond)
-	require.Zero(t, d.downloadConns.Load())
+	require.Zero(t, d.conns.held.Load())
 }
 
 // A memory-backed column prefetch starts no range of an object deleted while its ranges
@@ -503,7 +503,7 @@ func TestBlackBoxConcurrentReadsOfFileRunDownloadOnce(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.conns.max = 1
 	fs.diskCache.memoryPrefetchMax = 2 * unit
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })

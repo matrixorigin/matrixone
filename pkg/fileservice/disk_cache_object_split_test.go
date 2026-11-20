@@ -231,14 +231,14 @@ func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.maxDownloadConns = 2
-	d.downloadConns.Store(1)
+	d.conns.max = 2
+	d.conns.held.Store(1)
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with one connection free")
-	require.Equal(t, int64(1), d.downloadConns.Load(), "its connections are released")
+	require.Equal(t, int64(1), d.conns.held.Load(), "its connections are released")
 	require.True(t, d.cache.Contains(d.pathForFile("object")))
 }
 
@@ -246,8 +246,8 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 func TestS3FSDownloadWaitsForConn(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.maxDownloadConns = 1
-	d.downloadConns.Store(1)
+	d.conns.max = 1
+	d.conns.held.Store(1)
 	done := make(chan []byte, 1)
 	go func() {
 		got, err := readFullObjectOf(fs, 100, 10)
@@ -255,16 +255,16 @@ func TestS3FSDownloadWaitsForConn(t *testing.T) {
 		done <- got
 	}()
 	require.Eventually(t, func() bool {
-		d.connsMu.Lock()
-		defer d.connsMu.Unlock()
-		return d.connsFreed != nil
+		d.conns.mu.Lock()
+		defer d.conns.mu.Unlock()
+		return d.conns.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
 	require.False(t, d.cache.Contains(d.pathForFile("object")))
 	require.False(t, d.isUpdating(d.pathForFile("object")), "waiting for a connection holds no update of the path")
-	d.releaseDownloadConns(1)
+	d.conns.release()
 	require.Equal(t, data[100:110], <-done)
 	require.True(t, d.cache.Contains(d.pathForFile("object")))
-	require.Zero(t, d.downloadConns.Load())
+	require.Zero(t, d.conns.held.Load())
 }
 
 // waitingForConn reports whether a whole-object download of the object at diskPath waits
@@ -289,8 +289,8 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
 			fs.storage = keepOnDeleteStorage{fs.storage}
 			d := fs.diskCache
-			d.maxDownloadConns = 1
-			d.downloadConns.Store(1)
+			d.conns.max = 1
+			d.conns.held.Store(1)
 			diskPath := d.pathForFile("object")
 			done := make(chan []byte, 1)
 			go func() {
@@ -310,7 +310,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			require.Equal(t, data[100:110], <-done)
 			require.False(t, waitingForConn(d, diskPath))
 			require.False(t, d.cache.Contains(diskPath))
-			require.Equal(t, int64(1), d.downloadConns.Load(), "it took no connection")
+			require.Equal(t, int64(1), d.conns.held.Load(), "it took no connection")
 		})
 	}
 }
@@ -385,7 +385,7 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		d := fs.diskCache
 		d.objectSplit = objectSplitConfig{parts: 1}
 		d.prefetched.store(d.pathForFile("object"), int64(len(data)))
-		require.Equal(t, tc.limit, d.maxDownloadConns, "conns %d", tc.conns)
+		require.Equal(t, tc.limit, d.conns.max, "conns %d", tc.conns)
 		got, err := readFullObjectOf(fs, 100, 10)
 		require.NoError(t, err)
 		require.Equal(t, data[100:110], got)
@@ -404,7 +404,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 	)
 	fs, _, _ := newPrefetchRangeFS(t, 0, 1)
 	fs.diskCache.objectSplit = objectSplitConfig{parts: 2, min: 128 << 10}
-	fs.diskCache.maxDownloadConns = 2
+	fs.diskCache.conns.max = 2
 	ctx := context.Background()
 	contents := make([][]byte, objects)
 	for i := range objects {
@@ -436,7 +436,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 			t.Fatal("a read did not return")
 		}
 	}
-	require.Eventually(t, func() bool { return fs.diskCache.downloadConns.Load() == 0 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return fs.diskCache.conns.held.Load() == 0 }, 5*time.Second, time.Millisecond)
 }
 
 // A read of bytes in a part of a split download that waits for a connection reads its own
@@ -444,7 +444,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.maxDownloadConns = 1
+	d.conns.max = 1
 	key := fs.pathToKey("object")
 	g := newBlackBoxStorage(fs.storage, func(k string, off int64) bool { return k == key && off == 0 })
 	fs.storage = g

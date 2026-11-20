@@ -670,9 +670,7 @@ type loadedDir struct {
 func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 	lru := d.cache
 	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
-	if d.beforeIndexLoadedDirs != nil {
-		d.beforeIndexLoadedDirs()
-	}
+	runHook(d.hooks.beforeIndexLoadedDirs)
 	for _, e := range dirs {
 		owner, _ := d.paths.acquire(context.Background(), e.path, nil)
 		if _, err := os.Stat(e.path); err == nil {
@@ -910,9 +908,7 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	}
 	d.cache.Evict(ctx, nil, size)
 
-	if d.beforeFilePublication != nil {
-		d.beforeFilePublication()
-	}
+	runHook(d.hooks.beforeFilePublication)
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -950,9 +946,7 @@ func (d *DiskCache) createCacheTempDir(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
-	if d.beforeCacheTempFileCreate != nil {
-		d.beforeCacheTempFileCreate()
-	}
+	runHook(d.hooks.beforeCacheTempFileCreate)
 	return os.MkdirTemp(dir, "*"+cacheDirTempSuffix)
 }
 
@@ -1056,8 +1050,8 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 		}
 	}
 	for i, file := range files {
-		if i > 0 && d.beforeCacheDirFileOpen != nil {
-			d.beforeCacheDirFileOpen()
+		if i > 0 && d.hooks.beforeCacheDirFileOpen != nil {
+			d.hooks.beforeCacheDirFileOpen()
 		}
 		f, err := root.Open(file)
 		if err != nil {

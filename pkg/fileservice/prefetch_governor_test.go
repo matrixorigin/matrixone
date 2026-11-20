@@ -107,7 +107,7 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return storage.opens.Load() == budget/unit && f.freed != nil
+		return storage.opens.Load() == budget/unit && f.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the reads past the bound wait")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -490,7 +490,7 @@ func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return f.freed != nil
+		return f.freed.ch != nil
 	}, 5*time.Second, time.Millisecond, "the read of object waits for buffers")
 	require.NoError(t, fs.Delete(ctx, "object"))
 	release()

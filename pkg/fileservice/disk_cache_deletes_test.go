@@ -203,14 +203,13 @@ func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return f.freed != nil
+		return f.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the read waits for room")
 	require.Zero(t, storage.bytes.Load())
 
 	f.mu.Lock()
 	f.bytes = 0
-	close(f.freed)
-	f.freed = nil
+	f.freed.notifyLocked()
 	f.mu.Unlock()
 	require.Equal(t, data[5000:5002], <-got)
 	require.Equal(t, int64(4096), storage.bytes.Load(), "the prefetch range")
@@ -305,14 +304,14 @@ func TestDeleteWaitsForPublicationOfEarlierRead(t *testing.T) {
 			deleteObject := func() { defer close(deleted); deleteErr = d.DeletePaths(ctx, []string{"object"}) }
 			var published, seenAfterDelete atomic.Bool
 			if claimed {
-				d.afterPublicationClaim = func() {
+				d.hooks.afterPublicationClaim = func() {
 					go deleteObject()
 					select {
 					case <-deleted:
 					case <-time.After(100 * time.Millisecond):
 					}
 				}
-				d.afterFilePublication = func() {
+				d.hooks.afterFilePublication = func() {
 					published.Store(true)
 					select {
 					case <-deleted:
@@ -323,8 +322,8 @@ func TestDeleteWaitsForPublicationOfEarlierRead(t *testing.T) {
 					}
 				}
 			} else {
-				d.beforeFilePublication = deleteObject
-				d.afterFilePublication = func() { published.Store(true) }
+				d.hooks.beforeFilePublication = deleteObject
+				d.hooks.afterFilePublication = func() { published.Store(true) }
 			}
 			require.NoError(t, d.Update(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{entry}}, async))
 			d.flushAsyncUpdates(ctx)
