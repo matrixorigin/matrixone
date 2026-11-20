@@ -1165,6 +1165,19 @@ type BindContext struct {
 	// contexts created while binding one FROM clause inherit the owner, while a
 	// nested SELECT replaces it when bindSelect starts.
 	queryBlockOwner *BindContext
+	// reducibleTablelessScalar describes a scalar SELECT that MySQL may
+	// replace with its sole projection. hasDependentProjectionSubquery records
+	// whether a visible projection contains a row-dependent or unstable
+	// subquery, which prevents a derived SELECT from being merged.
+	// singleProjectionRetainsSubquery is captured before flattening and records
+	// whether a sole visible projection still contains a subquery after direct
+	// single-value reductions.
+	// canReduceInToSubqueryFreeComparison records whether a one-column IN RHS
+	// loses its subquery after MySQL's single-value reduction.
+	reducibleTablelessScalar            bool
+	hasDependentProjectionSubquery      bool
+	singleProjectionRetainsSubquery     bool
+	canReduceInToSubqueryFreeComparison bool
 	// aggregateInputParent is set on a subquery context when that subquery is
 	// bound as an aggregate argument of its parent query. Correlations back to
 	// this parent are per-row aggregate inputs, not bare aggregate-query output

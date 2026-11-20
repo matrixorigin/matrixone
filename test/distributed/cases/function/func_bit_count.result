@@ -525,6 +525,118 @@ SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
 ➤ bits[-5,64,0]  𝄀
 1
+SELECT 'correlated projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+(SELECT MAX(i.d) FROM t_bit_count_float i WHERE i.id = o.id) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ correlated projection[12,21,0]  ¦  bits[-5,64,0]  𝄀
+correlated projection  ¦  1
+SELECT 'row-dependent projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.d + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ row-dependent projection[12,24,0]  ¦  bits[-5,64,0]  𝄀
+row-dependent projection  ¦  1
+SELECT 'volatile projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+RAND() + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ volatile projection[12,19,0]  ¦  bits[-5,64,0]  𝄀
+volatile projection  ¦  1
+SELECT 'uncorrelated projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+(SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ uncorrelated projection[12,23,0]  ¦  bits[-5,64,0]  𝄀
+uncorrelated projection  ¦  2
+SELECT 'tableless scalar projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, (SELECT RAND()) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ tableless scalar projection[12,27,0]  ¦  bits[-5,64,0]  𝄀
+tableless scalar projection  ¦  2
+SELECT 'WHERE-only subquery', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x
+FROM t_bit_count_float o
+WHERE o.id = 1 AND EXISTS (SELECT 1 FROM t_bit_count_float i WHERE i.id = o.id)
+) s;
+➤ WHERE-only subquery[12,19,0]  ¦  bits[-5,64,0]  𝄀
+WHERE-only subquery  ¦  2
+SELECT 'direct scalar field', BIT_COUNT((SELECT o.d)) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+➤ direct scalar field[12,19,0]  ¦  bits[-5,64,0]  𝄀
+direct scalar field  ¦  1
+SELECT 'direct scalar CAST', BIT_COUNT((SELECT CAST(o.d AS DOUBLE))) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+➤ direct scalar CAST[12,18,0]  ¦  bits[-5,64,0]  𝄀
+direct scalar CAST  ¦  2
+SELECT 'scalar and sibling', BIT_COUNT(x) AS sibling_bits, BIT_COUNT(z) AS scalar_bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, (SELECT o.d) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ scalar and sibling[12,18,0]  ¦  sibling_bits[-5,64,0]  ¦  scalar_bits[-5,64,0]  𝄀
+scalar and sibling  ¦  2  ¦  1
+SELECT 'IN left operand', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.d IN (SELECT i.d FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN left operand[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN left operand  ¦  1
+SELECT 'tableless IN', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ tableless IN[12,12,0]  ¦  bits[-5,64,0]  𝄀
+tableless IN  ¦  2
+SELECT 'IN true filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1 = 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN true filter[12,14,0]  ¦  bits[-5,64,0]  𝄀
+IN true filter  ¦  2
+SELECT 'IN constant-true filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 2 > 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN constant-true filter[12,23,0]  ¦  bits[-5,64,0]  𝄀
+IN constant-true filter  ¦  2
+SELECT 'IN empty filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE FALSE) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN empty filter[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN empty filter  ¦  1
+SELECT 'IN one-row VALUES', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN one-row VALUES[12,17,0]  ¦  bits[-5,64,0]  𝄀
+IN one-row VALUES  ¦  2
+SELECT 'IN multirow VALUES', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1), ROW(2)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN multirow VALUES[12,18,0]  ¦  bits[-5,64,0]  𝄀
+IN multirow VALUES  ¦  1
+SELECT 'IN nested physical scalar', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.id IN (SELECT (SELECT (SELECT MAX(i.id) FROM t_bit_count_float i))) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN nested physical scalar[12,25,0]  ¦  bits[-5,64,0]  𝄀
+IN nested physical scalar  ¦  1
+SELECT 'IN grouped wrapped scalar', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.id IN (SELECT ABS((SELECT 1)) GROUP BY 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN grouped wrapped scalar[12,25,0]  ¦  bits[-5,64,0]  𝄀
+IN grouped wrapped scalar  ¦  1
 SELECT BIT_COUNT((SELECT CAST(3.9 AS DOUBLE))) AS scalar_cast_bits;
 ➤ scalar_cast_bits[-5,64,0]  𝄀
 2

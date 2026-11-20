@@ -17,10 +17,233 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBitCountDerivedSubqueryProjectionBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		selects string
+		want    int32
+	}{
+		{
+			name: "correlated projection materializes",
+			selects: `select cast(e.sal as double) x,
+				(select max(i.sal) from constraint_test.emp i where i.empno=e.empno) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "row-dependent wrapper materializes",
+			selects: `select cast(e.sal as double) x,
+				e.sal+(select max(i.sal) from constraint_test.emp i) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "volatile wrapper materializes",
+			selects: `select cast(e.sal as double) x,
+				rand()+(select max(i.sal) from constraint_test.emp i) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "uncorrelated subquery remains mergeable",
+			selects: `select cast(e.sal as double) x,
+				(select max(i.sal) from constraint_test.emp i) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "tableless scalar remains reducible",
+			selects: `select cast(e.sal as double) x, (select rand()) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "WHERE-only subquery remains mergeable",
+			selects: `select cast(e.sal as double) x from constraint_test.emp e
+				where exists (select 1 from constraint_test.emp i where i.empno=e.empno)`,
+			want: 16,
+		},
+		{
+			name: "direct IN with literal RHS reduces",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN with NULL RHS reduces",
+			selects: `select cast(e.sal as double) x, e.empno in (select null) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN with volatile RHS reduces",
+			selects: `select cast(e.sal as double) x, e.empno in (select rand()) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN reduces nested scalar RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (select (select 1)) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN retains nested physical scalar RHS",
+			selects: `select cast(e.sal as double) x,
+				e.empno in (select (select (select max(i.empno) from constraint_test.emp i))) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "direct IN keeps wrapped scalar RHS subquery",
+			selects: `select cast(e.sal as double) x, e.empno in (select abs((select 1))) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "direct IN retains subquery through GROUP BY ordinal",
+			selects: `select cast(e.sal as double) x,
+				e.empno in (select abs((select 1)) group by 1) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "direct IN keeps filtered empty RHS subquery",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where false) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "direct IN reduces true-filtered RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where 1=1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN reduces constant-true comparison filter",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where 2>1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN reduces DISTINCT RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (select distinct 1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN reduces grouped RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 group by 1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN reduces one-row VALUES RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (values row(1)) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN retains multirow VALUES RHS",
+			selects: `select cast(e.sal as double) x, e.empno in (values row(1), row(2)) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "NOT IN remains a subquery",
+			selects: `select cast(e.sal as double) x, e.empno not in (select 1) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "wrapped IN remains a subquery",
+			selects: `select cast(e.sal as double) x, (e.empno in (select 1)) + 0 z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "equality ANY reduces like IN",
+			selects: `select cast(e.sal as double) x, e.empno = any (select 1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "non-equality ANY remains a subquery",
+			selects: `select cast(e.sal as double) x, e.empno > any (select 1) z
+				from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			queryPlan, err := runOneStmt(optimizer, t, "select bit_count(x) from ("+tc.selects+") s")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(queryPlan, "bit_count")
+			require.NotNil(t, fn)
+			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.want, overload)
+		})
+	}
+}
+
+func TestBitCountCorrelatedScalarProjectionBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want int32
+	}{
+		{
+			name: "direct scalar field",
+			sql:  `select bit_count((select e.sal)) from constraint_test.emp e`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "direct scalar explicit cast",
+			sql:  `select bit_count((select cast(e.sal as double))) from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "reducible scalar does not materialize sibling projection",
+			sql:  `select bit_count(x) from (select cast(e.sal as double) x, (select e.sal) z from constraint_test.emp e) s`,
+			want: 16,
+		},
+		{
+			name: "unreduced scalar field",
+			sql:  `select bit_count((select i.sal from constraint_test.emp i limit 1))`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "IN subquery retains its dependent left operand",
+			sql:  `select bit_count(x) from (select cast(e.sal as double) x, e.sal in (select i.sal from constraint_test.emp i) z from constraint_test.emp e) s`,
+			want: function.BitCountRoundedFloat64Overload,
+		},
+		{
+			name: "uncorrelated tableless scalar remains reducible",
+			sql:  `select bit_count((select rand()))`,
+			want: 16,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+			salPos, ok := tableColumnPosition(table, "sal")
+			require.True(t, ok)
+			table.Cols[salPos].Typ.Id = int32(types.T_float64)
+			queryPlan, err := runOneStmt(optimizer, t, tc.sql)
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(queryPlan, "bit_count")
+			require.NotNil(t, fn)
+			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.want, overload)
+		})
+	}
+}
 
 func TestTableDumpReleasedBitCountBindings(t *testing.T) {
 	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
