@@ -1002,10 +1002,14 @@ func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 
 var queryCollectorElementSize = uint64(reflect.TypeFor[ByteJson]().Size())
 
+const queryCheckInterval = 64
+
 type queryCollector struct {
 	values  []ByteJson
 	reserve func(uint64) (func(), error)
 	release func()
+	ctx     context.Context
+	steps   uint64
 	err     error
 }
 
@@ -1013,7 +1017,7 @@ func (c *queryCollector) append(value ByteJson) {
 	if c.err != nil {
 		return
 	}
-	if c.reserve == nil {
+	if c.reserve == nil && c.ctx == nil {
 		c.values = append(c.values, value)
 		return
 	}
@@ -1026,16 +1030,34 @@ func (c *queryCollector) append(value ByteJson) {
 			c.err = moerr.NewInvalidInputNoCtx("JSON query result size overflow")
 			return
 		}
-		release, err := c.reserve(uint64(capacity) * queryCollectorElementSize)
-		if err != nil {
-			if release != nil {
-				release()
+		var release func()
+		if c.reserve != nil {
+			var err error
+			release, err = c.reserve(uint64(capacity) * queryCollectorElementSize)
+			if err != nil {
+				if release != nil {
+					release()
+				}
+				c.err = err
+				return
 			}
-			c.err = err
-			return
 		}
 		values := make([]ByteJson, len(c.values), capacity)
-		copy(values, c.values)
+		if c.ctx == nil {
+			copy(values, c.values)
+		} else {
+			// A growth can itself copy many matches from a single row.
+			for start := 0; start < len(c.values); start += 1024 {
+				if c.err = c.ctx.Err(); c.err != nil {
+					if release != nil {
+						release()
+					}
+					return
+				}
+				end := min(start+1024, len(c.values))
+				copy(values[start:end], c.values[start:end])
+			}
+		}
 		if c.release != nil {
 			c.release()
 		}
@@ -1055,6 +1077,14 @@ func (c *queryCollector) close() {
 func (bj ByteJson) query(cur *queryCollector, path *Path) {
 	if cur.err != nil {
 		return
+	}
+	if cur.ctx != nil {
+		if cur.steps%queryCheckInterval == 0 {
+			if cur.err = cur.ctx.Err(); cur.err != nil {
+				return
+			}
+		}
+		cur.steps++
 	}
 	if path.empty() {
 		cur.append(bj)
@@ -1167,6 +1197,41 @@ func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 		return out[0], true
 	}
 	return mergeToArray(out), true
+}
+
+// QueryWithExistsContext checks cancellation during path traversal and result
+// assembly. Match order, missing values and array wrapping follow QueryWithExists.
+func (bj ByteJson) QueryWithExistsContext(ctx context.Context, paths []*Path) (ByteJson, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(paths) == 1 && paths[0].IsSimple() {
+		if err := ctx.Err(); err != nil {
+			return Null, false, err
+		}
+		value, exists := bj.querySimpleExist(paths[0], true)
+		return value, exists, nil
+	}
+	collector := queryCollector{ctx: ctx}
+	for _, path := range paths {
+		bj.query(&collector, path)
+		if collector.err != nil {
+			return Null, false, collector.err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Null, false, err
+	}
+	switch len(collector.values) {
+	case 0:
+		return Null, false, nil
+	case 1:
+		if len(paths) == 1 && !paths[0].mayReturnMultiple() {
+			return collector.values[0], true, nil
+		}
+	}
+	value, err := mergeToArrayWithContext(ctx, collector.values)
+	return value, err == nil, err
 }
 
 // QueryWithMemory uses the ordinary JSON path semantics while reserving each

@@ -1147,12 +1147,9 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 				return err
 			}
 		}
-		var out bytejson.ByteJson
-		var exists bool
-		if op.simple {
-			out, exists = doc.QuerySimpleWithExists(paths)
-		} else {
-			out, exists = doc.QueryWithExists(paths)
+		out, exists, err := doc.QueryWithExistsContext(ctx, paths)
+		if err != nil {
+			return err
 		}
 		if err := rs.AppendByteJson(out, !exists); err != nil {
 			return err
