@@ -165,22 +165,32 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	if node.data == nil {
 		return nil
 	}
-	selection, commitTSVec, abort :=
-		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	var selection index.RowSelection
+	var commitTSVec, abort containers.Vector
+	preserveOffsets := preservePhysicalRows(ctx)
+	if preserveOffsets {
+		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendSnapshotLocked(end, mp)
+	} else {
+		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	}
 	if commitTSVec == nil {
 		return nil
 	}
 	var inner *containers.Batch
-	selection.ForEachRange(func(from, to uint32) bool {
-		window := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
-		if inner == nil {
-			inner = window
-		} else {
-			inner.Extend(window)
-			window.Close()
-		}
-		return true
-	})
+	if preserveOffsets {
+		inner = node.data.CloneWindowWithPool(0, int(selection.MaxRow), node.object.rt.VectorPool.Transient)
+	} else {
+		selection.ForEachRange(func(from, to uint32) bool {
+			window := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
+			if inner == nil {
+				inner = window
+			} else {
+				inner.Extend(window)
+				window.Close()
+			}
+			return true
+		})
+	}
 	if inner == nil {
 		commitTSVec.Close()
 		abort.Close()

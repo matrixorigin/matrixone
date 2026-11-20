@@ -128,7 +128,7 @@ func TestDictionarySelectionScopeStringsAndFailure(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	many := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() { many.Free(mp) })
@@ -138,11 +138,15 @@ func TestDictionarySelectionScopeStringsAndFailure(t *testing.T) {
 	for i := range rows {
 		rows[i] = int64(i)
 	}
+	// Null bitmaps are Go-owned, so a selection over a nullable fixed column
+	// needs no account admission even with a one-byte account.
 	admitted, err = scope.Bind([]*Vector{many}, outputs, []int{0}, rows, 512, mp, allocation)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.False(t, admitted)
-	require.Nil(t, outputs[0])
-	require.Nil(t, scope.columns[0].base.vec)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NotNil(t, outputs[0])
+	require.True(t, outputs[0].IsNull(511))
+	require.False(t, outputs[0].IsNull(0))
+	require.Zero(t, account.Snapshot().Used)
 	scope.Free(mp)
 	require.Zero(t, account.Snapshot().Used)
 }

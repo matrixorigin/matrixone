@@ -53,6 +53,6 @@ const (
 const (
 	AdaptiveTopRetainedData mpool.AllocationSite = iota + 96
 	AdaptiveTopRetainedArea
-	AdaptiveTopRetainedNulls
-	AdaptiveTopRetainedGrouping
+	_ // reserved: was AdaptiveTopRetainedNulls
+	_ // reserved: was AdaptiveTopRetainedGrouping
 )

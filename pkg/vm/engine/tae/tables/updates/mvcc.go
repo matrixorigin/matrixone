@@ -285,6 +285,20 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (sele
 func (n *AppendMVCCHandle) CollectAppendLocked(
 	start, end types.TS, mp *mpool.MPool,
 ) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
+	return n.collectAppendLocked(start, end, false, mp)
+}
+
+// CollectAppendSnapshotLocked keeps the old object's physical offsets. Slots
+// without a selected append node must stay invisible in the persisted prefix.
+func (n *AppendMVCCHandle) CollectAppendSnapshotLocked(
+	end types.TS, mp *mpool.MPool,
+) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
+	return n.collectAppendLocked(types.TS{}, end, true, mp)
+}
+
+func (n *AppendMVCCHandle) collectAppendLocked(
+	start, end types.TS, preserveOffsets bool, mp *mpool.MPool,
+) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
 	if end.LT(&start) {
 		return
 	}
@@ -342,6 +356,12 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 		if commitTSVec == nil {
 			commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
 			abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
+		}
+		if preserveOffsets {
+			for row := selection.MaxRow; row < node.startRow; row++ {
+				commitTSVec.Append(txnif.UncommitTS, false)
+				abortVec.Append(true, false)
+			}
 		}
 		selection.AddRange(node.startRow, node.maxRow)
 		for row := node.startRow; row < node.maxRow; row++ {

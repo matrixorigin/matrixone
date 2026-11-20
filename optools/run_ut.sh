@@ -2338,7 +2338,7 @@ function run_prebuilt_race_commands(){
                 return 1
             fi
             checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
-                "package_index=${index} prebuilt=true parallel=${parallel}"
+                "package_index=${index} prebuilt=true parallel=${parallel} timeout_seconds=${remaining}"
             set -m
             (
                 cd "${race_dirs[index]}" || exit 2

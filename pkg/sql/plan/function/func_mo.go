@@ -1173,6 +1173,8 @@ type enumValueIndex struct {
 	values        []string
 	exactIndexes  map[string]types.Enum
 	foldedIndexes map[string]types.Enum
+	// trimmedIndexes is non-nil only when a stored label has trailing spaces.
+	trimmedIndexes map[string]types.Enum
 }
 
 func buildEnumValueIndex(enumValues string) *enumValueIndex {
@@ -1197,24 +1199,48 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 			index.foldedIndexes[foldKey] = firstIndex
 		}
 		index.exactIndexes[value] = firstIndex
+		if strings.HasSuffix(value, " ") && index.trimmedIndexes == nil {
+			// Only definitions stored before CREATE-time trimming carry
+			// padded labels; ordinary domains skip the trimmed-label map.
+			index.trimmedIndexes = make(map[string]types.Enum, len(values))
+		}
+	}
+	if index.trimmedIndexes != nil {
+		for i, value := range values {
+			key := commonutil.EqualFoldKey(strings.TrimRight(value, " "))
+			if _, ok := index.trimmedIndexes[key]; !ok {
+				index.trimmedIndexes[key] = types.Enum(i + 1)
+			}
+		}
 	}
 	return index
 }
 
+// parse follows types.ParseEnum precedence: raw labels first, then the value
+// without trailing spaces, then padded stored labels compared trimmed.
 func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
-	for {
-		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		if enumIndex := index.foldedIndexes[commonutil.EqualFoldKey(value)]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		trimmed := strings.TrimRight(value, " ")
-		if trimmed == value {
-			return types.ParseEnumNumericText(value, len(index.values))
-		}
-		value = trimmed
+	if enumIndex := index.lookupRaw(value); enumIndex != 0 {
+		return enumIndex, false, nil
 	}
+	trimmed := strings.TrimRight(value, " ")
+	if trimmed != value {
+		if enumIndex := index.lookupRaw(trimmed); enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+	}
+	if index.trimmedIndexes != nil {
+		if enumIndex := index.trimmedIndexes[commonutil.EqualFoldKey(trimmed)]; enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+	}
+	return types.ParseEnumNumericText(trimmed, len(index.values))
+}
+
+func (index *enumValueIndex) lookupRaw(value string) types.Enum {
+	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+		return enumIndex
+	}
+	return index.foldedIndexes[commonutil.EqualFoldKey(value)]
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
