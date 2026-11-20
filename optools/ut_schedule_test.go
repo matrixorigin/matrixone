@@ -179,6 +179,38 @@ exit 127
 	return out, err
 }
 
+func TestRunUTPreparesPythonDependenciesForWorkerShards(t *testing.T) {
+	for _, tc := range []struct {
+		shard string
+		want  string
+	}{
+		{"all", "1"}, {"light", "1"}, {"embedded", "1"}, {"issues", "0"}, {"heavy-plan", "0"},
+	} {
+		t.Run(tc.shard, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+UT_SHARD="$SHARD"
+prepared=0
+function logger() { :; }
+function prepare_python_udf_dependencies() { (( prepared += 1 )); return 0; }
+function go() {
+ if [[ "$*" == "clean -testcache" ]]; then
+  [[ "$prepared" == "$WANT_PREPARE" ]] || exit 90
+  printf 'python preparation checked\n'
+  exit 0
+ fi
+ exit 91
+}
+run_tests
+exit 92`
+			out, err := scheduleHarnessWithMock(t, script, "#!/bin/bash\nexit 93\n",
+				"SHARD="+tc.shard, "WANT_PREPARE="+tc.want)
+			if err != nil || !strings.Contains(string(out), "python preparation checked") {
+				t.Fatalf("shard %s did not reach the cache boundary with expected Python setup: %v\n%s", tc.shard, err, out)
+			}
+		})
+	}
+}
+
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	t.Parallel()
 	workflowData, err := os.ReadFile("../.github/workflows/entrypoint.yaml")

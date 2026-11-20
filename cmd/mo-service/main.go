@@ -778,7 +778,11 @@ func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	finish := serviceLifecycle.registerTask(serviceRolePython)
+	return startManagedPythonWorker(cfg.PythonUdfWorkerConfig, stopper, serviceLifecycle)
+}
+
+func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifecycle *serviceSupervisor) error {
+	finish := lifecycle.registerTask(serviceRolePython)
 	serviceWG.Add(1)
 	var taskDone sync.Once
 	finishTask := func(err error) {
@@ -790,9 +794,9 @@ func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	err := stopper.RunNamedTask("python-udf-worker", func(ctx context.Context) {
 		var closeErr error
 		defer func() { finishTask(closeErr) }()
-		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
+		roleCtx, cancelRole := lifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := python.NewSupervisor(cfg.PythonUdfWorkerConfig)
+		s, err := python.NewSupervisor(cfg)
 		if err != nil {
 			panic(err)
 		}
@@ -807,18 +811,15 @@ func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
 			}
 		case <-workerDone:
-			// A worker exit while the role is still running leaves CN with a
-			// configured but unusable Python runtime. Surface it as a fatal
-			// service event so the existing lifecycle supervisor drains CN
-			// before the worker dependency and does not accept partial service
-			// availability. A zero exit is still unexpected here.
+			// The supervisor has reaped the worker. Its exit only makes the
+			// configured Python endpoint unavailable. CN and ordinary SQL
+			// continue to run, and the Gateway reports Python transport errors.
 			if roleCtx.Err() == nil {
 				workerErr := s.Err()
 				if workerErr == nil {
 					workerErr = errors.New("process exited without an error")
 				}
-				closeErr = fmt.Errorf("python UDF worker exited unexpectedly: %w", workerErr)
-				serviceLifecycle.notifyFatal(closeErr)
+				logutil.GetGlobalLogger().Error("Python UDF worker exited unexpectedly", zap.Error(workerErr))
 			}
 		}
 	})
