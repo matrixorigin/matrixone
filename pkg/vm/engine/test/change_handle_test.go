@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -1784,6 +1785,80 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 	)
 }
 
+func TestCheckpointObjectReuseAcrossRanges(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		fs, err := fileservice.NewMemoryFS("checkpoint-object-reuse", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+
+		start := types.BuildTS(10, 0)
+		fork := types.BuildTS(20, 0)
+		end := types.BuildTS(30, 0)
+		beforeFork := newObjectEntryForCheckpointTest(t, 1, false, true, types.BuildTS(12, 0), types.TS{})
+		afterFork := newObjectEntryForCheckpointTest(t, 2, false, true, types.BuildTS(24, 0), types.TS{})
+		zone := index.NewZM(types.T_int64, 0)
+		index.UpdateZMAny(zone, int64(42))
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&afterFork.ObjectStats, zone))
+		deletion := newObjectEntryForCheckpointTest(t, 3, false, true, types.BuildTS(25, 0), types.TS{})
+		otherTable := newObjectEntryForCheckpointTest(t, 4, false, true, types.BuildTS(26, 0), types.TS{})
+
+		failure := moerr.NewInternalErrorNoCtx("checkpoint metadata read unavailable")
+		var failRead bool
+		restore := logtailreplay.SetCheckpointReaderFactoryForTest(func(_ uint32, _ objectio.Location, tableID uint64, _ *mpool.MPool, _ fileservice.FileService) logtailreplay.CheckpointEntryReader {
+			if tableID == 2 {
+				return &checkpointReaderStub{objects: []checkpointObject{{entry: otherTable}}}
+			}
+			if failRead {
+				return &checkpointReaderStub{err: failure}
+			}
+			return &checkpointReaderStub{objects: []checkpointObject{
+				{entry: beforeFork},
+				{entry: afterFork},
+				{entry: deletion, isTombstone: true},
+			}}
+		})
+		defer restore()
+		entry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+		entry.SetLocation(objectio.NewRandomLocation(0, 1), nil)
+		entries := []*checkpoint.CheckpointEntry{entry}
+
+		ctx := logtailreplay.WithCheckpointObjectReuse(context.Background())
+		_, data, _, tombstones, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, fork, entries, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, []*objectio.ObjectEntry{&beforeFork}, data)
+		require.Empty(t, tombstones)
+
+		failRead = true
+		_, data, _, tombstones, err = logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", fork, end, entries, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, []*objectio.ObjectEntry{&afterFork}, data)
+		require.Equal(t, []*objectio.ObjectEntry{&deletion}, tombstones)
+
+		_, data, _, tombstones, err = logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 2, "", fork, end, entries, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, []*objectio.ObjectEntry{&otherTable}, data)
+		require.Empty(t, tombstones)
+
+		pk := index.NewZM(types.T_int64, 0)
+		index.UpdateZMAny(pk, int64(7))
+		filtered := engine.WithPKFilter(ctx, &engine.PKFilter{ObjectZMIsPK: true, Segments: [][]byte{pk}})
+		_, data, _, tombstones, err = logtailreplay.TestGetObjectsFromCheckpointRange(filtered, 1, "", fork, end, entries, mp, fs)
+		require.NoError(t, err)
+		require.Empty(t, data)
+		require.Equal(t, []*objectio.ObjectEntry{&deletion}, tombstones)
+
+		nextStatement := logtailreplay.WithCheckpointObjectReuse(context.Background())
+		_, _, _, _, err = logtailreplay.TestGetObjectsFromCheckpointRange(nextStatement, 1, "", fork, end, entries, mp, fs)
+		require.ErrorIs(t, err, failure)
+		failRead = false
+		_, data, _, tombstones, err = logtailreplay.TestGetObjectsFromCheckpointRange(nextStatement, 1, "", fork, end, entries, mp, fs)
+		require.NoError(t, err)
+		require.Equal(t, []*objectio.ObjectEntry{&afterFork}, data)
+		require.Equal(t, []*objectio.ObjectEntry{&deletion}, tombstones)
+	})
+}
+
 type checkpointObject struct {
 	entry       objectio.ObjectEntry
 	isTombstone bool
@@ -1791,10 +1866,11 @@ type checkpointObject struct {
 
 type checkpointReaderStub struct {
 	objects []checkpointObject
+	err     error
 }
 
 func (f *checkpointReaderStub) ReadMeta(context.Context) error {
-	return nil
+	return f.err
 }
 
 func (f *checkpointReaderStub) PrefetchData(string) {}

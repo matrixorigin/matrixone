@@ -1765,6 +1765,7 @@ func TestBaseHandleGetObjectEntries_ClassifiesAndSorts(t *testing.T) {
 		tree.Iter(),
 		types.BuildTS(5, 0),
 		types.BuildTS(20, 0),
+		false,
 	)
 
 	require.Len(t, aobj, 1)
@@ -2886,7 +2887,7 @@ func TestGetObjectEntries(t *testing.T) {
 
 	p := &baseHandle{changesHandle: &ChangeHandler{}}
 	iter := tree.Iter()
-	aobj, cnObj, tnByCreateTS, tnKeys := p.getObjectEntries(iter, start, end)
+	aobj, cnObj, tnByCreateTS, tnKeys := p.getObjectEntries(iter, start, end, false)
 	iter.Release()
 
 	require.Len(t, aobj, 1)
