@@ -204,10 +204,11 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	return nil
 }
 
-// convertColIntoSql renders a value as a SQL literal. Quoted text literals use
-// backslash escapes, which are only valid when the parsing session does not
-// enable NO_BACKSLASH_ESCAPES; makeMysqlConfig establishes that dialect on
-// every sink session.
+// convertColIntoSql renders a value as a SQL literal. Quoted text and JSON
+// literals use backslash escapes, which are only valid when the parsing session
+// does not enable NO_BACKSLASH_ESCAPES; makeMysqlConfig establishes that dialect
+// on every sink session. Binary and bit values use SQL-mode-independent x'...'
+// hex literals.
 func convertColIntoSql(
 	ctx context.Context,
 	data any,
@@ -237,12 +238,16 @@ func convertColIntoSql(
 	case types.T_bit:
 		value := data.(uint64)
 		bitLength := typ.Width
+		if bitLength <= 0 {
+			bitLength = 1
+		}
 		byteLength := (bitLength + 7) / 8
+		if byteLength > 8 {
+			byteLength = 8
+		}
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, b)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendHex(sqlBuff, b)
 	case types.T_int8:
 		value := data.(int8)
 		sqlBuff = appendInt64(sqlBuff, int64(value))

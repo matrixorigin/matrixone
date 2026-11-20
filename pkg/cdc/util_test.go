@@ -287,7 +287,37 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: uint64(1), typ: &types.Type{Oid: types.T_bit, Width: 5}, sqlBuff: []byte{}},
-			want:    []byte{0x27, 0x1, 0x27},
+			want:    []byte("x'01'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(1), typ: &types.Type{Oid: types.T_bit, Width: 0}, sqlBuff: []byte{}},
+			want:    []byte("x'01'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c), typ: &types.Type{Oid: types.T_bit, Width: 8}, sqlBuff: []byte{}},
+			want:    []byte("x'5c'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x27), typ: &types.Type{Oid: types.T_bit, Width: 8}, sqlBuff: []byte{}},
+			want:    []byte("x'27'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c6e), typ: &types.Type{Oid: types.T_bit, Width: 16}, sqlBuff: []byte{}},
+			want:    []byte("x'5c6e'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0), typ: &types.Type{Oid: types.T_bit, Width: 16}, sqlBuff: []byte{}},
+			want:    []byte("x'0000'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c27000affffffff), typ: &types.Type{Oid: types.T_bit, Width: 64}, sqlBuff: []byte{}},
+			want:    []byte("x'5c27000affffffff'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -926,6 +956,44 @@ func TestConvertColIntoSqlLiteralRequiresBackslashEscapes(t *testing.T) {
 			got, err = parseLiteral("NO_BACKSLASH_ESCAPES", string(buf))
 			require.True(t, err != nil || got != tc.value,
 				"literal unexpectedly round-trips under NO_BACKSLASH_ESCAPES: %s", buf)
+		})
+	}
+}
+
+func TestConvertColIntoSqlBitLiteralIndependentOfSQLMode(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		value uint64
+		width int32
+		want  string
+	}{
+		{name: "bit8_backslash", value: 0x5c, width: 8, want: "0x5c"},
+		{name: "bit8_quote", value: 0x27, width: 8, want: "0x27"},
+		{name: "bit16_backslash_n", value: 0x5c6e, width: 16, want: "0x5c6e"},
+		{name: "bit16_zero", value: 0x0000, width: 16, want: "0x0000"},
+		{name: "bit64_mixed", value: 0x5c27000affffffff, width: 64, want: "0x5c27000affffffff"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.Type{Oid: types.T_bit, Width: tc.width}
+			buf, err := convertColIntoSql(ctx, tc.value, &typ, []byte("SELECT "))
+			require.NoError(t, err)
+
+			for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+				stmt, parseErr := mysqlparser.ParseOneWithSQLMode(ctx, string(buf), 1, mode)
+				require.NoError(t, parseErr, "sql_mode=%q sql=%s", mode, buf)
+				sel, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				clause, ok := sel.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				require.Len(t, clause.Exprs, 1)
+				val, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, tree.P_hexnum, val.ValType)
+				require.Equal(t, tc.want, val.String())
+			}
 		})
 	}
 }
