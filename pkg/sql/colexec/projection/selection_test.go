@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,7 +40,10 @@ func TestProjectionSelectedInput(t *testing.T) {
 		input := batch.NewWithSize(2)
 		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30, 40, 50}, nil, proc.Mp())
-		input.SetSelection(5, []int32{1, 3, 4})
+		var selection bitmap.Bitmap
+		selection.InitWithSize(5)
+		selection.AddMany([]uint64{1, 3, 4})
+		input.SetSelection(5, &selection)
 
 		arg := NewArgument()
 		arg.ProjectList = []*plan.Expr{
@@ -68,10 +72,11 @@ func TestProjectionSelectedInput(t *testing.T) {
 		out := result.Batch
 		require.Equal(t, 3, out.RowCount())
 		require.Equal(t, output, out.HasSelection())
+		rows := out.SelectionRows(nil)
 		read := func(col, i int) int32 {
 			row := i
 			if out.HasSelection() {
-				row = int(out.Selection()[i])
+				row = int(rows[i])
 			}
 			return vector.GetFixedAtNoTypeCheck[int32](out.Vecs[col], row)
 		}

@@ -15,27 +15,31 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// A selected batch carries a row selection shared by all of its columns.
-// Its vectors keep their physical rows; logical row i is physical row
-// Selection()[i] of every vector, and RowCount() is len(Selection()).
+// A selected batch carries a row selection shared by all of its columns: a
+// bitmap over the vectors' physical rows. Its vectors keep their physical
+// rows; the logical rows are the set bits in ascending order, and RowCount()
+// is the number of set bits. A bitmap cannot express a reordering or a
+// repeated row, so a selection always preserves row order (and any sorted
+// property of the vectors).
 //
 // Only an operator that declares it accepts a selection on that input edge
 // receives one (see vm.SelectionConsumer); every other consumer, codec and
 // remote boundary gets compacted data. A selected batch borrows its vectors
-// and its selection from the producer, so it is valid until the producer's
-// next Call, the same as any other operator output.
+// and its bitmap from the producer, so it is valid until the producer's next
+// Call, the same as any other operator output.
 
-// SetSelection publishes sels as this batch's logical rows over its physical
-// vectors. sels must be strictly increasing physical row numbers. The batch
-// borrows sels; the producer keeps ownership.
-func (bat *Batch) SetSelection(physicalRows int, sels []int32) {
-	bat.selection = sels
+// SetSelection publishes the set bits of sel as this batch's logical rows over
+// its physical vectors. sel must have length physicalRows and must not be
+// modified while the batch is published; the producer keeps ownership.
+func (bat *Batch) SetSelection(physicalRows int, sel *bitmap.Bitmap) {
+	bat.selection = sel
 	bat.physicalRows = physicalRows
-	bat.rowCount = len(sels)
+	bat.rowCount = sel.Count()
 }
 
 // ClearSelection drops the selection and restores the physical row count.
@@ -54,13 +58,27 @@ func (bat *Batch) HasSelection() bool {
 	return bat != nil && bat.selection != nil
 }
 
-// Selection returns the physical row of every logical row, or nil when the
-// batch is not selected.
-func (bat *Batch) Selection() []int32 {
+// Selection returns the selection bitmap, or nil when the batch is not
+// selected. The caller must not modify it.
+func (bat *Batch) Selection() *bitmap.Bitmap {
 	if bat == nil {
 		return nil
 	}
 	return bat.selection
+}
+
+// SelectionRows appends the selected physical rows, ascending, to dst[:0].
+// It returns nil when the batch is not selected.
+func (bat *Batch) SelectionRows(dst []int64) []int64 {
+	if bat.selection == nil {
+		return nil
+	}
+	dst = dst[:0]
+	itr := bat.selection.IteratorValue()
+	for itr.HasNext() {
+		dst = append(dst, int64(itr.Next()))
+	}
+	return dst
 }
 
 // PhysicalRowCount returns the number of rows in the batch's vectors.
@@ -103,10 +121,7 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
 			}
 		}
 	} else {
-		sels := make([]int64, len(bat.selection))
-		for i, row := range bat.selection {
-			sels[i] = int64(row)
-		}
+		sels := bat.SelectionRows(nil)
 		for i, vec := range bat.Vecs {
 			if vec == nil {
 				continue
@@ -133,15 +148,20 @@ func (bat *Batch) SelectionMask(mask []bool) []bool {
 	if bat.selection == nil {
 		return nil
 	}
-	n := bat.physicalRows
-	if cap(mask) < n {
-		mask = make([]bool, n)
+	return SelectionMaskOf(bat.selection, bat.physicalRows, mask)
+}
+
+// SelectionMaskOf expands sel into a per-row mask of length physicalRows.
+func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
+	if cap(mask) < physicalRows {
+		mask = make([]bool, physicalRows)
 	} else {
-		mask = mask[:n]
+		mask = mask[:physicalRows]
 		clear(mask)
 	}
-	for _, row := range bat.selection {
-		mask[row] = true
+	itr := sel.IteratorValue()
+	for itr.HasNext() {
+		mask[itr.Next()] = true
 	}
 	return mask
 }

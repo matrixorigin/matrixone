@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -59,9 +60,9 @@ type Batch struct {
 	rowCount int
 	offHeap  bool
 
-	// selection, when non-nil, lists the physical row of each logical row
-	// (see selection.go); physicalRows is then the vectors' row count.
-	selection    []int32
+	// selection, when non-nil, marks the physical rows that are the batch's
+	// logical rows (see selection.go); physicalRows is the vectors' row count.
+	selection    *bitmap.Bitmap
 	physicalRows int
 
 	// allocationAccount is the destination selection for owned off-heap

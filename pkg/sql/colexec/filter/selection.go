@@ -15,6 +15,7 @@
 package filter
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,13 +24,12 @@ import (
 )
 
 // selectionState is the filter's selected-batch machinery. A selected output
-// borrows the input's vectors and the filter-owned row list; both stay valid
+// borrows the input's vectors and the filter-owned bitmap; both stay valid
 // until the next Call.
 type selectionState struct {
 	// output is set by the parent's preparation (vm.SelectionProducer).
 	output   bool
-	rows     []int32
-	next     []int32
+	rows     bitmap.Bitmap
 	mask     []bool
 	physical batch.Batch
 	view     batch.Batch
@@ -45,9 +45,10 @@ func (filter *Filter) SetSelectionOutput(allowed bool) { filter.ctr.selection.ou
 
 // selectionCall evaluates the predicates without copying the input. Each
 // predicate after a partial match sees only the surviving rows (the others
-// are masked and not evaluated), as with the compacting path. The result is
-// the input itself, an empty batch, a selected view (when the parent accepts
-// it) or a compacted copy.
+// are masked and not evaluated), as with the compacting path, and its result
+// is ANDed into the selection bitmap. The result is the input itself, an
+// empty batch, a selected view (when the parent accepts it) or a compacted
+// copy.
 func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	analyzer := filter.OpAnalyzer
 	s := &filter.ctr.selection
@@ -55,11 +56,10 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	physical := &s.physical
 	physicalRows := physical.RowCount()
 
-	// rows == nil means every physical row is selected.
-	var rows []int32
-	if input.HasSelection() {
-		s.rows = append(s.rows[:0], input.Selection()...)
-		rows = s.rows
+	// selected == false means every physical row is selected.
+	selected := input.HasSelection()
+	if selected {
+		s.rows.InitWith(input.Selection())
 	}
 
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
@@ -72,8 +72,9 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			filter.ctr.allExecutors[i] = executor
 		}
 		var mask []bool
-		if rows != nil {
-			mask = selectionMask(s, physicalRows, rows)
+		if selected {
+			s.mask = batch.SelectionMaskOf(&s.rows, physicalRows, s.mask)
+			mask = s.mask
 		}
 		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
 		if err != nil {
@@ -100,56 +101,40 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			v, null := bs.GetValue(row)
 			return !null && v
 		}
-		next := s.next[:0]
-		if rows == nil {
+		if !selected {
+			s.rows.InitWithSize(int64(physicalRows))
 			for row := 0; row < physicalRows; row++ {
 				if keep(uint64(row)) {
-					next = append(next, int32(row))
+					s.rows.Add(uint64(row))
 				}
 			}
-			if len(next) == physicalRows {
-				s.next = next
+			if s.rows.Count() == physicalRows {
 				continue // every row survives; stay unselected
 			}
+			selected = true
 		} else {
-			for _, row := range rows {
-				if keep(uint64(row)) {
-					next = append(next, row)
+			itr := s.rows.IteratorValue()
+			for itr.HasNext() {
+				row := itr.Next()
+				if !keep(row) {
+					s.rows.Remove(row)
 				}
 			}
 		}
-		s.next, s.rows = s.rows, next
-		rows = s.rows
-		if len(rows) == 0 {
+		if s.rows.IsEmpty() {
 			return batch.EmptyBatch, nil
 		}
 	}
 
-	if rows == nil {
+	if !selected {
 		return input, nil
 	}
+	s.view = batch.Batch{}
+	input.PhysicalView(&s.view)
+	s.view.SetSelection(physicalRows, &s.rows)
 	if s.output {
-		s.view = batch.Batch{}
-		input.PhysicalView(&s.view)
-		s.view.SetSelection(physicalRows, rows)
 		return &s.view, nil
 	}
-	s.sels = s.sels[:0]
-	for _, row := range rows {
-		s.sels = append(s.sels, int64(row))
-	}
+	s.sels = s.view.SelectionRows(s.sels)
 	return filter.ctr.shrinkWithSels(proc, physical, s.sels)
-}
-
-func selectionMask(s *selectionState, physicalRows int, rows []int32) []bool {
-	if cap(s.mask) < physicalRows {
-		s.mask = make([]bool, physicalRows)
-	} else {
-		s.mask = s.mask[:physicalRows]
-		clear(s.mask)
-	}
-	for _, row := range rows {
-		s.mask[row] = true
-	}
-	return s.mask
 }

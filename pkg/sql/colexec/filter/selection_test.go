@@ -17,6 +17,7 @@ package filter
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -33,7 +34,7 @@ func rowsOf(bat *batch.Batch) [][]string {
 		physical[i] = i
 	}
 	if bat.HasSelection() {
-		for i, row := range bat.Selection() {
+		for i, row := range bat.SelectionRows(nil) {
 			physical[i] = int(row)
 		}
 	}
@@ -59,7 +60,7 @@ func runFilter(t *testing.T, arg *Filter, proc *process.Process, selected bool) 
 		if res.Batch.HasSelection() {
 			sawSelection = true
 			require.True(t, selected, "a compacting filter must not publish a selection")
-			require.Len(t, res.Batch.Selection(), res.Batch.RowCount())
+			require.Equal(t, res.Batch.Selection().Count(), res.Batch.RowCount())
 			require.Equal(t, res.Batch.Vecs[0].Length(), res.Batch.PhysicalRowCount())
 		}
 		all = append(all, rowsOf(res.Batch))
@@ -101,19 +102,22 @@ func TestFilterSelectedInput(t *testing.T) {
 		proc := tc.proc
 		source := MakeFilterMockBatchs(proc.Mp())
 		physicalRows := source.RowCount()
-		var selection []int32
+		var selection bitmap.Bitmap
+		selection.InitWithSize(int64(physicalRows))
+		var selectedRows []int
 		for row := 0; row < physicalRows; row += 3 {
-			selection = append(selection, int32(row))
+			selection.Add(uint64(row))
+			selectedRows = append(selectedRows, row)
 		}
 		var wantRows [][]string
 		flat := rowsOf(source)
 		values := vector.MustFixedColNoTypeCheck[int32](source.Vecs[0])
-		for _, row := range selection {
+		for _, row := range selectedRows {
 			if values[row] > 10 {
 				wantRows = append(wantRows, flat[row])
 			}
 		}
-		source.SetSelection(physicalRows, selection)
+		source.SetSelection(physicalRows, &selection)
 		tc.arg.Children = nil
 		tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{source}))
 		require.NoError(t, tc.arg.Prepare(proc))

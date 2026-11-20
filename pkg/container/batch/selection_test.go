@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,7 +38,11 @@ func TestBatchSelection(t *testing.T) {
 	require.False(t, bat.HasSelection())
 	require.Nil(t, bat.SelectionMask(nil))
 
-	bat.SetSelection(6, []int32{1, 4, 5})
+	var selection bitmap.Bitmap
+	selection.InitWithSize(6)
+	selection.AddMany([]uint64{1, 4, 5})
+	bat.SetSelection(6, &selection)
+	require.Equal(t, []int64{1, 4, 5}, bat.SelectionRows(nil))
 	require.True(t, bat.HasSelection())
 	require.Equal(t, 3, bat.RowCount())
 	require.Equal(t, 6, bat.PhysicalRowCount())
@@ -68,7 +73,7 @@ func TestBatchSelection(t *testing.T) {
 	// Any explicit row count replaces the selection.
 	bat.ClearSelection()
 	require.Equal(t, 6, bat.RowCount())
-	bat.SetSelection(6, []int32{0})
+	bat.SetSelection(6, &selection)
 	bat.SetRowCount(6)
 	require.False(t, bat.HasSelection())
 
