@@ -465,7 +465,6 @@ func (v *Vector) readRawBytesAt(
 		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
 			return err
 		}
-		v.areaDisjoint = false
 		return nil
 	}
 	oldAreaLength := len(v.area)
@@ -489,6 +488,5 @@ func (v *Vector) readRawBytesAt(
 	*value = types.Varlena{}
 	value.SetOffsetLen(uint32(oldAreaLength), uint32(size))
 	v.area = area
-	v.areaDisjoint = true
 	return nil
 }

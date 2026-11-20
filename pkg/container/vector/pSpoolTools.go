@@ -41,7 +41,6 @@ func DetachVectorData(v *Vector) DetachedBuffer {
 		selection: v.allocationAccount,
 	}
 	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
 	}
 	v.data = nil
 	return buffer
@@ -56,7 +55,6 @@ func DetachVectorArea(v *Vector) DetachedBuffer {
 		selection: v.allocationAccount,
 		kind:      DetachedAreaBuffer,
 	}
-	v.areaDisjoint = false
 	v.area = nil
 	return buffer
 }
@@ -99,7 +97,6 @@ func (b *DetachedBuffer) AttachTo(
 			)
 		}
 		v.area = b.data
-		v.areaDisjoint = false
 	} else {
 		if cap(v.data) != 0 {
 			return allocationAccountInvalid(
@@ -108,7 +105,6 @@ func (b *DetachedBuffer) AttachTo(
 		}
 		v.data = b.data[:cap(b.data)]
 		if v.typ.IsVarlen() {
-			v.areaDisjoint = false
 		}
 	}
 	b.clear()

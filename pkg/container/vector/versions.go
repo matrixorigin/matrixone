@@ -112,7 +112,6 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	if err != nil {
 		return err
 	}
-	v.areaDisjoint = false
 	if v.allocationAccount != nil {
 		return allocationAccountInvalid(
 			"cannot install aliases in an accounted vector",

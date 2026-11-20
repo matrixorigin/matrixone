@@ -108,9 +108,6 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					require.Equal(t, beforeAccount, state.account.Snapshot().Used)
 					require.Equal(t, calls, controller.calls)
 					require.False(t, controller.rejected)
-					if len(shape.want) < len(shape.values) {
-						require.False(t, destination.areaDisjoint)
-					}
 					require.Equal(t, len(shape.values), snapshot.Length())
 					for row, value := range shape.values {
 						require.Equal(t, value, source.GetBytesAt(row))

@@ -164,7 +164,7 @@ func TestUnionOneConstVarlenaCopiesIndependentPayloads(t *testing.T) {
 	require.True(t, plan.canonicalVarlen)
 }
 
-func TestUnionOneBorrowedAreaRemainsConservative(t *testing.T) {
+func TestUnionOneBorrowedAreaMaterializesOwnedCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	area := bytes.Repeat([]byte{'b'}, 49)
@@ -185,10 +185,12 @@ func TestUnionOneBorrowedAreaRemainsConservative(t *testing.T) {
 	require.Equal(t, OwnedMPoolUnique, destination.AreaBackingKind())
 	require.NotSame(t, &area[0], &destination.GetArea()[0])
 	require.Equal(t, area, lease.Bytes())
-	require.False(t, destination.VarlenaAreaIsDisjoint())
+	// The owned copy's descriptors are computed to be disjoint.
+	require.True(t, destination.VarlenaAreaIsDisjoint())
 	plan, err := destination.PrepareMarshalBinary()
 	require.NoError(t, err)
-	require.True(t, plan.canonicalVarlen)
+	// An owned, disjoint copy marshals its area in bulk.
+	require.False(t, plan.canonicalVarlen)
 	require.Equal(t, area, destination.GetBytesAt(0))
 	require.Equal(t, "inline", destination.GetStringAt(1))
 }
@@ -260,7 +262,6 @@ func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
 	t.Cleanup(func() { source.Free(mp) })
 	require.NoError(t, view.UnionOne(source, 0, mp))
 	require.True(t, view.IsNull(1))
-	require.False(t, view.VarlenaAreaIsDisjoint())
 	for row, value := range values {
 		require.Equal(t, value, owner.GetBytesAt(row), "NULL append must not mutate shared descriptors")
 	}
@@ -283,6 +284,5 @@ func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
 	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
 	require.True(t, destination.VarlenaAreaIsDisjoint())
 	require.Error(t, destination.UnionOne(source, 0, mp))
-	require.False(t, destination.VarlenaAreaIsDisjoint())
 	require.Equal(t, "prefix", destination.GetStringAt(0))
 }

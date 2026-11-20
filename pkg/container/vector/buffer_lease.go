@@ -449,7 +449,7 @@ func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.
 	_, err = temporary.windowInto(0, source.length, mp, account, dst)
 	if err != nil {
 		dst.Free(mp)
-		*dst = Vector{typ: oldType, offHeap: oldOffHeap, allocationAccount: account, areaDisjoint: true}
+		*dst = Vector{typ: oldType, offHeap: oldOffHeap, allocationAccount: account}
 		return false, err
 	}
 	source.CopyExpressionMetadataTo(dst)

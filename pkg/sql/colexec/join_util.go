@@ -296,11 +296,6 @@ func appendableRows(dst, src *batch.Batch, start, rows int, limit int64) int {
 		if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
 			continue
 		}
-		if vec.CanCopyWholeVarlenaArea() && start == 0 && rows == vec.Length() {
-			// UnionBatch would copy the whole area, including dead bytes.
-			// Use a partial range so it uses only live descriptors instead.
-			rows--
-		}
 		for row := 0; row < rows; row++ {
 			available -= vector.VarlenaPayloadSize(vec, start+row)
 			if available < 0 {
