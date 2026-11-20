@@ -905,11 +905,12 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		}()
 
-		err = destination.PreExtendSelectedBatch(
+		var preflight vector.SelectedBatchPreflight
+		preflight, err = destination.PreExtendSelectedBatch(
 			source, 0, rows, flags, rows, mp)
 		admitted := account.Snapshot().Used
 		if err == nil {
-			err = destination.UnionBatchPreflighted(source, 0, rows, flags, mp)
+			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, mp)
 			if err == nil {
 				require.Equal(t, admitted, account.Snapshot().Used)
 				require.Equal(t, len(payload), len(destination.GetArea()))

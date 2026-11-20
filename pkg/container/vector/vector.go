@@ -176,15 +176,6 @@ type Vector struct {
 	// off-heap data and area allocations. Physical MPool metadata owns release.
 	allocationAccount *AllocationAccountSelection
 
-	// preflightAreaBytes is the exact non-inline payload admitted by
-	// PreExtendSelectedBatch for the next UnionBatchPreflighted publication.
-	// Keeping the proof with the destination removes operator-side parallel
-	// metadata and makes the preflight/publication pair self-contained.
-	preflightAreaBytes         int
-	preflightAreaReady         bool
-	preflightRowCount          int
-	preflightStringSourceReady bool
-
 	// areaDisjoint proves that every live non-inline varlena descriptor owns a
 	// distinct range in area. Spill projections use it to avoid scanning normal
 	// append-built vectors; operations that can introduce aliases clear it.
@@ -258,9 +249,6 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -278,9 +266,6 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -307,9 +292,6 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -890,8 +872,11 @@ func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp 
 		v.stringSourcesMP = owner
 	}
 	v.stringSources[row] = source
-	if !v.preflightStringSourceReady {
-		v.normalizeStringSources()
+	// The vector-wide source names the common source of uniform rows. A
+	// write that makes them disagree makes it Expression; NormalizeStringSources
+	// collapses a sidecar that has become uniform again.
+	if source != v.stringSource {
+		v.stringSource = types.StringSourceExpression
 	}
 	return nil
 }
@@ -922,13 +907,7 @@ func (v *Vector) PreflightSetStringSourceAtLength(
 		return nil
 	}
 	if v.stringSources != nil {
-		if err := v.preExtendStringSources(finalLength, mp); err != nil {
-			return err
-		}
-		if finalLength > v.length {
-			v.preflightStringSourceReady = true
-		}
-		return nil
+		return v.preExtendStringSources(finalLength, mp)
 	}
 	allocated, owner, err := v.allocateStringSources(finalLength, mp)
 	if err != nil {
@@ -939,9 +918,6 @@ func (v *Vector) PreflightSetStringSourceAtLength(
 	}
 	v.stringSources = allocated[:v.length]
 	v.stringSourcesMP = owner
-	if finalLength > v.length {
-		v.preflightStringSourceReady = true
-	}
 	return nil
 }
 
@@ -1546,7 +1522,6 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 
 func (v *Vector) resetStringSource() {
 	v.stringSource = types.StringSourceExpression
-	v.preflightStringSourceReady = false
 	v.releaseStringSources()
 }
 
@@ -1602,6 +1577,17 @@ func (v *Vector) preExtendStringSources(n int, mp *mpool.MPool) error {
 	v.stringSources = sources[:oldLength]
 	v.stringSourcesMP = owner
 	return nil
+}
+
+// NormalizeStringSources replaces a row-source sidecar whose rows all have
+// the same source by that single source, and releases the sidecar. It cannot
+// allocate or fail. Single-row source writes and length changes do not
+// normalize, so a caller that writes row sources itself calls this when it is
+// done.
+func (v *Vector) NormalizeStringSources() {
+	if v != nil {
+		v.normalizeStringSources()
+	}
 }
 
 func (v *Vector) normalizeStringSources() {
@@ -1811,12 +1797,12 @@ func (v *Vector) prepareStringSourceAppend(rows int, source types.StringSource, 
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
 func (v *Vector) setLengthAfterExtend(n int) {
-	v.setLengthAfterExtendWithSource(n, types.StringSourceExpression, true)
+	v.setLengthAfterExtendWithSource(n, types.StringSourceExpression, false)
 }
 
 // Known-source appends cannot make an already mixed vector uniform. Publish
 // their final provenance without a normalization scan or a temporary source.
-func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource, normalize bool) {
+func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource, knownSource bool) {
 	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if v.prepareParamKinds != nil {
 		if metadataLength > cap(v.prepareParamKinds) {
@@ -1843,12 +1829,11 @@ func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource
 				}
 			}
 		}
-		if normalize && !v.preflightStringSourceReady {
-			v.normalizeStringSources()
-		} else if !normalize {
+		// New rows can only make the sidecar mixed, never uniform.
+		if knownSource || metadataLength > oldLength && v.stringSource != source {
 			v.stringSource = types.StringSourceExpression
 		}
-	} else if !normalize {
+	} else if knownSource {
 		v.stringSource = source
 	}
 	v.length = n
@@ -2597,13 +2582,12 @@ func (v *Vector) PreflightUnionOnePrepareParamKinds(
 		v.length+1, summarizeStringSourceOne(w, sel), mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+1,
 		summarizePrepareParamKindOne(w, sel),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -2619,13 +2603,12 @@ func (v *Vector) PreflightUnionPrepareParamKinds(
 		v, v.length+len(sels), w, sels, mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -2672,10 +2655,9 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		finalLength, w, offset, cnt, flags, mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if v.prepareParamKinds != nil {
 		if err := v.preExtendPrepareParamKinds(finalLength, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
+			v.normalizeStringSources()
 			return err
 		}
 		return nil
@@ -2696,7 +2678,7 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		summarizePrepareParamKindBatch(w, offset, cnt, flags),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -4614,9 +4596,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.resetStringSource()
 	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.areaDisjoint = true
 
 	//reuse.Free[Vector](v, nil)
@@ -5589,10 +5568,36 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	return nil
 }
 
+// SelectedBatchPreflight is what PreExtendSelectedBatch admitted for one
+// destination vector: the row count after publication and the exact
+// non-inline payload bytes. The caller keeps it and hands it to the matching
+// UnionBatchPreflighted call, which consumes it. The zero value admits
+// nothing.
+type SelectedBatchPreflight struct {
+	areaBytes int
+	rowCount  int
+	ready     bool
+}
+
+// Ready reports whether p holds an unconsumed preflight.
+func (p *SelectedBatchPreflight) Ready() bool {
+	return p != nil && p.ready
+}
+
+// take consumes p.
+func (p *SelectedBatchPreflight) take() (areaBytes, rowCount int, ok bool) {
+	if !p.Ready() {
+		return 0, 0, false
+	}
+	areaBytes, rowCount = p.areaBytes, p.rowCount
+	*p = SelectedBatchPreflight{}
+	return areaBytes, rowCount, true
+}
+
 // PreExtendSelectedBatch reserves every physical allocation needed by the
 // matching UnionBatchPreflighted call. It performs the selected varlena payload
-// scan once and retains the exact proof on the destination so publication can
-// skip its otherwise duplicate pregrow scan.
+// scan once and returns its result, so publication can skip its otherwise
+// duplicate pregrow scan. On error the result is the zero value.
 func (v *Vector) PreExtendSelectedBatch(
 	w *Vector,
 	offset int,
@@ -5600,7 +5605,7 @@ func (v *Vector) PreExtendSelectedBatch(
 	flags []uint8,
 	targetRows int,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	return v.preExtendSelectedBatch(
 		w, offset, cnt, flags, targetRows, false, mp,
 	)
@@ -5617,7 +5622,7 @@ func (v *Vector) PreExtendSelectedBatchValidated(
 	flags []uint8,
 	targetRows int,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	return v.preExtendSelectedBatch(
 		w, offset, cnt, flags, targetRows, true, mp,
 	)
@@ -5631,25 +5636,22 @@ func (v *Vector) preExtendSelectedBatch(
 	targetRows int,
 	selectionValidated bool,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	if v == nil || w == nil || offset < 0 || cnt < 0 || targetRows < 0 ||
 		len(flags) != cnt || !w.CoversLogicalRows(offset, cnt) {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
-	v.preflightAreaReady = false
-	v.preflightAreaBytes = 0
-	v.preflightRowCount = 0
 	// The preflight proof cannot retain an aliased source for publication.
 	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
 	// after the caller has committed its surrounding state transition.
 	if v == w && w.IsDictionary() || v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
 
 	selectedRows := 0
 	if selectionValidated {
 		if targetRows < v.length {
-			return mpool.ErrAllocationAccountInvalid
+			return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 		}
 		selectedRows = targetRows - v.length
 	}
@@ -5660,7 +5662,7 @@ func (v *Vector) preExtendSelectedBatch(
 		var err error
 		selectedAreaBytes, err = dictionarySelectedAreaBytes(w, offset, flags)
 		if err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 		// The generic flag proof/count remains below; payload sizing has used
 		// the immutable selected view instead of a physical descriptor slice.
@@ -5673,7 +5675,7 @@ func (v *Vector) preExtendSelectedBatch(
 	if !selectionValidated || varlen && !w.IsConst() {
 		for row, flag := range flags {
 			if !selectionValidated && flag > 1 {
-				return mpool.ErrAllocationAccountInvalid
+				return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 			}
 			if flag == 0 {
 				continue
@@ -5688,14 +5690,14 @@ func (v *Vector) preExtendSelectedBatch(
 			}
 			_, length := values[offset+row].OffsetLen()
 			if int(length) > math.MaxInt-selectedAreaBytes {
-				return mpool.ErrAllocationAllocatorLimit
+				return SelectedBatchPreflight{}, mpool.ErrAllocationAllocatorLimit
 			}
 			selectedAreaBytes += int(length)
 		}
 	}
 	if targetRows < v.length ||
 		!selectionValidated && selectedRows != targetRows-v.length {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
 	if varlen && w.IsConst() && selectedRows != 0 && !values[0].IsSmall() {
 		_, length := values[0].OffsetLen()
@@ -5706,83 +5708,64 @@ func (v *Vector) preExtendSelectedBatch(
 	// publication proof is admitted; publication cannot allocate or shrink it.
 	if selectedRows > 0 {
 		if err := v.MaterializeOwned(mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if w.HasNull() {
 		if err := v.PreExtendNulls(targetRows, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if w.HasGrouping() {
 		if err := v.PreExtendGrouping(targetRows, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	// Publication extends fixed descriptors before it copies payload. Admit the
 	// descriptor backing here as part of the same physical work unit.
 	if targetRows > v.length && targetRows > v.Capacity() {
 		if err := v.PreExtend(targetRows-v.length, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if err := v.preflightUnionBatchPrepareParamKinds(
 		w, int64(offset), cnt, flags, selectedRows, mp,
 	); err != nil {
-		return err
+		return SelectedBatchPreflight{}, err
 	}
 	if err := v.PreflightUnionBatchBinaryString(
 		w, int64(offset), cnt, flags, mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
-		return err
+		v.normalizeStringSources()
+		return SelectedBatchPreflight{}, err
 	}
 	if selectedAreaBytes > cap(v.area)-len(v.area) {
 		if err := v.PreExtendWithArea(0, selectedAreaBytes, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
-			return err
+			v.normalizeStringSources()
+			return SelectedBatchPreflight{}, err
 		}
 	}
-	// Keep a preflight-created mixed source sidecar alive while length and
-	// payload are published. Provenance propagation fills its future rows before
-	// UnionBatchPreflighted finalizes and normalizes it.
-	v.preflightStringSourceReady = v.stringSources != nil
-	v.preflightAreaBytes = selectedAreaBytes
-	v.preflightRowCount = targetRows
-	v.preflightAreaReady = true
-	return nil
-}
-
-// CancelSelectedBatchPreflight drops an unpublished selection proof. It never
-// releases admitted backing storage; a later work unit may reuse that capacity.
-func (v *Vector) CancelSelectedBatchPreflight() {
-	if v == nil {
-		return
-	}
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
-	v.preflightStringSourceReady = false
-	v.normalizeStringSources()
+	return SelectedBatchPreflight{
+		areaBytes: selectedAreaBytes,
+		rowCount:  targetRows,
+		ready:     true,
+	}, nil
 }
 
 // UnionBatchPreflighted publishes a selection after PreExtendSelectedBatch.
-// It consumes the destination-owned proof exactly once.
+// It consumes preflight, which must be that call's result for v.
 func (v *Vector) UnionBatchPreflighted(
 	w *Vector,
 	offset int64,
 	cnt int,
 	flags []uint8,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
-	if v == nil || !v.preflightAreaReady {
+	selectedAreaBytes, preflightRowCount, ok := preflight.take()
+	if v == nil || !ok {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selectedAreaBytes := v.preflightAreaBytes
-	preflightRowCount := v.preflightRowCount
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, nil, mp,
 		selectedAreaBytes, preflightRowCount, true)
@@ -5797,25 +5780,27 @@ func (v *Vector) UnionBatchPreflightedWithStringSources(
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
 	return v.unionBatchPreflightedWithStringSourcesOverride(
-		w, offset, cnt, flags, stringSources, mp, true)
+		w, offset, cnt, flags, stringSources, preflight, mp, true)
 }
 
 // UnionBatchPreflightedWithStringSourcesDeferredNormalization keeps the
 // preflighted source sidecar alive after publication. The caller must invoke
-// FinalizeStringSourcePreflight after all correlated row updates are complete.
+// NormalizeStringSources after all correlated row updates are complete.
 func (v *Vector) UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 	w *Vector,
 	offset int64,
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
 	return v.unionBatchPreflightedWithStringSourcesOverride(
-		w, offset, cnt, flags, stringSources, mp, false)
+		w, offset, cnt, flags, stringSources, preflight, mp, false)
 }
 
 func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
@@ -5824,6 +5809,7 @@ func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 	finalize bool,
 ) error {
@@ -5836,14 +5822,10 @@ func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
 				"invalid string source %d", stringSources[row])
 		}
 	}
-	if v == nil || !v.preflightAreaReady {
+	selectedAreaBytes, preflightRowCount, ok := preflight.take()
+	if v == nil || !ok {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selectedAreaBytes := v.preflightAreaBytes
-	preflightRowCount := v.preflightRowCount
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, stringSources, mp,
 		selectedAreaBytes, preflightRowCount, finalize)
@@ -5867,27 +5849,9 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 		err = v.unionBatchFlat(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
 	}
 	if finalize {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 	}
 	return err
-}
-
-// RetainStringSourcePreflight keeps reserved row metadata alive across a
-// correlated publication sequence. FinalizeStringSourcePreflight must close it.
-func (v *Vector) RetainStringSourcePreflight() {
-	if v != nil && v.stringSources != nil {
-		v.preflightStringSourceReady = true
-	}
-}
-
-// FinalizeStringSourcePreflight ends a deferred source publication. Capacity
-// normalization cannot allocate or fail.
-func (v *Vector) FinalizeStringSourcePreflight() {
-	if v == nil || !v.preflightStringSourceReady {
-		return
-	}
-	v.preflightStringSourceReady = false
-	v.normalizeStringSources()
 }
 
 // Dup use to copy an identical vector
@@ -7117,8 +7081,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		); err != nil {
 			return err
 		}
-		v.RetainStringSourcePreflight()
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -8397,8 +8360,7 @@ type FixedSourceRow struct {
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
 	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
 	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings ||
-		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
-		v.preflightStringSourceReady {
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() {
 		return false, nil
 	}
 	if inlineStrings && (types.IsUnicodeCollation(v.typ.Charset) || v.AreaBackingKind() != OwnedMPoolUnique) {
@@ -8506,7 +8468,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
 		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
 		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
-		v.stringSources == nil && w.stringSources == nil && !v.preflightStringSourceReady &&
+		v.stringSources == nil && w.stringSources == nil &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 	if !plainMetadata {
 		if err := v.MaterializeOwned(mp); err != nil {
@@ -8516,10 +8478,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 			return err
 		}
 		if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
+			v.normalizeStringSources()
 			return err
 		}
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 	}
 	if err := extendWithBitmaps(
 		v,
@@ -8675,8 +8637,7 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 	); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
+	defer v.normalizeStringSources()
 
 	// Keep preflight admission and validation unchanged. As in UnionOne,
 	// uniform ordinary metadata needs no per-row publication. Check both
@@ -8829,7 +8790,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			len(sels) <= cap(v.data)/width-v.length && v.nsp.IsEmpty() &&
 			v.gsp.IsEmpty() && w.gsp.IsEmpty() &&
 			v.DataBackingKind() == OwnedMPoolUnique && !v.HasBorrowedBacking() &&
-			!v.preflightStringSourceReady && v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
+			v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
 			(v.length == 0 || v.stringSource == w.stringSource) {
 			oldLen := v.length
 			v.data = v.data[:cap(v.data)]
@@ -8872,8 +8833,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
+	defer v.normalizeStringSources()
 
 	if err := extendWithBitmaps(
 		v,
@@ -9170,7 +9130,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
@@ -10329,7 +10289,7 @@ func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSo
 	// scalar provenance, row sidecars, and an outstanding source preflight.
 	if source == nil && v.prepareParamKind == PrepareParamNone && v.prepareParamKinds == nil &&
 		v.stringSource == types.StringSourceExpression && v.stringSources == nil &&
-		!v.binaryString && !v.binaryStringRowsActive && !v.preflightStringSourceReady {
+		!v.binaryString && !v.binaryStringRowsActive {
 		return nil
 	}
 	if source == nil {
@@ -10354,7 +10314,7 @@ func (v *Vector) publishSingleAppend(source *types.StringSource) {
 		}
 		v.setLengthAfterExtend(v.length + 1)
 	} else {
-		v.setLengthAfterExtendWithSource(v.length+1, *source, false)
+		v.setLengthAfterExtendWithSource(v.length+1, *source, true)
 	}
 }
 

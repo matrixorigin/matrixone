@@ -111,7 +111,7 @@ func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.
 	if !hasDefaultFixedMinMaxMetadata(vec) || !hasDefaultFixedMinMaxMetadata(aggVec) {
 		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 	}
-	defer aggVec.FinalizeStringSourcePreflight()
+	defer aggVec.NormalizeStringSources()
 
 	// A scalar fill needs no per-batch hash table or local winner arrays. The
 	// same guard used by preflight proves that neither input nor destination
@@ -330,14 +330,14 @@ func (exec *minMaxExecFixed[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 	if !hasDefaultFixedMinMaxMetadata(src) || !hasDefaultFixedMinMaxMetadata(dst) {
 		return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 	}
-	defer dst.FinalizeStringSourcePreflight()
+	defer dst.NormalizeStringSources()
 	if src.IsNull(uint64(y2)) {
 		return nil
 	}
 	// Scalar window snapshots need only the two touched states, not a scan of
 	// every chunk or per-row metadata merging. The guard excludes metadata
-	// allocation, but a preflight flag may survive a collapsed sidecar, so it
-	// must still be finalized as in BatchMerge.
+	// allocation, but a reserved sidecar may still be uniform, so it must
+	// still be normalized as in BatchMerge.
 	// Spill-decoded sources may be compact; only the destination is chunk-sized.
 	value := chunkRows[T](src)[y2]
 	aggs := chunkArr[T](dst)
@@ -512,6 +512,7 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 					}
 				}
 			}
+			vec.NormalizeStringSources()
 		}
 	}
 	return vecs, nil
@@ -790,6 +791,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 					}
 				}
 			}
+			vec.NormalizeStringSources()
 		}
 	}
 	return vecs, nil
