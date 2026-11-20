@@ -56,6 +56,10 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 		wantBatchRows    []int
 	}{
 		{
+			name: "inner-duplicate-continuation", joinType: plan.Node_INNER, probeKeys: []int64{1},
+			wantBatchRows: []int{11, 2},
+		},
+		{
 			name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2},
 			wantBatchRows: []int{11, 3},
 		},
@@ -235,7 +239,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				want[joinedRow{2, nullID}] = true
 				want[joinedRow{3, -1}] = true
 				want[joinedRow{4, -1}] = true
-			} else if !tc.usePK {
+			} else if tc.joinType == plan.Node_LEFT {
 				want[joinedRow{2, -1}] = true
 			}
 
