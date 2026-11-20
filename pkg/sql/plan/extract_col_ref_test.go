@@ -17,7 +17,9 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +30,9 @@ func TestExtractColRefInFilterNested(t *testing.T) {
 	fn := func(args ...*pb.Expr) *pb.Expr { return &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Args: args}}} }
 	literal := &pb.Expr{Expr: &pb.Expr_Lit{Lit: &pb.Literal{}}}
 	param := &pb.Expr{Expr: &pb.Expr_P{P: &pb.ParamRef{}}}
-	unsupported := &pb.Expr{Expr: &pb.Expr_List{List: &pb.ExprList{}}}
+	list := func(items ...*pb.Expr) *pb.Expr {
+		return &pb.Expr{Expr: &pb.Expr_List{List: &pb.ExprList{List: items}}}
+	}
 	a, b, c := col(1, 1), col(1, 2), col(2, 1)
 	cases := []struct {
 		name string
@@ -42,7 +46,10 @@ func TestExtractColRefInFilterNested(t *testing.T) {
 		{"swapped_multi", fn(fn(b, c), a), false},
 		{"different_tag", fn(a, c), false},
 		{"different_position", fn(a, b), false},
-		{"unsupported", fn(a, unsupported), false},
+		{"empty_list", fn(a, list()), false},
+		{"parameter_list", fn(a, list(param, literal)), true},
+		{"list_with_other_column", fn(a, list(param, list(b))), false},
+		{"list_with_same_column", fn(a, list(param, a)), false},
 		{"constant_first", fn(literal, a), false},
 	}
 	for _, tc := range cases {
@@ -80,5 +87,35 @@ func BenchmarkExtractColRefInFilter(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// The index predicate for a prepared IN retains the parameter list until
+// execution. Losing its block selectivity makes a point lookup ineligible
+// for prepare-time physical compilation.
+func TestPreparedInIndexLookupKeepsTPPlan(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	table := mock.ctxt.tables["index_hint_t"]
+	table.Indexes = table.Indexes[:1] // non-covering secondary index on a
+	ctx := &backfillCachedStatsContext{
+		backfillTopStatsContext: &backfillTopStatsContext{MockCompilerContext: &mock.ctxt, rows: 10_000_000},
+		cache:                   NewStatsCache(),
+	}
+	stats := NewStatsInfo()
+	stats.TableCnt = ctx.rows
+	stats.NdvMap["a"] = 1_000_000
+	stats.NdvMap["id"] = ctx.rows
+	stats.NdvMap[catalog.IndexTableIndexColName] = ctx.rows
+	ctx.cache.Set(table.TblId, stats)
+	ctx.cache.Set(mock.ctxt.tables[table.Indexes[0].IndexTableName].TblId, stats)
+
+	for _, rhs := range []string{"?,?,?,?,?,?,?,?,?,?", "1,2,3,4,5,6,7,8,9,10"} {
+		stmt, err := mysql.Parse(ctx.GetContext(), "select id,a,b from index_hint_t where a in ("+rhs+")", 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt[0], true)
+		require.NoError(t, err)
+		require.Equal(t, []string{"idx_a"}, reachableIndexScanNames(p.GetQuery()))
+		require.Equal(t, ExecTypeTP, GetExecType(p.GetQuery(), false, true), rhs)
 	}
 }
