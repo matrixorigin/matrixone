@@ -176,15 +176,14 @@ func TestDiskCacheTransitionReadDuringCloseKeepsNoOpenFile(t *testing.T) {
 	require.True(t, d.cache.Contains(diskPath))
 	// The read has started its read of the path when the cache closes.
 	var deadline time.Time
-	generation, ok := d.startPathReadWithin(ctx, diskPath, &deadline, shortIOWaitDuration)
+	generation, ok := d.paths.startRead(ctx, diskPath, &deadline)
 	require.True(t, ok)
 	d.Close(ctx)
-	opened, ok := d.openReadFile(ctx, diskPath, generation)
+	opened, ok := d.paths.open(ctx, diskPath, generation)
 	require.True(t, ok)
-	d.closeReadFile(opened)
-	d.finishPathRead(diskPath, generation)
-	d.updatingPaths.L.Lock()
-	kept := len(d.updatingPaths.openFiles.m)
-	d.updatingPaths.L.Unlock()
+	d.paths.close(diskPath, opened)
+	d.paths.L.Lock()
+	kept := len(d.paths.openFiles.m)
+	d.paths.L.Unlock()
 	require.Zero(t, kept, "a file kept open after Close is never closed")
 }

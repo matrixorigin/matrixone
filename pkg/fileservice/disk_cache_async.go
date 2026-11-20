@@ -70,11 +70,11 @@ type asyncCallbackTurn struct {
 }
 
 type diskCacheAsyncFileFinalize struct {
-	file       *os.File
-	target     fillTarget
-	doneUpdate func() error
-	attempted  bool
-	err        error
+	file      *os.File
+	target    fillTarget
+	owner     *pathOwner
+	attempted bool
+	err       error
 }
 
 type diskCacheAsyncState struct {
@@ -380,7 +380,7 @@ func (d *DiskCache) releaseAsyncFileFinalizeReservation(diskPath string) {
 func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	diskPath string,
 	file *os.File,
-	doneUpdate func() error,
+	owner *pathOwner,
 	target fillTarget,
 ) {
 	a := &d.async
@@ -391,9 +391,9 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	job := &diskCacheAsyncUpdate{
 		diskPath: diskPath,
 		finalize: &diskCacheAsyncFileFinalize{
-			file:       file,
-			target:     target,
-			doneUpdate: doneUpdate,
+			file:   file,
+			target: target,
+			owner:  owner,
 		},
 	}
 	select {
@@ -507,7 +507,7 @@ func (d *DiskCache) completeAsyncUpdate(
 		if job.finalize != nil {
 			cleanupErr := errors.Join(
 				cleanupDiskCacheTempFile(job.finalize.file),
-				job.finalize.doneUpdate(),
+				job.finalize.owner.release(),
 			)
 			if job.finalize.attempted {
 				resultErr := job.finalize.err

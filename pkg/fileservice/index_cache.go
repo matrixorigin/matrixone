@@ -539,16 +539,14 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 	}
 	d := c.disk
 	var deadline time.Time
-	generation, ok := d.startPathReadWithin(ctx, diskPath, &deadline, shortIOWaitDuration)
+	generation, ok := d.paths.startRead(ctx, diskPath, &deadline)
 	if !ok {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
 		return nil, nil, moerr.NewFileNotFoundNoCtx(name)
 	}
-	d.updatingPaths.L.Lock()
-	kept := d.updatingPaths.openFiles.takeLocked(diskPath)
-	d.updatingPaths.L.Unlock()
+	kept := d.paths.takeKept(diskPath)
 	opened := openedDiskCacheFile{generation: generation, kept: kept}
 	if kept != nil {
 		d.cache.Get(ctx, diskPath)
@@ -556,24 +554,13 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 	} else {
 		files, err := d.openDir(ctx, name, diskPath, []string{file})
 		if err != nil {
-			d.finishPathRead(diskPath, generation)
+			d.paths.endRead(diskPath, generation)
 			return nil, nil, err
 		}
 		opened.file = files[0]
-		var closeFile *os.File
-		d.updatingPaths.L.Lock()
-		if d.pathReadCurrentLocked(diskPath, generation) {
-			opened.kept, closeFile = d.updatingPaths.openFiles.keepLocked(diskPath, files[0])
-		}
-		d.updatingPaths.L.Unlock()
-		if closeFile != nil {
-			_ = closeFile.Close()
-		}
+		opened.kept = d.paths.keep(diskPath, generation, files[0])
 	}
-	return opened.file, func() {
-		d.closeReadFile(opened)
-		d.finishPathRead(diskPath, generation)
-	}, nil
+	return opened.file, func() { d.paths.close(diskPath, opened) }, nil
 }
 
 // IndexFileHold keeps a cache entry on disk until it is released. Only the first release
@@ -653,11 +640,11 @@ func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	c.disk.deletes.deleted(diskPath)
-	done, err := c.disk.startUpdateContext(ctx, diskPath)
+	owner, err := c.disk.paths.acquire(ctx, diskPath, nil)
 	if err != nil {
 		return err
 	}
-	defer done()
+	defer owner.release()
 	if err := removeCacheDir(diskPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -687,11 +674,11 @@ func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 		d.beforeIndexLoadedDirs()
 	}
 	for _, e := range dirs {
-		done := d.startUpdate(e.path)
+		owner, _ := d.paths.acquire(context.Background(), e.path, nil)
 		if _, err := os.Stat(e.path); err == nil {
 			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
 		}
-		done()
+		_ = owner.release()
 	}
 }
 
@@ -766,11 +753,11 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 	if !idle {
 		return false, err
 	}
-	done, err := d.startUpdateContext(ctx, path)
+	owner, err := d.paths.acquire(ctx, path, nil)
 	if err != nil {
 		return false, err
 	}
-	defer done()
+	defer owner.release()
 	d.held.mu.Lock()
 	if idle, err = d.idleDirLocked(path, before); !idle {
 		d.held.mu.Unlock()
@@ -869,14 +856,14 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
-	doneUpdate, err := d.startUpdateWithCleanupContext(ctx, diskPath, func() error {
+	owner, err := d.paths.acquire(ctx, diskPath, func() error {
 		return d.removeUnindexedFile(diskPath)
 	})
 	if err != nil {
 		return false, err
 	}
 	defer func() {
-		d.mergeWriteCleanupError(diskPath, &err, doneUpdate())
+		d.mergeWriteCleanupError(diskPath, &err, owner.release())
 	}()
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -1043,14 +1030,14 @@ func (d *DiskCache) moveCacheDirFile(ctx context.Context, from, to string) (int6
 
 func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, files []string) ([]*os.File, error) {
 	var deadline time.Time
-	generation, ok := d.startPathReadWithin(ctx, diskPath, &deadline, shortIOWaitDuration)
+	generation, ok := d.paths.startRead(ctx, diskPath, &deadline)
 	if !ok {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		return nil, moerr.NewFileNotFoundNoCtx(name)
 	}
-	defer d.finishPathRead(diskPath, generation)
+	defer d.paths.endRead(diskPath, generation)
 
 	// Files are opened relative to one directory handle, so all of them come from the
 	// same entry even if it is evicted and published again meanwhile.
@@ -1092,10 +1079,10 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 			}
 			return nil, err
 		}
-		if doneReindex, ok := d.tryStartReadReindex(diskPath, generation); ok {
+		if owner, ok := d.paths.reindex(diskPath, generation); ok {
 			var reindexErr error
 			func() {
-				defer func() { reindexErr = doneReindex() }()
+				defer func() { reindexErr = owner.release() }()
 				d.cache.Set(ctx, diskPath, struct{}{}, size)
 			}()
 			if reindexErr != nil {

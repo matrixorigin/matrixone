@@ -108,7 +108,7 @@ func (l *notifyingDiskCacheLocker) Unlock() {
 
 func installNotifyingDiskCacheLocker(cache *DiskCache) *notifyingDiskCacheLocker {
 	locker := &notifyingDiskCacheLocker{unlocked: make(chan struct{}, 16)}
-	cache.updatingPaths.Cond = sync.NewCond(locker)
+	cache.paths.Cond = sync.NewCond(locker)
 	return locker
 }
 
@@ -513,9 +513,9 @@ func TestDiskCacheOpenReaderCannotReindexEvictedPath(t *testing.T) {
 			require.False(t, cache.cache.Contains(diskPath))
 			_, err = os.Stat(diskPath)
 			require.ErrorIs(t, err, os.ErrNotExist)
-			cache.updatingPaths.L.Lock()
-			activeReadGenerations := len(cache.updatingPaths.readGenerations)
-			cache.updatingPaths.L.Unlock()
+			cache.paths.L.Lock()
+			activeReadGenerations := len(cache.paths.reads)
+			cache.paths.L.Unlock()
 			require.Zero(t, activeReadGenerations)
 		})
 	}
@@ -610,9 +610,9 @@ func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
 	require.True(t, cache.cache.Contains(diskPath))
 	_, err := os.Stat(diskPath)
 	require.NoError(t, err)
-	cache.updatingPaths.L.Lock()
-	activeReadGenerations := len(cache.updatingPaths.readGenerations)
-	cache.updatingPaths.L.Unlock()
+	cache.paths.L.Lock()
+	activeReadGenerations := len(cache.paths.reads)
+	cache.paths.L.Unlock()
 	require.Zero(t, activeReadGenerations)
 }
 
@@ -1103,7 +1103,7 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	// A timed-out Close starts the background drain but does not join it. Wait
 	// for the queued finalizer to release its path explicitly before inspecting
 	// the cleanup result; the first finalizers are still blocked in file.Sync, so
-	// this unlock can only come from the queued finalizer's doneUpdate path.
+	// this unlock can only come from the queued finalizer's owner release.
 	requireDiskCacheUnlock(t, locker)
 	// The unlocks after this one are not waited for: drain them so the locker never blocks.
 	stopDrain := make(chan struct{})
@@ -1405,19 +1405,12 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 	// over only after all setup succeeds, and the once keeps failure cleanup
 	// from racing with worker cleanup.
 	t.Cleanup(releaseReservation)
-	doneUpdate, ok := cache.tryStartUpdateWithCleanup(
+	owner, ok := cache.paths.tryAcquire(
 		diskPath,
 		func() error { return cache.removeUnindexedFile(diskPath) },
 	)
 	require.True(t, ok)
-	var doneUpdateOnce sync.Once
-	var doneUpdateErr error
-	finishUpdate := func() error {
-		doneUpdateOnce.Do(func() {
-			doneUpdateErr = doneUpdate()
-		})
-		return doneUpdateErr
-	}
+	finishUpdate := owner.release
 	// Register ownership cleanup in reservation -> update -> temp order.
 	// Cleanup runs in reverse registration order, so every failure path releases
 	// resources in temp -> update -> reservation order, matching the successful
@@ -1593,7 +1586,7 @@ func TestDiskCacheCloseDeadlineDoesNotWaitForQueuedCleanup(t *testing.T) {
 	releaseCleanup := make(chan struct{})
 	unblockCleanup := sync.OnceFunc(func() { close(releaseCleanup) })
 	t.Cleanup(unblockCleanup)
-	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+	owner, _ := cache.paths.acquire(context.Background(), diskPath, func() error {
 		close(cleanupStarted)
 		<-releaseCleanup
 		return nil
@@ -1610,8 +1603,8 @@ func TestDiskCacheCloseDeadlineDoesNotWaitForQueuedCleanup(t *testing.T) {
 	a.jobs <- &diskCacheAsyncUpdate{
 		diskPath: diskPath,
 		finalize: &diskCacheAsyncFileFinalize{
-			file:       tempFile,
-			doneUpdate: doneUpdate,
+			file:  tempFile,
+			owner: owner,
 		},
 	}
 

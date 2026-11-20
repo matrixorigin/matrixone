@@ -35,7 +35,7 @@ type openCacheFile struct {
 
 // openFilePool keeps, by disk path, the cache files reads opened, so the reads after
 // them do not open them again. A change of a path drops its file. It is guarded by the
-// disk cache's updatingPaths lock.
+// lock of the disk cache's pathOwners.
 type openFilePool struct {
 	m map[string]*openCacheFile
 	// missing are the paths a read found no file at, until they change.

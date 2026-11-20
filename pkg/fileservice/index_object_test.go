@@ -343,9 +343,9 @@ func TestIndexObjectReadKeepsFileOpen(t *testing.T) {
 	diskPath, err := d.pathForDir(IndexObjectEntry("object"))
 	require.NoError(t, err)
 	kept := func() *openCacheFile {
-		d.updatingPaths.L.Lock()
-		defer d.updatingPaths.L.Unlock()
-		return d.updatingPaths.openFiles.m[diskPath]
+		d.paths.L.Lock()
+		defer d.paths.L.Unlock()
+		return d.paths.openFiles.m[diskPath]
 	}
 
 	require.Equal(t, data[1000:1010], readIndexObjectRange(t, fs, IndexFileObject, 1000, 10))

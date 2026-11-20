@@ -51,18 +51,18 @@ func TestDiskCacheReadKeepsFileOpen(t *testing.T) {
 	got, ok := readTestEntry(t, ctx, cache, "foo", 10)
 	require.True(t, ok)
 	require.Equal(t, data, got)
-	cache.updatingPaths.L.Lock()
-	kept := cache.updatingPaths.openFiles.m[diskPath]
-	cache.updatingPaths.L.Unlock()
+	cache.paths.L.Lock()
+	kept := cache.paths.openFiles.m[diskPath]
+	cache.paths.L.Unlock()
 	require.NotNil(t, kept, "the read keeps its file open")
 	require.Zero(t, kept.refs)
 
 	got, ok = readTestEntry(t, ctx, cache, "foo", 10)
 	require.True(t, ok)
 	require.Equal(t, data, got)
-	cache.updatingPaths.L.Lock()
-	defer cache.updatingPaths.L.Unlock()
-	require.Same(t, kept, cache.updatingPaths.openFiles.m[diskPath], "the next read reads the kept file")
+	cache.paths.L.Lock()
+	defer cache.paths.L.Unlock()
+	require.Same(t, kept, cache.paths.openFiles.m[diskPath], "the next read reads the kept file")
 	require.Zero(t, kept.refs)
 }
 
@@ -78,9 +78,9 @@ func TestDiskCacheKeptFileClosedOnDeleteAndClose(t *testing.T) {
 		require.True(t, ok)
 	}
 	keptOf := func(p string) *openCacheFile {
-		cache.updatingPaths.L.Lock()
-		defer cache.updatingPaths.L.Unlock()
-		return cache.updatingPaths.openFiles.m[cache.pathForIOEntry(p, IOEntry{Offset: 0, Size: 3})]
+		cache.paths.L.Lock()
+		defer cache.paths.L.Unlock()
+		return cache.paths.openFiles.m[cache.pathForIOEntry(p, IOEntry{Offset: 0, Size: 3})]
 	}
 	foo, bar := keptOf("foo"), keptOf("bar")
 	require.NotNil(t, foo)
@@ -192,9 +192,9 @@ func TestDiskCacheMissingPathForgottenOnWrite(t *testing.T) {
 	diskPath := cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 3})
 	_, ok := readTestEntry(t, ctx, cache, "foo", 3)
 	require.False(t, ok)
-	cache.updatingPaths.L.Lock()
-	require.True(t, cache.updatingPaths.openFiles.missingLocked(diskPath))
-	cache.updatingPaths.L.Unlock()
+	cache.paths.L.Lock()
+	require.True(t, cache.paths.openFiles.missingLocked(diskPath))
+	cache.paths.L.Unlock()
 
 	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 3, Data: []byte("abc")}}}, false))
 	got, ok := readTestEntry(t, ctx, cache, "foo", 3)
@@ -210,8 +210,8 @@ func TestDiskOpenFilesMaxConfig(t *testing.T) {
 	limit := 3
 	config.DiskOpenFilesMax = &limit
 	caches := newTestFileServiceCaches(t, config)
-	require.Equal(t, 3, caches.disk.updatingPaths.openFiles.limit)
-	require.Equal(t, 3, caches.index.disk.updatingPaths.openFiles.limit)
+	require.Equal(t, 3, caches.disk.paths.openFiles.limit)
+	require.Equal(t, 3, caches.index.disk.paths.openFiles.limit)
 }
 
 // disk-open-files-max 0 keeps no file open and notes no path missing: every read opens the
@@ -228,8 +228,8 @@ func TestDiskOpenFilesMaxZeroDisablesPool(t *testing.T) {
 	got, ok := readTestEntry(t, ctx, cache, "foo", 3)
 	require.True(t, ok)
 	require.Equal(t, []byte("abc"), got)
-	cache.updatingPaths.L.Lock()
-	defer cache.updatingPaths.L.Unlock()
-	require.Empty(t, cache.updatingPaths.openFiles.m)
-	require.Empty(t, cache.updatingPaths.openFiles.missing)
+	cache.paths.L.Lock()
+	defer cache.paths.L.Unlock()
+	require.Empty(t, cache.paths.openFiles.m)
+	require.Empty(t, cache.paths.openFiles.missing)
 }

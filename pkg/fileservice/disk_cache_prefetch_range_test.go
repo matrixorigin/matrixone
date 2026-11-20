@@ -285,9 +285,9 @@ func TestS3FSPrefetchRangeKeepsCachedRangeOpen(t *testing.T) {
 	require.Len(t, ranges, 1)
 	require.Equal(t, data[6000:9000], readRangeOf(t, fs, 0, 6000, 3000))
 	require.Equal(t, int64(2), storage.reads.Load(), "the cached range is not read again")
-	fs.diskCache.updatingPaths.L.Lock()
-	defer fs.diskCache.updatingPaths.L.Unlock()
-	kept := fs.diskCache.updatingPaths.openFiles.m[ranges[0].diskPath]
+	fs.diskCache.paths.L.Lock()
+	defer fs.diskCache.paths.L.Unlock()
+	kept := fs.diskCache.paths.openFiles.m[ranges[0].diskPath]
 	require.NotNil(t, kept, "the cached range's file is kept open")
 	require.Zero(t, kept.refs)
 }

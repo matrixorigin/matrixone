@@ -1049,17 +1049,17 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 
 // readCachedRange reads len(dst) bytes at offset of the object from the cached range r.
 func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset int64, dst []byte, deadline *time.Time) bool {
-	generation, ok := d.startPathReadWithin(ctx, r.diskPath, deadline, shortIOWaitDuration)
+	generation, ok := d.paths.startRead(ctx, r.diskPath, deadline)
 	if !ok {
 		return false
 	}
-	defer d.finishPathRead(r.diskPath, generation)
-	opened, ok := d.openReadFile(ctx, r.diskPath, generation)
+	opened, ok := d.paths.open(ctx, r.diskPath, generation)
 	if !ok {
+		d.paths.endRead(r.diskPath, generation)
 		d.ranges.remove(r.diskPath)
 		return false
 	}
-	defer d.closeReadFile(opened)
+	defer d.paths.close(r.diskPath, opened)
 	if _, err := opened.file.ReadAt(dst, offset-r.offset); err != nil {
 		return false
 	}
