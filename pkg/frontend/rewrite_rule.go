@@ -1383,17 +1383,16 @@ func laterRewriteRuleDeterminesResult(ctx context.Context, left, right, sqlMode 
 	if !rightOK {
 		return false
 	}
-	if r == nil {
+	// An incompatible rule wins outright; an unfiltered rule also supplies
+	// every row if the shapes are compatible. Neither needs the earlier shape.
+	if r == nil || r.unfiltered {
 		return true
 	}
 	l, leftOK := rewriteRuleShapeForPrecedence(ctx, left, sqlMode, true)
-	// Incompatible shapes already select the later rule. For compatible
-	// shapes, an unfiltered later rule absorbs the earlier predicate in
-	// the visibility union (all rows OR any subset is all rows).
 	if !leftOK {
 		return false
 	}
-	if l == nil || r.unfiltered {
+	if l == nil {
 		return true
 	}
 	same, err := sameRewriteShape(ctx, l, r, sqlMode)
@@ -1466,6 +1465,9 @@ func sameRewriteResultHeading(x, y tree.SelectExpr) bool {
 	heading := func(e tree.SelectExpr) (string, bool) {
 		if e.As != nil && !e.As.Empty() {
 			return e.As.Origin(), true
+		}
+		if col, ok := e.Expr.(*tree.UnresolvedName); ok && !col.Star {
+			return col.ColNameOrigin(), true
 		}
 		return tree.NameConstHeading(e.Expr)
 	}
