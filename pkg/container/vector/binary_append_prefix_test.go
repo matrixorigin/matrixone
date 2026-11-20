@@ -181,47 +181,6 @@ func TestUnionBatchBinaryDomainBorrowedDestination(t *testing.T) {
 	}
 }
 
-func TestUnionBatchBinaryDomainPrefixAdmissionFailure(t *testing.T) {
-	mp, dst, state := binaryAppendDestination(t, true)
-	controller := &rejectNextVectorAllocation{}
-	class, err := state.account.RegisterCapacityController(controller)
-	require.NoError(t, err)
-	// Register cleanup before installing the private selection; vectors must be
-	// freed before this class is removed, including an early assertion failure.
-	t.Cleanup(func() {
-		dst.Free(mp)
-		require.Zero(t, controller.used)
-		require.NoError(t, state.account.UnregisterCapacityController(class, controller))
-	})
-	selection, err := NewAllocationAccountSelectionWithCapacityClass(state.account,
-		testVectorAllocationOwner, testVectorDataAllocationSite, testVectorAreaAllocationSite,
-		testVectorNullAllocationSite, testVectorGroupAllocationSite, class)
-	require.NoError(t, err)
-	require.NoError(t, dst.SetAllocationAccount(selection))
-	require.NoError(t, dst.PreExtend(5, mp))
-	require.NoError(t, dst.PreExtendBitmap(5, mp))
-	require.NoError(t, AppendBytesList(dst, [][]byte{nil, []byte("old-a"), []byte("old-b")}, []bool{true, false, false}, mp))
-	src := NewVec(types.T_varchar.ToType())
-	t.Cleanup(func() { src.Free(mp) })
-	require.NoError(t, AppendBytesList(src, [][]byte{[]byte("new-a"), []byte("new-b")}, nil, mp))
-	require.NoError(t, src.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp))
-	before := state.account.Snapshot().Used
-	controller.failAt = controller.calls + 1
-	err = dst.UnionBatch(src, 0, 2, nil, mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.True(t, controller.rejected)
-	require.Equal(t, 3, dst.Length())
-	require.Equal(t, before, state.account.Snapshot().Used)
-	for row, value := range []string{"", "old-a", "old-b"} {
-		require.Equal(t, row == 0, dst.IsNull(uint64(row)))
-		if row != 0 {
-			require.Equal(t, value, dst.GetStringAt(row))
-		}
-		require.Equal(t, types.RuntimeStringInherit, dst.GetRuntimeStringDomainAt(row))
-	}
-	require.False(t, dst.HasBinaryStringRows())
-}
-
 func BenchmarkUnionBatchBinaryDomainNullablePrefix(b *testing.B) {
 	for _, prefix := range []int{64, 4096} {
 		for _, mode := range []string{"inherit", "binary", "conflict"} {

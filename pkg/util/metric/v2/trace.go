@@ -24,7 +24,6 @@ func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDiscardCounter)
 	registry.MustRegister(traceCollectorCollectHungCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
-	registry.MustRegister(traceCollectorStatusCounter)
 	registry.MustRegister(traceCollectorQueueLength)
 	registry.MustRegister(traceNegativeCUCounter)
 	registry.MustRegister(traceETLMergeCounter)
@@ -87,17 +86,6 @@ var (
 			Name:      "collector_discard_item_total",
 			Help:      "Count of trace collector discard item total.",
 		}, []string{"type"})
-
-	traceCollectorStatusCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "trace",
-			Name:      "collector_status_total",
-			Help:      "Count of trace collector discard total.",
-		}, []string{"type"})
-	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
-	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
-	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
 
 	traceCollectorQueueLength = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

@@ -843,7 +843,7 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 	allocator := memory.NewGoAllocator()
@@ -880,7 +880,7 @@ func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 
@@ -920,7 +920,7 @@ func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t 
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 

@@ -186,7 +186,7 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
+		account, mpool.AllocationOwnerExternal, 1, 2,
 	)
 	require.NoError(t, err)
 	vec, err := NewBorrowedFixedVectorWithAllocation(
@@ -219,22 +219,22 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestBorrowedValidityLegacyMaterializationUsesReservedMPoolStorage(t *testing.T) {
+func TestBorrowedValidityLegacyMaterializationUsesGoStorage(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
+		account, mpool.AllocationOwnerExternal, 1, 2,
 	)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 	vec, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), selection)
 	require.NoError(t, err)
 	require.NoError(t, vec.PrepareBorrowedValidity(3, mp))
-	admittedBytes := mp.CurrNB()
-	require.Positive(t, admittedBytes)
-	require.Positive(t, account.Snapshot().Used)
+	// The materialization destination is a Go-owned bitmap.
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, account.Snapshot().Used)
 
 	validity := []byte{0b00000101} // row one is NULL
 	var releases atomic.Int32
@@ -246,12 +246,11 @@ func TestBorrowedValidityLegacyMaterializationUsesReservedMPoolStorage(t *testin
 	lease.Release()
 	require.True(t, vec.GetNulls().HasBorrowedValidity())
 
-	bitmap := vec.GetNulls().GetBitmap()
+	_ = vec.GetNulls().GetBitmap()
 	require.False(t, vec.GetNulls().HasBorrowedValidity())
 	require.Equal(t, int32(1), releases.Load())
-	require.True(t, bitmap.HasExternalStorage())
 	require.Equal(t, []uint64{1}, vec.GetNulls().ToArray())
-	require.Equal(t, admittedBytes, mp.CurrNB(), "legacy materialization must not allocate outside admission")
+	require.Zero(t, mp.CurrNB(), "materialization must not allocate from the mpool")
 
 	vec.Free(mp)
 	require.Zero(t, account.Snapshot().Used)

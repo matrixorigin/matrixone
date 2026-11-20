@@ -46,10 +46,9 @@ Dual-protocol compatibility: `GetNextBatch` handles both explicit typed signals 
 
 ### Test Freshness
 
-Use [validation-evidence.md](validation-evidence.md). Exact-head author/CI or
-local output is valid when selection, mode, terminal status, and relevant
-semantic inputs match. Do not rerun it merely because a reviewer turn changed
-or an unrelated document/PR body was edited.
+Use the [shared validation and evidence rules](validation-evidence.md) to
+select the test scope and verify whether author, CI, or local results apply to
+the final change.
 
 ### Completion Gate
 
@@ -59,7 +58,7 @@ contract with these domain-specific checks:
 ```
 □ sender/receiver and Call/Reset/cleanup closures are mapped
 □ exact changed/directly affected regression selection is non-empty and passes
-□ every affected owning package has valid normal evidence
+□ normal test evidence covers the affected behavior at the shared validation scope
 □ shared-state/lifecycle race evidence satisfies the shared adaptive protocol
 □ at least one real dependent endpoint is validated when the protocol crosses packages
 □ final delivery diff/generated artifacts are inspected

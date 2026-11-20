@@ -2156,32 +2156,6 @@ func TestSelectedValueRuntimeStringDomainOverridesStaticBinary(t *testing.T) {
 	require.True(t, vec.GetIsBinaryStringAt(0))
 }
 
-func TestSelectedValueRuntimeStringDomainAllocationFailureIsAtomic(t *testing.T) {
-	mp := mpool.MustNewZero()
-	state := newTestVectorAllocationAccount(t, 8<<20, 3)
-
-	vec := newAccountedTestVector(t, types.T_varbinary.ToType(), state.selection)
-	values := make([][]byte, 1024)
-	rows := make([]bool, len(values))
-	for row := range values {
-		values[row] = []byte("a")
-		rows[row] = row%2 != 0
-	}
-	require.NoError(t, vec.PreExtend(len(values), mp))
-	require.NoError(t, AppendBytesList(vec, values, nil, mp))
-	defer func() {
-		vec.Free(mp)
-		require.Zero(t, mp.CurrNB())
-		finalizeTestVectorAllocationAccount(t, state)
-	}()
-
-	err := vec.SetSelectedValueBinaryStringRowsWithMP(rows, mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
-	require.False(t, vec.HasBinaryStringRows())
-	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
-}
-
 func TestExplicitTextRuntimeDomainSurvivesVectorLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	newText := func(t *testing.T) *Vector {
@@ -2479,7 +2453,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestBinaryStringShuffleWithBufScratchFailureIsAtomic(t *testing.T) {
+func TestBinaryStringShuffleWithBufMovesMetadataWithoutMPoolScratch(t *testing.T) {
 	dataMP := mpool.MustNewZero()
 	vec := NewVec(types.T_text.ToType())
 	vec.SetOffHeap(true)
@@ -2492,13 +2466,14 @@ func TestBinaryStringShuffleWithBufScratchFailureIsAtomic(t *testing.T) {
 	defer mpool.DeleteMPool(scratchMP)
 	hold, err := scratchMP.Alloc(mpool.MB, true)
 	require.NoError(t, err)
+	// The string-row bitmaps are Go-owned, so an exhausted scratch pool does
+	// not block the shuffle.
 	var scratch []byte
-	err = vec.ShuffleWithBuf([]int64{1, 0}, scratchMP, &scratch)
-	require.Error(t, err)
-	require.Equal(t, []byte("z"), vec.GetBytesAt(0))
-	require.Equal(t, []byte("a"), vec.GetBytesAt(1))
-	require.True(t, vec.GetBinaryStringMetadataAt(0))
-	require.False(t, vec.GetBinaryStringMetadataAt(1))
+	require.NoError(t, vec.ShuffleWithBuf([]int64{1, 0}, scratchMP, &scratch))
+	require.Equal(t, []byte("a"), vec.GetBytesAt(0))
+	require.Equal(t, []byte("z"), vec.GetBytesAt(1))
+	require.False(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
 
 	scratchMP.Free(hold)
 	vec.Free(dataMP)
@@ -7163,9 +7138,6 @@ func TestStringSourceUniformInplaceSortAndCompact(t *testing.T) {
 	t.Run("external empty bitmaps", func(t *testing.T) {
 		vec := NewVec(types.T_int64.ToType())
 		require.NoError(t, AppendFixedList(vec, []int64{2, 1}, nil, mp))
-		vec.nsp.GetBitmap().InstallExternalStorage(make([]uint64, 0))
-		vec.gsp.GetBitmap().InstallExternalStorage(make([]uint64, 0))
-		require.True(t, vec.GetNulls().GetBitmap().HasExternalStorage())
 		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
 		require.NoError(t, vec.InplaceSort(mp))
 		require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](vec))

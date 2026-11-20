@@ -131,8 +131,8 @@ type SpillConfig struct {
 const (
 	cteAllocationSiteData mpool.AllocationSite = iota + 1
 	cteAllocationSiteArea
-	cteAllocationSiteNulls
-	cteAllocationSiteGrouping
+	_ // reserved: was cteAllocationSiteNulls
+	_ // reserved: was cteAllocationSiteGrouping
 )
 
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
@@ -188,18 +188,18 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 			)
 		}
 		owner := s.spillConfig.AllocationOwner
-		sites := [4]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea, cteAllocationSiteNulls, cteAllocationSiteGrouping}
+		sites := [2]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea}
 		switch owner {
 		case 0, mpool.AllocationOwnerCTE:
 			owner = mpool.AllocationOwnerCTE
 		case mpool.AllocationOwnerTop:
-			sites = [4]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea, topsites.AdaptiveTopRetainedNulls, topsites.AdaptiveTopRetainedGrouping}
+			sites = [2]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea}
 		default:
 			return mpool.ErrAllocationAccountInvalid
 		}
 		allocation, err := vector.NewAllocationAccountSelection(
 			s.spillConfig.AllocationAccount, owner,
-			sites[0], sites[1], sites[2], sites[3],
+			sites[0], sites[1],
 		)
 		if err != nil {
 			return err

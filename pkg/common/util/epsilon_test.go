@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package assertx
+package util
 
 import "testing"
 
@@ -124,42 +124,6 @@ func TestInEpsilonF64Slice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := InEpsilonF64Slice(tt.args.want, tt.args.got); got != tt.want {
 				t.Errorf("InEpsilonF64Slice() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestInEpsilonF64Slices(t *testing.T) {
-	type args struct {
-		want [][]float64
-		got  [][]float64
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			name: "Test 1 - difference is epsilon",
-			args: args{
-				want: [][]float64{{2.0, 3.0}, {4.0}},
-				got:  [][]float64{{2.0 + float64EqualityThreshold, 3.0 + float64EqualityThreshold}, {4.0}},
-			},
-			want: false,
-		},
-		{
-			name: "Test 2 - difference is less than epsilon (next neg-power of epsilon & epsilon/2)",
-			args: args{
-				want: [][]float64{{2.0, 3.0}, {4.0}},
-				got:  [][]float64{{2.0 + 1e-1*float64EqualityThreshold, 3.0 + float64EqualityThreshold/2}, {4.0}},
-			},
-			want: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := InEpsilonF64Slices(tt.args.want, tt.args.got); got != tt.want {
-				t.Errorf("InEpsilonF64Slices() = %v, want %v", got, tt.want)
 			}
 		})
 	}

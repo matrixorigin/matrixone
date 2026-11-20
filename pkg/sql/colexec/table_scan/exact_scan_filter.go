@@ -191,6 +191,8 @@ func addComparison(column, literal *pb.Expr, op objectio.ExactScanOp, columns []
 }
 
 func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
+	tableScan.ctr.membershipPrepared, tableScan.ctr.membershipApplied = false, false
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
@@ -239,9 +241,11 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 		Observe: func(stats objectio.ExactScanStats) {
 			tableScan.ctr.filterActiveDuration += stats.FilterTime
 			if stats.InputRows > 0 {
-				tableScan.OpAnalyzer.InputBlock()
 				op := tableScan.OpAnalyzer.GetOpStats()
-				op.InputRows += int64(stats.InputRows)
+				if !tableScan.ctr.membershipApplied {
+					tableScan.OpAnalyzer.InputBlock()
+					op.InputRows += int64(stats.InputRows)
+				}
 				op.InputSize += stats.InputBytes
 				op.ScanBytes += stats.InputBytes
 			}

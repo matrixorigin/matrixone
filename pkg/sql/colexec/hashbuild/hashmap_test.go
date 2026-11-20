@@ -1120,7 +1120,6 @@ func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T)
 
 	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
 	require.NotNil(t, hb.DelRows)
-	require.True(t, hb.DelRows.HasExternalStorage())
 	require.True(t, hb.DelRows.Contains(2))
 	require.Equal(t, account.Snapshot().Used, generation.Used())
 	require.Positive(t, account.Snapshot().Used)
@@ -1142,56 +1141,6 @@ func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T)
 	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
 }
 
-func TestAccountedDedupBitmapExactBoundaryRollsBack(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	for _, tc := range []struct {
-		name    string
-		cap     uint64
-		wantErr bool
-	}{
-		{name: "one byte short", cap: 7, wantErr: true},
-		{name: "exact", cap: 8},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			budget := process.MustNewExecutionResourceBudget(tc.cap, tc.cap)
-			generation, err := budget.OpenGeneration(1)
-			require.NoError(t, err)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 1)
-			require.NoError(t, err)
-			account, err := registry.OpenWithController(tc.cap, generation)
-			require.NoError(t, err)
-			hb := &HashmapBuilder{mapAllocationAccount: account}
-			bm, err := hb.newDedupBitmap(
-				64,
-				proc.Mp(),
-				HashBuildAllocationSiteDedupIgnoreBitmap,
-			)
-			if tc.wantErr {
-				require.Error(t, err)
-				require.True(t, IsRetryableMemoryCapacity(err))
-				require.Nil(t, bm)
-				require.Zero(t, account.Snapshot().Used)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, uint64(8), account.Snapshot().Used)
-				releaseDedupBitmap(bm, proc.Mp())
-				require.Zero(t, account.Snapshot().Used)
-			}
-			terminal, _, err := registry.CompleteTerminal(account)
-			require.NoError(t, err)
-			require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
-		})
-	}
-}
-
-// TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout reproduces the
-// REPLACE multi-UK fan-out case (issue #24428) at the hashbuild layer: one new
-// row (same new PK) fans out to several build rows that carry DIFFERENT old
-// PKs. keep-last keeps one and turns the others into delete-only rows. The
-// surviving bucket must still be marked deleted (DelRows) when a discarded
-// row's old PK equals the surviving row's new key, otherwise the dedup-join
-// probe side raises a false DuplicateEntry for the existing row REPLACE removes.
 func TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())

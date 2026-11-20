@@ -178,29 +178,9 @@ func (v *Vector) PrepareBorrowedValidity(rows int, mp *mpool.MPool) error {
 		v.nsp.HasBorrowedValidity() || v.nsp.Len() != 0 {
 		return moerr.NewInvalidInputNoCtx("invalid borrowed validity reservation")
 	}
-	requiredWords := (rows + 63) / 64
 	bitmap := v.nsp.GetBitmap()
-	if requiredWords > bitmap.ExternalStorageCapacity() {
-		var (
-			storage []uint64
-			err     error
-		)
-		if v.allocationAccount == nil {
-			storage, err = mpool.MakeSlice[uint64](requiredWords, mp, v.offHeap)
-		} else {
-			storage, err = v.allocateBitmapGrowth(
-				bitmap, rows, mp, v.allocationAccount.nullsSite,
-			)
-		}
-		if err != nil {
-			return err
-		}
-		if cap(storage) > 0 {
-			previous := bitmap.InstallExternalStorage(storage)
-			mpool.FreeSlice(mp, previous)
-		}
-	}
 	bitmap.Reset()
+	bitmap.Reserve(rows)
 	return nil
 }
 

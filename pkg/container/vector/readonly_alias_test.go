@@ -277,7 +277,7 @@ func TestReadonlyWindowMutationFailure(t *testing.T) {
 				require.NoError(t, err)
 				state.selection, err = NewAllocationAccountSelectionWithCapacityClass(
 					state.account, testVectorAllocationOwner, testVectorDataAllocationSite,
-					testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite, class,
+					testVectorAreaAllocationSite, class,
 				)
 				require.NoError(t, err)
 				values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}

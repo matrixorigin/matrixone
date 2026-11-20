@@ -357,38 +357,82 @@ func ReadOneBlockAllColumns(
 		Entries:  make([]fileservice.IOEntry, 0),
 		Policy:   cachePolicy,
 	}
+	ioVec.Entries = appendBlockColumnEntries(ioVec.Entries, meta.GetBlockMeta(id), cols)
+	if err = fs.Read(ctx, ioVec); err != nil {
+		ioVec.ReleaseReadResultOnError()
+		return nil, err
+	}
+	defer ioVec.Release()
+	return decodeBlockColumns(ioVec.Entries)
+}
+
+// ReadBlocksAllColumns reads the requested blocks in one FileService request.
+// The caller groups only blocks whose physical read ranges overlap enough to
+// make a combined range useful. Batches are returned in blockIDs order.
+func ReadBlocksAllColumns(
+	ctx context.Context,
+	meta *ObjectDataMeta,
+	name string,
+	blockIDs []uint16,
+	cols []uint16,
+	cachePolicy fileservice.Policy,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) ([]*batch.Batch, error) {
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 0, len(blockIDs)*len(cols)),
+		Policy:   cachePolicy,
+	}
+	for _, id := range blockIDs {
+		ioVec.Entries = appendBlockColumnEntries(ioVec.Entries, meta.GetBlockMeta(uint32(id)), cols)
+	}
+	if err := fs.Read(ctx, ioVec); err != nil {
+		ioVec.ReleaseReadResultOnError()
+		return nil, err
+	}
+	defer ioVec.Release()
+
+	batches := make([]*batch.Batch, 0, len(blockIDs))
+	for start := 0; start < len(ioVec.Entries); start += len(cols) {
+		bat, err := decodeBlockColumns(ioVec.Entries[start : start+len(cols)])
+		if err != nil {
+			for _, b := range batches {
+				b.Clean(mp)
+			}
+			return nil, err
+		}
+		batches = append(batches, bat)
+	}
+	return batches, nil
+}
+
+func appendBlockColumnEntries(entries []fileservice.IOEntry, block BlockObject, cols []uint16) []fileservice.IOEntry {
 	for _, seqnum := range cols {
-		blkmeta := meta.GetBlockMeta(id)
-		col := blkmeta.ColumnMeta(seqnum)
-		ext := col.Location()
-		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+		ext := block.ColumnMeta(seqnum).Location()
+		entries = append(entries, fileservice.IOEntry{
 			Offset:         int64(ext.Offset()),
 			Size:           int64(ext.Length()),
 			CachedDataSize: int64(ext.OriginSize()),
 			ToCacheData:    constructorFactory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
+	return entries
+}
 
-	err = fs.Read(ctx, ioVec)
-	if err != nil {
-		ioVec.ReleaseReadResultOnError()
-		return nil, err
-	}
-	defer ioVec.Release()
-
-	bat = batch.NewWithSize(len(cols))
-	var obj any
-	for i := range cols {
+func decodeBlockColumns(entries []fileservice.IOEntry) (*batch.Batch, error) {
+	bat := batch.NewWithSize(len(entries))
+	for i, entry := range entries {
 		// always copy to avoid memory leak
-		bs := slices.Clone(ioVec.Entries[i].CachedData.Bytes())
-		obj, err = Decode(bs)
+		bs := slices.Clone(entry.CachedData.Bytes())
+		obj, err := Decode(bs)
 		if err != nil {
 			return nil, err
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
-	return
+	return bat, nil
 }
 
 // ReadOneBlockAllColumnsWindow materializes only the requested rows and reads

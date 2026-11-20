@@ -32,7 +32,6 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -786,7 +785,6 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		ctrl := gomock.NewController(t)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli

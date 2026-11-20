@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -983,9 +983,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		case []byte:
 			err = vector.SetConstBytes(expr.vec, v, 1, proc.GetMPool())
 		case string:
-			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(v), 1, proc.GetMPool())
+			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(v), 1, proc.GetMPool())
 		default:
-			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
+			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
 		}
 	}
 	if err == nil {

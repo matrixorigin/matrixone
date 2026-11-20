@@ -373,13 +373,16 @@ func (d *LogServiceDriver) readFromBackend(
 
 	var client *wrappedClient
 	if client, err = d.clientPool.GetContext(ctx); err != nil {
+		if err == ctx.Err() {
+			err = context.Cause(ctx)
+		}
 		return
 	}
 	defer client.Putback()
 
 	for {
 		if ctx.Err() != nil {
-			err = ctx.Err()
+			err = context.Cause(ctx)
 			return
 		}
 		attemptCtx, cancel := context.WithTimeoutCause(
@@ -397,7 +400,7 @@ func (d *LogServiceDriver) readFromBackend(
 		cancel()
 		retryTimes++
 		if ctx.Err() != nil {
-			err = ctx.Err()
+			err = context.Cause(ctx)
 			return
 		}
 		if time.Since(t0) > d.config.MaxTimeout {
@@ -408,7 +411,7 @@ func (d *LogServiceDriver) readFromBackend(
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			err = ctx.Err()
+			err = context.Cause(ctx)
 			return
 		}
 		timer.Stop()

@@ -130,7 +130,7 @@ func TestFlatCopyFailureReleasesPartialPublication(t *testing.T) {
 	controller := &rejectNextBatchAllocation{}
 	account, err := registry.OpenWithController(1<<20, controller)
 	require.NoError(t, err)
-	allocation, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	state := testBatchAllocationAccount{registry: registry, account: account, selection: allocation}
 	t.Cleanup(func() {

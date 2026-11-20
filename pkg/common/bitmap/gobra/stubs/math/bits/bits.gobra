@@ -1,0 +1,95 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Gobra stub for the subset of math/bits used by pkg/common/bitmap, plus a
+// model of uint64 bit operations. Gobra encodes & | ^ &^ << >> as functions
+// with no meaning, so the axioms below give them one in terms of Bit(w, k),
+// "bit k of w". Every axiom is checked against the real Go operators by
+// TestGobraBitModel in pkg/common/bitmap.
+package bits
+
+ghost type BitModel domain {
+	func Bit(uint64, int) bool
+
+	axiom { // zero has no bits
+		forall k int :: {Bit(0, k)} !Bit(0, k)
+	}
+	axiom { // &
+		forall a, b uint64, k int :: {Bit(a & b, k)} 0 <= k && k < 64 ==> Bit(a & b, k) == (Bit(a, k) && Bit(b, k))
+	}
+	axiom { // |
+		forall a, b uint64, k int :: {Bit(a | b, k)} 0 <= k && k < 64 ==> Bit(a | b, k) == (Bit(a, k) || Bit(b, k))
+	}
+	axiom { // &^
+		forall a, b uint64, k int :: {Bit(a &^ b, k)} 0 <= k && k < 64 ==> Bit(a &^ b, k) == (Bit(a, k) && !Bit(b, k))
+	}
+	axiom { // ^ (xor)
+		forall a, b uint64, k int :: {Bit(a ^ b, k)} 0 <= k && k < 64 ==> Bit(a ^ b, k) == (Bit(a, k) != Bit(b, k))
+	}
+	axiom { // ^ (not)
+		forall a uint64, k int :: {Bit(^a, k)} 0 <= k && k < 64 ==> Bit(^a, k) == !Bit(a, k)
+	}
+	axiom { // single bit
+		forall s uint64, k int :: {Bit(uint64(1) << s, k)} 0 <= s && s < 64 && 0 <= k && k < 64 ==> Bit(uint64(1) << s, k) == (k == int(s))
+	}
+	axiom { // single-bit test; follows from the axioms above
+		forall a, s uint64 :: {a & (uint64(1) << s)} 0 <= s && s < 64 ==> (a&(uint64(1)<<s) != 0) == Bit(a, int(s))
+	}
+	axiom { // all ones shifted left
+		forall s uint64, k int :: {Bit(^uint64(0) << s, k)} 0 <= s && s < 64 && 0 <= k && k < 64 ==> Bit(^uint64(0) << s, k) == (k >= int(s))
+	}
+	axiom { // all ones shifted right
+		forall s uint64, k int :: {Bit(^uint64(0) >> s, k)} 0 <= s && s < 64 && 0 <= k && k < 64 ==> Bit(^uint64(0) >> s, k) == (k < 64-int(s))
+	}
+}
+
+// A nonzero word has a set bit.
+ghost
+requires a != 0
+ensures 0 <= k && k < 64 && Bit(a, k)
+decreases
+func SomeBit(a uint64) (k int)
+
+// Words with the same bits are equal.
+ghost
+requires forall k int :: {Bit(a, k)} {Bit(b, k)} 0 <= k && k < 64 ==> Bit(a, k) == Bit(b, k)
+ensures a == b
+decreases
+func BitsEq(a, b uint64)
+
+// PcUpTo counts the set bits of w below k.
+ghost
+requires 0 <= k && k <= 64
+decreases k
+pure func PcUpTo(w uint64, k int) int {
+	return k == 0 ? 0 : PcUpTo(w, k-1) + (Bit(w, k-1) ? 1 : 0)
+}
+
+// Pc counts the set bits of w.
+ghost
+decreases
+pure func Pc(w uint64) int {
+	return PcUpTo(w, 64)
+}
+
+ensures res == Pc(x)
+ensures 0 <= res && res <= 64
+decreases
+func OnesCount64(x uint64) (res int)
+
+requires x != 0
+ensures 0 <= res && res < 64 && Bit(x, res)
+ensures forall k int :: {Bit(x, k)} 0 <= k && k < res ==> !Bit(x, k)
+decreases
+func TrailingZeros64(x uint64) (res int)

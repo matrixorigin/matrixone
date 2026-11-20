@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package backoff
+package util
 
 import (
 	"math"
 	"time"
 )
 
-// Exponential computes the delay for a one-based attempt. Non-positive initial
+// ExponentialBackoff computes the delay for a one-based attempt. Non-positive initial
 // delays default to 100ms, and multipliers at or below one default to two.
 // A positive maximum caps the delay before jitter is added. When random is nil,
 // jitter uses the current time; callers may inject it for deterministic tests.
-func Exponential(attempt int, initial time.Duration, multiplier float64, maximum, jitter time.Duration, random func(time.Duration) time.Duration) time.Duration {
+func ExponentialBackoff(attempt int, initial time.Duration, multiplier float64, maximum, jitter time.Duration, random func(time.Duration) time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}

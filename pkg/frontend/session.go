@@ -34,7 +34,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2077,7 +2076,6 @@ func NewSession(
 	// owning transaction and cleaned at every terminal transaction outcome.
 	ses.seqObligations = process.NewSequenceObligationSet()
 
-	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	u, _ := util.FastUuid()
 	ses.uuid = uuid.UUID(u)
@@ -2338,11 +2336,6 @@ func (ses *Session) Close() {
 
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
-	}
-
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
 	}
 
 	//  The mpool cleanup must be placed at the end,

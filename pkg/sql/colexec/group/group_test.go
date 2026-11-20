@@ -3820,7 +3820,7 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	require.Nil(t, result.Batch)
 	require.Equal(t, spillNumBuckets, nonEmptyBuckets)
 	require.NotNil(t, g.ctr.spillBkts)
-	require.Equal(t, 1, g.ctr.spillBkts.Len())
+	require.Equal(t, 1, len(g.ctr.spillBkts))
 	require.NotNil(t, g.ctr.currentSpillBkt)
 	transferredSlots := 0
 	for _, bkt := range g.ctr.currentSpillBkt {
@@ -3849,7 +3849,7 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	require.Nil(t, result.Batch)
 	require.Nil(t, g.ctr.currentSpillBkt)
 	require.NotNil(t, g.ctr.spillBkts)
-	require.Equal(t, nonEmptyBuckets, g.ctr.spillBkts.Len())
+	require.Equal(t, nonEmptyBuckets, len(g.ctr.spillBkts))
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
 
 	postTransferFiles := append([]*os.File(nil), spillFiles...)
@@ -3872,7 +3872,7 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
 	require.NotEmpty(t, spillFiles)
 	require.NotNil(t, g.ctr.spillBkts)
-	require.Positive(t, g.ctr.spillBkts.Len())
+	require.Positive(t, len(g.ctr.spillBkts))
 
 	g.Reset(proc, true, context.Canceled)
 	require.Nil(t, g.ctr.mp)

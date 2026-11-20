@@ -527,7 +527,7 @@ func TestDictionaryEnsureFlatFailureIsTransactional(t *testing.T) {
 	account, err := registry.OpenWithController(1<<20, controller)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner,
-		testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
+		testVectorDataAllocationSite, testVectorAreaAllocationSite)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		finalizeTestVectorAllocationAccount(t, testVectorAllocationAccount{registry: registry, account: account, selection: selection})

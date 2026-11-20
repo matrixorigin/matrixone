@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -1390,7 +1389,7 @@ func filterGCNamesLocked(
 	if !txn.isCloneTxn {
 		return names
 	}
-	return readutil.RemoveIf(names, func(name string) bool {
+	return slices.DeleteFunc(names, func(name string) bool {
 		txnID := txn.op.Txn().ID
 		if e.cloneTxnCache.IsSharedFile(txnID, name) {
 			return true

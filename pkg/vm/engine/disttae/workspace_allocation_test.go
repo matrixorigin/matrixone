@@ -263,7 +263,7 @@ func TestWorkspaceInsertPreservesRawBatchProvenance(t *testing.T) {
 				account, err = registry.OpenWithController(1<<20, parent)
 				require.NoError(t, err)
 				defer func() { _, _, err := registry.CompleteTerminal(account); require.NoError(t, err) }()
-				selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDML, 1, 2, 3, 4)
+				selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDML, 1, 2)
 				require.NoError(t, err)
 				b = batch.NewOffHeapWithSize(1)
 				require.NoError(t, b.SetAllocationAccount(selection))

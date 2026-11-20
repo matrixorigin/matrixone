@@ -1,0 +1,420 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Ghost definitions and lemmas for the Gobra proof of bitmap.go. Go ignores
+// .gobra files. Every lemma here is proven (none is trusted); the only trusted
+// facts are the bit-operation axioms in gobra/stubs/math/bits.
+package bitmap
+
+import "math/bits"
+
+// SumPc is the number of set bits in the first m words of s.
+ghost
+requires 0 <= m && m <= len(s)
+decreases m
+pure func SumPc(s seq[uint64], m int) int {
+	return m == 0 ? 0 : SumPc(s, m-1) + bits.Pc(s[m-1])
+}
+
+// TailClear holds when no bit at or beyond nb is set in s.
+ghost
+decreases
+pure func TailClear(s seq[uint64], nb int64) bool {
+	return nb%64 == 0 || len(s) == 0 ||
+		forall k int :: {bits.Bit(s[len(s)-1], k)} int(nb%64) <= k && k < 64 ==> !bits.Bit(s[len(s)-1], k)
+}
+
+// Changing word i changes the sum by the difference of its bit counts.
+ghost
+requires 0 <= i && i < len(s) && 0 <= m && m <= len(s)
+ensures SumPc(s[i = v], m) == (i < m ? SumPc(s, m) - bits.Pc(s[i]) + bits.Pc(v) : SumPc(s, m))
+decreases m
+func sumUpdate(s seq[uint64], i int, v uint64, m int) {
+	if m > 0 {
+		sumUpdate(s, i, v, m-1)
+	}
+}
+
+ghost
+requires 0 <= m && m <= len(s)
+requires forall i int :: {s[i]} 0 <= i && i < m ==> s[i] == 0
+ensures SumPc(s, m) == 0
+decreases m
+func sumZero(s seq[uint64], m int) {
+	if m > 0 {
+		pcZero(64)
+		sumZero(s, m-1)
+	}
+}
+
+ghost
+requires 0 <= k && k <= 64
+ensures bits.PcUpTo(0, k) == 0
+decreases k
+func pcZero(k int) {
+	if k > 0 {
+		pcZero(k - 1)
+	}
+}
+
+// Pc(a | b) == Pc(a) + Pc(b &^ a)
+ghost
+requires 0 <= k && k <= 64
+ensures bits.PcUpTo(a|b, k) == bits.PcUpTo(a, k)+bits.PcUpTo(b&^a, k)
+decreases k
+func pcOr(a, b uint64, k int) {
+	if k > 0 {
+		pcOr(a, b, k-1)
+	}
+}
+
+// Pc(a) == Pc(a & b) + Pc(a &^ b)
+ghost
+requires 0 <= k && k <= 64
+ensures bits.PcUpTo(a, k) == bits.PcUpTo(a&b, k)+bits.PcUpTo(a&^b, k)
+decreases k
+func pcSplit(a, b uint64, k int) {
+	if k > 0 {
+		pcSplit(a, b, k-1)
+	}
+}
+
+// Pc(a & ^b) == Pc(a &^ b)
+ghost
+requires 0 <= k && k <= 64
+ensures bits.PcUpTo(a & ^b, k) == bits.PcUpTo(a&^b, k)
+decreases k
+func pcAndNot(a, b uint64, k int) {
+	if k > 0 {
+		pcAndNot(a, b, k-1)
+	}
+}
+
+// Pc(^a) == Pc(^0 &^ a)
+ghost
+requires 0 <= k && k <= 64
+ensures bits.PcUpTo(^a, k) == bits.PcUpTo(^uint64(0)&^a, k)
+decreases k
+func pcNot(a uint64, k int) {
+	if k > 0 {
+		pcNot(a, k-1)
+	}
+}
+
+// Setting or clearing a single bit changes the count by at most one.
+ghost
+requires 0 <= s && s < 64 && 0 <= k && k <= 64
+ensures bits.PcUpTo((uint64(1)<<s)&^w, k) == ((int(s) < k && !bits.Bit(w, int(s))) ? 1 : 0)
+ensures bits.PcUpTo(w&(uint64(1)<<s), k) == ((int(s) < k && bits.Bit(w, int(s))) ? 1 : 0)
+decreases k
+func pcBit(w uint64, s uint64, k int) {
+	if k > 0 {
+		pcBit(w, s, k-1)
+	}
+}
+
+// w & (1<<s) == 0 exactly when bit s of w is clear.
+ghost
+requires 0 <= s && s < 64
+ensures (w&(uint64(1)<<s) == 0) == !bits.Bit(w, int(s))
+decreases
+func testBit(w uint64, s uint64) {
+	m := uint64(1) << s
+	if w&m != 0 {
+		k := bits.SomeBit(w & m)
+		assert bits.Bit(w&m, k)
+	} else {
+		assert !bits.Bit(w&m, int(s))
+	}
+}
+
+// A word is nonzero exactly when it has a set bit.
+ghost
+ensures (w != 0) == (exists k int :: {bits.Bit(w, k)} 0 <= k && k < 64 && bits.Bit(w, k))
+decreases
+func nonZero(w uint64) {
+	if w != 0 {
+		k := bits.SomeBit(w)
+		assert bits.Bit(w, k)
+	}
+}
+
+// Sums over equal prefixes are equal.
+ghost
+requires 0 <= m && m <= len(s) && m <= len(t)
+requires forall i int :: {s[i]} {t[i]} 0 <= i && i < m ==> s[i] == t[i]
+ensures SumPc(s, m) == SumPc(t, m)
+decreases m
+func sumPrefix(s, t seq[uint64], m int) {
+	if m > 0 {
+		sumPrefix(s, t, m-1)
+	}
+}
+
+// Zero words add nothing to the sum.
+ghost
+requires 0 <= m && m <= k && k <= len(s)
+requires forall i int :: {s[i]} m <= i && i < k ==> s[i] == 0
+ensures SumPc(s, k) == SumPc(s, m)
+decreases k - m
+func sumZeroTail(s seq[uint64], m, k int) {
+	if k > m {
+		pcZero(64)
+		sumZeroTail(s, m, k-1)
+	}
+}
+
+// HasS reports whether row r is set in the words s of an nb-bit bitmap.
+ghost
+decreases
+pure func HasS(s seq[uint64], nb int64, r int) bool {
+	return 0 <= r && r < int(nb) && r/64 < len(s) && bits.Bit(s[r/64], r%64)
+}
+
+// CntS is the number of set rows below m.
+ghost
+requires 0 <= m
+ensures 0 <= res && res <= m
+decreases m
+pure func CntS(s seq[uint64], nb int64, m int) (res int) {
+	return m == 0 ? 0 : CntS(s, nb, m-1) + (HasS(s, nb, m-1) ? 1 : 0)
+}
+
+// Rows of word j up to bit k count as the word's bits.
+ghost
+requires 0 <= nb && len(s) == int((nb+63)/64) && TailClear(s, nb)
+requires 0 <= j && j < len(s) && 0 <= k && k <= 64
+requires CntS(s, nb, 64*j) == SumPc(s, j)
+ensures CntS(s, nb, 64*j+k) == SumPc(s, j)+bits.PcUpTo(s[j], k)
+decreases k
+func cntWord(s seq[uint64], nb int64, j int, k int) {
+	if k > 0 {
+		cntWord(s, nb, j, k-1)
+		r := 64*j + k - 1
+		assert r/64 == j && r%64 == k-1
+		if r >= int(nb) {
+			assert j == len(s)-1 && nb%64 != 0 && k-1 >= int(nb%64)
+			assert !bits.Bit(s[len(s)-1], k-1)
+		}
+		assert HasS(s, nb, r) == bits.Bit(s[j], k-1)
+	}
+}
+
+// The first 64*j rows count as the first j words.
+ghost
+requires 0 <= nb && len(s) == int((nb+63)/64) && TailClear(s, nb)
+requires 0 <= j && j <= len(s)
+ensures CntS(s, nb, 64*j) == SumPc(s, j)
+decreases j
+func cntWords(s seq[uint64], nb int64, j int) {
+	if j > 0 {
+		cntWords(s, nb, j-1)
+		cntWord(s, nb, j-1, 64)
+	}
+}
+
+// Rows at or beyond nb are never set.
+ghost
+requires 0 <= nb && int(nb) <= m
+ensures CntS(s, nb, m) == CntS(s, nb, int(nb))
+decreases m - int(nb)
+func cntBeyond(s seq[uint64], nb int64, m int) {
+	if m > int(nb) {
+		cntBeyond(s, nb, m-1)
+	}
+}
+
+// No set row below m exactly when the count is zero.
+ghost
+requires 0 <= m
+ensures CntS(s, nb, m) >= 0
+ensures (CntS(s, nb, m) == 0) == (forall r int :: {HasS(s, nb, r)} 0 <= r && r < m ==> !HasS(s, nb, r))
+decreases m
+func cntZero(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntZero(s, nb, m-1)
+	}
+}
+
+// SortedRows holds when sels is strictly increasing and non-negative.
+ghost
+decreases
+pure func SortedRows(sels seq[int64]) bool {
+	return (forall a int :: {sels[a]} 0 <= a && a < len(sels) ==> 0 <= sels[a]) &&
+		(forall a, b int :: {sels[a], sels[b]} 0 <= a && a < b && b < len(sels) ==> sels[a] < sels[b])
+}
+
+// RankUpTo is the number of the first m entries of sels below x.
+ghost
+requires 0 <= m && m <= len(sels)
+decreases m
+pure func RankUpTo(sels seq[int64], m int, x int64) int {
+	return m == 0 ? 0 : RankUpTo(sels, m-1, x) + (sels[m-1] < x ? 1 : 0)
+}
+
+// Rank is the number of entries of sels below x.
+ghost
+decreases
+pure func Rank(sels seq[int64], x int64) int {
+	return RankUpTo(sels, len(sels), x)
+}
+
+// A sorted selection has sels[i] >= i.
+ghost
+requires SortedRows(sels) && 0 <= m && m <= len(sels)
+ensures forall i int :: {sels[i]} 0 <= i && i < m ==> sels[i] >= int64(i)
+decreases m
+func selsAtLeastIndex(sels seq[int64], m int) {
+	if m > 0 {
+		selsAtLeastIndex(sels, m-1)
+		if m > 1 {
+			assert sels[m-2] < sels[m-1]
+		}
+	}
+}
+
+// If exactly the entries before idx are below x, the rank of x is idx.
+ghost
+requires 0 <= idx && idx <= len(sels) && 0 <= m && m <= len(sels)
+requires forall j int :: {sels[j]} 0 <= j && j < idx ==> sels[j] < x
+requires forall j int :: {sels[j]} idx <= j && j < len(sels) ==> sels[j] >= x
+ensures RankUpTo(sels, m, x) == (m < idx ? m : idx)
+decreases m
+func rankAt(sels seq[int64], m int, x int64, idx int) {
+	if m > 0 {
+		rankAt(sels, m-1, x, idx)
+	}
+}
+
+// Counting the bits of w inside a mask that keeps exactly bits [a, b).
+ghost
+requires 0 <= a && a <= b && b <= 64 && 0 <= k && k <= 64
+requires forall j int :: {bits.Bit(m, j)} 0 <= j && j < 64 ==> bits.Bit(m, j) == (a <= j && j < b)
+ensures bits.PcUpTo(w&m, k) == bits.PcUpTo(w, k < b ? k : b)-bits.PcUpTo(w, k < a ? k : a)
+decreases k
+func pcMask(w, m uint64, a, b, k int) {
+	if k > 0 {
+		pcMask(w, m, a, b, k-1)
+	}
+}
+
+// Every word boundary splits the row count like the word sums.
+ghost
+requires 0 <= nb && len(s) == int((nb+63)/64) && TailClear(s, nb)
+requires 0 <= m && m <= len(s)
+ensures forall j int :: {SumPc(s, j)} 0 <= j && j <= m ==> CntS(s, nb, 64*j) == SumPc(s, j)
+decreases m
+func cntAllWords(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntAllWords(s, nb, m-1)
+		cntWord(s, nb, m-1, 64)
+	}
+}
+
+// Same words with the same word count mean the same rows, whatever the bit
+// lengths: rows between the two lengths are tail bits, which are clear.
+ghost
+requires 0 <= nb1 && 0 <= nb2 && len(s) == int((nb1+63)/64) && len(s) == int((nb2+63)/64)
+requires TailClear(s, nb1) && TailClear(s, nb2)
+ensures forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} HasS(s, nb1, r) == HasS(s, nb2, r)
+decreases
+func sameWordsSameRows(s seq[uint64], nb1, nb2 int64) {
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb1) <= r && r < int(nb2) ==>
+		r/64 == len(s)-1 && nb1%64 != 0 && r%64 >= int(nb1%64)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb2) <= r && r < int(nb1) ==>
+		r/64 == len(s)-1 && nb2%64 != 0 && r%64 >= int(nb2%64)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb1) <= r && r < int(nb2) ==>
+		!bits.Bit(s[len(s)-1], r%64) && !HasS(s, nb2, r)
+	assert forall r int :: {HasS(s, nb1, r)} {HasS(s, nb2, r)} 0 <= r && int(nb2) <= r && r < int(nb1) ==>
+		!bits.Bit(s[len(s)-1], r%64) && !HasS(s, nb1, r)
+}
+
+// The number of set rows below m is between 0 and m, and grows with m.
+ghost
+requires 0 <= a && a <= b
+ensures 0 <= CntS(s, nb, a) && CntS(s, nb, a) <= CntS(s, nb, b) && CntS(s, nb, b)-CntS(s, nb, a) <= b-a
+ensures CntS(s, nb, a) <= a
+decreases b
+func cntMono(s seq[uint64], nb int64, a, b int) {
+	if b > a {
+		cntMono(s, nb, a, b-1)
+	} else {
+		cntLe(s, nb, a)
+	}
+}
+
+// The number of set rows below m is between 0 and m.
+ghost
+requires 0 <= m
+ensures 0 <= CntS(s, nb, m) && CntS(s, nb, m) <= m
+decreases m
+func cntLe(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntLe(s, nb, m-1)
+	}
+}
+
+// A set row a followed by unset rows up to b adds exactly one.
+ghost
+requires 0 <= a && a < b && HasS(s, nb, a)
+requires forall r int :: {HasS(s, nb, r)} a < r && r < b ==> !HasS(s, nb, r)
+ensures CntS(s, nb, b) == CntS(s, nb, a)+1
+decreases b
+func cntStep(s seq[uint64], nb int64, a, b int) {
+	if b > a+1 {
+		cntStep(s, nb, a, b-1)
+	}
+}
+
+// An equal count at a and b means no set row in [a, b).
+ghost
+requires 0 <= a && a <= b && CntS(s, nb, a) == CntS(s, nb, b)
+ensures forall r int :: {HasS(s, nb, r)} a <= r && r < b ==> !HasS(s, nb, r)
+decreases b
+func cntFlat(s seq[uint64], nb int64, a, b int) {
+	if b > a {
+		cntMono(s, nb, a, b-1)
+		cntFlat(s, nb, a, b-1)
+	}
+}
+
+// RankOff is the number of rows r + off below s, for set rows r.
+ghost
+requires 0 <= off
+decreases
+pure func RankOff(s seq[uint64], nb int64, off int, x int) int {
+	return x >= off ? CntS(s, nb, x-off) : 0
+}
+
+// The count of set rows is monotonic over [0, m].
+ghost
+requires 0 <= m
+ensures forall a, b int :: {CntS(s, nb, a), CntS(s, nb, b)} 0 <= a && a <= b && b <= m ==> CntS(s, nb, a) <= CntS(s, nb, b)
+decreases m
+func cntMonoAll(s seq[uint64], nb int64, m int) {
+	if m > 0 {
+		cntMonoAll(s, nb, m-1)
+	}
+}
+
+// Distinct set rows have distinct counts below them.
+ghost
+requires 0 <= a && HasS(s, nb, a) && 0 <= nb
+ensures forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && CntS(s, nb, r) == CntS(s, nb, a) ==> r == a
+decreases
+func cntInjS(s seq[uint64], nb int64, a int) {
+	cntMonoAll(s, nb, int(nb))
+	assert forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && r < a ==> CntS(s, nb, r+1) == CntS(s, nb, r)+1 && CntS(s, nb, r+1) <= CntS(s, nb, a)
+	assert forall r int :: {HasS(s, nb, r)} HasS(s, nb, r) && a < r ==> CntS(s, nb, a+1) == CntS(s, nb, a)+1 && CntS(s, nb, a+1) <= CntS(s, nb, r)
+}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package assertx
+package util
 
 import (
 	"math"
@@ -29,20 +29,6 @@ import (
 //   - service_weaver: https://github.com/ServiceWeaver/weaver/blob/8e7c225542b8f8267ec0da3e01a098366b6f8daf/internal/weaver/load.go#L31
 //   - google lib: https://github.com/google/differential-privacy/blob/91b4ecebf33e71b8a215b7ea8325fb5e47b12671/privacy-on-beam/pbeam/pbeamtest/pbeamtest_test.go#L1406
 const float64EqualityThreshold = 1e-9
-
-// InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
-func InEpsilonF64Slices(want, got [][]float64) bool {
-	if len(want) != len(got) {
-		return false
-	}
-
-	for i := 0; i < len(want); i++ {
-		if !InEpsilonF64Slice(want[i], got[i]) {
-			return false
-		}
-	}
-	return true
-}
 
 // InEpsilonF64Slice returns true if all the elements in v1 and v2 are within epsilon of each other.
 // assert.InEpsilonSlice requires v1 to be non-zero.

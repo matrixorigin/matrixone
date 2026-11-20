@@ -82,7 +82,7 @@ func TestDependentOrderedAssignmentImages(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 			require.NoError(t, err)
 			typ := types.T_int64.ToType().PlanType()
 			col := func(rel, pos int32) *plan.Expr { return plan2.GetColExpr(typ, rel, pos) }
