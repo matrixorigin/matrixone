@@ -167,6 +167,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
+	case types.T_year:
+		row[i] = vector.GetFixedAtWithTypeCheck[types.MoYear](vec, rowIndex)
 	case types.T_datetime:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
@@ -332,6 +334,11 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_date:
 		value := data.(types.Date)
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, value.String())
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_year:
+		value := data.(types.MoYear)
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
