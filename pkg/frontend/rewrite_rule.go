@@ -1310,6 +1310,14 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 
 	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule, sqlMode)
 	if err != nil {
+		// The left rule already grants all rows. Use the catalog parser mode
+		// only to prove compatibility, never to execute the right predicate.
+		if leftShape.unfiltered && mysql.ParseSQLModeFlags(sqlMode) != 0 {
+			r, parsed := rewriteRuleShapeForPrecedence(ctx, rightRule, "", false)
+			if parsed && r != nil && leftShape.selectList == r.selectList && leftShape.table == r.table {
+				return leftRule, true, nil
+			}
+		}
 		return "", false, err
 	}
 	if !ok {

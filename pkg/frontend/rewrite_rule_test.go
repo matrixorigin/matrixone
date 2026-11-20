@@ -743,6 +743,33 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 	}
 }
 
+func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const unfiltered = "select a from db1.t1"
+	const predicate = ` where code = 'docs\'notes'`
+	for _, tc := range []struct {
+		name, left, right string
+		wantErr           bool
+	}{
+		{"compatible", unfiltered, unfiltered + predicate, false},
+		{"different projection", unfiltered, "select a as n from db1.t1" + predicate, true},
+		{"different source", unfiltered, "select a from db1.t2" + predicate, true},
+		{"ineligible later rule", unfiltered, unfiltered + predicate + " order by a", true},
+		{"filtered earlier rule", unfiltered + " where a = 1", unfiltered + predicate, true},
+		{"malformed in both modes", unfiltered, unfiltered + " where (", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mergeRewriteRulesWithSQLMode(t.Context(), tc.left, tc.right, mode)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "failed to parse rewrite rule")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, unfiltered, got)
+		})
+	}
+}
+
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

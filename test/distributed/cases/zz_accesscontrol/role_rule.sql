@@ -457,6 +457,13 @@ alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup" on
 select a from db1.t_dup order by a;
 -- @session
 
+-- The same visibility union applies when the unfiltered rule is earlier.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
