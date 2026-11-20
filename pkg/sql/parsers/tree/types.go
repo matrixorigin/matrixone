@@ -192,14 +192,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		if len(node.EnumValues) > 0 {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
-				if ctx.viewDefinition && enumLabelNeedsHex(enum) {
+				if (ctx.viewDefinition || ctx.preserveTextLiteralWidth && utf8.ValidString(enum)) && enumLabelNeedsHex(enum) {
 					// The MySQL scanner decodes this spelling to a STRING token,
 					// regardless of NO_BACKSLASH_ESCAPES.
 					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", enum)
 				} else if ctx.preserveTextLiteralWidth {
-					if !ctx.NoBackslashEscape() {
-						enum = FormatString(enum)
-					}
+					// Leave invalid UTF-8 visible to the rewrite serializer's check.
 					ctx.WriteValue(P_char, enum)
 				} else {
 					ctx.WriteByte('"')

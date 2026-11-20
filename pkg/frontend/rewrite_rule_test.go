@@ -773,6 +773,18 @@ func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
 	}
 }
 
+func TestMergedEnumRuleStableAcrossEscapeModes(t *testing.T) {
+	const prefix = "select cast(1 as enum(_utf8mb4 X'610962', _utf8mb4 X'615c62', 'z')) as label from db1.t1 where a = "
+	ctx := t.Context()
+	original, err := mergeRewriteRulesWithSQLMode(ctx, prefix+"1", prefix+"2", "")
+	require.NoError(t, err)
+	reloaded, err := mergeRewriteRulesWithSQLMode(ctx, prefix+"1", prefix+"2", "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Equal(t, original, reloaded)
+	require.Contains(t, reloaded, "_utf8mb4 X'610962'")
+	require.Contains(t, reloaded, "_utf8mb4 X'615c62'")
+}
+
 func TestMergeRewriteRulesFallbackPreservesSessionProjection(t *testing.T) {
 	const mode = "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"
 	const unfiltered = `select "a" as n from db1.t1`

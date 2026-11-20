@@ -479,6 +479,18 @@ set sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES';
 select n from db1.t_dup order by n;
 -- @session
 
+-- Reloading equivalent ENUM rules must not invalidate a prepared handle.
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare keep_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute keep_handle;
+deallocate prepare keep_handle;
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

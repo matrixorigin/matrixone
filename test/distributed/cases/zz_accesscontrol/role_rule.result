@@ -481,6 +481,18 @@ select n from db1.t_dup order by n;
 3  𝄀
 4  𝄀
 5
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 2" on table db1.t_dup;
+set sql_mode = '';
+prepare keep_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute keep_handle;
+➤ 1[-5,64,0]  𝄀
+1
+deallocate prepare keep_handle;
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+➤ hex(cast(label as varchar))[-1,16383,0]  ¦  count(*)[-5,64,0]  𝄀
+610962  ¦  2
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
