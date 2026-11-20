@@ -30,30 +30,6 @@ type testBatchAllocationAccount struct {
 	selection *vector.AllocationAccountSelection
 }
 
-type rejectNextBatchAllocation struct {
-	calls    int
-	failAt   int
-	rejected bool
-	used     uint64
-}
-
-func (c *rejectNextBatchAllocation) AcquireAllocationCapacity(size uint64) error {
-	c.calls++
-	if c.failAt != 0 && c.calls == c.failAt {
-		c.rejected = true
-		return mpool.ErrAllocationAccountCapacity
-	}
-	c.used += size
-	return nil
-}
-
-func (c *rejectNextBatchAllocation) ReleaseAllocationCapacity(size uint64) {
-	if c.used < size {
-		panic("batch allocation controller release underflow")
-	}
-	c.used -= size
-}
-
 func newTestBatchAllocationAccount(
 	t *testing.T,
 	allocationSlots uint64,

@@ -53,8 +53,6 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, tc.op, args...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			require.Nil(t, root.dictionaryInput, "physical normalization remains required")
 			checkValues := func(result *vector.Vector) {
 				t.Helper()
 				require.False(t, result.HasNull())
@@ -145,8 +143,6 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, ">=", cols...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			root.dictionaryInput = nil
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result))

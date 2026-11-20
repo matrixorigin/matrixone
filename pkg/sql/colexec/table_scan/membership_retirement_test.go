@@ -23,10 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -101,9 +99,6 @@ func TestMembershipRetiresBeforeEmptyBatchContinue(t *testing.T) {
 	scan.OutputAllocation = allocation
 	scan.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "key", ProbeNDV: 1000000}}
 	scan.SetAnalyzeControl(0, true)
-	consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator(), owned: true}
-	consumer.AppendChild(scan)
-	vm.ConfigureDictionaryBoundaries(consumer)
 	t.Cleanup(func() { scan.Free(proc, false, nil); scan.Release() })
 	require.NoError(t, scan.Prepare(proc))
 	scan.ctr.domainProbes[0].tested = runtimefilter.LocalDomainBatchRows - 1

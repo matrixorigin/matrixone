@@ -841,7 +841,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					count = len(tc.member.Sels)
 				}
 				require.Equal(t, count, bat.RowCount())
-				require.Equal(t, !tc.member.All, bat.Vecs[predicates[0]].IsDictionary())
 				for row := range count {
 					physical := row
 					if !tc.member.All {
@@ -871,7 +870,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			for col, v := range output.Vecs {
 				require.Same(t, original[col], v)
 				require.False(t, v.HasBorrowedBacking())
-				require.False(t, v.IsDictionary())
 			}
 			require.Equal(t, 1, memberCalls)
 			wantPredicate := 1
@@ -899,7 +897,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 	}
 
 	for _, complete := range []bool{false, true} {
-		t.Run(map[bool]string{false: "dictionary late rows", true: "dictionary complete columns"}[complete], func(t *testing.T) {
+		t.Run(map[bool]string{false: "selected late rows", true: "selected complete columns"}[complete], func(t *testing.T) {
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
@@ -908,20 +906,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			output.Clean(queryMP)
 			output = batch.NewOffHeapWithSize(len(colTypes))
-			workspace := make([]*vector.Vector, len(colTypes))
-			headers := make([]*vector.Vector, len(colTypes))
 			t.Cleanup(func() {
 				output.Clean(queryMP)
-				for _, v := range workspace {
-					if v != nil {
-						v.Free(queryMP)
-					}
-				}
-				for _, v := range headers {
-					if v != nil {
-						v.Free(queryMP)
-					}
-				}
 				cacheVectors.Free(queryMP)
 				require.Zero(t, account.Snapshot().Used)
 				_, _, err := registry.CompleteTerminal(account)
@@ -943,8 +929,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			calls := 0
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: selection,
-				Workspace:        workspace,
-				ReusableHeaders:  headers,
 				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("selected read must not rerun Apply")
 					return engine.ReaderFilterResult{}, nil
@@ -964,28 +948,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, calls)
 			require.Equal(t, 3, output.RowCount())
-			require.True(t, output.Vecs[0].IsDictionary())
-			require.NotNil(t, workspace[0])
-			original := workspace[0].GetData()
-			firstHeader := output.Vecs[0]
-			for col, v := range workspace {
-				if v != nil {
-					output.Vecs[col].CleanOnlyData()
-					headers[col] = output.Vecs[col]
-					output.Vecs[col] = v
-					workspace[col] = nil
-				}
-			}
+			first := output.Vecs[0]
 			output.CleanOnlyData()
-			require.Equal(t, vector.OwnedMPoolUnique, output.Vecs[0].DataBackingKind())
-			require.Same(t, &original[0], &output.Vecs[0].GetData()[0], "reader must retain native buffer capacity")
 			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read-reuse", output, cacheVectors, queryMP, fs, early, request)
 			require.NoError(t, err)
 			require.Equal(t, 2, calls)
-			require.Same(t, firstHeader, output.Vecs[0], "publication header must be reused after its previous borrow ends")
-			require.True(t, output.Vecs[0].IsDictionary())
-
-			require.Equal(t, complete, output.Vecs[1].IsDictionary())
+			require.Same(t, first, output.Vecs[0], "selection compacts the read vector in place")
 			for i, want := range []int32{1, 4, 6} {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], i))
 				require.Equal(t, []byte("payload-"+string(rune('0'+want))), output.Vecs[1].GetBytesAt(i))
@@ -1018,7 +986,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			return engine.ReaderFilterResult{}, nil
 		}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
-			require.False(t, b.Vecs[1].IsDictionary(), "the first predicate must not need an identity dictionary")
 			require.True(t, b.Vecs[1].HasBorrowedBacking(), "sealed cached input must retain its byte owner")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
@@ -1065,7 +1032,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 3, out.RowCount())
 		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
-		require.False(t, out.HasDictionary())
 		require.Zero(t, out.Vecs[1].Length())
 		require.Empty(t, scratch.Sources)
 		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
@@ -1078,7 +1044,6 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-owned-payload", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
 		require.NoError(t, err)
 		require.Equal(t, 3, out.RowCount())
-		require.False(t, out.HasDictionary())
 		require.False(t, out.Vecs[1].HasBorrowedBacking())
 		for i, want := range []int32{1, 3, 5} {
 			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))

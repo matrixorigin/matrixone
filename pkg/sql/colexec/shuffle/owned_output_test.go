@@ -36,7 +36,7 @@ import (
 
 func TestOwnedCompleteKeyShuffle(t *testing.T) {
 	for _, values := range [][]int64{{7, 7, 7}, {0, 1, 2, 3, 4, 5, 6, 7}} {
-		for _, dictionary := range []bool{false, true} {
+		{
 			expected := values
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			budget, err := proc.GetExecutionResourceBudget()
@@ -54,24 +54,6 @@ func TestOwnedCompleteKeyShuffle(t *testing.T) {
 			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
 			input.SetRowCount(len(values))
-			if dictionary {
-				func() {
-					original := input.Vecs[0]
-					base, err := vector.FreezeVector(original, proc.Mp(), nil)
-					require.NoError(t, err)
-					defer base.Release()
-					rows, err := vector.NewRowSelection([]int64{1, 0, 1}, len(values), proc.Mp(), nil)
-					require.NoError(t, err)
-					defer rows.Release()
-					dict, err := vector.NewDictionaryVector(base, rows, proc.Mp(), nil)
-					require.NoError(t, err)
-					input.Vecs[0] = dict
-					original.Free(proc.Mp())
-					input.SetRowCount(3)
-					expected = []int64{values[1], values[0], values[1]}
-				}()
-			}
-
 			input.ShuffleIDX = 99
 			source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 			arg.AppendChild(source)

@@ -15,116 +15,12 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// functionDictionaryState is allocated only for actual dictionary bindings or
-// normalization. The expression owns scratch vectors; the frame is borrowed.
-type functionDictionaryState struct {
-	frame      *DictionaryInputFrame
-	parameters []*vector.Vector
-	scratch    []*vector.Vector
-}
-
-func (state *functionDictionaryState) freeScratch(mp *mpool.MPool) {
-	for _, parameter := range state.scratch {
-		if parameter != nil {
-			parameter.Free(mp)
-		}
-	}
-	state.parameters, state.scratch = nil, nil
-}
-
-// normalizeDictionaryParameters owns the compatibility storage for functions
-// whose physical reads have not been converted. Never mutate borrowed arguments.
-// The all-flat path returns its original slice and allocates no scratch.
-func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters []*vector.Vector, allowDirect bool) ([]*vector.Vector, error) {
-	first := -1
-	for i, p := range parameters {
-		if p != nil && p.IsDictionary() {
-			first = i
-			break
-		}
-	}
-	if first < 0 {
-		return parameters, nil
-	}
-	direct := allowDirect && expr.dictionaryInput != nil && expr.dictionaryInput(parameters)
-	if direct && len(expr.parameterTypes) == len(parameters) {
-		for i, p := range parameters {
-			if p != nil && p.IsDictionary() && types.IsUnicodeCollation(expr.parameterTypes[i].Charset) &&
-				p.GetType().Oid == expr.parameterTypes[i].Oid && *p.GetType() != expr.parameterTypes[i] {
-				direct = false
-				break
-			}
-		}
-	}
-	if direct {
-		return parameters, nil
-	}
-
-	state := expr.dictionaryState
-	if state == nil {
-		state = &functionDictionaryState{}
-		expr.dictionaryState = state
-	}
-	if len(state.parameters) != len(parameters) {
-		state.freeScratch(expr.m)
-		// Keep two initialization allocations, as with the previous separate
-		// slices, while keeping the expression's flat-only footprint small.
-		storage := make([]*vector.Vector, 2*len(parameters))
-		state.parameters = storage[:len(parameters):len(parameters)]
-		state.scratch = storage[len(parameters):len(storage):len(storage)]
-	}
-	copy(state.parameters, parameters)
-	for i := first; i < len(parameters); i++ {
-		source := parameters[i]
-		if source == nil || !source.IsDictionary() {
-			continue
-		}
-		if source.AllocationAccountSelection() != nil && expr.allocation == nil {
-			return nil, mpool.ErrAllocationAccountInvalid
-		}
-		if flat, found, err := state.frame.materialize(source, expr.allocation, expr.m); found {
-			if err != nil {
-				return nil, err
-			}
-			state.parameters[i] = flat
-			continue
-		}
-		dst := state.scratch[i]
-		if dst == nil {
-			var err error
-			dst, err = newExpressionOffHeapVector(*source.GetType(), expr.allocation)
-			if err != nil {
-				return nil, err
-			}
-			state.scratch[i] = dst
-		} else {
-			dst.Reset(*source.GetType())
-		}
-		if err := dst.UnionBatch(source, 0, source.Length(), nil, expr.m); err != nil {
-			return nil, err
-		}
-		source.CopyExpressionMetadataTo(dst)
-		state.parameters[i] = dst
-	}
-	return state.parameters, nil
-}
-
-func (expr *FunctionExpressionExecutor) freeDictionaryParameters() {
-	if state := expr.dictionaryState; state != nil {
-		state.freeScratch(expr.m)
-		state.frame = nil
-		expr.dictionaryState = nil
-	}
-}
-
-// booleanProducesNoNulls proves result validity for this evaluation, independently
-// of whether the kernel can read dictionary payload. Eval uses this only for a
+// booleanProducesNoNulls proves result validity for this evaluation. Eval uses this only for a
 // full, unmasked, accounted Boolean result; other results retain normal admission.
 func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 	logical, comparison := false, false
@@ -170,17 +66,16 @@ func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 		}
 	}
 	// The byte-prefix range kernel can set a NULL bit only from a NULL
-	// argument. This proof does not opt it into dictionary execution.
+	// argument.
 	if logical || expr.fid == function.PREFIX_BETWEEN {
 		return true
 	}
 	if comparison && numericComparisonDomain(expr.parameterResults) {
 		return true
 	}
-	// Strings, temporal comparisons, BETWEEN and fixed-list membership keep
-	// their existing metadata/shape proof. A physical-only numeric kernel above
-	// still receives ordinary normalization; it needs no result NULL bitmap.
-	return expr.dictionaryInput != nil && expr.dictionaryInput(expr.parameterResults)
+	// Strings, temporal comparisons, BETWEEN and fixed-list membership have
+	// no proof here; their results keep ordinary NULL admission.
+	return false
 }
 
 func numericComparisonDomain(parameters []*vector.Vector) bool {
@@ -261,7 +156,7 @@ func (expr *FunctionExpressionExecutor) fixedMembershipList() *vector.Vector {
 	value := list.resultVector
 	oid := value.GetType().Oid
 	if !(oid.IsSignedInt() || oid.IsUnsignedInt() || oid.IsMySQLString()) ||
-		value.IsDictionary() || value.HasGrouping() {
+		value.HasGrouping() {
 		return nil
 	}
 	return value

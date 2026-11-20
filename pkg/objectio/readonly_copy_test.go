@@ -182,7 +182,6 @@ func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	admitted, err := TryBorrowCachedVector(destination, probe, mp)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	require.False(t, destination.IsDictionary())
 	require.True(t, destination.HasBorrowedBacking())
 	require.Zero(t, probe.bytesCalls.Load())
 	visible := destination.GetBytesAt(0)
@@ -193,7 +192,7 @@ func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	require.Zero(t, probe.released.Load())
 	require.Equal(t, long, destination.GetBytesAt(0))
 	before := bytes.Clone(probe.backing)
-	require.NoError(t, destination.EnsureWritable(mp))
+	require.NoError(t, destination.MaterializeOwned(mp))
 	require.NoError(t, vector.SetBytesAt(destination, 0, []byte("changed"), mp))
 	require.Equal(t, before, probe.backing)
 	require.Equal(t, int32(1), probe.released.Load())
@@ -237,7 +236,6 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, admitted)
 			require.Zero(t, destination.Length())
-			require.False(t, destination.IsDictionary())
 
 			if transient {
 				require.NoError(t, CopyCachedVectorAll(destination, data, mp))

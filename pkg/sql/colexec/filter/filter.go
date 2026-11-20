@@ -76,11 +76,6 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
-	filter.ctr.dictionaryBoundary.BeginCall()
-	if filter.ctr.viewOutput != nil {
-		filter.ctr.viewOutput.Clean(proc.Mp())
-		filter.ctr.viewOutput = nil
-	}
 	analyzer := filter.OpAnalyzer
 
 	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, analyzer)
@@ -92,19 +87,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
-	if filter.ctr.dictionaryBoundary.AllowsDictionaryOutput() &&
-		(!filter.ctr.dictionaryBoundary.PrefersOwnedOutput() || inputResult.Batch.HasDictionary()) && len(inputResult.Batch.ExtraBuf) == 0 {
-		output, err := filter.selectedCall(proc, inputResult.Batch)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-		if filter.IsEnd {
-			output = nil
-		}
-		result := vm.NewCallResult()
-		result.Batch = output
-		return result, nil
-	}
 	filterBat := inputResult.Batch
 	var sels []int64
 	defer func() {

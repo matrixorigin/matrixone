@@ -169,13 +169,16 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		exact          bool
 		retained       bool
 		sourceError    bool
+		// stagedPressure: copying the member rows for the predicates already
+		// exceeds the budget, so the staged predicate call never happens.
+		stagedPressure bool
 	}{
 		{name: "identity", limit: 128},
 		{name: "selective output fits", limit: 128, selective: true},
-		{name: "early output pressure", limit: 64, selective: true, bypass: true},
+		{name: "early output pressure", limit: 64, selective: true, bypass: true, stagedPressure: true},
 		{name: "late output pressure", limit: 96, selective: true, bypass: true},
 		{name: "callback capacity error", limit: 128, predicateError: true},
-		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true},
+		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true, stagedPressure: true},
 		{name: "generic ordinary fallback", limit: 128, ordinary: true},
 		{name: "tombstoned ordinary fallback", limit: 128, ordinary: true, tombstone: true},
 		{name: "total tombstoned visibility once", limit: 128, tombstone: true},
@@ -234,10 +237,22 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 						}
 					})
 					var scratch []int64
-					var parameter vector.FunctionParameterWrapper[bool]
-					evaluate = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-						rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, exprs, allocation, &scratch, &parameter, nil, nil, nil)
-						return engine.ReaderFilterResult{Sels: rows, All: all}, err
+					evaluate = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+						value, err := exprs[0].Eval(proc, []*batch.Batch{bat}, nil)
+						if err != nil {
+							return engine.ReaderFilterResult{}, err
+						}
+						keep := vector.GenerateFunctionFixedTypeParameter[bool](value)
+						scratch = scratch[:0]
+						for row := 0; row < bat.RowCount(); row++ {
+							if v, null := keep.GetValue(uint64(row)); v && !null {
+								scratch = append(scratch, int64(row))
+							}
+						}
+						if len(scratch) == bat.RowCount() {
+							return engine.ReaderFilterResult{All: true}, nil
+						}
+						return engine.ReaderFilterResult{Sels: scratch}, nil
 					}
 				}
 				request.Select = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
@@ -310,7 +325,9 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					require.Zero(t, memberUsed, "identity inputs must not reserve optional row maps")
 					require.Equal(t, tc.bypass, request.Membership.Bypass)
 					if tc.bypass {
-						wantCalls++
+						if !tc.stagedPressure {
+							wantCalls++
+						}
 					} else if tc.selective {
 						wantRows--
 					}

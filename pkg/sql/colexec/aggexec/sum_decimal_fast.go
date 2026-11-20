@@ -160,9 +160,6 @@ func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vec
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
-	if vectors[0].IsDictionary() {
-		return exec.bulkFillSingleGroupDictionary(groupIndex, vectors)
-	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -216,12 +213,6 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroup(groupIndex int, vectors []
 func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
-	}
-	if vectors[0].IsDictionary() {
-		if len(exec.state) == 1 && exec.state[0].length > 0 && exec.state[0].length <= 256 {
-			return exec.batchFillDenseGroupsDictionary(offset, groups, vectors)
-		}
-		return exec.batchFillDictionary(offset, groups, vectors)
 	}
 
 	if vectors[0].IsConst() && vectors[0].IsConstNull() {
@@ -630,9 +621,6 @@ func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Ve
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
-	if vectors[0].IsDictionary() {
-		return exec.bulkFillSingleGroupDictionary(groupIndex, vectors)
-	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -700,9 +688,6 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroup(groupIndex int, vectors [
 func (exec *sumDecimal128FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
-	}
-	if vectors[0].IsDictionary() {
-		return exec.batchFillDictionary(offset, groups, vectors)
 	}
 
 	return exec.batchFill(offset, groups, vectors)
