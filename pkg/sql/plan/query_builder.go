@@ -4807,83 +4807,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
-	// get Union selectStmts
-	// Folding replaces the set boundary with branch DISTINCT. Keep the
-	// original set node when it owns ordering or pagination.
-	allowFold := len(astOrderBy) == 0 && astLimit == nil && astRankOption == nil
-	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes, allowFold)
+	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
-	}
-
-	if len(selectStmts) == 1 {
-		var nodeID int32
-		switch sltStmt := selectStmts[0].(type) {
-		case *tree.Select:
-			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
-				sltClause.Distinct = true
-				nodeID, err = builder.bindSelect(sltStmt, ctx, isRoot)
-			} else {
-				// rewrite sltStmt to select distinct * from (sltStmt) a
-				tmpSltStmt := &tree.Select{
-					Select: &tree.SelectClause{
-						Distinct: true,
-
-						Exprs: []tree.SelectExpr{
-							{Expr: tree.StarExpr()},
-						},
-						From: &tree.From{
-							Tables: tree.TableExprs{
-								&tree.AliasedTableExpr{
-									Expr: &tree.ParenTableExpr{
-										Expr: sltStmt,
-									},
-									As: tree.AliasClause{
-										Alias: "a",
-									},
-								},
-							},
-						},
-					},
-					Limit:   astLimit,
-					OrderBy: astOrderBy,
-				}
-				nodeID, err = builder.bindSelect(tmpSltStmt, ctx, isRoot)
-			}
-
-		case *tree.SelectClause:
-			if !sltStmt.Distinct {
-				sltStmt.Distinct = true
-			}
-			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
-		}
-		if err == nil {
-			// Identical UNION branches can collapse to one DISTINCT SELECT,
-			// but its SQL result still crosses a set-operation boundary.
-			// Keep outer references bound per invocation even though admission
-			// can no longer see a set node above the correlated branch.
-			if ctx.isCorrelated {
-				if builder.dependentRelations == nil {
-					builder.dependentRelations = make(map[int32]bool)
-				}
-				builder.dependentRelations[nodeID] = true
-			}
-			var integerIDs []uint32
-			if builder.integerPrecision != nil {
-				integerIDs = make([]uint32, len(ctx.headings))
-				for i := range integerIDs {
-					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
-				}
-			}
-			ctx.clearOutputColumnProvenance()
-			for i, id := range integerIDs {
-				if !shareGroupingInput {
-					id = builder.integerPrecision.reference(id)
-				}
-				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
-			}
-		}
-		return nodeID, err
 	}
 
 	// build selects

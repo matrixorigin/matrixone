@@ -1677,12 +1677,12 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
-func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType, allowFold bool) error {
+// Preserve every input until binding and execution. SQL formatting is lossy,
+// and even identical inputs may produce different rows or have side effects.
+func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
-		// An intermediate set operation cannot use the caller's single-branch
-		// DISTINCT fallback: that fallback only applies to an entire set.
-		err := getUnionSelects(ctx, leftStmt, selects, unionTypes, false)
+		err := getUnionSelects(ctx, leftStmt, selects, unionTypes)
 		if err != nil {
 			return err
 		}
@@ -1699,26 +1699,10 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if allowFold && stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		// A branch's LIMIT must run before set DISTINCT, not after it.
-		if allowFold && stmt.Type == tree.UNION && !stmt.All &&
-			rightStmt.Select.Limit == nil && len(rightStmt.Select.OrderBy) == 0 && rightStmt.Select.RankOption == nil {
-			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))

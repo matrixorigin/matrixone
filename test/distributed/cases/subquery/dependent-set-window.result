@@ -132,4 +132,22 @@ union select b.i from medium_keys b
 ➤ k[4,9,0]  ¦  v[-6,8,0]  𝄀
 1  ¦  1  𝄀
 3  ¦  0
+create table text_keys (k varchar(20));
+insert into text_keys values ('one');
+select 'o.k' in (
+select o.k from text_keys a where a.k = o.k
+union select 'o.k' from text_keys a where a.k = o.k
+) as v from text_keys o;
+➤ v[-6,8,0]  𝄀
+1
+create sequence union_branch_seq start with 1;
+select 2 in (
+select nextval('union_branch_seq') from text_keys a where a.k = o.k
+union select nextval('union_branch_seq') from text_keys a where a.k = o.k
+) as v from text_keys o;
+➤ v[-6,8,0]  𝄀
+1
+select currval('union_branch_seq') as v;
+➤ v[12,65535,0]  𝄀
+2
 drop database dependent_set_window;

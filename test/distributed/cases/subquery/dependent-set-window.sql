@@ -59,12 +59,12 @@ select o.id from outer_keys o where 2 in (
     select a.id from outer_keys a where a.id = 1
     union select 2 from outer_keys b where b.id = 2 and b.id = o.id
 ) order by o.id;
--- Folding identical branches to DISTINCT must preserve outer captures.
+-- Identical UNION inputs retain outer captures and deduplicate result rows.
 select o.id, 1 in (
     select o.id from outer_keys a where a.id = o.id
     union select o.id from outer_keys a where a.id = o.id
 ) as v from outer_keys o order by o.id;
--- Changing only the alias avoids the fold but must not change the result.
+-- Changing only a branch alias must not change the result.
 select o.id, 1 in (
     select o.id from outer_keys a where a.id = o.id
     union select o.id from outer_keys b where b.id = o.id
@@ -92,4 +92,18 @@ select o.k, 1 in (
     select o.k from medium_keys a where a.k = o.k
     union select b.i from medium_keys b
 ) as v from medium_keys o order by o.k;
+-- A column and a string literal with the same printed text are different inputs.
+create table text_keys (k varchar(20));
+insert into text_keys values ('one');
+select 'o.k' in (
+    select o.k from text_keys a where a.k = o.k
+    union select 'o.k' from text_keys a where a.k = o.k
+) as v from text_keys o;
+-- Both identical inputs must evaluate NEXTVAL before UNION deduplicates rows.
+create sequence union_branch_seq start with 1;
+select 2 in (
+    select nextval('union_branch_seq') from text_keys a where a.k = o.k
+    union select nextval('union_branch_seq') from text_keys a where a.k = o.k
+) as v from text_keys o;
+select currval('union_branch_seq') as v;
 drop database dependent_set_window;
