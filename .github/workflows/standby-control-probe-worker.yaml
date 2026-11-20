@@ -1,0 +1,13 @@
+name: Retry-control probe (hosted, no PR code)
+on:
+  workflow_call:
+    inputs:
+      group: {type: number, required: true}
+permissions: {}
+jobs:
+  result:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GROUP: ${{ inputs.group }}
+        run: test "$GROUP" = 0 || test "$GITHUB_RUN_ATTEMPT" -gt 1

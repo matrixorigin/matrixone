@@ -1,0 +1,54 @@
+name: Retry-control probe (hosted only)
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/standby-control-probe.yaml]
+permissions: {}
+jobs:
+  guarded:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '3771e8369c41370e025d7eeb75883eafc9b5fc16' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+    steps:
+      - id: gate
+        run: echo 'allowed=true' >> "$GITHUB_OUTPUT"
+  matrix_guarded:
+    name: guarded group ${{ matrix.group }}
+    needs: guarded
+    if: needs.guarded.outputs.allowed == 'true'
+    strategy:
+      fail-fast: false
+      matrix: {group: [0, 1]}
+    uses: ./.github/workflows/standby-control-probe-worker.yaml
+    with:
+      group: ${{ matrix.group }}
+  unguarded:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '3771e8369c41370e025d7eeb75883eafc9b5fc16'
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+    steps:
+      - id: gate
+        run: echo 'allowed=true' >> "$GITHUB_OUTPUT"
+  matrix_unguarded:
+    name: unguarded group ${{ matrix.group }}
+    needs: unguarded
+    if: needs.unguarded.outputs.allowed == 'true'
+    strategy:
+      fail-fast: false
+      matrix: {group: [0, 1]}
+    uses: ./.github/workflows/standby-control-probe-worker.yaml
+    with:
+      group: ${{ matrix.group }}
+  inspect:
+    if: always()
+    needs: [guarded, unguarded, matrix_guarded, matrix_unguarded]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GUARDED: ${{ needs.guarded.outputs.allowed }}
+          UNGUARDED: ${{ needs.unguarded.outputs.allowed }}
+          M1: ${{ needs.matrix_guarded.result }}
+          M2: ${{ needs.matrix_unguarded.result }}
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT guarded=$GUARDED unguarded=$UNGUARDED guarded_result=$M1 unguarded_result=$M2"
