@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -766,6 +767,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		)
 	}
 
+	resource.LockReadPKFromContext(ctx).MarkRemotePKSubstagesUnavailable()
 	modify := false
 	keyVector := bat.GetVector(pkIndex)
 	err = tbl.forwardRead(

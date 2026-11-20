@@ -16,6 +16,7 @@ package resource
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"sync"
@@ -63,7 +64,7 @@ func TestLockReadObservationMergeAndSeal(t *testing.T) {
 	require.Equal(t, uint64(20*time.Millisecond), d.LogtailNS)
 	require.Equal(t, uint64(12*time.Millisecond), d.PKCheckNS)
 	require.Equal(t, uint64(10*time.Millisecond), d.PKReadinessNS)
-	require.Equal(t, "30313233343536373839616263646566", d.ConflictTxnID)
+	require.Equal(t, "30313233343536373839616263646566", d.ObservedConflictTxnID)
 	require.Equal(t, "logtail", d.LastIncomplete)
 	require.Equal(t, "success", d.Outcome)
 	require.Equal(t, uint64(2), d.AttemptCount)
@@ -79,6 +80,36 @@ func TestLockReadObservationMergeAndSeal(t *testing.T) {
 	raw, err := json.Marshal(StatementResourceSummary{})
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "lock_read")
+}
+
+func TestLockReadWitnessAcrossAttempts(t *testing.T) {
+	ctx := context.Background()
+	root := NewRoot(ConnExternal)
+	at := time.Unix(1, 0)
+	first, second := []byte("first-holder-txn"), []byte("next-holder--txn")
+
+	for i, holder := range [][]byte{first, second} {
+		var err error
+		if i == 1 {
+			err = context.Canceled
+		}
+		observation := &LockReadObservation{}
+		lockCtx := ContextWithLockReadAcquisition(ctx, observation)
+		ObserveLocalLockConflict(lockCtx, [][]byte{holder})
+		observation.Record(lockCtx, LockReadAcquisition, at, at.Add(time.Millisecond), err)
+		observation.ObserveAcquisitionConflict(false, err)
+		root.MergeLockRead(observation)
+		require.True(t, root.MergeExecution(ExecutionSummary{AttemptCount: 1}))
+		at = at.Add(time.Millisecond)
+	}
+
+	summary, snapshot := root.SealWithLockRead(uint64(2 * time.Millisecond))
+	diagnostic := snapshot.Diagnostic(uuid.Nil, summary.AttemptCount, true)
+	require.Equal(t, uint64(2), diagnostic.AttemptCount)
+	require.Equal(t, uint64(2*time.Millisecond), diagnostic.AcquisitionNS)
+	require.Equal(t, "acquisition", diagnostic.LastIncomplete)
+	require.Equal(t, "failed", diagnostic.Outcome)
+	require.Equal(t, hex.EncodeToString(first), diagnostic.ObservedConflictTxnID)
 }
 
 func TestLockReadObservationSaturatesAndRetainsFailedLeaf(t *testing.T) {

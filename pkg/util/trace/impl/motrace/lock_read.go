@@ -83,6 +83,8 @@ func (s *StatementInfo) finishLockRead(summary *resource.StatementResourceSummar
 	}
 	diagnostic := observed.Diagnostic(uuid.UUID(s.StatementID), summary.AttemptCount, failed)
 	summary.LockRead = &diagnostic
+	// Keep the statement ID and plan available to correlate with this event.
+	s.DisableAgg()
 	logutil.GetGlobalLogger().WithOptions(zap.AddStacktrace(zapcore.PanicLevel)).
 		Info(lockReadDiagnosticMessage, zap.Any("lock_read", diagnostic))
 }

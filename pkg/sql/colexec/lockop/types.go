@@ -67,7 +67,6 @@ type LockOptions struct {
 	filter                   RowsFilter
 	filterCols               []int32
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
-	lockReadRoot             *resource.Root
 	lockRead                 *resource.LockReadObservation
 }
 

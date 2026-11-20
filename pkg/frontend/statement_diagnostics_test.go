@@ -361,7 +361,8 @@ func TestLockReadCompactProjectionRetainsBoundedScalarWhenPlanWasCaptured(t *tes
 	lockRead := &resource.LockReadDiagnostic{
 		StatementID: uuid.New(), AttemptCount: math.MaxUint64, AcquisitionNS: math.MaxUint64, LogtailNS: math.MaxUint64,
 		PKCheckNS: math.MaxUint64, PKReadinessNS: math.MaxUint64, Seen: 15, Conflict: true,
-		LastIncomplete: "pk_readiness", ConflictTxnID: strings.Repeat("f", 32), Outcome: "success",
+		RemotePKSubstagesUnavailable: true,
+		LastIncomplete:               "pk_readiness", ObservedConflictTxnID: strings.Repeat("f", 32), Outcome: "success",
 	}
 	summary := resource.StatementResourceSummary{
 		LockRead: lockRead, AttemptCount: math.MaxUint64,

@@ -21,6 +21,7 @@ import (
 	"maps"
 	"math"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"time"
 
@@ -1271,7 +1272,13 @@ func (c *Compile) lockReadQueryContext(ctx context.Context) context.Context {
 	if root.LockReadEnabled() && c.resourceAttemptOwnerEligible && !c.isInternal {
 		if stmt, ok := c.stmt.(*tree.Select); ok && stmt != nil {
 			if query := c.pn.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
-				lockReadRoot = root
+				// Metadata locks also occur on ordinary SELECTs. Use the bound
+				// plan to identify locking reads, including table fallbacks.
+				if slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+					return node.GetNodeType() == plan.Node_LOCK_OP
+				}) {
+					lockReadRoot = root
+				}
 			}
 		}
 	}

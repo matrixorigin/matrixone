@@ -52,29 +52,35 @@ func (s LockReadStage) String() string {
 
 // LockReadDiagnostic is the admitted, immutable terminal projection. Seen is
 // a bit mask in stage order. PKCheckNS includes PKReadinessNS.
+// ObservedConflictTxnID is a historical witness from a local queue admission.
+// It may come from an earlier physical lock call or statement attempt.
+// RemotePKSubstagesUnavailable indicates that PKCheckNS includes a sharded
+// check whose remote readiness and logtail waits cannot be measured here.
 type LockReadDiagnostic struct {
-	StatementID    uuid.UUID `json:"statement_id"`
-	AttemptCount   uint64    `json:"attempt_count"`
-	AcquisitionNS  uint64    `json:"acquisition_ns"`
-	LogtailNS      uint64    `json:"logtail_ns"`
-	PKCheckNS      uint64    `json:"pk_check_ns"`
-	PKReadinessNS  uint64    `json:"pk_readiness_ns"`
-	Seen           uint8     `json:"seen"`
-	Conflict       bool      `json:"conflict"`
-	ConflictTxnID  string    `json:"conflict_txn_id,omitempty"`
-	LastIncomplete string    `json:"last_incomplete,omitempty"`
-	Outcome        string    `json:"outcome"`
+	StatementID                  uuid.UUID `json:"statement_id"`
+	AttemptCount                 uint64    `json:"attempt_count"`
+	AcquisitionNS                uint64    `json:"acquisition_ns"`
+	LogtailNS                    uint64    `json:"logtail_ns"`
+	PKCheckNS                    uint64    `json:"pk_check_ns"`
+	PKReadinessNS                uint64    `json:"pk_readiness_ns"`
+	RemotePKSubstagesUnavailable bool      `json:"remote_pk_substages_unavailable,omitempty"`
+	Seen                         uint8     `json:"seen"`
+	Conflict                     bool      `json:"conflict"`
+	ObservedConflictTxnID        string    `json:"observed_conflict_txn_id,omitempty"`
+	LastIncomplete               string    `json:"last_incomplete,omitempty"`
+	Outcome                      string    `json:"outcome"`
 }
 
 type lockReadTotals struct {
-	elapsed     [4]uint64
-	failedAt    time.Time
-	holder      [16]byte
-	seen        uint8
-	incomplete  LockReadStage
-	interrupted bool
-	conflict    bool
-	hasHolder   bool
+	elapsed                      [4]uint64
+	failedAt                     time.Time
+	holder                       [16]byte
+	seen                         uint8
+	incomplete                   LockReadStage
+	interrupted                  bool
+	conflict                     bool
+	hasHolder                    bool
+	remotePKSubstagesUnavailable bool
 }
 
 func (t *lockReadTotals) merge(other lockReadTotals) {
@@ -87,6 +93,7 @@ func (t *lockReadTotals) merge(other lockReadTotals) {
 	t.seen |= other.seen
 	t.interrupted = t.interrupted || other.interrupted
 	t.conflict = t.conflict || other.conflict
+	t.remotePKSubstagesUnavailable = t.remotePKSubstagesUnavailable || other.remotePKSubstagesUnavailable
 	if !t.hasHolder && other.hasHolder {
 		t.holder, t.hasHolder = other.holder, true
 	}
@@ -194,8 +201,8 @@ func ContextWithLockReadAcquisition(ctx context.Context, o *LockReadObservation)
 	return context.WithValue(ctx, lockReadAcquisitionKey{}, o)
 }
 
-// ObserveLocalLockConflict copies one real holder while the local waiter
-// owns its admission snapshot. The lock table never takes the resource lock.
+// ObserveLocalLockConflict copies one observed holder at queue admission.
+// The lock table never takes the resource lock.
 func ObserveLocalLockConflict(ctx context.Context, holders [][]byte) {
 	o, _ := ctx.Value(lockReadAcquisitionKey{}).(*LockReadObservation)
 	if o == nil {
@@ -218,6 +225,12 @@ func ContextWithLockReadPK(ctx context.Context, o *LockReadObservation) context.
 func LockReadPKFromContext(ctx context.Context) *LockReadObservation {
 	o, _ := ctx.Value(lockReadPKKey{}).(*LockReadObservation)
 	return o
+}
+
+func (o *LockReadObservation) MarkRemotePKSubstagesUnavailable() {
+	if o != nil {
+		o.totals.remotePKSubstagesUnavailable = true
+	}
 }
 
 // EnableLockRead associates this root with a terminal diagnostics owner.
@@ -253,13 +266,14 @@ func (s LockReadSnapshot) Diagnostic(id uuid.UUID, attempts uint64, failed bool)
 		StatementID: id, AttemptCount: attempts, Seen: t.seen,
 		AcquisitionNS: t.elapsed[0], LogtailNS: t.elapsed[1],
 		PKCheckNS: t.elapsed[2], PKReadinessNS: t.elapsed[3],
-		Conflict: t.conflict, LastIncomplete: t.incomplete.String(), Outcome: "success",
+		RemotePKSubstagesUnavailable: t.remotePKSubstagesUnavailable,
+		Conflict:                     t.conflict, LastIncomplete: t.incomplete.String(), Outcome: "success",
 	}
 	if failed {
 		d.Outcome = "failed"
 	}
 	if t.hasHolder {
-		d.ConflictTxnID = hex.EncodeToString(t.holder[:])
+		d.ObservedConflictTxnID = hex.EncodeToString(t.holder[:])
 	}
 	return d
 }

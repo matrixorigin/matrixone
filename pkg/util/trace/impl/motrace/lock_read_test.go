@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -85,12 +86,69 @@ func recordLockReadEvents(t *testing.T, threshold float64) func() []lockReadTest
 
 func prepareLockReadStatement(limiter *LockReadLimiter, id uuid.UUID, duration time.Duration) (*StatementInfo, *resource.Root) {
 	s := &StatementInfo{StatementID: id, ResponseAt: time.Now(), Duration: duration, Statement: []byte("private SQL and primary key")}
-	s.DisableAgg()
 	root := resource.NewRoot(resource.ConnExternal)
 	s.SetResourceRoot(root)
 	s.SetLockReadLimiter(limiter)
 	root.MergeExecution(resource.ExecutionSummary{AttemptCount: 2})
 	return s, root
+}
+
+func TestLockReadAdmittedStatementsKeepIndividualRecords(t *testing.T) {
+	readEvents := recordLockReadEvents(t, 0)
+	provider := GetTracerProvider()
+	WithSelectThreshold(200 * time.Millisecond).apply(&provider.tracerProviderConfig)
+	WithAggregatorWindow(time.Second).apply(&provider.tracerProviderConfig)
+	ctx := context.Background()
+	aggregator := (batchETLHandler{}).NewAggregator(ctx, MOStatementType)
+	require.NotNil(t, aggregator)
+	t.Cleanup(aggregator.Close)
+
+	var reported []*StatementInfo
+	stub := gostub.Stub(&ReportStatement, func(_ context.Context, stmt *StatementInfo) error {
+		reported = append(reported, stmt)
+		return nil
+	})
+	t.Cleanup(stub.Reset)
+	at := time.Unix(1, 0)
+	limiter := newLockReadLimiter(func() time.Time { return at }, 1, 2)
+	for id := byte(1); id <= 4; id++ {
+		stmt, root := prepareLockReadStatement(limiter, uuid.UUID{15: id}, 100*time.Millisecond)
+		stmt.SessionID = uuid.UUID{15: 42}
+		stmt.StatementType = "Select"
+		stmt.SqlSourceType = constant.ExternSql
+		stmt.RequestAt, stmt.ResponseAt = at, at.Add(stmt.Duration)
+		stmt.ExecPlan = NewDummySerializableExecPlan(map[string]string{"plan": "point read"}, dummySerializeExecPlan, stmt.StatementID)
+		t.Cleanup(stmt.FreeExecPlan)
+		observation := &resource.LockReadObservation{}
+		observation.Record(ctx, resource.LockReadAcquisition, at, stmt.ResponseAt, context.Canceled)
+		root.MergeLockRead(observation)
+		stmt.EndStatement(ctx, context.Canceled, 0, 0, 0)
+	}
+
+	events := readEvents()
+	require.Len(t, events, 2)
+	require.Len(t, reported, 4)
+	for i, stmt := range reported {
+		require.Equal(t, reported[0].Key(aggregator.GetWindow()), stmt.Key(aggregator.GetWindow()))
+		individual, err := aggregator.AddItem(stmt)
+		if i >= len(events) {
+			require.NoError(t, err)
+			require.Nil(t, individual)
+			require.Nil(t, stmt.resourceSummary.LockRead)
+			continue
+		}
+		require.ErrorIs(t, err, ErrFilteredOut)
+		require.Same(t, stmt, individual)
+		require.NotNil(t, stmt.ExecPlan)
+		var event struct {
+			LockRead resource.LockReadDiagnostic `json:"lock_read"`
+		}
+		require.NoError(t, json.Unmarshal(events[i].fields, &event))
+		require.Equal(t, uuid.UUID(stmt.StatementID), event.LockRead.StatementID)
+	}
+	groups := aggregator.GetResults()
+	require.Len(t, groups, 1)
+	require.Equal(t, int64(2), groups[0].Aggred())
 }
 
 func TestLockReadSubsecondTerminalEligibility(t *testing.T) {
@@ -150,7 +208,7 @@ func TestLockReadSubsecondTerminalEligibility(t *testing.T) {
 			require.Equal(t, uuid.UUID(s.StatementID), event.LockRead.StatementID)
 			require.Equal(t, uint64(2), event.LockRead.AttemptCount)
 			require.Equal(t, uint64(100*time.Millisecond), event.LockRead.AcquisitionNS)
-			require.Empty(t, event.LockRead.ConflictTxnID)
+			require.Empty(t, event.LockRead.ObservedConflictTxnID)
 			if tc.phaseErr != nil {
 				require.Equal(t, "acquisition", event.LockRead.LastIncomplete)
 				require.Equal(t, "failed", event.LockRead.Outcome)
@@ -183,6 +241,7 @@ func TestLockReadCNBudgetAndEventSize(t *testing.T) {
 		root.MergeExecution(resource.ExecutionSummary{AttemptCount: math.MaxUint64})
 		observation := &resource.LockReadObservation{}
 		err := fmt.Errorf("private payload: %w", context.Canceled)
+		observation.MarkRemotePKSubstagesUnavailable()
 		for _, stage := range []resource.LockReadStage{resource.LockReadAcquisition, resource.LockReadLogtail, resource.LockReadPKReadiness, resource.LockReadPKCheck} {
 			for range 3 {
 				observation.Record(ctx, stage, at, at.Add(math.MaxInt64), err)
@@ -222,7 +281,8 @@ func TestLockReadCNBudgetAndEventSize(t *testing.T) {
 		seen[d.StatementID] = true
 		require.Equal(t, uint64(math.MaxUint64), d.AttemptCount)
 		require.Equal(t, uint64(math.MaxUint64), d.PKReadinessNS)
-		require.Len(t, d.ConflictTxnID, 32)
+		require.True(t, d.RemotePKSubstagesUnavailable)
+		require.Len(t, d.ObservedConflictTxnID, 32)
 		require.Equal(t, "success", d.Outcome, "a successful retry keeps the final outcome")
 	}
 	now = now.Add(time.Second)

@@ -751,6 +751,7 @@ func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
 			_, snapshot := root.SealWithLockRead(0)
 			d := snapshot.Diagnostic(uuid.Nil, 1, got.err != nil)
 			require.False(t, got.changed)
+			require.False(t, d.RemotePKSubstagesUnavailable)
 			require.GreaterOrEqual(t, d.PKCheckNS, d.PKReadinessNS)
 			require.GreaterOrEqual(t, d.PKReadinessNS, uint64(releasedAt.Sub(waitedAt)))
 			if name == "cancel" {
