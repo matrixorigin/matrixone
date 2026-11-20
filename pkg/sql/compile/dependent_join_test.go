@@ -178,7 +178,7 @@ func TestDependentIndependentJoinWork(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 			require.NoError(t, err)
 			opened, closed, pairs, hashJoins := 0, 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {

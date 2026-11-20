@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"strconv"
@@ -23,7 +24,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -65,7 +65,11 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(commonutil.CloneBytesIf(vec.GetBytesAt(rowIndex), !safeRefSlice))
+		if safeRefSlice {
+			row[i] = types.DecodeJson(vec.GetBytesAt(rowIndex))
+		} else {
+			row[i] = types.DecodeJson(bytes.Clone(vec.GetBytesAt(rowIndex)))
+		}
 	case types.T_bool:
 		row[i] = vector.GetFixedAtNoTypeCheck[bool](vec, rowIndex)
 	case types.T_bit:
@@ -99,7 +103,11 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float64:
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt(rowIndex), !safeRefSlice)
+		if safeRefSlice {
+			row[i] = vec.GetBytesAt(rowIndex)
+		} else {
+			row[i] = bytes.Clone(vec.GetBytesAt(rowIndex))
+		}
 	case types.T_geometry, types.T_geometry32:
 		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(rowIndex))
 		if err != nil {
@@ -239,7 +247,11 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice))
+		if safeRefSlice {
+			row[i] = types.DecodeJson(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
+		} else {
+			row[i] = types.DecodeJson(bytes.Clone(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex)))
+		}
 	case types.T_bool:
 		row[i] = colSlices.arrBool[sliceIdx][rowIndex]
 	case types.T_bit:
@@ -270,9 +282,17 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 	case types.T_float64:
 		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
+		if safeRefSlice {
+			row[i] = vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex)
+		} else {
+			row[i] = bytes.Clone(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
+		}
 	case types.T_geometry, types.T_geometry32:
-		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
+		if safeRefSlice {
+			row[i] = vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex)
+		} else {
+			row[i] = bytes.Clone(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
+		}
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -646,7 +666,8 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 	vec := slices.GetVector(i)
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		return types.DecodeJson(commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)).String(), nil
+		// String() builds a new string, so the borrowed bytes need no copy.
+		return types.DecodeJson(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r))).String(), nil
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -692,7 +713,10 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	vec := slices.dataSet.Vecs[i]
 	switch vec.GetType().Oid { //get col
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
+		if slices.safeRefSlice {
+			return vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), nil
+		}
+		return bytes.Clone(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_geometry, types.T_geometry32:
 		return encodeMySQLGeometry(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), *vec.GetType())
 	default:

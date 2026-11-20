@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -52,7 +51,6 @@ func Test_runSql(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 
 	ctx := context.Background()
 	proc.Ctx = context.Background()

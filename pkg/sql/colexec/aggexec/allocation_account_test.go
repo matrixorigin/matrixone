@@ -45,12 +45,10 @@ func newTestAggregateAllocation(
 	account, err := registry.Open(128 << 20)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData:     1,
-		VectorArea:     2,
-		VectorNulls:    3,
-		VectorGrouping: 4,
-		ArgumentCount:  5,
-		ArgumentArena:  6,
+		VectorData:    1,
+		VectorArea:    2,
+		ArgumentCount: 5,
+		ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	return registry, account, allocation
@@ -183,12 +181,10 @@ func TestAccountedGroupConcatFinalizationExactCap(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData:     1,
-			VectorArea:     2,
-			VectorNulls:    3,
-			VectorGrouping: 4,
-			ArgumentCount:  5,
-			ArgumentArena:  6,
+			VectorData:    1,
+			VectorArea:    2,
+			ArgumentCount: 5,
+			ArgumentArena: 6,
 		})
 		require.NoError(t, err)
 
@@ -497,8 +493,7 @@ func TestAccountedOrderedGroupConcatFinalizationExactCap(t *testing.T) {
 			account,
 			mpool.AllocationOwnerGroup,
 			AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			},
 		)
 		require.NoError(t, err)
@@ -577,8 +572,7 @@ func TestAccountedHLLPreflightRollbackAndSpillRoundTrip(t *testing.T) {
 		require.NoError(t, openErr)
 		allocation, openErr := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, openErr)
 		exec, openErr := MakeAgg(
@@ -849,8 +843,7 @@ func TestAccountedApproxPercentilePreflightAndSpillRoundTrip(t *testing.T) {
 		require.NoError(t, openErr)
 		allocation, openErr := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, openErr)
 		exec, openErr := MakeAgg(
@@ -1112,8 +1105,7 @@ func TestFixedMinMaxPreflightsMixedFuturePrepareParamKinds(t *testing.T) {
 		require.NoError(t, registryErr)
 		allocation, registryErr := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, registryErr)
 		exec := makeMinMaxExec(
@@ -1248,8 +1240,7 @@ func TestDistinctFillPreflightUsesPublishedNodeFootprints(t *testing.T) {
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, err)
 
@@ -1345,8 +1336,7 @@ func TestMaxByNullWinnerRetainsPreflightedPrepareParamCapacity(t *testing.T) {
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, err)
 

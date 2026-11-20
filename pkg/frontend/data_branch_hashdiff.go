@@ -1390,7 +1390,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseDeleteBatches = plan2.RemoveIf(baseDeleteBatches, func(t batchWithKind) bool {
+		baseDeleteBatches = slices.DeleteFunc(baseDeleteBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true
@@ -1402,7 +1402,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseUpdateBatches = plan2.RemoveIf(baseUpdateBatches, func(t batchWithKind) bool {
+		baseUpdateBatches = slices.DeleteFunc(baseUpdateBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true

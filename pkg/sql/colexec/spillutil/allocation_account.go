@@ -34,10 +34,10 @@ const (
 	SpillAllocationSiteRowIDs
 	SpillAllocationSiteMarshalBuffer
 	SpillAllocationSiteCoalesceBuffer
-	SpillAllocationSiteDecodedNulls
-	SpillAllocationSiteDecodedGrouping
-	SpillAllocationSiteSelectedNulls
-	SpillAllocationSiteSelectedGrouping
+	_ // reserved: was SpillAllocationSiteDecodedNulls
+	_ // reserved: was SpillAllocationSiteDecodedGrouping
+	_ // reserved: was SpillAllocationSiteSelectedNulls
+	_ // reserved: was SpillAllocationSiteSelectedGrouping
 )
 
 // Sites 44-59 belong to hashbuild runtime-filter and dedup allocations.
@@ -75,8 +75,6 @@ func NewSpillAllocationAccountWithCapacityClass(
 		owner,
 		SpillAllocationSiteDecodedData,
 		SpillAllocationSiteDecodedArea,
-		SpillAllocationSiteDecodedNulls,
-		SpillAllocationSiteDecodedGrouping,
 		capacityClass,
 	)
 	if err != nil {
@@ -87,8 +85,6 @@ func NewSpillAllocationAccountWithCapacityClass(
 		owner,
 		SpillAllocationSiteSelectedData,
 		SpillAllocationSiteSelectedArea,
-		SpillAllocationSiteSelectedNulls,
-		SpillAllocationSiteSelectedGrouping,
 		capacityClass,
 	)
 	if err != nil {
