@@ -2009,6 +2009,8 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			var counter perfcounter.CounterSet
+			ctx = perfcounter.WithCounterSet(ctx, &counter)
 			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
 				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
 			}, nil, false, true)
@@ -2038,11 +2040,39 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 			// Disk lookup precedes remote lookup. Publish synchronously at this
 			// boundary: the foreground request missed the file but its SetFile
 			// will find it. No sleeps or production scheduling hooks are needed.
+			readDone := make(chan struct{})
+			var updateDone chan struct{}
+			var updateGuardExpired bool
+			finishRead := sync.OnceFunc(func() {
+				close(readDone)
+				if updateDone != nil {
+					<-updateDone
+				}
+			})
+			defer finishRead()
 			fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
 				require.NoError(t, fs.PrefetchFile(ctx, path))
 				require.Equal(t, int64(len(data)), m.bytes.Load())
 				require.Equal(t, 1, m.opens)
 				require.Equal(t, 1, m.closes)
+				if tc.name == "many-published" && updateDone == nil {
+					// This update started after the initial disk lookup. Reusing
+					// the full file must not wait for an unrelated entry writer.
+					entryPath := fs.diskCache.pathForIOEntry(path, v.Entries[0])
+					finish := fs.diskCache.startUpdate(entryPath)
+					updateDone = make(chan struct{})
+					go func() {
+						defer close(updateDone)
+						defer finish()
+						timer := time.NewTimer(5 * time.Second)
+						defer timer.Stop()
+						select {
+						case <-readDone:
+						case <-timer.C:
+							updateGuardExpired = true
+						}
+					}()
+				}
 				if tc.name != "many-published" {
 					// A short local file cannot satisfy the requested ranges. SetFile
 					// still skips it; the foreground request must fall back to storage.
@@ -2069,6 +2099,8 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 				return nil
 			})
 			err = fs.Read(ctx, v)
+			finishRead()
+			require.False(t, updateGuardExpired, "full file recheck waited for an entry update")
 			if tc.wantErr == nil {
 				require.NoError(t, err)
 				for _, e := range v.Entries {
@@ -2082,6 +2114,15 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 			require.Equal(t, tc.wantBytes, m.bytes.Load()-int64(len(data)), "foreground bytes consumed")
 			require.Equal(t, tc.wantOpens, m.opens-1)
 			require.Equal(t, m.opens, m.closes)
+			if tc.name == "many-published" {
+				require.NotNil(t, updateDone, "fixture must park an entry update")
+				require.EqualValues(t, 64, counter.FileService.DiskReadSize.Load())
+				require.Zero(t, counter.FileService.S3ReadSize.Load())
+			}
+			if tc.name == "partly-published" {
+				require.EqualValues(t, 13, counter.FileService.DiskReadSize.Load())
+				require.EqualValues(t, 17, counter.FileService.S3ReadSize.Load())
+			}
 			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 0, Size: 3}}}
 			defer warm.Release()
 			require.NoError(t, fs.Read(t.Context(), warm))
