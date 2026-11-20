@@ -34,21 +34,23 @@ import (
 )
 
 func TestExpressionDefaultNullIfStringSource(t *testing.T) {
+	// IF/CASE/COALESCE with a binary arm are statically typed binary (MySQL
+	// semantics), so byte-wise results apply to every selected row.
 	for _, tc := range []struct {
 		name, sourceType, expression, input, wantHex string
 		nullInput, nullResult, integerResult         bool
 		wantLength                                   int64
 	}{
-		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
-		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61a0bde4"},
 		{name: "independent text owner", sourceType: "varchar(16)", expression: "reverse(nullif(txt,''))", input: "你a", wantHex: "61e4bda0"},
 		{name: "independent binary owner", sourceType: "varbinary(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
-		{name: "CASE selected text through NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61e4bda0"},
-		{name: "CASE pure text LPAD", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then lpad(txt,3,'z') else _binary '' end)", input: "你a", wantHex: "61e4bda07a"},
+		{name: "CASE selected text through NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE pure text LPAD", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then lpad(txt,3,'z') else _binary '' end)", input: "你a", wantHex: "61a0bde47a"},
 		{name: "CASE binary LPAD", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then lpad(txt,3,_binary 'z') else _binary '' end)", input: "你a", wantHex: "a0bde4"},
 		{name: "CASE pure text LPAD numeric DEFAULT", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then lpad(txt,3,'z') else _binary '0' end)", input: "你a", integerResult: true, wantLength: 3},
-		{name: "CASE selected text", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
-		{name: "IF selected text", sourceType: "varchar(16)", expression: "reverse(if(txt is not null,txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE selected text", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "IF selected text", sourceType: "varchar(16)", expression: "reverse(if(txt is not null,txt,_binary ''))", input: "你a", wantHex: "61a0bde4"},
 		{name: "IF length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary ''))", input: "你a", integerResult: true, wantLength: 2},
 		{name: "CASE length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else _binary '0' end)", input: "你a", integerResult: true, wantLength: 2},
 		{name: "IF length of empty text", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", integerResult: true},
@@ -59,10 +61,10 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 		{name: "CASE explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
 		{name: "CASE explicit binary peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
 		{name: "CASE explicit binary NULL", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast(null as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
-		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61a0bde4"},
 		{name: "CASE selected binary column", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then txt else '' end)", input: "你a", wantHex: "61a0bde4"},
 		{name: "CASE NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", nullInput: true, nullResult: true},
-		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61e4bda0"},
+		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61a0bde4"},
 		{name: "matching value", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullResult: true},
 		{name: "NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullInput: true, nullResult: true},
 	} {

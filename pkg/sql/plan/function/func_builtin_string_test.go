@@ -175,10 +175,9 @@ func Test_BuiltInToLower(t *testing.T) {
 	})
 
 	t.Run("reset after fallback", func(t *testing.T) {
-		source := testutil.MakeVarlenaVector([][]byte{[]byte("ABC"), []byte("DEF")}, nil, types.T_varchar.ToType(), proc.Mp())
+		source := testutil.MakeVarlenaVector([][]byte{[]byte("ABC"), []byte("DEF")}, nil, types.T_varbinary.ToType(), proc.Mp())
 		defer source.Free(proc.Mp())
 		source.GetNulls().Add(1)
-		require.NoError(t, source.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringInherit}, proc.Mp()))
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(2))
@@ -186,7 +185,6 @@ func Test_BuiltInToLower(t *testing.T) {
 			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
 		require.Equal(t, []byte("ABC"), result.GetResultVector().GetBytesAt(0))
 		require.True(t, result.GetResultVector().IsNull(1))
-		require.Equal(t, types.RuntimeStringBinary, result.GetResultVector().GetRuntimeStringDomainAt(0))
 
 		next := testutil.MakeVarlenaVector([][]byte{[]byte("ALPHA"), []byte("beta")}, nil, types.T_varchar.ToType(), proc.Mp())
 		defer next.Free(proc.Mp())
@@ -195,7 +193,6 @@ func Test_BuiltInToLower(t *testing.T) {
 		for row, want := range []string{"alpha", "beta"} {
 			require.False(t, result.GetResultVector().IsNull(uint64(row)))
 			require.Equal(t, want, string(result.GetResultVector().GetBytesAt(row)))
-			require.Equal(t, types.RuntimeStringInherit, result.GetResultVector().GetRuntimeStringDomainAt(row))
 		}
 	})
 }

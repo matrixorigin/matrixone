@@ -3404,9 +3404,9 @@ func TestParseExecuteDataPreservesStringDomainAcrossRebinds(t *testing.T) {
 		require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
 			buildStringExecutePacket(proto, tc.mysqlType, "中中"), 0))
 		require.Equal(t, []byte{byte(tc.mysqlType), 0}, prepareStmt.ParamTypes)
-		proc.SetPrepareParamsWithMetadata(prepareStmt.params, nil,
-			[]bool{binaryProtocolPrepareParamIsBinaryString(tc.mysqlType)})
-		require.Equal(t, tc.binary, proc.GetPrepareParamIsBinaryString(0))
+		proc.SetPrepareParams(prepareStmt.params)
+		require.Equal(t, tc.binary,
+			binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(prepareStmt.ParamTypes[0])))
 		require.Equal(t, "中中", proc.GetPrepareParams().GetStringAt(0))
 	}
 }

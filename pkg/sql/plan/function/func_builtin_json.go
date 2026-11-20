@@ -1989,7 +1989,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 	if !v.IsNull(uint64(row)) {
 		switch v.GetType().Oid {
 		case types.T_char, types.T_varchar, types.T_text:
-			if v.GetIsBinaryStringAt(row) {
+			if isBinaryStringVector(v) {
 				return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 			}
 		}

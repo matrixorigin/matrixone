@@ -404,10 +404,9 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 			}
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
-		domain := types.RuntimeStringInherit
-		encodedMetadata := false
 		if exec.argTypes[0].Oid.IsMySQLString() {
-			payload, domain, encodedMetadata, err = decodeAggStringMetadata(payload)
+			// The envelope's domain byte is retired and dropped.
+			payload, _, _, err = decodeAggStringMetadata(payload)
 			if err != nil {
 				return err
 			}
@@ -423,11 +422,6 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		}
 		if err := values.SetRawBytesAt(index, payload, exec.mp); err != nil {
 			return err
-		}
-		if encodedMetadata {
-			if err := values.SetRuntimeStringDomainAtWithMP(index, domain, exec.mp); err != nil {
-				return err
-			}
 		}
 		index++
 		return nil

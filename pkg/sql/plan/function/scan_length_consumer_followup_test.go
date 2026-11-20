@@ -27,23 +27,31 @@ import (
 func TestScanFollowupLengthConsumer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	payload := []byte(strings.Repeat("a", 32) + "中\x00")
-	input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{payload, payload, {}, payload}, []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringInherit})
-	defer input.Free(proc.Mp())
-	input.SetNull(3)
-	for _, typ := range []types.T{types.T_uint64, types.T_int64} {
-		func() {
-			result := vector.NewFunctionResultWrapper(typ.ToType(), proc.Mp())
-			defer result.Free()
-			require.NoError(t, result.PreExtendAndReset(input.Length()))
-			require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length(), nil))
-			output := result.GetResultVector()
-			require.Equal(t, typ, output.GetType().Oid)
-			require.True(t, output.IsNull(3))
-			if typ == types.T_uint64 {
-				require.Equal(t, []uint64{34, 36, 0}, vector.MustFixedColNoTypeCheck[uint64](output)[:3])
-			} else {
-				require.Equal(t, []int64{34, 36, 0}, vector.MustFixedColNoTypeCheck[int64](output)[:3])
-			}
-		}()
+	for _, tc := range []struct {
+		typ  types.Type
+		want int
+	}{
+		{types.T_varchar.ToType(), 34},
+		{types.T_varbinary.ToType(), 36},
+	} {
+		input := testutil.MakeVarlenaVector([][]byte{payload, {}, payload}, nil, tc.typ, proc.Mp())
+		input.SetNull(2)
+		for _, typ := range []types.T{types.T_uint64, types.T_int64} {
+			func() {
+				result := vector.NewFunctionResultWrapper(typ.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(input.Length()))
+				require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length(), nil))
+				output := result.GetResultVector()
+				require.Equal(t, typ, output.GetType().Oid)
+				require.True(t, output.IsNull(2))
+				if typ == types.T_uint64 {
+					require.Equal(t, []uint64{uint64(tc.want), 0}, vector.MustFixedColNoTypeCheck[uint64](output)[:2])
+				} else {
+					require.Equal(t, []int64{int64(tc.want), 0}, vector.MustFixedColNoTypeCheck[int64](output)[:2])
+				}
+			}()
+		}
+		input.Free(proc.Mp())
 	}
 }

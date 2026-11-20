@@ -756,7 +756,6 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
-		require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp))
 		return vec
 	}
 
@@ -775,7 +774,6 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	results, err := left.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "beta", results[0].GetStringAt(0))
-	require.Equal(t, types.RuntimeStringBinary, results[0].GetRuntimeStringDomainAt(0))
 
 	results[0].Free(mp)
 	leftValues.Free(mp)
@@ -805,7 +803,6 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 	}
 	assertResult := func(result *vector.Vector, want []byte) {
 		require.Equal(t, want, result.GetBytesAt(0))
-		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
 	}
 
 	for _, tc := range []struct {
@@ -876,39 +873,10 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
-	typ := types.New(types.T_varchar, 20, 0)
-	values := vector.NewVec(typ)
-	defer values.Free(mp)
-	require.NoError(t, vector.AppendBytes(values, []byte("aa"), false, mp))
-	require.NoError(t, vector.AppendBytes(values, []byte("zz"), false, mp))
-	// Only the selected row carries an explicit binary runtime domain. The
-	// aggregate must keep that row-level metadata instead of reducing the
-	// retained arguments to raw bytes.
-	require.NoError(t, values.SetRuntimeStringDomainAtWithMP(
-		1, types.RuntimeStringBinary, mp))
-
-	exec, err := makeOrderedPercentileExec(
-		mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
-	require.NoError(t, err)
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.SetExtraInformation(
-		EncodeOrderedPercentileConfig([]byte("1"), false), 0))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
-	result, err := exec.Flush()
-	require.NoError(t, err)
-	defer result[0].Free(mp)
-	exec.Free()
-
-	require.Equal(t, "zz", result[0].GetStringAt(0))
-	require.Equal(t, types.RuntimeStringBinary, result[0].GetRuntimeStringDomainAt(0))
-}
-
 // TestAggStringMetadataLegacySourceByte checks that retained-argument
 // envelopes written by older peers, which stored a string source in byte 5,
-// still decode with the runtime domain intact, while writers emit 0 there.
+// still decode with the runtime domain intact, while writers emit an INHERIT
+// domain and a zero source byte.
 func TestAggStringMetadataLegacySourceByte(t *testing.T) {
 	envelope := func(domain types.RuntimeStringDomain, source byte) []byte {
 		return []byte{
@@ -941,7 +909,7 @@ func TestAggStringMetadataLegacySourceByte(t *testing.T) {
 	_, _, _, err := decodeAggStringMetadata(envelope(types.RuntimeStringBinary, 0xff))
 	require.ErrorContains(t, err, "invalid aggregate string metadata")
 
-	// Writers always emit the default (zero) source byte.
+	// Writers always emit the INHERIT domain and the default (zero) source byte.
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 	typ := types.New(types.T_varchar, 20, 0)
@@ -955,11 +923,10 @@ func TestAggStringMetadataLegacySourceByte(t *testing.T) {
 	values := vector.NewVec(typ)
 	defer values.Free(mp)
 	require.NoError(t, vector.AppendBytes(values, []byte("v"), false, mp))
-	require.NoError(t, values.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
 	var wire bytes.Buffer
 	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
-	require.True(t, bytes.Contains(wire.Bytes(), envelope(types.RuntimeStringBinary, 0)))
+	require.True(t, bytes.Contains(wire.Bytes(), envelope(types.RuntimeStringInherit, 0)))
 }
 
 func TestMakeSpecialOrderedPercentileExec(t *testing.T) {

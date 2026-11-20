@@ -281,25 +281,27 @@ func TestStringDeclarationBoundaries(t *testing.T) {
 		name, sql string
 		binary    bool
 	}{
-		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", false},
-		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", false},
+		// COALESCE over a binary arm is statically typed binary at every
+		// declaration boundary; no boundary may relabel it as text.
+		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", true},
+		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", true},
 		{"having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having x is not null) d", true},
 		{"constant having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having true) d", true},
 		{"limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation limit 1) d", true},
 		{"sorted limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation order by n_name limit 1) d", true},
 		{"distinct projection", "select reverse(x) from (select distinct coalesce(n_name,_binary '') x from nation) d", true},
 		{"window projection", "select reverse(x) from (select coalesce(n_name,_binary '') x,row_number() over () rn from nation) d", true},
-		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", false},
+		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", true},
 		{"scalar grouped", "select reverse((select coalesce(n_name,_binary '') from nation group by coalesce(n_name,_binary '')))", true},
-		{"scalar singleton group", "select reverse((select coalesce(n_name,_binary '') from nation where n_nationkey=1 group by coalesce(n_name,_binary '')))", false},
-		{"scalar having", "select reverse((select coalesce(n_name,_binary '') x from nation where n_nationkey=1 having x is not null))", false},
+		{"scalar singleton group", "select reverse((select coalesce(n_name,_binary '') from nation where n_nationkey=1 group by coalesce(n_name,_binary '')))", true},
+		{"scalar having", "select reverse((select coalesce(n_name,_binary '') x from nation where n_nationkey=1 having x is not null))", true},
 		{"scalar distinct", "select reverse((select distinct coalesce(n_name,_binary '') from nation limit 1))", true},
 		{"scalar window", "select reverse((select first_value(coalesce(n_name,_binary '')) over () from nation limit 1))", true},
 		{"scalar set", "select reverse((select coalesce(n_name,_binary '') x from nation union all select _binary '' order by x desc limit 1))", true},
 		{"scalar materialized source", "select reverse((select x from (select coalesce(n_name,_binary '') x from nation limit 1) d))", true},
 
-		{"direct COALESCE", "select reverse(coalesce(n_name,_binary '')) from nation", false},
-		{"nested COALESCE", "select reverse(coalesce(coalesce(n_name,_binary ''),'')) from nation", false},
+		{"direct COALESCE", "select reverse(coalesce(n_name,_binary '')) from nation", true},
+		{"nested COALESCE", "select reverse(coalesce(coalesce(n_name,_binary ''),'')) from nation", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)

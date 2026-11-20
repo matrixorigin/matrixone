@@ -537,8 +537,11 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 			copy.Typ = target
 			return &copy, nil
 		}
-		if types.IsCaseInsensitiveCollation(uint8(selected.charset)) {
-			clearConvertedBinaryLiteralForm(expr, selected.rank)
+		if keepsBinaryLiteralDomain(expr, selected) {
+			// A binary literal keeps byte-string semantics unless the selected
+			// collation won by strictly stronger coercibility. Its static type
+			// is the only carrier of that domain, so it is not converted.
+			return expr, nil
 		}
 		return appendCastBeforeExpr(ctx, expr, target)
 	}
@@ -551,35 +554,35 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 	return result, nil
 }
 
-// clearConvertedBinaryLiteralForm drops the binary string provenance of a
-// constant binary literal whose value the conversion cast reinterprets under
-// a case-insensitive selected collation, but only when that collation won by
-// strictly stronger coercibility than the literal's own (an explicit COLLATE,
-// or a winning implicit one such as a column's). MySQL keeps a binary string
+// keepsBinaryLiteralDomain reports whether a constant binary literal (hex,
+// bit or _binary introducer) keeps its byte-string domain under conversion to
+// the selected collation. It does unless that collation won by strictly
+// stronger coercibility than the literal's own (an explicit COLLATE, or a
+// winning implicit one such as a column's). MySQL keeps a binary string
 // byte-wise at equal coercibility, so a coercible-versus-coercible tie (for
-// example 'abc' LIKE _binary 'ABC%' or FIND_IN_SET('A', _binary 'a,b')) must
-// retain the literal's binary domain and stay byte-wise. When the strict win
-// holds, the converted value compares under the selected collation instead of
-// routing the pattern matchers byte-wise (issue #31175). The cast target type
-// is unchanged; only the domain the literal claims for itself follows the
-// conversion.
-func clearConvertedBinaryLiteralForm(expr *Expr, selectedRank uint32) {
+// example 'abc' LIKE _binary 'ABC%' or FIND_IN_SET('A', _binary 'a,b'))
+// stays byte-wise (issue #31175). A case-sensitive selection never needs the
+// literal converted: byte-wise matching already agrees with it.
+func keepsBinaryLiteralDomain(expr *Expr, selected expressionCollation) bool {
 	literal := expr.GetLit()
 	if literal == nil {
-		return
+		return false
 	}
 	switch literal.LiteralForm {
 	case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
 		plan.StringLiteralForm_STRING_LITERAL_HEX,
 		plan.StringLiteralForm_STRING_LITERAL_BIT:
 	default:
-		return
+		return false
+	}
+	if types.StaticStringDomain(makeTypeByPlan2Expr(expr)) != types.StringDomainBinary {
+		return false
+	}
+	if !types.IsCaseInsensitiveCollation(uint8(selected.charset)) {
+		return true
 	}
 	candidate, ok := collationForExpression(expr)
-	if !ok || selectedRank >= candidate.rank {
-		return
-	}
-	literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	return !ok || selected.rank >= candidate.rank
 }
 
 func numericBetweenCollationArguments(ctx context.Context, args []*Expr) ([]*Expr, error) {

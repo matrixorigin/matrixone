@@ -424,20 +424,6 @@ func TestOrdBinaryUsesFirstOctet(t *testing.T) {
 	}
 }
 
-func TestOrdUsesRowStringDomain(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"é", "é", "ignored"}, []bool{false, false, true}),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xC3A9, 0}, []bool{false, false, true}),
-		Ord)
-	defer tc.Free()
-	require.NoError(t, tc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info := tc.Run()
-	require.True(t, ok, info)
-}
-
 // QUOTE
 func initQuoteTestCase() []tcTemp {
 	cases := []struct {
@@ -4031,31 +4017,17 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 		require.True(t, succeed, info)
 	})
 
-	t.Run("mixed runtime domains", func(t *testing.T) {
-		ftc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
-			},
-			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
-			JsonQuote)
-		defer ftc.Free()
-		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
-		succeed, info := ftc.Run()
-		require.True(t, succeed, info)
-	})
-
 	t.Run("masked binary row is not evaluated", func(t *testing.T) {
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"binary", "binary"}, []bool{false, false}),
 			},
-			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", `"text"`}, []bool{true, false}),
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
 			JsonQuote).WithSelectList(&FunctionSelectList{
 			AnyNull:    true,
-			SelectList: []bool{false, true},
+			SelectList: []bool{false, false},
 		})
 		defer ftc.Free()
-		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
 		succeed, info := ftc.Run()
 		require.True(t, succeed, info)
 	})
@@ -4240,61 +4212,18 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 
 func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
+	t.Run("static binary input is rejected", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"plain", "text"}, []bool{false, false}),
 			},
 			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{"", ""}, []bool{false, false}),
 			JsonUnquote)
 		defer tc.Free()
-		require.NoError(t, tc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
 		succeed, info := tc.Run()
 		require.True(t, succeed, info)
 	})
 
-	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
-			},
-			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"text", ""}, []bool{false, true}),
-			JsonUnquote).WithSelectList(&FunctionSelectList{
-			AnyNull:    true,
-			SelectList: []bool{true, false},
-		})
-		defer tc.Free()
-		require.NoError(t, tc.parameters[0].SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
-		succeed, info := tc.Run()
-		require.True(t, succeed, info)
-	})
-
-	t.Run("prepared text binary text rebind", func(t *testing.T) {
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),
-			},
-			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"plain"}, []bool{false}),
-			JsonUnquote)
-		defer tc.Free()
-
-		run := func(binary bool) error {
-			tc.parameters[0].SetIsBinaryString(binary)
-			require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-			return JsonUnquote(tc.parameters, tc.result, proc, tc.fnLength, nil)
-		}
-		assertResult := func() {
-			value, isNull := vector.GenerateFunctionStrParameter(tc.GetResultVectorDirectly()).GetStrValue(0)
-			require.False(t, isNull)
-			require.Equal(t, "plain", string(value))
-		}
-
-		require.NoError(t, run(false))
-		assertResult()
-		require.Error(t, run(true))
-		require.NoError(t, run(false))
-		assertResult()
-	})
 }
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
