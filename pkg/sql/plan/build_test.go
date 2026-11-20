@@ -6154,11 +6154,16 @@ func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
 	require.True(t, foundGeneratedAssignment)
 }
 
-func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+func TestAssignmentCastPlanProtocolSelection(t *testing.T) {
 	proc := newPlanTestProcess(t)
-
-	build := func(version int64) string {
-		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, version)
+	for _, tc := range []struct {
+		version    int64
+		stringCast string
+	}{
+		{defines.MORPCVersion4, "cast_strict"},
+		{defines.MORPCVersion5, "cast_assign"},
+	} {
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, tc.version)
 		mock := NewMockOptimizer(true, proc)
 		stmt, err := mysql.ParseOne(
 			t.Context(),
@@ -6169,18 +6174,26 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 		defer stmt.Free()
 		built, err := mock.Optimize(stmt)
 		require.NoError(t, err)
-		data, err := json.Marshal(built)
-		require.NoError(t, err)
-		return string(data)
+		var integerCasts, stringCasts []string
+		for _, node := range built.Nodes {
+			for _, project := range node.ProjectList {
+				walkPlanExpr(project, func(expr *plan.Expr) {
+					name := expr.GetF().GetFunc().GetObjName()
+					if !IsAssignmentCastFamilyName(name) {
+						return
+					}
+					switch types.T(expr.Typ.Id) {
+					case types.T_uint32:
+						integerCasts = append(integerCasts, name)
+					case types.T_varchar:
+						stringCasts = append(stringCasts, name)
+					}
+				})
+			}
+		}
+		require.Equal(t, []string{"cast_assign"}, integerCasts, "protocol %d", tc.version)
+		require.Equal(t, []string{tc.stringCast, tc.stringCast}, stringCasts, "protocol %d", tc.version)
 	}
-
-	mixedVersionPlan := build(defines.MORPCVersion4)
-	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
-
-	upgradedPlan := build(defines.MORPCVersion5)
-	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {

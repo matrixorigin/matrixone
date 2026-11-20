@@ -1757,8 +1757,8 @@ func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	for _, target := range targets {
-		want := "cast"
-		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+		want := "cast_ignore"
+		if target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
 			want = "cast_strict"
 		}
 		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)

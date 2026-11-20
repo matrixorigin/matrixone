@@ -1290,6 +1290,11 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, mode, decimal256RoundedIntegerString)
 		}
 	}
+	if mode.isAssignment() && canWidenDecimalDomain(*fromType, *toType) &&
+		selectList.ShouldEvalAllRow() && !selectList.IgnoreAllRow() &&
+		decimalBatchFitsDeclaredPrecision(from, length) {
+		mode = castModeNormal
+	}
 	if toType.IsDecimal() &&
 		(mode == castModeExplicit ||
 			(mode.isAssignment() && (fromType.IsNumeric() || fromType.Oid == types.T_bool))) {
@@ -6674,12 +6679,53 @@ func decimalToFloat[D decimalIntegerSource[D], T constraints.Float](
 // Scale reduction can carry into the integer part, so it stays on the checked path.
 // Source and result types are fixed for a batch; evaluate this before the row loop.
 func canWidenDecimalScale(from, to types.Type) bool {
+	return to.Scale > from.Scale && canWidenDecimalDomain(from, to)
+}
+
+func canWidenDecimalDomain(from, to types.Type) bool {
 	sourceLimit, targetLimit := types.DecimalMaxPrecision(from.Oid), types.DecimalMaxPrecision(to.Oid)
-	return sourceLimit > 0 && targetLimit > 0 && sourceLimit <= targetLimit &&
+	return sourceLimit > 0 && targetLimit >= sourceLimit &&
 		from.Width > 0 && from.Width <= sourceLimit &&
-		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
+		from.Scale >= 0 && from.Scale <= from.Width && to.Scale >= from.Scale &&
 		to.Width > 0 && to.Width <= targetLimit && to.Scale <= to.Width &&
 		to.Width-to.Scale >= from.Width-from.Scale
+}
+
+// A computed value can exceed its declared width. Verify it before using the
+// native widening path, which assumes the input fits its declared precision.
+func decimalBatchFitsDeclaredPrecision(from *vector.Vector, length int) bool {
+	if length == 0 || from.IsConstNull() {
+		return true
+	}
+	if from.IsConst() {
+		length = 1
+	}
+	typ := from.GetType()
+	switch typ.Oid {
+	case types.T_decimal64:
+		limit := types.Decimal64(types.Pow10[typ.Width])
+		return decimalCoefficientsFit(from, length, limit, limit.Minus())
+	case types.T_decimal128:
+		limit := intDecimal128WidthLimit(typ.Width)
+		return decimalCoefficientsFit(from, length, limit, limit.Minus())
+	case types.T_decimal256:
+		limit := intDecimal256WidthLimit(typ.Width)
+		return decimalCoefficientsFit(from, length, limit, limit.Minus())
+	}
+	return false
+}
+
+func decimalCoefficientsFit[T interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256
+	Less(T) bool
+}](from *vector.Vector, length int, upper, lower T) bool {
+	ns := from.GetNulls()
+	for i, value := range vector.MustFixedColNoTypeCheck[T](from)[:length] {
+		if (!lower.Less(value) || !value.Less(upper)) && !ns.Contains(uint64(i)) {
+			return false
+		}
+	}
+	return true
 }
 
 // decimalCastAllNull checks only the requested row domain. Endpoint checks

@@ -1060,18 +1060,18 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 }
 
 func useSqlModeAssignmentCast(targetType Type) bool {
-	switch targetType.Id {
-	case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
-		int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64):
-		return true
-	}
-	return useSqlModeStringAssignmentCast(targetType) ||
-		types.T(targetType.Id).IsDecimal() ||
+	return usesUnconditionalAssignmentCast(targetType) ||
+		useSqlModeStringAssignmentCast(targetType) ||
 		types.T(targetType.Id).IsFloat() ||
-		targetType.Id == int32(types.T_date) ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
+}
+
+func usesUnconditionalAssignmentCast(target Type) bool {
+	oid := types.T(target.Id)
+	return (oid.IsInteger() && !isMediumIntPlanType(target)) || oid.IsDecimal() ||
+		oid == types.T_date || oid == types.T_binary || oid == types.T_varbinary
 }
 
 func isMediumIntPlanType(targetType Type) bool {
@@ -1463,9 +1463,8 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
-	// Binary assignment semantics are authored for the supported same-version
-	// cluster; do not extend the existing old-peer gate to these types.
-	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
+	// These assignments are authored for a same-version cluster.
+	if usesUnconditionalAssignmentCast(targetType) {
 		if isIgnore {
 			return "cast_ignore"
 		}
@@ -1482,12 +1481,6 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 	}
 	if !assignmentCastProtocolSupported(proc) {
 		if isIgnore {
-			if targetType.Id == int32(types.T_date) {
-				return "cast_strict"
-			}
-			return "cast"
-		}
-		if types.T(targetType.Id).IsInteger() {
 			return "cast"
 		}
 		return "cast_strict"
@@ -1558,17 +1551,7 @@ func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, target
 	if integerLiteralFitsAssignmentTarget(expr, targetType) || validatedDecimalLiteralFitsAssignmentTarget(expr, targetType) {
 		return "cast"
 	}
-	name := assignmentCastFunctionName(targetType, isIgnore, proc)
-	if types.T(targetType.Id).IsInteger() &&
-		(types.T(expr.Typ.Id).IsFloat() ||
-			(types.T(targetType.Id).IsUnsignedInt() && makeTypeByPlan2Expr(expr).IsDecimal()) ||
-			expr.GetP() != nil) && assignmentCastProtocolSupported(proc) {
-		name = "cast_assign"
-		if isIgnore {
-			name = "cast_ignore"
-		}
-	}
-	return name
+	return assignmentCastFunctionName(targetType, isIgnore, proc)
 }
 
 func validatedDecimalLiteralFitsAssignmentTarget(expr *Expr, targetType Type) bool {
