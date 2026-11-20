@@ -15,6 +15,7 @@
 package bytejson
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -94,6 +95,65 @@ func TestCancellableJSONParseStopsWithinTokenAndContainer(t *testing.T) {
 			require.GreaterOrEqual(t, p.pos, test.wantAfter)
 			require.Less(t, p.pos, test.wantBefore)
 			require.Less(t, p.pos, len(p.data))
+		})
+	}
+}
+
+func TestCancellableJSONParseErrorOrder(t *testing.T) {
+	wideString := `"` + strings.Repeat("a", 2*jsonParseChunk) + `"`
+	for _, test := range []struct {
+		name  string
+		input string
+		want  error
+	}{
+		{"invalid prefix", `[!` + wideString + `]`, nil},
+		{"invalid suffix", `[` + wideString + `,!]`, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := []byte(test.input)
+			_, err := ParseFromByteSlice(data)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			_, err = ParseFromByteSliceWithCancellation(parent, data)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+			ctx := &cancelAfterJSONChecks{parent, cancel, 2}
+			_, err = ParseFromByteSliceWithCancellation(ctx, data)
+			if test.want == nil {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				require.NoError(t, parent.Err())
+			} else {
+				require.ErrorIs(t, err, test.want)
+			}
+		})
+	}
+}
+
+func TestCancellableJSONParseDeepAndLongNumberBoundaries(t *testing.T) {
+	// This decimal is halfway between 1 and the next representable float64.
+	const midpoint = "1.00000000000000011102230246251565404236316680908203125"
+	zeros := strings.Repeat("0", jsonParseChunk)
+	for _, test := range []struct {
+		name  string
+		input string
+	}{
+		{"round to even", midpoint + zeros},
+		{"round above midpoint", midpoint + zeros + "1"},
+		{"capped exponent", "0.1e-" + strings.Repeat("9", jsonParseChunk)},
+		{"max nesting", strings.Repeat("[", jsonParseDepthLimit) + "null" + strings.Repeat("]", jsonParseDepthLimit)},
+		{"decoded duplicate key", `{"` + strings.Repeat("ξ", jsonParseChunk/4) + `":1e999,"` + strings.Repeat(`\u03be`, jsonParseChunk/4) + `":[]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := []byte(test.input)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			legacy, err := ParseFromByteSlice(data)
+			require.NoError(t, err)
+			got, err := ParseFromByteSliceWithCancellation(ctx, data)
+			require.NoError(t, err)
+			require.True(t, legacy.Type == got.Type && bytes.Equal(legacy.Data, got.Data), "binary JSON differs from the legacy parser")
 		})
 	}
 }
