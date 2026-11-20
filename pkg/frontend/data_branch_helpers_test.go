@@ -245,7 +245,7 @@ func TestRunSQL_DataBranchUserIdentifiersUseInternalExec(t *testing.T) {
 	}
 }
 
-func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
+func TestDataBranchScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
 	t.Run("empty attrs returns nil", func(t *testing.T) {
@@ -330,6 +330,9 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 			Times(1)
 
 		historicalRel := mock_frontend.NewMockRelation(ctrl)
+		historicalRel.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{
+			Cols: []*planpb.ColDef{{Name: "id"}},
+		})
 		wantErr := moerr.NewInternalErrorNoCtx("historical ranges reached")
 		historicalRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
 			Return(nil, wantErr).
@@ -390,6 +393,29 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 		require.Contains(t, err.Error(), "cannot resolve range relation")
 	})
 
+	t.Run("rejects a renamed column before opening ranges", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		snapshot := types.BuildTS(20, 2)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
+		txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(txnOp)
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		rangeRel.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{
+			Cols: []*planpb.ColDef{{Name: "id"}, {Name: "v"}},
+		})
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).Return("db", "t0", rangeRel, nil)
+		ses.txnHandler = &TxnHandler{storage: eng, txnOp: txnOp}
+
+		err := scanSnapshotRelationByID(
+			context.Background(), "lca-reader-fallback", ses, 7, snapshot,
+			[]string{"id", "w"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+			nil, 0, nil,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.ErrorContains(t, err, `column "w" is unavailable for table 7 at snapshot 20-2`)
+	})
+
 	t.Run("propagates ranges error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -399,6 +425,9 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		rangeRel.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{
+			Cols: []*planpb.ColDef{{Name: "id"}},
+		})
 		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")
 		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
 			Return(nil, wantErr).
