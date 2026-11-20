@@ -486,13 +486,12 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
-		lockReadRoot := resource.LockReadRootFromContext(proc.Ctx)
 		var observation *resource.LockReadObservation
-		if lockReadRoot != nil {
-			observation = &resource.LockReadObservation{}
-		}
 		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
 		if len(group) > 1 {
+			if resource.LockReadRootFromContext(proc.Ctx) != nil {
+				observation = &resource.LockReadObservation{}
+			}
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group, observation)
 		}
 		// Keep the planner target row-scoped. fetchRows bounds an oversized batch,
@@ -511,7 +510,7 @@ func performLock(
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
-				withLockRead(lockReadRoot, observation).
+				withLockRead(observation).
 				WithLockMode(target.mode).
 				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
@@ -863,9 +862,6 @@ func doLock(
 	opts LockOptions,
 	lockWaitDeadline int64,
 ) (bool, bool, timestamp.Timestamp, error) {
-	if opts.lockRead != nil {
-		defer opts.lockReadRoot.MergeLockRead(opts.lockRead)
-	}
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -1030,6 +1026,14 @@ func doLock(
 		}
 	}
 
+	// Both pre-pipeline locks and LockOp converge here. A grouped LockOp
+	// supplies its observation so the per-target PK checks share this owner.
+	if root := resource.LockReadRootFromContext(ctx); root != nil {
+		if opts.lockRead == nil {
+			opts.lockRead = &resource.LockReadObservation{}
+		}
+		defer root.MergeLockRead(opts.lockRead)
+	}
 	lockCtx := resource.ContextWithLockReadAcquisition(ctx, opts.lockRead)
 	acquisitionStart := opts.lockRead.Start()
 	result, err := lockWithRetry(
@@ -2148,8 +2152,7 @@ func getRowsFilter(
 	}
 }
 
-func (opts LockOptions) withLockRead(root *resource.Root, observation *resource.LockReadObservation) LockOptions {
-	opts.lockReadRoot = root
+func (opts LockOptions) withLockRead(observation *resource.LockReadObservation) LockOptions {
 	opts.lockRead = observation
 	return opts
 }

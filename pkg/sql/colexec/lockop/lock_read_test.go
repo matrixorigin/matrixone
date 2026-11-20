@@ -22,12 +22,35 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLockReadFastPipelineRowLock(t *testing.T) {
+	const tableID = 10
+	runLockNonBlockingOpTest(t, []uint64{tableID}, [][]int32{{7}}, func(proc *process.Process, op *LockOp) {
+		root := resource.NewRoot(resource.ConnExternal)
+		proc.Ctx = resource.ContextWithLockReadRoot(proc.Ctx, root)
+		defer func() { require.NoError(t, proc.GetTxnOperator().Rollback(proc.Ctx)) }()
+		require.NoError(t, op.Prepare(proc))
+		op.ctr.hasNewVersionInRange = testFunc
+		result, err := vm.Exec(op, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{7}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		_, snapshot := root.SealWithLockRead(0)
+		diagnostic := snapshot.Diagnostic(uuid.Nil, 1, false)
+		require.NotZero(t, diagnostic.Seen&1)
+		require.Positive(t, diagnostic.AcquisitionNS)
+		require.Empty(t, diagnostic.LastIncomplete)
+		require.False(t, snapshot.Qualifies(0, time.Second))
+	})
+}
 
 type lockReadFrontierContext struct {
 	context.Context
