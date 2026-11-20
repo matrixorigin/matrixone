@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'idc-isolation-probe', 'idc-direct-branch', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh', 'all-env-real-pr-2', 'persistent-env-real-pr-2', 'persistent-authority-preflight', 'uniform-native-jed', 'uniform-native-mnl2', 'uniform-native-ruh']
+        options: ['off', 'idc-isolation-probe', 'idc-direct-branch', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh', 'all-env-real-pr-2', 'persistent-env-real-pr-2', 'persistent-authority-preflight', 'uniform-native-jed', 'uniform-native-mnl2', 'uniform-native-ruh', 'mty-n0-manual-f2d6e75']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,115 @@ permissions:
   contents: read
 
 jobs:
+  mty-node0-manual-private-candidate:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.ref == 'refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.coverage_comparison == 'mty-n0-manual-f2d6e75' && inputs.matrixone_sha == 'c33ce3ff8e7555c8053c85693e55e93e73d898b7' && !inputs.cs_s3_smoke && !inputs.cs_s3_adaptation_smoke && !inputs.cs_s3_probe && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    permissions: {contents: read, actions: read}
+    concurrency: {group: mty-node0-manual-f2d6e75, cancel-in-progress: false}
+    runs-on: cs-mty-nc-n0-pr-v1
+    timeout-minutes: 95
+    env:
+      COVERAGE_GROUP: "1"
+      CS_CACHE_SOURCE_REPOSITORY: matrixorigin/matrixone
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1"
+      GOMAXPROCS: "7"
+      GOFLAGS: ""
+      GOWORK: "off"
+      GOPROXY: https://goproxy.cn|https://proxy.golang.org|direct
+    steps:
+    - name: Verify assigned reader and private work budget
+      env:
+        ACTUAL_RUNNER: ${{ runner.name }}
+      run: |
+        set -euo pipefail
+        [[ "$ACTUAL_RUNNER" =~ ^cs-mty-nc-n0-pr-v1-[a-z0-9]+-runner-[a-z0-9]+$ ]]
+        [[ "$CS_CACHE_ENV/$CS_CACHE_NODE/$CS_CACHE_EXPECTED_NODE" == mty/mo-standard-0/mo-standard-0 ]]
+        [[ "$CS_CACHE_NODE_UID" == '571fcdbf-80bb-404f-a8c3-9b4f7dbc4d0a' && "$CS_CACHE_PVC_UID" == '89814db6-38ed-4e31-aa91-42eb8793b96b' && "$CS_CACHE_PV_UID" == '53535c8c-0e05-43e5-a3b8-2223f5a9ae3c' ]]
+        findmnt -T /ci-cache/incremental-v2 -n -o OPTIONS | tr ',' '\n' | grep -qx ro
+        for dir in "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; do
+          test "$(df -Pk "$dir" | tail -1 | awk '{print $4}')" -ge 62914560
+        done
+        for dir in cs-node-cache cs-buildcache-go cs-buildcache-gomod unpublished-mty-n0-candidate; do test ! -e "$RUNNER_TEMP/$dir"; done
+        echo "GOMODCACHE=$RUNNER_TEMP/cs-buildcache-gomod" >> "$GITHUB_ENV"
+        echo "GOCACHE=$RUNNER_TEMP/cs-buildcache-go" >> "$GITHUB_ENV"
+    - name: Use the normal disposable CS build dependencies
+      timeout-minutes: 10
+      run: |
+        set -euo pipefail
+        if ! (command -v gcc && command -v g++ && command -v make && command -v pkg-config && command -v cmake && command -v python); then
+          sudo apt-get -o Acquire::ForceIPv4=true update
+          sudo apt-get -o Acquire::ForceIPv4=true install -y build-essential cmake pkg-config python3 python-is-python3
+        fi
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/matrixone
+        ref: c33ce3ff8e7555c8053c85693e55e93e73d898b7
+        persist-credentials: false
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/CI
+        ref: e6d99f2172b1c809fb8b75ab4e87f7278d1bf3ab
+        path: .ci-workflow
+        persist-credentials: false
+        sparse-checkout: |
+          scripts
+          config
+    - name: Restore verified tools from the read-only volume
+      run: |
+        set -euo pipefail
+        python3 .ci-workflow/scripts/node_cache_toolchain_store.py --catalog .ci-workflow/config/node-compile-cache-catalog.json --lock .ci-workflow/config/node-toolchain-lock.json --destination "$RUNNER_TEMP/node-toolchain-install" --report "$RUNNER_TEMP/persistent-toolchain.json"
+    - name: Verify runtime and volume before compilation
+      env:
+        CS_CACHE_READ_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 .ci-workflow/scripts/node_cache_native_pvc_catalog.py materialize
+        python3 .ci-workflow/scripts/node_compile_cache.py configure --catalog "$RUNNER_TEMP/cs-reviewed-persistent-catalog.json"
+        python3 .ci-workflow/scripts/mty_n0_refresh_preflight.py | tee "$RUNNER_TEMP/refresh-evidence.json"
+    - name: Discover the cold comparison's exact group
+      timeout-minutes: 25
+      run: |
+        set -euo pipefail
+        timeout 900s go list -mod=readonly ./... > "$RUNNER_TEMP/all-packages.txt"
+        grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog' "$RUNNER_TEMP/all-packages.txt" > "$RUNNER_TEMP/coverage-full-scope.txt"
+        go build -o "$RUNNER_TEMP/compact-coverage-profile" .ci-workflow/scripts/compact_coverage_profile.go
+        "$RUNNER_TEMP/compact-coverage-profile" -packages < "$RUNNER_TEMP/coverage-full-scope.txt" > "$RUNNER_TEMP/coverage-instrumented-scope.txt"
+        python3 .ci-workflow/scripts/coverage_two_groups.py --packages "$RUNNER_TEMP/coverage-full-scope.txt" --group 1 --group-count 2 --manifest "$RUNNER_TEMP/coverage-group-plan.json" --selected "$RUNNER_TEMP/coverage-group.txt"
+        jq -e '.scope_sha256 == "32f7fb7eaee102aac1d4100d8b1c59d98a55e928ef97181f292cd2d575b80c5c" and (.groups[1]|length)==250' "$RUNNER_TEMP/coverage-group-plan.json"
+    - name: Prepare native outputs privately
+      timeout-minutes: 31
+      run: |
+        set -euo pipefail
+        python3 .ci-workflow/scripts/node_compile_cache.py prepare-native --state "$CS_NODE_CACHE_STATE"
+        native=$(jq -er '.native_output_sha256|select(test("^[a-f0-9]{64}$"))' "$RUNNER_TEMP/cs-node-cache/native-result.json")
+        echo "CGO_CFLAGS=-I$GITHUB_WORKSPACE/cgo -I$GITHUB_WORKSPACE/thirdparties/install/include -DMO_NATIVE_CACHE_${native}=1" >> "$GITHUB_ENV"
+        echo "CGO_LDFLAGS=-L$GITHUB_WORKSPACE/cgo -lmo -Wl,-rpath,$GITHUB_WORKSPACE/cgo -L$GITHUB_WORKSPACE/thirdparties/install/lib -lusearch_c -Wl,-rpath,$GITHUB_WORKSPACE/thirdparties/install/lib -lm" >> "$GITHUB_ENV"
+    - name: Build private group-1 candidate; no tests or shared writes
+      run: python3 .ci-workflow/scripts/mty_n0_prepare_group1.py
+    - name: Preserve unpublished candidate; not a cache grant
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mty-node0-manual-32922-group1-candidate
+        compression-level: 0
+        retention-days: 3
+        if-no-files-found: error
+        path: |
+          ${{ runner.temp }}/unpublished-mty-n0-candidate/manifest.json
+          ${{ runner.temp }}/unpublished-mty-n0-candidate/index.json
+          ${{ runner.temp }}/unpublished-mty-n0-candidate/delta.tar.gz
+    - name: Save allowlisted preparation evidence
+      if: always() && !cancelled()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mty-node0-manual-32922-preflight
+        retention-days: 3
+        if-no-files-found: warn
+        path: |
+          ${{ runner.temp }}/persistent-toolchain.json
+          ${{ runner.temp }}/refresh-evidence.json
+          ${{ runner.temp }}/coverage-group-plan.json
+          ${{ runner.temp }}/cs-node-cache/native-result.json
+          ${{ runner.temp }}/cs-node-cache/validation-failed.json
   idc-direct-branch:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && inputs.coverage_comparison == 'idc-direct-branch' && inputs.matrixone_sha == '11e2d46797327b66784b991c6e244faeafa5dfc0' && !inputs.object_storage_smoke && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.local_minio_coverage && !inputs.cs_s3_adaptation_smoke && !inputs.coverage_contract_smoke
     concurrency:
