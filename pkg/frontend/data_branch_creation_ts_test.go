@@ -68,6 +68,7 @@ func TestTryBuildCurrentMoTablesCPKeyFilter(t *testing.T) {
 	require.Empty(t, fallbackReason)
 	require.NotNil(t, pkFilter)
 	require.Equal(t, catalog.MO_TABLES_CPKEY_IDX, pkFilter.PrimarySeqnum)
+	require.True(t, pkFilter.ObjectZMIsPK)
 	require.Len(t, pkFilter.Segments, 1)
 
 	packer := types.NewPacker()
