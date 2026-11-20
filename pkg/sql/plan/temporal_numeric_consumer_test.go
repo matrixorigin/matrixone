@@ -51,6 +51,11 @@ func TestTemporalNumericConsumers(t *testing.T) {
 		{name: "time bit xor", expr: "time'01:02:03' ^ 1", wantUint: 10202},
 		{name: "date shift left", expr: "date'2024-01-01' << 1", wantUint: 40480202},
 		{name: "time shift right", expr: "time'01:02:03' >> 1", wantUint: 5101},
+		{name: "date unary tilde", expr: "~date'2024-01-01'", wantUint: ^uint64(20240101)},
+		{name: "datetime unary tilde", expr: "~cast('2024-01-01 10:00:00' as datetime)", wantUint: ^uint64(20240101100000)},
+		{name: "time unary tilde", expr: "~time'01:02:03'", wantUint: ^uint64(10203)},
+		{name: "integer unary tilde control", expr: "~5", wantUint: ^uint64(5)},
+		{name: "text unary tilde control", expr: "~'5'", wantUint: ^uint64(5)},
 		{name: "date bit count", expr: "bit_count(date'2024-01-01')", wantUint: 14},
 		{name: "datetime bit count", expr: "bit_count(cast('2024-01-01 10:00:00' as datetime))", wantUint: 15},
 		{name: "time bit count", expr: "bit_count(time'01:02:03')", wantUint: 10},
@@ -116,6 +121,27 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 			constant: 3, sourceArg: 1, want: []uint64{1, 0, 1, 0}, wantTemporal: true,
 		},
 		{
+			name: "date unary tilde", function: "unary_tilde", typ: types.T_date.ToType(),
+			values: []types.Date{date, types.ZeroDate, 0, 0}, nulls: []bool{false, false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101), ^uint64(0), ^uint64(10101), 0}, wantTemporal: true,
+		},
+		{
+			name: "datetime unary tilde", function: "unary_tilde", typ: types.T_datetime.ToTypeWithScale(6),
+			values: []types.Datetime{datetime, carryDatetime, 0}, nulls: []bool{false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101100000), ^uint64(20240301000000), 0}, wantTemporal: true,
+		},
+		{
+			name: "signed fractional time unary tilde", function: "unary_tilde", typ: types.T_time.ToTypeWithScale(6),
+			values: []types.Time{clockTime, negativeSubsecond, negativeTime, 0}, nulls: []bool{false, false, false, true},
+			sourceArg: 0,
+			want:      []uint64{^uint64(10203), ^uint64(negativeSubsecondInteger), ^uint64(negativeSecondInteger), 0}, wantTemporal: true,
+		},
+		{
+			name: "timestamp unary tilde UTC", function: "unary_tilde", typ: types.T_timestamp.ToTypeWithScale(6),
+			values: []types.Timestamp{datetime.ToTimestamp(time.UTC), carryDatetime.ToTimestamp(time.UTC), 0}, nulls: []bool{false, false, true},
+			sourceArg: 0, want: []uint64{^uint64(20240101100000), ^uint64(20240301000000), 0}, wantTemporal: true,
+		},
+		{
 			name: "date bit count", function: "bit_count", typ: types.T_date.ToType(),
 			values: []types.Date{date, types.ZeroDate, 0, 0}, nulls: []bool{false, false, false, true},
 			sourceArg: 0, want: []uint64{14, 0, 9, 0}, wantTemporal: true,
@@ -168,7 +194,7 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 			proc.GetSessionInfo().TimeZone = time.FixedZone("test", tc.zoneOffset)
 			source := temporalNumericColumn(tc.typ)
 			args := []*Expr{source}
-			if tc.function != "bit_count" {
+			if tc.function != "bit_count" && tc.function != "unary_tilde" {
 				constant := makePlan2Int64ConstExprWithType(tc.constant)
 				if tc.sourceArg == 0 {
 					args = append(args, constant)
@@ -204,7 +230,7 @@ func TestTemporalNumericConsumerColumns(t *testing.T) {
 func TestPreparedTemporalNumericConsumers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		`prepare temporal_numeric_prepared from 'select ? & 3, 3 & ?, bit_count(?), sec_to_time(?)'`)
+		`prepare temporal_numeric_prepared from 'select ? & 3, 3 & ?, bit_count(?), sec_to_time(?), ~?'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
 	snapshot := proto.Clone(original)
@@ -214,10 +240,11 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name     string
-		values   []any
-		wantUint []uint64
-		wantTime types.Time
+		name      string
+		values    []any
+		wantUint  []uint64
+		wantTime  types.Time
+		wantTilde uint64
 	}{
 		{
 			name: "native temporal parameters",
@@ -226,8 +253,9 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 				ParamValue{Value: "2024-01-01", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "2024-01-01 10:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "01:02:03.500000", RuntimeType: types.T_time.ToTypeWithScale(6), HasRuntimeType: true, IsBinaryProtocol: true},
+				ParamValue{Value: "2024-01-01 10:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 			},
-			wantUint: []uint64{1, 1, 15}, wantTime: firstTime,
+			wantUint: []uint64{1, 1, 15}, wantTime: firstTime, wantTilde: ^uint64(20240101100000),
 		},
 		{
 			name: "template reuse with new temporal parameters",
@@ -236,8 +264,9 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 				ParamValue{Value: "2024-01-02", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "2024-01-02 00:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 				ParamValue{Value: "00:00:01.500000", RuntimeType: types.T_time.ToTypeWithScale(6), HasRuntimeType: true, IsBinaryProtocol: true},
+				ParamValue{Value: "2024-01-02", RuntimeType: types.T_date.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 			},
-			wantUint: []uint64{2, 2, 14}, wantTime: secondTime,
+			wantUint: []uint64{2, 2, 14}, wantTime: secondTime, wantTilde: ^uint64(20240102),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -246,7 +275,7 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 			require.True(t, changed)
 			query := bound.GetQuery()
 			root := query.Nodes[query.Steps[0]]
-			require.Len(t, root.ProjectList, 4)
+			require.Len(t, root.ProjectList, 5)
 			for row, want := range tc.wantUint {
 				result, free, err := colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[row], []*batch.Batch{batch.EmptyForConstFoldBatch})
 				require.NoError(t, err)
@@ -263,8 +292,86 @@ func TestPreparedTemporalNumericConsumers(t *testing.T) {
 			free()
 			require.Equal(t, int32(6), gotScale)
 			require.Equal(t, tc.wantTime, gotTime)
+			result, free, err = colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[4], []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			gotType := result.GetType().Oid
+			gotTilde := vector.GetFixedAtNoTypeCheck[uint64](result, 0)
+			free()
+			require.Equal(t, types.T_uint64, gotType)
+			require.Equal(t, tc.wantTilde, gotTilde)
 			require.True(t, proto.Equal(snapshot, original), "execution specialization must leave the template unchanged")
 		})
+	}
+}
+
+// Unary NOT converts only a bound native temporal operand. Non-temporal DEFAULT
+// operands keep their column-typed binding (BINARY ~X'0102' is bytewise), so
+// defaults persisted by earlier versions re-verify unchanged on dump/load.
+func TestUnaryTildeDefaultKeepsOperandBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		wantBytes []byte
+		wantUint  uint64
+	}{
+		{name: "binary hex", sql: "create table b (v binary(2) default (~X'0102'))", wantBytes: []byte{0xfe, 0xfd}},
+		{name: "varbinary hex", sql: "create table b (v varbinary(8) default (~X'0102'))", wantBytes: []byte{0xfe, 0xfd}},
+		{name: "varchar hex", sql: "create table c (v varchar(32) default (~X'0102'))", wantBytes: []byte("18446744073709551615")},
+		{name: "varchar bit literal", sql: "create table c (v varchar(32) default (~0b0101))", wantBytes: []byte("18446744073709551615")},
+		{name: "varchar string", sql: "create table c (v varchar(32) default (~'5'))", wantBytes: []byte("18446744073709551610")},
+		{name: "unsigned hex", sql: "create table u (v bigint unsigned default (~X'0102'))", wantUint: ^uint64(0x0102)},
+		{name: "varchar date", sql: "create table d (v varchar(32) default (~date'2024-06-18'))", wantBytes: []byte("18446744073689310997")},
+		{name: "unsigned time", sql: "create table d (v bigint unsigned default (~time'01:02:03'))", wantUint: ^uint64(10203)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			built, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false, nil)
+			require.NoError(t, err)
+			expr := built.GetDdl().GetCreateTable().TableDef.Cols[0].Default.Expr
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			if tc.wantBytes != nil {
+				require.Equal(t, tc.wantBytes, result.GetBytesAt(0))
+			} else {
+				require.Equal(t, tc.wantUint, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+		})
+	}
+}
+
+// AST binding must not put a non-temporal unary NOT operand in the integer
+// source context; only a bound temporal operand gets the private cast.
+func TestUnaryTildeBindsOperandInOrdinaryContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	binaryType := types.New(types.T_binary, 2, 0)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, makePlan2Type(&binaryType), nil)
+	for _, tc := range []struct {
+		sql          string
+		wantOperand  types.T
+		wantTemporal bool
+	}{
+		{sql: "~X'0102'", wantOperand: types.T_binary},
+		{sql: "~date'2024-06-18'", wantOperand: types.T_int64, wantTemporal: true},
+	} {
+		stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select "+tc.sql, 1)
+		require.NoError(t, err)
+		ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		expr, err := binder.BindExpr(ast, 0, false)
+		require.NoError(t, err, tc.sql)
+		tilde := expr.GetF()
+		require.Equal(t, "unary_tilde", tilde.Func.GetObjName(), tc.sql)
+		operand := tilde.Args[0]
+		require.Equal(t, tc.wantOperand, types.T(operand.Typ.Id), tc.sql)
+		cast := operand.GetF()
+		temporal := false
+		if cast != nil {
+			id, overload := function.DecodeOverloadID(cast.Func.GetObj())
+			temporal = id == int32(function.CAST) && overload == function.TemporalIntegerArgumentCastOverload
+		}
+		require.Equal(t, tc.wantTemporal, temporal, tc.sql)
 	}
 }
 
