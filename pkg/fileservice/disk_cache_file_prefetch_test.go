@@ -39,7 +39,7 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.prefetchFile(ctx, "object", 1000, 200<<10, filePrefetchOpener(fs, "object"))
+		err := fs.diskCache.prefetchFile(ctx, "object", 1000, 200<<10, filePrefetchOpener(fs, "object"))
 		done <- err
 	}()
 	<-storage.stalled
@@ -65,7 +65,7 @@ func TestDeleteCancelsFilePrefetch(t *testing.T) {
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.prefetchFile(ctx, "object", 0, 200<<10, filePrefetchOpener(fs, "object"))
+		err := fs.diskCache.prefetchFile(ctx, "object", 0, 200<<10, filePrefetchOpener(fs, "object"))
 		done <- err
 	}()
 	<-storage.stalled
