@@ -730,8 +730,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}()
 	defer finishFill()
 	// A merge leader must not wake its waiters until caller-visible cache work
-	// has completed. Cache updates are deferred below, so register this defer
-	// first and let their later defers run before the merge is marked done.
+	// has completed. Successful reads publish cache updates before returning,
+	// so this defer marks the merge done only after those updates finish.
 	// Async disk finalization is intentionally outside this generation: the
 	// foreground read only admits that bounded work, and subsequent disk-cache
 	// readers use their own bounded wait before falling back to object storage.
@@ -769,36 +769,39 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	// Allocate failure state only when a cache can receive completed entries.
-	// Deferred cache updates must not publish entries after a failed read.
-	var readFailed *bool
-	if len(vector.Caches) > 0 || s.memCache != nil || s.diskCache != nil {
-		readFailed = new(bool)
+	// Run queued IOVectorCache updates only after read work succeeds. Deferring
+	// them in registration order runs them in reverse; if one panics or calls
+	// runtime.Goexit, the remaining registered updates still run.
+	var updatesBuf [4]func()
+	cacheUpdates := updatesBuf[:0]
+	finishCacheUpdates := func() error {
+		for _, update := range cacheUpdates {
+			defer update()
+		}
+		return nil
 	}
+
 	for _, cache := range vector.Caches {
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
-		err := readCache(ctx, cache, vector)
+		cacheReadErr := readCache(ctx, cache, vector)
 		LogEvent(ctx, str_read_vector_Caches_end)
 		metric.FSReadDurationReadVectorCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
-			return recordCacheReadFailure(err, readFailed)
+		if cacheReadErr != nil {
+			return cacheReadErr
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
-		defer func(readFailed *bool) {
-			if err != nil || (readFailed != nil && *readFailed) {
-				return
-			}
+		cacheUpdates = append(cacheUpdates, func() {
 			t0 := time.Now()
 			LogEvent(ctx, str_update_vector_Caches_begin)
 			_ = cache.Update(ctx, vector, false)
 			LogEvent(ctx, str_update_vector_Caches_end)
 			metric.FSReadDurationUpdateVectorCache.Observe(time.Since(t0).Seconds())
-		}(readFailed)
+		})
 	}
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
@@ -810,26 +813,23 @@ read_memory_cache:
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_memory_cache_Caches_begin)
-		err := readCache(ctx, s.memCache, vector)
+		cacheReadErr := readCache(ctx, s.memCache, vector)
 		LogEvent(ctx, str_read_memory_cache_Caches_end)
 		metric.FSReadDurationReadMemoryCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
-			return recordCacheReadFailure(err, readFailed)
+		if cacheReadErr != nil {
+			return cacheReadErr
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
-		defer func(readFailed *bool) {
-			if err != nil || (readFailed != nil && *readFailed) {
-				return
-			}
+		cacheUpdates = append(cacheUpdates, func() {
 			t0 := time.Now()
 			LogEvent(ctx, str_update_memory_cache_begin)
 			_ = s.memCache.Update(ctx, vector, s.asyncUpdate)
 			LogEvent(ctx, str_update_memory_cache_end)
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
-		}(readFailed)
+		})
 	}
 
 read_disk_cache:
@@ -837,21 +837,21 @@ read_disk_cache:
 		decodePrepared = true
 		finishDecode, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
 		if err != nil {
-			return recordCacheReadFailure(err, readFailed)
+			return err
 		}
 		if fillAttempted {
 			if fillTicket != nil && !fillTicket.leader {
 				if err = fillTicket.wait(ctx, sharedDecodeFillWait); err != nil {
 					finishFill()
-					return recordCacheReadFailure(err, readFailed)
+					return err
 				}
 			}
 			if err = readCache(ctx, s.memCache, vector); err != nil {
 				finishFill()
-				return recordCacheReadFailure(err, readFailed)
+				return err
 			}
 			if vector.allDone() {
-				return nil
+				return finishCacheUpdates()
 			}
 			if fillTicket != nil && !fillTicket.leader {
 				// This request did not receive an admitted disk-cache fill. Do
@@ -869,12 +869,12 @@ read_disk_cache:
 		for i, entry := range vector.Entries {
 			undoneBefore[i] = !entry.done
 		}
-		err := readCache(ctx, s.diskCache, vector)
+		cacheReadErr := readCache(ctx, s.diskCache, vector)
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
+		if cacheReadErr != nil {
 			finishFill()
-			return recordCacheReadFailure(err, readFailed)
+			return cacheReadErr
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
 		var actualDiskReadBytes int64
@@ -890,21 +890,18 @@ read_disk_cache:
 			})
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
 		// try to cache IOEntry if not caching the full file
 		if vector.Policy.CacheIOEntry() {
-			defer func(readFailed *bool) {
-				if err != nil || (readFailed != nil && *readFailed) {
-					return
-				}
+			cacheUpdates = append(cacheUpdates, func() {
 				t0 := time.Now()
 				LogEvent(ctx, str_update_disk_cache_Caches_begin)
 				_ = s.diskCache.Update(ctx, vector, s.asyncUpdate)
 				LogEvent(ctx, str_update_disk_cache_Caches_end)
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
-			}(readFailed)
+			})
 		}
 		finishFill()
 
@@ -917,10 +914,10 @@ read_disk_cache:
 		LogEvent(ctx, str_read_remote_cache_Caches_end)
 		metric.FSReadDurationReadRemoteCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
-			return recordCacheReadFailure(err, readFailed)
+			return err
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 	}
 
@@ -963,7 +960,7 @@ read_disk_cache:
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if waitErr != nil {
-				return recordCacheReadFailure(waitErr, readFailed)
+				return waitErr
 			}
 			if !completed && mergeKey.FullObject {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
@@ -984,7 +981,7 @@ read_disk_cache:
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
 					if waitErr != nil {
-						return recordCacheReadFailure(waitErr, readFailed)
+						return waitErr
 					}
 					if !completed {
 						forcePerEntryRangeRead = true
@@ -1023,7 +1020,7 @@ read_disk_cache:
 						metric.FSReadDurationIOMerger.Observe(rangeMergeTime.Seconds())
 						LogEvent(ctx, str_ioMerger_Merge_end)
 						if waitErr != nil {
-							return recordCacheReadFailure(waitErr, readFailed)
+							return waitErr
 						}
 						if completed {
 							if mayReadMemoryCache {
@@ -1062,7 +1059,7 @@ read_s3:
 		err = s.read(ctx, vector, forceMinimalRangeRead, false)
 	}
 	if err != nil {
-		return recordCacheReadFailure(err, readFailed)
+		return err
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
 	// Record S3 read size (all bytes read from S3)
@@ -1072,15 +1069,7 @@ read_s3:
 		})
 	}
 
-	return nil
-}
-
-// recordCacheReadFailure suppresses deferred updates after any later read error.
-func recordCacheReadFailure(err error, readFailed *bool) error {
-	if err != nil && readFailed != nil {
-		*readFailed = true
-	}
-	return err
+	return finishCacheUpdates()
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
