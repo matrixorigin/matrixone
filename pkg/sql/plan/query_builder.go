@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"reflect"
 	"slices"
 	"strconv"
@@ -6061,6 +6062,29 @@ func (builder *QueryBuilder) deriveRecursiveCTENullability(
 	}
 }
 
+// saturatingAddExprs sums two non-negative pagination bounds without
+// uint64 wraparound: the addend is clipped to the remaining headroom first,
+// mirroring the saturation recursiveCTEPrefixLimit applies to the emission
+// cover.
+func saturatingAddExprs(ctx context.Context, a, b *Expr) (*Expr, error) {
+	if a == nil {
+		return b, nil
+	}
+	if b == nil {
+		return a, nil
+	}
+	maxConst := MakePlan2Uint64ConstExprWithType(math.MaxUint64)
+	remaining, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{DeepCopyExpr(maxConst), DeepCopyExpr(a)})
+	if err != nil {
+		return nil, err
+	}
+	clipped, err := BindFuncExprImplByPlanExpr(ctx, "least", []*Expr{DeepCopyExpr(b), remaining})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{DeepCopyExpr(a), clipped})
+}
+
 func (builder *QueryBuilder) bindRecursiveCte(
 	ctx *BindContext,
 	s *tree.Select,
@@ -6070,6 +6094,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	stmts []tree.SelectStatement,
 	distinct bool,
 	bodyScope *BindContext,
+	effectiveLimit *tree.Limit,
+	enclosingClauses []*tree.Limit,
+	effectiveOrderBy tree.OrderBy,
 ) (nodeID int32, outputCtx *BindContext, err error) {
 	// Recursive binding wires and coerces existing feedback nodes.
 	builder.stableCTERoots = nil
@@ -6078,7 +6105,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		builder.cteRecursiveBindingDepth--
 		builder.stableCTERoots = nil
 	}()
-	if len(s.OrderBy) > 0 {
+	if len(s.OrderBy) > 0 || len(effectiveOrderBy) > 0 {
 		return 0, nil, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
 	if builder.isForUpdate {
@@ -6246,9 +6273,21 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 
 	// union all statement
-	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, s.Limit, nil)
+	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, effectiveLimit, nil)
 	if err != nil {
 		return 0, nil, err
+	}
+	// A prepared NULL OFFSET means skip-nothing on every channel the
+	// innermost clause feeds: the emission cover's saturation bound and
+	// the composed pagination seeds, matching the enclosing-stage
+	// normalization below. NULL COUNT still yields no rows, and an absent
+	// COUNT stays unbounded.
+	if offsetExpr != nil {
+		zero := MakePlan2Uint64ConstExprWithType(0)
+		if offsetExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+			[]*Expr{DeepCopyExpr(offsetExpr), zero}); err != nil {
+			return 0, nil, err
+		}
 	}
 
 	//4. add CTE Scan Node
@@ -6295,9 +6334,86 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
-	// Skipped result rows must still reach the recursive member through the
-	// shared sink. Apply OFFSET only on this non-feedback consumer.
-	builder.qry.Nodes[nodeID].Offset = offsetExpr
+	// Pagination applies only on this non-feedback consumer; skipped rows
+	// still reach the recursive member through the shared sink.
+	// Every enclosing wrapper of the union's own block is one pagination
+	// stage of the same query expression: compose the stages page by page
+	// from the inside out, so each stage keeps its own offset and count
+	// while the emission cover still bounds the recursion.
+	if len(enclosingClauses) == 0 {
+		// The recursion's own clause already saturates the emission cover;
+		// the non-feedback output keeps the plain skip and the cover-bounded
+		// stream, so explicit output limits must not reenter the bound.
+		builder.qry.Nodes[nodeID].Offset = offsetExpr
+		builder.qry.Nodes[nodeID].Limit = nil
+		return nodeID, initCtx, nil
+	}
+	pageStart, pageEnd := offsetExpr, limitExpr
+	// An absent Count is unbounded, not a numeric zero: leave pageEnd nil so
+	// enclosing stages open the end instead of freezing it at the offset.
+	if pageEnd != nil && pageStart != nil {
+		if pageEnd, err = saturatingAddExprs(builder.GetContext(), pageEnd, pageStart); err != nil {
+			return 0, nil, err
+		}
+	}
+	for _, stage := range enclosingClauses {
+		stageOffset, stageLimit, _, serr := builder.bindLimit(ctx, stage, nil)
+		if serr != nil {
+			return 0, nil, serr
+		}
+		// A prepared NULL OFFSET means skip-nothing, the same normalization
+		// the plain offset channel applies; without it NULL would propagate
+		// through the composed sums and shrink the result to zero rows. A
+		// prepared NULL COUNT keeps yielding no rows, and an absent COUNT
+		// stays unbounded - only the offset is coalesced to zero here.
+		if stageOffset != nil {
+			zero := MakePlan2Uint64ConstExprWithType(0)
+			if stageOffset, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+				[]*Expr{DeepCopyExpr(stageOffset), zero}); err != nil {
+				return 0, nil, err
+			}
+		}
+		prevStart := pageStart
+		if stageOffset != nil {
+			if pageStart, err = saturatingAddExprs(builder.GetContext(), pageStart, stageOffset); err != nil {
+				return 0, nil, err
+			}
+		}
+		if stageLimit != nil {
+			cand := DeepCopyExpr(stageLimit)
+			for _, part := range []*Expr{prevStart, stageOffset} {
+				if cand, err = saturatingAddExprs(builder.GetContext(), cand, part); err != nil {
+					return 0, nil, err
+				}
+			}
+			if pageEnd == nil {
+				pageEnd = cand
+			} else if pageEnd, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
+				[]*Expr{pageEnd, cand}); err != nil {
+				return 0, nil, err
+			}
+		}
+	}
+	outputLimit := pageEnd
+	if pageEnd != nil && pageStart != nil {
+		negativePage, nerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<",
+			[]*Expr{DeepCopyExpr(pageEnd), DeepCopyExpr(pageStart)})
+		if nerr != nil {
+			return 0, nil, nerr
+		}
+		remaining, derr := BindFuncExprImplByPlanExpr(builder.GetContext(), "-",
+			[]*Expr{DeepCopyExpr(pageEnd), DeepCopyExpr(pageStart)})
+		if derr != nil {
+			return 0, nil, derr
+		}
+		zero := MakePlan2Uint64ConstExprWithType(0)
+		if outputLimit, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case",
+			[]*Expr{negativePage, zero, remaining}); err != nil {
+			return 0, nil, err
+		}
+	}
+	builder.qry.Nodes[nodeID].Offset = pageStart
+	builder.qry.Nodes[nodeID].Limit = outputLimit
 	outputCtx = initCtx
 	return
 }
@@ -6334,7 +6450,7 @@ func (bc *BindContext) bindingRecurQueryBlock() bool {
 // selectTreePreservingWith peels parenthesized wrappers like getSelectTree but
 // stops at the first node carrying its own WITH clause, so an inner WITH that
 // sits behind intermediate wrappers still reaches bindSelect with its whole
-// lexical scope (PR 32906 reviews 5985861342/5985871552).
+// lexical scope.
 func selectTreePreservingWith(s *tree.Select) *tree.Select {
 	for s != nil {
 		if s.With != nil {
@@ -6378,8 +6494,7 @@ func (builder *QueryBuilder) bindCte(
 	case *tree.Select:
 		// Peel parenthesized wrappers but stop at a node carrying its own
 		// WITH: an inner WITH behind intermediate wrappers must reach
-		// bindSelect with its whole lexical scope (PR 32906 reviews
-		// 5985861342/5985871552).
+		// bindSelect with its whole lexical scope.
 		s = selectTreePreservingWith(stmt)
 	case *tree.ParenSelect:
 		s = selectTreePreservingWith(stmt.Select)
@@ -6394,7 +6509,7 @@ func (builder *QueryBuilder) bindCte(
 	var distinct bool
 	// Recursive-union inspection must look through parenthesized wrappers
 	// around a WITH-bearing body, while the binder keeps the full select for
-	// its lexical scope (PR 32906 review 5985871552 G2).
+	// its lexical scope.
 	inspection := s.Select
 	for {
 		paren, ok := inspection.(*tree.ParenSelect)
@@ -6426,20 +6541,66 @@ func (builder *QueryBuilder) bindCte(
 		// an exclusive per-body scope only: the shared per-WITH declaration
 		// frame is never reassigned, so siblings cannot see body-local names,
 		// and the scope starts from a value snapshot of the shared map so
-		// displaced-outers keep recording (PR 32906 review 5985871552 G2,
-		// root19 C4).
+		// displaced-outers keep recording.
+		newBodyScope := func() *BindContext {
+			scope := NewBindContext(builder, cteRef.declarationCtx)
+			scope.cteByName = make(map[string]*CTERef, len(cteRef.declarationCtx.cteByName))
+			for n, r := range cteRef.declarationCtx.cteByName {
+				scope.cteByName[n] = r
+			}
+			return scope
+		}
 		var bodyScope *BindContext
 		if s.With != nil {
-			bodyScope = NewBindContext(builder, cteRef.declarationCtx)
-			bodyScope.cteByName = make(map[string]*CTERef, len(cteRef.declarationCtx.cteByName))
-			for n, r := range cteRef.declarationCtx.cteByName {
-				bodyScope.cteByName[n] = r
-			}
+			bodyScope = newBodyScope()
 			if err = builder.preprocessCte(s, bodyScope); err != nil {
 				return 0, err
 			}
 		}
-		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct, bodyScope)
+		// Keep the wrapped recursive body's whole query expression: along the
+		// same paren peel the recursive inspection uses, every intermediate
+		// WITH declares its own frame on the exclusive body scope, the
+		// innermost LIMIT / ORDER BY clause owns the recursive emission, and
+		// every enclosing clause paginates the result inside out.
+		effectiveLimit, effectiveOrderBy := s.Limit, s.OrderBy
+		var wrapperClauses []*tree.Limit
+		if s.Limit != nil {
+			wrapperClauses = append(wrapperClauses, s.Limit)
+		}
+		wrapper := s.Select
+		for {
+			paren, ok := wrapper.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			inner := paren.Select
+			if inner.With != nil {
+				if bodyScope == nil {
+					bodyScope = newBodyScope()
+				}
+				if err = builder.preprocessCte(inner, bodyScope); err != nil {
+					return 0, err
+				}
+			}
+			if inner.Limit != nil {
+				wrapperClauses = append(wrapperClauses, inner.Limit)
+			}
+			if len(effectiveOrderBy) == 0 && len(inner.OrderBy) > 0 {
+				effectiveOrderBy = inner.OrderBy
+			}
+			wrapper = inner.Select
+		}
+		// The innermost clause is the union's own pagination block: it owns
+		// the recursive emission cover. Enclosing clauses paginate that
+		// cover-bounded result page by page, applied inside out.
+		enclosingClauses := make([]*tree.Limit, 0, len(wrapperClauses))
+		if n := len(wrapperClauses); n > 0 {
+			effectiveLimit = wrapperClauses[n-1]
+			for i := n - 2; i >= 0; i-- {
+				enclosingClauses = append(enclosingClauses, wrapperClauses[i])
+			}
+		}
+		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct, bodyScope, effectiveLimit, enclosingClauses, effectiveOrderBy)
 		if err != nil {
 			return 0, err
 		}
@@ -6505,8 +6666,7 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 		// visible when an inner (possibly parenthesized) WITH is preprocessed
 		// into the same BindContext, inner names legally shadow the outer
 		// ones with declaration order preserved, and a parent-shared map
-		// inherited through BindContext is never mutated (PR 32906 review
-		// 5983495748).
+		// inherited through BindContext is never mutated.
 		merged := make(map[string]*CTERef, len(ctx.cteByName)+len(refs))
 		for name, ref := range ctx.cteByName {
 			merged[name] = ref
@@ -6515,7 +6675,7 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 			if outer, ok := ctx.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
 				// Same-name inner declaration: keep the displaced enclosing
 				// definition reachable for lookups that happen before the
-				// inner name enters scope (PR 32906 review 5985871552).
+				// inner name enters scope.
 				ref.shadowedOuter = outer
 			}
 			merged[name] = ref
@@ -6524,7 +6684,7 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 		// One declaration scope per WITH clause: every ref in the same WITH
 		// shares a single declaration context, which is also the identifier
 		// the masked-lookup walk uses to distinguish a pending same-WITH
-		// sibling from an enclosing definition (PR 32906 review 5985871552).
+		// sibling from an enclosing definition.
 		declaration := newCTEDeclarationContext(builder, ctx)
 		for _, ref := range refs {
 			ref.declarationCtx = declaration
@@ -6651,7 +6811,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	// The effective time window is only known after the parenthesized body is
 	// unwrapped: the clause can live on the inner select while bindSelect's
-	// stmt parameter is the outer wrapper (PR 32906 review 5983495748). Adopt
+	// stmt parameter is the outer wrapper. Adopt
 	// it above like ORDER BY/LIMIT/BY RANK, then initialize time-window
 	// binding state from the effective clause.
 	if astTimeWindow != nil {

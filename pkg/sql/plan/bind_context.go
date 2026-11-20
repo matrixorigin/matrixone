@@ -222,8 +222,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		// entry declared by the same WITH clause as the CTE currently being
 		// bound is the pending later declaration, so serve the enclosing
 		// definition it displaced; any other entry is an enclosing-scope
-		// definition that is already visible here. (PR 32906 reviews
-		// 5985861342/5985871552)
+		// definition that is already visible here.
 		cur := bc.cteState.cte
 		for frame := bc; frame != nil; frame = frame.parent {
 			if frame != bc && frame.cteState.masked(name) && frame.cteState.cte != cur {
@@ -233,8 +232,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 				// being bound), so the walk continues to the declaration
 				// frame and serves the displaced definition there. Before
 				// stopping at a genuine outer boundary, consult that frame
-				// for the displaced sibling once (PR 32906 reviews
-				// 5985861342/5985871552, root19 Fix-2).
+				// for the displaced sibling once.
 				if cte, ok := frame.cteByName[name]; ok && cur != nil && cte != cur &&
 					cte.withClause != nil && cte.withClause == cur.withClause {
 					if outer := cte.shadowedOuter; outer != nil && outer != cte {
@@ -261,8 +259,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			// region state; the immutable owner chain still knows the regions
 			// this lookup runs inside, so a later same-WITH declaration is
 			// withheld (or resolves to the definition it displaced) while
-			// earlier siblings keep serving normally (PR 32906 reviews
-			// 5985861342/5985871552, root19 C1).
+			// earlier siblings keep serving normally.
 			if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
 				if outer := cte.shadowedOuter; outer != nil && outer != cte {
 					return outer
@@ -279,7 +276,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		if parent.cteState.masked(name) {
 			// Before stopping at this boundary, serve the displaced
 			// definition of a chain-pending sibling that this frame can
-			// reach (PR 32906 reviews 5985861342/5985871552, Fix-2).
+			// reach.
 			if cte, ok := parent.cteByName[name]; ok && bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
 				if outer := cte.shadowedOuter; outer != nil && outer != cte {
 					return outer
