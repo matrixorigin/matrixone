@@ -90,7 +90,7 @@ func (spool *dataBranchOutputSpool) append(wrapped batchWithKind) error {
 	var batchSize uint64
 	spool.buf.Write(types.EncodeUint64(&batchSize))
 	batchStart := spool.buf.Len()
-	if _, err := wrapped.batch.MarshalBinaryWithPrepareParamKinds(&spool.buf, false); err != nil {
+	if _, err := wrapped.batch.MarshalBinaryWithMetadata(&spool.buf, false); err != nil {
 		return err
 	}
 	batchSize = uint64(spool.buf.Len() - batchStart)
@@ -153,7 +153,7 @@ func (spool *dataBranchOutputSpool) next() (batchWithKind, bool, error) {
 		spool.readBatch.CleanOnlyData()
 	}
 	limitedReader := &io.LimitedReader{R: spool.reader, N: int64(batchSize)}
-	if err = spool.readBatch.UnmarshalFromReaderWithPrepareParamKinds(
+	if err = spool.readBatch.UnmarshalFromReaderWithMetadata(
 		limitedReader, int64(batchSize), spool.mp); err != nil {
 		return batchWithKind{}, false, err
 	}

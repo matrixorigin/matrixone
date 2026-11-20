@@ -61,8 +61,6 @@ type functionInformationForEval struct {
 	rowScopedDiagnostics    bool
 	rowScopedDecimalCast    bool
 	folded                  functionFolding
-	flowControlKind         vector.PrepareParamKind
-	flowControlKindSeen     bool
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -136,6 +134,21 @@ func (expr *FunctionExpressionExecutor) tryFoldParameter(
 		}
 		return true, nil
 	}
+	if param, ok := parameter.(*ParamExpressionExecutor); ok && param.textFallback != nil {
+		// Without a typed value the parameter is its TEXT conversion, which
+		// folds (or refuses to) like any other function parameter.
+		useFallback := !atRuntime
+		if atRuntime {
+			_, via, err := param.route(proc)
+			if err != nil {
+				return false, err
+			}
+			useFallback = via == param.textFallback
+		}
+		if useFallback {
+			parameter = param.textFallback
+		}
+	}
 	if functionParameter, ok := parameter.(*FunctionExpressionExecutor); ok {
 		if err := functionParameter.doFold(proc, atRuntime); err != nil {
 			return false, err
@@ -163,10 +176,10 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	proc *process.Process,
 	atRuntime bool,
 ) (bool, error) {
-	expr.resetFlowControlPrepareParamKind()
+	expr.resetFlowControlMetadata()
 	observeSelected := func(index int, folded bool, err error) (bool, error) {
 		if err == nil && folded {
-			expr.observeFlowControlPrepareParamKind(
+			expr.observeFlowControlMetadata(
 				expr.parameterResults[index], expr.parameterExecutor[index], []bool{true})
 		}
 		return folded, err
@@ -243,7 +256,7 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 				return folded, err
 			}
 			if !expr.parameterResults[i].IsNull(0) {
-				expr.observeFlowControlPrepareParamKind(
+				expr.observeFlowControlMetadata(
 					expr.parameterResults[i], expr.parameterExecutor[i], []bool{true})
 				return true, nil
 			}
@@ -330,7 +343,7 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		}
 	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		if err := expr.applyFlowControlPrepareParamKinds(
+		if err := expr.applyFlowControlMetadata(
 			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
 			return err
 		}
@@ -375,9 +388,6 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		}
 	}
 	canFold := !expr.volatile
-	if expr.stringToNumericCast && expr.canFoldPreparedIntegerStringCast() {
-		canFold = true
-	}
 	if !allParametersFolded || !canFold || (!atRuntime && expr.timeDependent) {
 		return nil
 	}
@@ -403,20 +413,6 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	return expr.finishFolding(proc, execLen)
 }
 
-// canFoldPreparedIntegerStringCast reports whether the prepared parameter's
-// protocol metadata establishes an integer source. Prepared numeric values are
-// materialized in a TEXT vector for compatibility with the parameter path, so
-// the cast still looks like TEXT -> numeric to the expression executor. The
-// integer provenance means the value cannot contain the trailing text that
-// requires row-level coercion warnings, making scalar folding safe.
-func (expr *FunctionExpressionExecutor) canFoldPreparedIntegerStringCast() bool {
-	if !expr.stringToNumericCast || expr.rowScopedDecimalCast || len(expr.parameterResults) == 0 {
-		return false
-	}
-	parameter := expr.parameterResults[0]
-	return parameter != nil && parameter.GetPrepareParamKind() == vector.PrepareParamInteger
-}
-
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	if expr.null != nil {
 		expr.null.CleanOnlyData()
@@ -426,6 +422,17 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	}
 	expr.folded = false
 	expr.foldedNull = false
+	if expr.typedVec != nil {
+		expr.typedVec.Free(expr.mp)
+		expr.typedVec = nil
+	}
+	expr.typedFolded = false
+	if expr.adapter != nil {
+		expr.adapter.ResetForNextQuery()
+	}
+	if expr.textFallback != nil {
+		expr.textFallback.ResetForNextQuery()
+	}
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

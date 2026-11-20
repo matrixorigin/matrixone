@@ -323,8 +323,7 @@ type container struct {
 	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
 	sortRollup                  *sortRollupState
-	prepareParamKind            aggexec.PrepareParamKindStates
-	prepareParamKindWireV1      bool
+	rowMetadataTrailerWire      bool
 	legacyTextMinMax            bool
 	legacyVarianceState         bool
 	legacyDecimalSumState       bool
@@ -788,9 +787,8 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	}
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
-	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
-	ctr.prepareParamKindWireV1 = false
+	ctr.rowMetadataTrailerWire = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
 	if ctr.distinctSpill != nil {

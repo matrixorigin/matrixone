@@ -308,7 +308,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 			arg.AppendChild(child)
 			var wantText string
-			var wantKind vector.PrepareParamKind
 			var wantDomain types.RuntimeStringDomain
 			var wantSource types.StringSource
 			for start := 0; start < 515; start += 257 {
@@ -325,21 +324,18 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 				child.WithBatchs([]*batch.Batch{bat})
 				payload := vector.NewVec(types.T_varchar.ToType())
 				bat.Vecs = append(bat.Vecs, payload)
-				kinds := make([]vector.PrepareParamKind, len(rows))
 				domains := make([]types.RuntimeStringDomain, len(rows))
 				sources := make([]types.StringSource, len(rows))
 				for i := range rows {
 					id := start + i
 					text := fmt.Sprintf("%d:%s", id, strings.Repeat("payload", 12))
 					require.NoError(t, vector.AppendBytes(payload, []byte(text), false, proc.Mp()))
-					kinds[i] = []vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamInteger, vector.PrepareParamFloat}[id%3]
 					domains[i] = []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary}[id%3]
 					sources[i] = []types.StringSource{types.StringSourceExpression, types.StringSourceCOMStmt, types.StringSourceUserVariable}[id%3]
 					if id == winner {
-						wantText, wantKind, wantDomain, wantSource = text, kinds[i], domains[i], sources[i]
+						wantText, wantDomain, wantSource = text, domains[i], sources[i]
 					}
 				}
-				require.NoError(t, payload.SetPrepareParamKindsWithMP(kinds, proc.Mp()))
 				require.NoError(t, payload.SetRuntimeStringDomainsWithMP(domains, proc.Mp()))
 				require.NoError(t, payload.SetStringSourcesWithMP(sources, proc.Mp()))
 			}
@@ -351,7 +347,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			require.Equal(t, int64(winner), vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[3], 0))
 			payload := result.Batch.Vecs[4]
 			require.Equal(t, wantText, string(payload.GetBytesAt(0)))
-			require.Equal(t, wantKind, payload.GetPrepareParamKindAt(0))
 			require.Equal(t, wantDomain, payload.GetRuntimeStringDomainAt(0))
 			require.Equal(t, wantSource, payload.GetStringSourceAt(0))
 			result, err = arg.Call(proc)

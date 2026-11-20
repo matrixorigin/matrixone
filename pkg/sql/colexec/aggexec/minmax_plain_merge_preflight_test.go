@@ -114,7 +114,6 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](result[0])[:2])
 				for row := range 3 {
 					require.Equal(t, row == 2, result[0].IsNull(uint64(row)))
-					require.Equal(t, vector.PrepareParamNone, result[0].GetPrepareParamKindAt(row))
 					require.Equal(t, types.StringSourceExpression, result[0].GetStringSourceAt(row))
 				}
 			})
@@ -254,68 +253,15 @@ func TestFixedMinMaxMergeMetadataFallbackOrder(t *testing.T) {
 	}
 }
 
-func TestFixedMinMaxMergeScalarKindMetadata(t *testing.T) {
-	for _, owner := range []string{"source", "target"} {
-		t.Run(owner, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			require.NoError(t, f.exec.GroupGrow(2))
-			require.NoError(t, f.exec.BatchFill(0, []uint64{1, 2}, []*vector.Vector{f.intInput(t, []int64{5, 5}, nil)}))
-			source := f.mergeSource(t, []int64{4}, nil)
-			target, candidate := f.base.state[0].vecs[0], source.base.state[0].vecs[0]
-			want := []vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone}
-			if owner == "source" {
-				candidate.SetPrepareParamKind(vector.PrepareParamFloat)
-			} else {
-				target.SetPrepareParamKind(vector.PrepareParamFloat)
-				want = []vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamFloat}
-			}
-			for _, v := range []*vector.Vector{target, candidate} {
-				require.Nil(t, v.GetPrepareParamKinds())
-				require.False(t, v.HasStringSourceMetadata(), "scalar kinds alone require fallback")
-			}
-			before, sourceBefore := snapshotFixedMetadataPreflight(f), snapshotFixedMetadataPreflight(source)
-			used := f.account.Snapshot().Used
-			f.controller.failAt = f.controller.calls + 1
-			require.ErrorIs(t, f.exec.PreflightBatchMerge(source.exec, 0, []uint64{1}), mpool.ErrAllocationAccountCapacity)
-			require.True(t, f.controller.rejected)
-			require.Equal(t, before, snapshotFixedMetadataPreflight(f))
-			require.Equal(t, sourceBefore, snapshotFixedMetadataPreflight(source))
-			require.Equal(t, used, f.account.Snapshot().Used)
-			f.controller.failAt, f.controller.rejected = 0, false
-			require.NoError(t, f.exec.PreflightBatchMerge(source.exec, 0, []uint64{1}))
-			requireFixedPreflightRowsUnchanged(t, before, snapshotFixedMetadataPreflight(f))
-			admitted, calls := f.account.Snapshot().Used, f.controller.calls
-			f.controller.failAt = calls + 1
-			require.NoError(t, f.exec.Merge(source.exec, 0, 0))
-			require.False(t, f.controller.rejected)
-			require.Equal(t, calls, f.controller.calls)
-			require.LessOrEqual(t, f.account.Snapshot().Used, admitted)
-			require.Equal(t, []int64{4, 5}, vector.MustFixedColNoTypeCheck[int64](target))
-			for row, kind := range want {
-				require.False(t, target.IsNull(uint64(row)))
-				require.Equal(t, kind, target.GetPrepareParamKindAt(row))
-			}
-			require.Equal(t, sourceBefore, snapshotFixedMetadataPreflight(source))
-		})
-	}
-}
-
 func TestFixedMinMaxMergeEmptyMetadataSidecar(t *testing.T) {
-	for _, kind := range []string{"kind", "source"} {
+	for _, kind := range []string{"source"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
 			require.NoError(t, f.exec.PreAllocateGroups(128))
 			v := f.base.standby[0].vecs[0]
-			if kind == "kind" {
-				require.NoError(t, v.PreflightSetPrepareParamKindsAtLength([]int{0, 1},
-					[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat}, 2, f.mp))
-				require.NotNil(t, v.GetPrepareParamKinds())
-				require.Empty(t, v.GetPrepareParamKinds())
-			} else {
-				require.NoError(t, v.PreflightSetStringSourceAtLength(0, 2, types.StringSourceLiteral, f.mp))
-				require.NotNil(t, v.GetStringSources())
-				require.Empty(t, v.GetStringSources())
-			}
+			require.NoError(t, v.PreflightSetStringSourceAtLength(0, 2, types.StringSourceLiteral, f.mp))
+			require.NotNil(t, v.GetStringSources())
+			require.Empty(t, v.GetStringSources())
 			source := f.mergeSource(t, []int64{4, 4}, nil)
 			groups := []uint64{1, 128}
 			before := snapshotFixedMetadataPreflight(f)
@@ -341,7 +287,6 @@ func TestFixedMinMaxMergeEmptyMetadataSidecar(t *testing.T) {
 				if present {
 					require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](v, row))
 				}
-				require.Equal(t, vector.PrepareParamNone, v.GetPrepareParamKindAt(row))
 				require.Equal(t, types.StringSourceExpression, v.GetStringSourceAt(row))
 			}
 		})
@@ -396,7 +341,6 @@ func BenchmarkFixedMinMaxPlainMergeMetadataPreflight(b *testing.B) {
 				want := int64(row + (hashmap.UnitLimit-1-row)/tc.groups*tc.groups)
 				require.False(b, v.IsNull(uint64(row)))
 				require.Equal(b, want, vector.GetFixedAtNoTypeCheck[int64](v, row))
-				require.Equal(b, vector.PrepareParamNone, v.GetPrepareParamKindAt(row))
 				require.Equal(b, types.StringSourceExpression, v.GetStringSourceAt(row))
 			}
 		})

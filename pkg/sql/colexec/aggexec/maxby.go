@@ -317,19 +317,10 @@ func (exec *maxByExec) copyWinner(
 	if err := dst[0].PreflightSetStringSourceAt(dstRow, valueSource, exec.mp); err != nil {
 		return err
 	}
-	if !src[0].IsNull(uint64(srcRows[0])) {
-		if err := dst[0].PreflightSetPrepareParamKindAt(
-			dstRow,
-			src[0].GetPrepareParamKindAt(srcRows[0]),
-			exec.mp,
-		); err != nil {
-			return err
-		}
-	}
 	for i := range dst {
 		if src[i].IsNull(uint64(srcRows[i])) {
 			if i == 0 {
-				dst[i].SetNullPreservingPrepareParamCapacity(uint64(dstRow))
+				dst[i].SetNull(uint64(dstRow))
 				if err := dst[i].SetStringSourceAtWithMP(dstRow, valueSource, exec.mp); err != nil {
 					return err
 				}
@@ -366,9 +357,6 @@ func (exec *maxByExec) getChunk(groupIndex int) int {
 func (exec *maxByExec) compactChunk(chunk int) {
 	if chunk < 0 || chunk >= len(exec.state) {
 		return
-	}
-	if len(exec.state[chunk].vecs) != 0 {
-		exec.state[chunk].vecs[0].NormalizePrepareParamKinds()
 	}
 	usage := exec.ensureVarlenaUsage(chunk)
 	for i, vec := range exec.state[chunk].vecs {

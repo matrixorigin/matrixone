@@ -788,7 +788,6 @@ func (ctr *container) writeSpillRecord(
 	bucket int,
 	rows []int32,
 	bktFlags []uint8,
-	prepareParamKindSources []prepareParamKindRowsSource,
 ) (int64, int64, error) {
 	if len(rows) == 0 {
 		return 0, 0, nil
@@ -851,9 +850,7 @@ func (ctr *container) writeSpillRecord(
 		fullFlags = make([][]uint8, len(ctr.groupByBatches))
 		fullFlags[nthBatch] = bktFlags
 	}
-	clear(prepareParamKindSources)
-	hasPrepareParamKinds := false
-	for i, ag := range ctr.aggList {
+	for _, ag := range ctr.aggList {
 		// Generic spill is local state, so retain GROUP_CONCAT source rows even
 		// when this operator is currently connected to a legacy partial peer.
 		aggexec.SetGroupConcatSourceRowWire(ag, true)
@@ -870,25 +867,11 @@ func (ctr *container) writeSpillRecord(
 				return 0, 0, err
 			}
 		}
-		if i < len(ctr.aggExprs) && ctr.aggExprs[i].PreservesFirstArgPrepareParamKind() {
-			var err error
-			prepareParamKindSources[i], err = newPrepareParamKindSelectedRowsSource(
-				ag.PrepareParamKindVectorForChunk(nthBatch), rows)
-			if err != nil {
-				return 0, 0, err
-			}
-			hasPrepareParamKinds = hasPrepareParamKinds ||
-				prepareParamKindSources[i].summary.seen
-		}
 	}
-	if err := writeSpillBool(&record, hasPrepareParamKinds); err != nil {
+	// The record keeps its retired row-metadata trailer flag; current writers
+	// never append the trailer.
+	if err := writeSpillBool(&record, false); err != nil {
 		return 0, 0, err
-	}
-	if hasPrepareParamKinds {
-		if err := writePrepareParamKindTrailer(proc.Ctx, &record, ctr.aggExprs,
-			&ctr.prepareParamKind, prepareParamKindSources); err != nil {
-			return 0, 0, err
-		}
 	}
 
 	const lastMagic = uint64(0xDEADBEEF12345678)
@@ -1018,7 +1001,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 	//
 	nBatches := len(ctr.groupByBatches)
 	var compactedAggChunks int64
-	prepareParamKindSources := make([]prepareParamKindRowsSource, len(ctr.aggList))
 	maxBatchRows := 0
 	totalBatchRows := 0
 	for _, gb := range ctr.groupByBatches {
@@ -1100,7 +1082,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 			written, spilled, err := ctr.writeSpillRecord(
 				proc, spillfs, opStats, gb, nthBatch, bucket,
 				rows, bktFlags,
-				prepareParamKindSources,
 			)
 			if err != nil {
 				return err
@@ -1272,39 +1253,20 @@ func (ctr *container) prepareSpillReloadRecord(
 		return record, false, aggErr
 	}
 
-	hasPrepareParamKinds, err := types.ReadBool(reader)
+	hasRowMetadataTrailer, err := types.ReadBool(reader)
 	if err != nil {
 		return record, false, err
 	}
-	if hasPrepareParamKinds {
-		var spillPrepareParamKind aggexec.PrepareParamKindStates
-		spillPrepareParamKind.Reset(aggExprs)
-		targets := make([]prepareParamKindRowsTarget, len(ctr.spillAggList))
+	if hasRowMetadataTrailer {
+		// Written only by older writers; validated and discarded.
+		expectedRows := make([]int, len(ctr.spillAggList))
 		for i, ag := range ctr.spillAggList {
-			targets[i] = prepareParamKindFlatTarget(ag)
+			expectedRows[i] = ag.GetNumGroups()
 		}
-		prepareParamKindSummaries, err := readPrepareParamKindTrailer(
-			proc.Ctx,
-			reader,
-			int32(len(ctr.spillAggList)),
-			&spillPrepareParamKind,
-			targets,
-			ctr.mp,
-			true,
-			true,
-		)
-		if err != nil {
+		if err := readRowMetadataTrailer(
+			proc.Ctx, reader, expectedRows, true, true,
+		); err != nil {
 			return record, false, err
-		}
-		for i, ag := range ctr.spillAggList {
-			if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
-				continue
-			}
-			if !prepareParamKindSummaries[i].rows {
-				if prepareParamKindSummaries[i].seen {
-					ag.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
-				}
-			}
 		}
 	}
 
@@ -1662,21 +1624,10 @@ func (ctr *container) getNextFinalResult(
 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
-		for i, ag := range ctr.aggList {
+		for _, ag := range ctr.aggList {
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
-			}
-			kind := ctr.prepareParamKind.Get(i)
-			for _, vec := range vecs {
-				// Preserving aggregates (MIN/MAX/ANY/MAX_BY and value
-				// windows) attach the winner's row provenance directly to
-				// their state vector. Keep that exact metadata; the scalar
-				// execution summary is only a compatibility fallback for
-				// aggregate implementations that materialize ordinary state.
-				if !vec.HasPrepareParamKind() {
-					vec.SetPrepareParamKind(kind)
-				}
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(

@@ -93,14 +93,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	group.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()
-	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
 	group.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
 	group.ctr.warningRetentionSet = true
 	group.ctr.groupConcatWarnings.SetWarningBudget(
 		process.WarningDiagnosticBudgetForProcess(proc))
-	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
-		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 	if group.ctr.allocationAccount != nil {
 		if err = group.ctr.mp.BindAllocationAccount(
@@ -927,20 +924,7 @@ func (group *Group) evaluateBuildInput(
 	proc *process.Process,
 	bat *batch.Batch,
 ) error {
-	if err := group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
-		return err
-	}
-	for i := range group.Aggs {
-		if i >= len(group.ctr.aggArgEvaluate) ||
-			len(group.ctr.aggArgEvaluate[i].Vec) == 0 {
-			continue
-		}
-		arg := group.ctr.aggArgEvaluate[i].Vec[0]
-		if arg.Length() > 0 && !arg.AllNull() {
-			group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-		}
-	}
-	return nil
+	return group.evaluateGroupByAndAggArgs(proc, bat)
 }
 
 func (group *Group) retryBuildBatchAfterCapacity(
@@ -1452,12 +1436,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	if err := types.WriteInt32(writer, nAggs); err != nil {
 		return vm.CancelResult, false, err
 	}
-	var prepareParamKindSources []prepareParamKindRowsSource
-	if group.ctr.prepareParamKindWireV1 {
-		prepareParamKindSources = make(
-			[]prepareParamKindRowsSource, len(group.ctr.aggList))
-	}
-	for i, ag := range group.ctr.aggList {
+	for _, ag := range group.ctr.aggList {
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
@@ -1480,34 +1459,18 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"canonical DISTINCT argument keys require MORPCVersion79")
 		}
-		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
+		if vec := aggResultVectorForChunk(ag, curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"aggregate binary-string metadata requires MORPCVersion18")
 		}
-		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
+		if vec := aggResultVectorForChunk(ag, curr); vec != nil &&
 			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
 		if err := saveAggregateChunkForProtocol(
 			ag, curr, writer, stringSourceWireEnabled(proc)); err != nil {
-			return vm.CancelResult, false, err
-		}
-		if !group.ctr.prepareParamKindWireV1 ||
-			!group.Aggs[i].PreservesFirstArgPrepareParamKind() {
-			continue
-		}
-		var err error
-		prepareParamKindSources[i], err = newPrepareParamKindRowsSource(
-			ag.PrepareParamKindVectorForChunk(curr), nil)
-		if err != nil {
-			return vm.CancelResult, false, err
-		}
-	}
-	if group.ctr.prepareParamKindWireV1 {
-		if err := writePrepareParamKindTrailer(proc.Ctx, writer, group.Aggs,
-			&group.ctr.prepareParamKind, prepareParamKindSources); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}

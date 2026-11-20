@@ -73,7 +73,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				origin := types.StringSourceLiteral
 				if source == 1 {
 					origin = types.StringSourceExpression
-					v.SetPrepareParamKind(vector.PrepareParamInteger)
 					v.SetIsBinaryString(true)
 				}
 				require.NoError(t, v.SetStringSource(origin))
@@ -107,7 +106,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
 						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
 						require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
 						require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 						if !want.IsNull(uint64(row)) {

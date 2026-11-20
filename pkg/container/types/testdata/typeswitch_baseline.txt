@@ -29,7 +29,6 @@ pkg/container/types/types.go	IsArrayRelate	vector chain	1
 pkg/container/types/types.go	IsOrdered	float	1
 pkg/container/vector/vector.go	InplaceSort	vector	1
 pkg/container/vector/vector.go	InplaceSortAndCompact	vector	1
-pkg/container/vector/vector.go	PrepareParamKindForType	float	1
 pkg/container/vector/vector.go	supportsInplaceSort	vector	1
 pkg/container/vector/vector.go	validateVectorBinary	vector	1
 pkg/frontend/computation_wrapper.go	preparedJSONGenericConcreteTypeSupported	float	1

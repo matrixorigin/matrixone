@@ -368,5 +368,5 @@ func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vecto
 			return nil
 		}
 	}
-	return state.SetPrepareParamKindAtWithMP(0, vector.PrepareParamNone, exec.mp)
+	return nil
 }

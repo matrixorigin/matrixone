@@ -5401,13 +5401,6 @@ func collectPreparedJSONComparisonParamPositions(
 				}
 			}
 		}
-		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
-			if positions != nil {
-				if param := impl.F.Args[0].GetP(); param != nil {
-					positions[param.Pos] = struct{}{}
-				}
-			}
-		}
 		if functionName == function.JsonMemberOfFunctionName && len(impl.F.Args) == 2 {
 			if positions != nil {
 				if param := impl.F.Args[0].GetP(); param != nil {
@@ -5450,14 +5443,6 @@ func addPreparedJSONMemberOfParamPosition(expr *plan.Expr, positions map[int32]s
 		return
 	}
 	if param := expr.GetP(); param != nil {
-		positions[param.Pos] = struct{}{}
-		return
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.GetFunc().GetObjName() != function.JsonComparisonParamFunctionName || len(fn.Args) != 1 {
-		return
-	}
-	if param := fn.Args[0].GetP(); param != nil {
 		positions[param.Pos] = struct{}{}
 	}
 }
@@ -5504,7 +5489,7 @@ func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
 }
 
 func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	isBinaryProtocol := false
 	if param, ok := value.(ParamValue); ok {
 		value = param.Value
@@ -5514,7 +5499,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	if value == nil {
 		return true, false
 	}
-	if kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger && kind != vector.PrepareParamBoolean {
+	if kind != types.StringConversionString && kind != types.StringConversionInteger && kind != types.StringConversionBoolean {
 		return false, false
 	}
 
@@ -5532,7 +5517,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
 		return true, false
 	case string:
-		if kind == vector.PrepareParamBoolean {
+		if kind == types.StringConversionBoolean {
 			return value == "0" || value == "1", false
 		}
 		// Connector/ODBC converts SQL_INTEGER and SQL_BIGINT values to their
@@ -5540,7 +5525,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 		// prepared statements. Accept that wire representation only when the
 		// value came from COM_STMT_EXECUTE. SQL PREPARE user variables and
 		// other non-binary-protocol text values keep the stricter validation.
-		if kind != vector.PrepareParamInteger && !isBinaryProtocol {
+		if kind != types.StringConversionInteger && !isBinaryProtocol {
 			return false, false
 		}
 		if strings.HasPrefix(value, "-") {
@@ -5585,18 +5570,18 @@ func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 			return preparedNumericReprepareType(param.SourceType)
 		}
 		switch param.PrepareParamKind {
-		case vector.PrepareParamInteger:
+		case types.StringConversionInteger:
 			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
 				return preparedNumericReprepareType(typ)
 			}
 			// Preserve the protocol domain even for an internally malformed value;
 			// materialization remains responsible for returning the existing error.
 			return types.T_int64.ToType(), true
-		case vector.PrepareParamFloat:
+		case types.StringConversionFloat:
 			return types.T_float64.ToType(), true
-		case vector.PrepareParamDecimal:
+		case types.StringConversionDecimal:
 			return mysqlPreparedDecimalReprepareType(), true
-		case vector.PrepareParamBoolean:
+		case types.StringConversionBoolean:
 			return types.T_int64.ToType(), true
 		}
 		return PreparedParamValueNumericReprepareType(param.Value)
@@ -6400,12 +6385,12 @@ func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 }
 
 func isPositivePreparedInteger(value any) bool {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	if paramValue, ok := value.(ParamValue); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
-	if value == nil || kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger {
+	if value == nil || kind != types.StringConversionString && kind != types.StringConversionInteger {
 		return false
 	}
 
@@ -6433,7 +6418,7 @@ func isPositivePreparedInteger(value any) bool {
 	case types.MoYear:
 		return value > 0
 	case string:
-		if kind != vector.PrepareParamInteger {
+		if kind != types.StringConversionInteger {
 			return false
 		}
 		parsed, err := strconv.ParseUint(value, 10, 63)
@@ -6683,15 +6668,15 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 }
 
 func isNonNegativePreparedInteger(value any) bool {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	if paramValue, ok := value.(ParamValue); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
-	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
+	if value == nil || kind == types.StringConversionFloat || kind == types.StringConversionDecimal {
 		return false
 	}
-	if kind == vector.PrepareParamBoolean {
+	if kind == types.StringConversionBoolean {
 		switch value := value.(type) {
 		case bool:
 			return true
@@ -6893,7 +6878,7 @@ func replaceParamValsWithSelection(
 			}
 			continue
 		}
-		if param.PrepareParamKind == vector.PrepareParamBoolean {
+		if param.PrepareParamKind == types.StringConversionBoolean {
 			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
 			// literal for functions such as JSON_SET, but retain its numeric
 			// protocol domain while selecting comparison coercion.

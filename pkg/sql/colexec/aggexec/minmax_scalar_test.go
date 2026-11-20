@@ -93,9 +93,6 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 					} else {
 						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 					}
-					require.True(t, result.HasPrepareParamKind(), "ordinary winners observe None")
-					require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind())
-					require.Nil(t, result.GetPrepareParamKinds())
 					require.False(t, result.HasStringSourceMetadata())
 				}
 				require.True(t, results[0].IsNull(1))
@@ -105,7 +102,7 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 }
 
 func TestFixedMinMaxScalarFillMetadataAdmission(t *testing.T) {
-	for _, metadata := range []string{"kind", "source"} {
+	for _, metadata := range []string{"source"} {
 		t.Run(metadata, func(t *testing.T) {
 			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
 			batch := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
@@ -125,11 +122,7 @@ func TestFixedMinMaxScalarFillMetadataAdmission(t *testing.T) {
 			f.controller.failAt = 0
 
 			rich := f.intInput(t, []int64{5, 5}, nil)
-			if metadata == "kind" {
-				rich.SetPrepareParamKind(vector.PrepareParamFloat)
-			} else {
-				require.NoError(t, rich.SetStringSource(types.StringSourceLiteral))
-			}
+			require.NoError(t, rich.SetStringSource(types.StringSourceLiteral))
 			// Rich input must use the existing metadata path, including admission
 			// before the representative changes. Then an ordinary input must also
 			// fall back when only the destination carries rich metadata.
@@ -150,7 +143,6 @@ func TestFixedMinMaxScalarFillMetadataAdmission(t *testing.T) {
 			}
 			target := f.base.state[0].vecs[0]
 			require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](target, 0))
-			require.Equal(t, vector.PrepareParamNone, target.GetPrepareParamKindAt(0))
 			require.Equal(t, types.StringSourceExpression, target.GetStringSourceAt(0))
 
 			if metadata == "source" {

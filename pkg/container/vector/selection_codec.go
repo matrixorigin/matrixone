@@ -50,9 +50,11 @@ const (
 	selectedRowsRowBinary = byte(1 << 2)
 	selectedRowsRowText   = byte(1 << 3)
 
-	selectedRowsKindNone    = byte(0)
-	selectedRowsKindUniform = byte(1)
-	selectedRowsKindRows    = byte(2)
+	// The kind field (bits 2-3) is retired; readers skip what an older writer
+	// put there.
+	selectedRowsKindUniform    = byte(1)
+	selectedRowsKindRows       = byte(2)
+	selectedRowsRetiredKindMax = byte(4)
 
 	selectedRowsBinaryNone    = byte(0)
 	selectedRowsBinaryUniform = byte(1)
@@ -147,20 +149,14 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 	metadata := byte(0)
-	var firstKind PrepareParamKind
-	kindSeen := false
-	kindMixed := false
 	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.IsEmpty() &&
-		v.gsp.IsEmpty() && len(v.prepareParamKinds) == 0 {
+		v.gsp.IsEmpty() {
 		// Every selected row has uniform metadata, but selection bounds still
 		// need validation before passing rows to a specialized writer.
 		for _, row := range rows {
 			if row < 0 || int(row) >= v.length {
 				return moerr.NewInvalidInputNoCtx("selected vector row out of range")
 			}
-		}
-		if count > 0 && v.prepareParamKindSeen {
-			firstKind, kindSeen = v.prepareParamKind, true
 		}
 	} else {
 		for i := 0; i < count; i++ {
@@ -170,28 +166,11 @@ func (v *Vector) marshalSelectedRowsTo(
 			}
 			if v.IsNull(uint64(row)) {
 				metadata |= selectedRowsHasNull
-			} else {
-				if v.prepareParamKindSeen || len(v.prepareParamKinds) != 0 {
-					kind := v.GetPrepareParamKindAt(row)
-					if !kindSeen {
-						firstKind, kindSeen = kind, true
-					} else if kind != firstKind {
-						kindMixed = true
-					}
-				}
 			}
 			if v.gsp.Contains(uint64(row)) {
 				metadata |= selectedRowsHasGrouping
 			}
 		}
-	}
-	kindMode := selectedRowsKindNone
-	if kindSeen {
-		kindMode = selectedRowsKindUniform
-		if kindMixed {
-			kindMode = selectedRowsKindRows
-		}
-		metadata |= kindMode << selectedRowsKindShift
 	}
 	var firstDomain types.RuntimeStringDomain
 	binarySeen := false
@@ -249,11 +228,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	metadata |= sourceMode << selectedRowsSourceShift
 	if err := writeSelectedRowsByte(w, metadata, &encoded); err != nil {
 		return err
-	}
-	if kindMode == selectedRowsKindUniform {
-		if err := writeSelectedRowsByte(w, byte(firstKind), &encoded); err != nil {
-			return err
-		}
 	}
 	if sourceMode == selectedRowsSourceUniform {
 		if err := writeSelectedRowsByte(w, byte(firstSource), &encoded); err != nil {
@@ -356,13 +330,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 metadataTrailers:
-	if kindMode == selectedRowsKindRows {
-		for i := 0; i < count; i++ {
-			if err := writeSelectedRowsByte(w, byte(v.GetPrepareParamKindAt(rowAt(i))), &encoded); err != nil {
-				return err
-			}
-		}
-	}
 	if sourceMode == selectedRowsSourceRows {
 		for i := 0; i < count; i++ {
 			if err := writeSelectedRowsByte(w, byte(v.GetStringSourceAt(rowAt(i))), &encoded); err != nil {
@@ -408,14 +375,14 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		sourceMode > selectedRowsSourceRows {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector metadata")
 	}
-	var uniformKind PrepareParamKind
+	// The kind field is retired: writers no longer set it, and a value from an
+	// older writer is validated and dropped.
 	if kindMode == selectedRowsKindUniform {
 		encoded, err := types.ReadByte(r)
 		if err != nil {
 			return err
 		}
-		uniformKind = PrepareParamKind(encoded)
-		if uniformKind > PrepareParamBoolean {
+		if encoded > selectedRowsRetiredKindMax {
 			return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
 		}
 	}
@@ -533,12 +500,15 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			}
 		}
 	}
-	switch kindMode {
-	case selectedRowsKindUniform:
-		v.SetPrepareParamKind(uniformKind)
-	case selectedRowsKindRows:
-		if err := v.SetPrepareParamKindsFromReader(r, count, mp); err != nil {
-			return err
+	if kindMode == selectedRowsKindRows {
+		for i := 0; i < count; i++ {
+			encoded, err := types.ReadByte(r)
+			if err != nil {
+				return err
+			}
+			if encoded > selectedRowsRetiredKindMax {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
+			}
 		}
 	}
 	switch sourceMode {
